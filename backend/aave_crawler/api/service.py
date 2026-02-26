@@ -1,7 +1,7 @@
 """
 业务逻辑层。
 - 实时从链上查询用户仓位
-- 计算 ETH 清算价格
+- 计算 ETH liq_price
 """
 
 from __future__ import annotations
@@ -20,10 +20,9 @@ from ..rpc import (
     get_reserve_config,
 )
 from .schemas import (
-    AccountSummarySchema,
     LiquidationLineResponse,
     PositionResponse,
-    ReservePositionSchema,
+    PriceResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,47 +77,52 @@ def _format_position(pos: UserPosition) -> PositionResponse:
     s = pos.summary
 
     hf_raw = s.health_factor
-    if hf_raw >= _MAX_UINT256:
-        hf_str = "inf"
-    else:
-        hf_str = _fmt(_raw_to_dec(hf_raw, 18), 4)
+    hf_str = "inf" if hf_raw >= _MAX_UINT256 else _fmt(_raw_to_dec(hf_raw, 18), 4)
 
-    summary = AccountSummarySchema(
-        total_collateral_usd=_fmt(_raw_to_dec(s.total_collateral_base, 8)),
-        total_debt_usd=_fmt(_raw_to_dec(s.total_debt_base, 8)),
-        available_borrows_usd=_fmt(_raw_to_dec(s.available_borrows_base, 8)),
-        health_factor=hf_str,
-        ltv=_fmt(Decimal(s.ltv) / Decimal(10000), 4),
-        liq_threshold=_fmt(Decimal(s.current_liquidation_threshold) / Decimal(10000), 4),
-    )
+    total_debt = _raw_to_dec(s.total_debt_base, 8)
+    liq_threshold = Decimal(s.current_liquidation_threshold) / Decimal(10000)
 
-    reserves: list[ReservePositionSchema] = []
+    # 找 ETH/WETH 抵押仓位
+    eth_reserve: ReservePosition | None = None
     for r in pos.reserves:
-        price = _raw_to_dec(r.price_raw, 8)
-        supply = _raw_to_dec(r.supply_raw, r.decimals)
-        stable = _raw_to_dec(r.stable_debt_raw, r.decimals)
-        variable = _raw_to_dec(r.variable_debt_raw, r.decimals)
-        total_debt = stable + variable
-        reserves.append(
-            ReservePositionSchema(
-                symbol=r.symbol,
-                token_address=r.token_address,
-                price_usd=_fmt(price),
-                supply_amount=_fmt(supply, 6),
-                supply_usd=_fmt(supply * price),
-                stable_debt_amount=_fmt(stable, 6),
-                variable_debt_amount=_fmt(variable, 6),
-                total_debt_amount=_fmt(total_debt, 6),
-                total_debt_usd=_fmt(total_debt * price),
-                use_as_collateral=r.usage_as_collateral_enabled,
-            )
-        )
+        if r.symbol.upper() in _ETH_SYMBOLS and r.usage_as_collateral_enabled and r.supply_raw > 0:
+            eth_reserve = r
+            break
+
+    if eth_reserve is not None:
+        eth_amount = _raw_to_dec(eth_reserve.supply_raw, eth_reserve.decimals)
+        eth_price = _raw_to_dec(eth_reserve.price_raw, 8)
+        eth_collateral_amount = _fmt(eth_amount, 6)
+        eth_collateral_usd = _fmt(eth_amount * eth_price)
+    else:
+        eth_amount = Decimal("0")
+        eth_collateral_amount = "0"
+        eth_collateral_usd = "0"
+
+    # 计算清算价
+    if total_debt == 0 or eth_amount == 0 or liq_threshold == 0:
+        liq_price_str = "0"
+    else:
+        # 其他（非 ETH）抵押品的加权安全垫
+        other_safe = Decimal("0")
+        for r in pos.reserves:
+            if r.symbol.upper() in _ETH_SYMBOLS:
+                continue
+            if not r.usage_as_collateral_enabled or r.supply_raw == 0:
+                continue
+            other_safe += _raw_to_dec(r.supply_raw, r.decimals) * _raw_to_dec(r.price_raw, 8) * liq_threshold
+        numerator = total_debt - other_safe
+        liq_price_str = "0" if numerator <= 0 else _fmt(numerator / (eth_amount * liq_threshold))
 
     return PositionResponse(
         address=pos.user_address,
-        block_number=pos.block_number,
-        summary=summary,
-        reserves=reserves,
+        eth_collateral_amount=eth_collateral_amount,
+        eth_collateral_usd=eth_collateral_usd,
+        total_debt_usd=_fmt(total_debt),
+        health_factor=hf_str,
+        ltv=_fmt(Decimal(s.ltv) / Decimal(10000), 4),
+        liq_threshold=_fmt(liq_threshold, 4),
+        liq_price=liq_price_str,
     )
 
 
@@ -247,3 +251,125 @@ async def get_liquidation_line(w3: AsyncWeb3, address: str) -> LiquidationLineRe
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"无法查询地址 {address} 的仓位")
     return _calc_liquidation_line(pos)
+
+
+# ── DB 批量查询（预爬取数据） ──────────────────────────────────────────────────
+
+# 健康系数阈值：DB 中 ∞ 存为 Decimal("1e18")，大于该阈值视为 inf
+_INF_HF_THRESHOLD = Decimal("1e15")
+
+# 合法的排序字段白名单（防止 SQL 注入）
+_SORT_COLS = {
+    "liquidation_price": "liq_price",
+    "health_factor": "health_factor",
+}
+_SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
+
+
+async def get_sorted_positions(
+    pool,
+    orderby: str = "liquidation_price",
+    order: str = "asc",
+    limit: int = 10,
+) -> list[PositionResponse]:
+    """从数据库读取已爬取的仓位，按指定字段排序后返回。
+
+    Args:
+        pool: asyncpg 连接池
+        orderby: 排序字段，``liquidation_price`` 或 ``health_factor``
+        order: 方向，``asc`` 或 ``desc``
+        limit: 最多返回多少条（上限 200）
+    """
+    order_col = _SORT_COLS.get(orderby, "liq_price")
+    order_dir = _SORT_DIRS.get(order, "ASC")
+
+    sql = f"""
+WITH eth_col AS (
+    SELECT
+        user_address,
+        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        supply_usd::numeric                                   AS eth_collateral_usd
+    FROM loan.aave_v3_eth_reserve_positions
+    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+      AND use_as_collateral = true
+      AND supply_raw > 0
+),
+computed AS (
+    SELECT
+        p.user_address                                            AS address,
+        COALESCE(e.eth_amount,        0::numeric)                AS eth_collateral_amount,
+        COALESCE(e.eth_collateral_usd, 0::numeric)               AS eth_collateral_usd,
+        p.total_debt_usd,
+        p.health_factor,
+        p.ltv,
+        p.liq_threshold,
+        CASE
+            WHEN p.total_debt_usd = 0
+              OR COALESCE(e.eth_amount, 0::numeric) = 0
+              OR p.liq_threshold = 0
+            THEN 0::numeric
+            ELSE p.total_debt_usd
+                 / (COALESCE(e.eth_amount, 0::numeric) * p.liq_threshold)
+        END AS liq_price
+    FROM loan.aave_v3_eth_positions p
+    LEFT JOIN eth_col e ON p.user_address = e.user_address
+)
+SELECT * FROM computed
+ORDER BY {order_col} {order_dir}
+LIMIT $1
+"""
+
+    rows = await pool.fetch(sql, limit)
+
+    results: list[PositionResponse] = []
+    for row in rows:
+        hf = Decimal(str(row["health_factor"]))
+        hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
+
+        lp = Decimal(str(row["liq_price"]))
+        results.append(
+            PositionResponse(
+                address=row["address"],
+                eth_collateral_amount=_fmt(Decimal(str(row["eth_collateral_amount"])), 6),
+                eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"]))),
+                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                health_factor=hf_str,
+                ltv=_fmt(Decimal(str(row["ltv"])), 4),
+                liq_threshold=_fmt(Decimal(str(row["liq_threshold"])), 4),
+                liq_price=_fmt(lp) if lp > 0 else "0",
+            )
+        )
+    return results
+
+
+async def get_eth_price(w3: AsyncWeb3, asset: str) -> PriceResponse:
+    """从链上 Oracle 实时获取指定资产的 USD 价格。
+
+    Args:
+        w3: AsyncWeb3 实例
+        asset: 资产符号，如 ``eth``、``wbtc``；大小写不敏感
+    """
+    from fastapi import HTTPException
+
+    # 预热缓存，确保 reserve_tokens 已加载
+    await _get_common_data(w3)
+
+    # "eth" 在 Aave 中以 WETH 表示
+    target = asset.upper()
+    if target == "ETH":
+        target = "WETH"
+
+    reserve_tokens = _cache["reserve_tokens"]
+    matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
+    if not matching:
+        raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
+
+    token_address = matching[0].token_address
+    prices = await get_assets_prices(w3, [token_address])
+    price = _raw_to_dec(prices[0], 8)
+
+    return PriceResponse(
+        asset=asset.upper(),
+        price_usd=_fmt(price, 2),
+        token_address=token_address,
+    )

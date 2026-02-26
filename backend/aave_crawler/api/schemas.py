@@ -29,9 +29,13 @@ class AccountSummarySchema(BaseModel):
 
 class PositionResponse(BaseModel):
     address: str
-    block_number: int
-    summary: AccountSummarySchema
-    reserves: list[ReservePositionSchema]
+    eth_collateral_amount: str = Field(description="ETH/WETH 抵押数量")
+    eth_collateral_usd: str = Field(description="ETH/WETH 抵押的 USD 估値")
+    total_debt_usd: str = Field(description="总借贷 USD")
+    health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
+    ltv: str = Field(description="贷款价値比（0~1）")
+    liq_threshold: str = Field(description="清算阈値（0~1）")
+    liq_price: str = Field(description="ETH 跌至这个价格时触发清算风险；无借贷或无法计算时返回 '0'")
 
 
 class LiquidationLineResponse(BaseModel):
@@ -46,3 +50,9 @@ class LiquidationLineResponse(BaseModel):
     )
     health_factor: str
     note: str = Field(default="", description="计算备注，如无 ETH 抵押品时的说明")
+
+
+class PriceResponse(BaseModel):
+    asset: str = Field(description="资产符号，如 ETH")
+    price_usd: str = Field(description="当前 USD 价格（链上 Oracle）")
+    token_address: str = Field(description="对应的代币合约地址")

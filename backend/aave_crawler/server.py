@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.routes import router
 from .api.service import _cache
 from .config import load_config
+from .db import create_pool
 from .rpc import build_web3
 
 logger = logging.getLogger(__name__)
@@ -27,15 +28,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
-    """启动时初始化 Web3 客户端，关闭时清理缓存。"""
+    """启动时初始化 Web3 客户端和 DB 连接池，关闭时清理资源。"""
     cfg = load_config()
     logger.info("正在连接 RPC 节点...")
     w3 = await build_web3(cfg)
     application.state.w3 = w3
     application.state.cfg = cfg
-    logger.info("RPC 节点就绪，API 服务启动")
+    logger.info("正在连接数据库...")
+    pool = await create_pool(cfg.postgres)
+    application.state.pool = pool
+    logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
-    # 清理公共数据缓存
+    await pool.close()
     _cache.clear()
     logger.info("API 服务关闭")
 
@@ -43,7 +47,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     application = FastAPI(
         title="Aave V3 ETH 仓位查询 API",
-        description="实时查询以太主网 Aave V3 用户仓位及 ETH 清算价格",
+        description="实时查询以太主网 Aave V3 用户仓位及 ETH liq_price",
         version="0.1.0",
         lifespan=lifespan,
     )
