@@ -18,24 +18,26 @@ export function PositionTable({ reserves }: Props) {
         </div>
 
         {supplies.length === 0 ? (
-          <p className="empty-text">该地址在 Aave V3 上没有供给仓位</p>
+          <p className="empty-text">该地址在 Aave V3 (Base) 上没有供给仓位</p>
         ) : (
           <div className="table-wrap">
             <table className="pos-table">
               <thead>
                 <tr>
                   <th>资产</th>
+                  <th className="right">单价 (USD)</th>
                   <th className="right">余额</th>
+                  <th className="right">估值 (USD)</th>
                   <th className="center">用作抵押品</th>
                 </tr>
               </thead>
               <tbody>
                 {supplies.map((r) => (
                   <tr key={r.tokenAddress}>
-                    <td>
-                      <span className="token-symbol">{r.symbol}</span>
-                    </td>
+                    <td><span className="token-symbol">{r.symbol}</span></td>
+                    <td className="right mono">${r.priceUSD}</td>
                     <td className="right mono">{r.supplyBalance}</td>
+                    <td className="right mono bold">${r.supplyValueUSD}</td>
                     <td className="center">
                       {r.usageAsCollateralEnabled ? (
                         <span className="pill green-pill">是</span>
@@ -59,31 +61,29 @@ export function PositionTable({ reserves }: Props) {
         </div>
 
         {borrows.length === 0 ? (
-          <p className="empty-text">该地址在 Aave V3 上没有借贷仓位</p>
+          <p className="empty-text">该地址在 Aave V3 (Base) 上没有借贷仓位</p>
         ) : (
           <div className="table-wrap">
             <table className="pos-table">
               <thead>
                 <tr>
                   <th>资产</th>
+                  <th className="right">单价 (USD)</th>
                   <th className="right">稳定借贷</th>
                   <th className="right">浮动借贷</th>
                   <th className="right">合计</th>
+                  <th className="right">估值 (USD)</th>
                 </tr>
               </thead>
               <tbody>
                 {borrows.map((r) => (
                   <tr key={r.tokenAddress}>
-                    <td>
-                      <span className="token-symbol">{r.symbol}</span>
-                    </td>
-                    <td className="right mono">
-                      {r.stableDebtRaw > 0n ? r.stableDebt : '—'}
-                    </td>
-                    <td className="right mono">
-                      {r.variableDebtRaw > 0n ? r.variableDebt : '—'}
-                    </td>
+                    <td><span className="token-symbol">{r.symbol}</span></td>
+                    <td className="right mono">${r.priceUSD}</td>
+                    <td className="right mono">{r.stableDebtRaw > 0n ? r.stableDebt : '—'}</td>
+                    <td className="right mono">{r.variableDebtRaw > 0n ? r.variableDebt : '—'}</td>
                     <td className="right mono bold">{r.totalDebt}</td>
+                    <td className="right mono bold red-text">${r.totalDebtValueUSD}</td>
                   </tr>
                 ))}
               </tbody>

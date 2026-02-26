@@ -41,7 +41,7 @@ export default function App() {
             <span className="logo-icon">⚡</span>
             <span className="logo-text">Aave V3 仓位查询</span>
           </div>
-          <span className="network-badge">Ethereum Mainnet</span>
+          <span className="network-badge">Base Mainnet</span>
         </div>
       </header>
 
@@ -72,9 +72,9 @@ export default function App() {
                   {line}
                 </p>
               ))}
-              {error.includes('VITE_ETH_RPC_URL') && (
+              {error.includes('config.yaml') && (
                 <p className="rpc-hint">
-                  参考 <code>.env.example</code>，在项目根目录创建 <code>.env.local</code> 并填入 RPC 地址后重启开发服务器。
+                  参考 <code>config.yaml.example</code>，在项目根目录创建 <code>config.yaml</code> 并填入 <code>rpc_url</code> 后重启开发服务器。
                 </p>
               )}
             </div>
@@ -84,7 +84,7 @@ export default function App() {
         {/* No position */}
         {!loading && !error && position && !hasPosition && (
           <div className="status-block">
-            <p>该地址在 Aave V3 (Ethereum) 上暂无任何仓位</p>
+            <p>该地址在 Aave V3 (Base) 上暂无任何仓位</p>
           </div>
         )}
 
@@ -98,7 +98,7 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        数据来源：Aave V3 Ethereum Mainnet 智能合约
+        数据来源：Aave V3 Base Mainnet 智能合约
       </footer>
     </div>
   );

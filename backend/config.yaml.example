@@ -1,0 +1,22 @@
+# Aave Crawler 配置示例
+# 复制此文件为 config.yaml 并填写实际值（config.yaml 不会提交到版本控制）
+
+# Base 网络 RPC 端点（留空则自动使用公共节点）
+rpc_url: ""
+
+postgres:
+  host: "127.0.0.1"
+  port: 5432
+  user: "your_pg_user"
+  password: "your_pg_password"
+  database: "your_database"
+
+crawler:
+  # 并发查询用户数（建议 10~30，过高会被 RPC 限速）
+  concurrency: 20
+  # 每批次处理完后写入 DB 的用户数
+  batch_size: 100
+  # 单次 RPC 调用超时（秒）
+  rpc_timeout: 20
+  # 失败重试次数
+  retry_count: 3

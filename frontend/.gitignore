@@ -23,5 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Environment variables
+# Config & Environment variables (local overrides, not committed)
 .env
+.env.*
+config.yaml
