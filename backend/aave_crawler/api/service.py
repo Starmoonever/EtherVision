@@ -342,14 +342,24 @@ LIMIT $1
     return results
 
 
-async def get_eth_price(w3: AsyncWeb3, asset: str) -> PriceResponse:
-    """从链上 Oracle 实时获取指定资产的 USD 价格。
+async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None) -> PriceResponse:
+    """获取指定资产的 USD 价格。
+
+    - ``timestamp=None``：从链上 Aave Oracle 实时查询
+    - ``timestamp=<unix_ts>``：从 DeFiLlama Coins API 查询历史价格
 
     Args:
-        w3: AsyncWeb3 实例
-        asset: 资产符号，如 ``eth``、``wbtc``；大小写不敏感
+        w3:        AsyncWeb3 实例
+        asset:     资产符号，如 ``eth``、``wbtc``；大小写不敏感
+        timestamp: Unix 时间戳（秒），None 表示查当前价格
     """
+    import time as _time
+    import aiohttp
+    from datetime import datetime, timezone
     from fastapi import HTTPException
+
+    def _ts_to_utc_str(ts: int) -> str:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # 预热缓存，确保 reserve_tokens 已加载
     await _get_common_data(w3)
@@ -365,11 +375,48 @@ async def get_eth_price(w3: AsyncWeb3, asset: str) -> PriceResponse:
         raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
 
     token_address = matching[0].token_address
-    prices = await get_assets_prices(w3, [token_address])
-    price = _raw_to_dec(prices[0], 8)
 
-    return PriceResponse(
-        asset=asset.upper(),
-        price_usd=_fmt(price, 2),
-        token_address=token_address,
-    )
+    if timestamp is None:
+        # ── 实时价格：链上 Oracle ─────────────────────────────────────────
+        prices = await get_assets_prices(w3, [token_address])
+        price = _raw_to_dec(prices[0], 8)
+        return PriceResponse(
+            asset=asset.upper(),
+            price_usd=_fmt(price, 2),
+            token_address=token_address,
+            timestamp=_ts_to_utc_str(int(_time.time())),
+            source="on-chain",
+        )
+    else:
+        # ── 历史价格：DeFiLlama Coins API ────────────────────────────────
+        # https://coins.llama.fi/prices/historical/{timestamp}/ethereum:{address}
+        coin_key = f"ethereum:{token_address.lower()}"
+        url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"DeFiLlama 返回 HTTP {resp.status}",
+                        )
+                    data = await resp.json()
+        except aiohttp.ClientError as exc:
+            raise HTTPException(status_code=502, detail=f"无法连接 DeFiLlama: {exc}") from exc
+
+        coins = data.get("coins", {})
+        if coin_key not in coins:
+            raise HTTPException(
+                status_code=404,
+                detail=f"DeFiLlama 未返回 '{asset}' 在该时间点的价格数据",
+            )
+        entry = coins[coin_key]
+        price = Decimal(str(entry["price"]))
+        actual_ts = int(entry.get("timestamp", timestamp))
+        return PriceResponse(
+            asset=asset.upper(),
+            price_usd=_fmt(price, 2),
+            token_address=token_address,
+            timestamp=_ts_to_utc_str(actual_ts),
+            source="defillama",
+        )

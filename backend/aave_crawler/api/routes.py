@@ -83,14 +83,46 @@ async def positions(
 @router.get(
     "/price",
     response_model=PriceResponse,
-    summary="查询资产当前价格",
-    description="从链上 Aave Oracle 实时获取资产的 USD 价格",
+    summary="查询资产价格（当前或历史）",
+    description=(
+        "查询资产 USD 价格。\n\n"
+        "- `time=now`（默认）：从链上 Aave Oracle 实时查询当前价格\n"
+        "- `time=<UTC 时间字符串>`：从 DeFiLlama 查询历史价格\n\n"
+        "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
+    ),
 )
 async def asset_price(
     request: Request,
     asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
-    time: str = Query("now", description="时间参数，目前仅支持 now"),
+    time: str = Query(
+        "now",
+        description="now = 实时价格；UTC 时间字符串 = 历史价格，如 2024-11-14T12:00:00Z",
+    ),
 ) -> PriceResponse:
-    if time != "now":
-        raise HTTPException(status_code=400, detail="time 参数目前仅支持 'now'")
-    return await get_eth_price(_w3(request), asset)
+    if time == "now":
+        return await get_eth_price(_w3(request), asset)
+
+    # 解析 UTC 时间字符串 → Unix 秒级时间戳
+    from datetime import datetime, timezone
+
+    _FMTS = [
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ]
+    ts: int | None = None
+    for fmt in _FMTS:
+        try:
+            dt = datetime.strptime(time, fmt).replace(tzinfo=timezone.utc)
+            ts = int(dt.timestamp())
+            break
+        except ValueError:
+            continue
+
+    if ts is None:
+        raise HTTPException(
+            status_code=400,
+            detail="time 格式无法识别，支持示例：2024-11-14T12:00:00Z、2024-11-14 12:00:00、2024-11-14",
+        )
+    return await get_eth_price(_w3(request), asset, timestamp=ts)

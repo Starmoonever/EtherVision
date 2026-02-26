@@ -54,5 +54,7 @@ class LiquidationLineResponse(BaseModel):
 
 class PriceResponse(BaseModel):
     asset: str = Field(description="资产符号，如 ETH")
-    price_usd: str = Field(description="当前 USD 价格（链上 Oracle）")
+    price_usd: str = Field(description="USD 价格")
     token_address: str = Field(description="对应的代币合约地址")
+    timestamp: str = Field(description="价格对应的 UTC 时间，格式如 2024-11-14T12:00:00Z")
+    source: str = Field(description="数据来源：on-chain（链上 Oracle）或 defillama（DeFiLlama 历史）")
