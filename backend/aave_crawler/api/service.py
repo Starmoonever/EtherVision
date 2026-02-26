@@ -14,6 +14,7 @@ from web3 import AsyncWeb3
 
 from ..models import ReservePosition, UserPosition
 from ..rpc import (
+    EMPTY_POSITION,
     fetch_user_position,
     get_all_reserve_tokens,
     get_assets_prices,
@@ -235,9 +236,11 @@ async def get_user_position(w3: AsyncWeb3, address: str) -> PositionResponse:
     pos = await fetch_user_position(
         w3, address, reserve_tokens, reserve_configs, asset_prices, sem
     )
+    from fastapi import HTTPException
+    if pos is EMPTY_POSITION:
+        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave 无任何仓位（已平仓或从未使用）")
     if pos is None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"无法查询地址 {address} 的仓位，请确认地址有效且有 Aave 仓位")
+        raise HTTPException(status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试")
     return _format_position(pos)
 
 
@@ -247,9 +250,11 @@ async def get_liquidation_line(w3: AsyncWeb3, address: str) -> LiquidationLineRe
     pos = await fetch_user_position(
         w3, address, reserve_tokens, reserve_configs, asset_prices, sem
     )
+    from fastapi import HTTPException
+    if pos is EMPTY_POSITION:
+        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave 无任何仓位（已平仓或从未使用）")
     if pos is None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"无法查询地址 {address} 的仓位")
+        raise HTTPException(status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试")
     return _calc_liquidation_line(pos)
 
 

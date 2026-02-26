@@ -10,6 +10,7 @@ import click
 from .config import load_config
 from .crawler import run_crawler
 from .db import create_pool
+from .watcher import run_watcher
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -44,6 +45,37 @@ def cmd_crawl(config: str | None, limit: int | None, dry_run: bool, verbose: boo
         pool = await create_pool(cfg.postgres)
         try:
             await run_crawler(cfg, pool, limit=limit, dry_run=dry_run)
+        finally:
+            await pool.close()
+
+    asyncio.run(_run())
+
+
+@cli.command("watch")
+@click.option("--config", "-c", default=None, help="config.yaml 路径")
+@click.option(
+    "--interval", "-i", default=None, type=int,
+    help="轮询间隔（秒），默认读取 config.yaml 中 watcher.interval",
+)
+@click.option(
+    "--lookback", "-l", default=None, type=int,
+    help="首次启动时回看多岑分钟内的历史事件（默认 10）",
+)
+@click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
+def cmd_watch(
+    config: str | None, interval: int | None, lookback: int | None, verbose: bool
+) -> None:
+    """增量监听模式：轮询 aave.aave_history，只重爬有操作的用户（持续运行）"""
+    _setup_logging(verbose)
+    cfg = load_config(config)
+
+    _interval = interval if interval is not None else cfg.watcher.interval
+    _lookback = lookback if lookback is not None else cfg.watcher.lookback_minutes
+
+    async def _run() -> None:
+        pool = await create_pool(cfg.postgres)
+        try:
+            await run_watcher(cfg, pool, interval=_interval, lookback_minutes=_lookback)
         finally:
             await pool.close()
 

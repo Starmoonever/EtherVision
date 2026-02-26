@@ -33,10 +33,18 @@ class CrawlerConfig:
 
 
 @dataclass
+class WatcherConfig:
+    interval: int = 60           # 轮询间隔（秒）
+    lookback_minutes: int = 10   # 首次启动时水位线回退多少分钟
+    history_schema: str = "aave" # aave_history 所在 schema
+
+
+@dataclass
 class AppConfig:
     rpc_url: str = ""
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)
+    watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
@@ -58,10 +66,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             raw = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
             pg_raw = raw.get("postgres", {})
             cr_raw = raw.get("crawler", {})
+            wt_raw = raw.get("watcher", {})
             return AppConfig(
                 rpc_url=raw.get("rpc_url", ""),
                 postgres=PostgresConfig(**{k: v for k, v in pg_raw.items() if k in PostgresConfig.__dataclass_fields__}),
                 crawler=CrawlerConfig(**{k: v for k, v in cr_raw.items() if k in CrawlerConfig.__dataclass_fields__}),
+                watcher=WatcherConfig(**{k: v for k, v in wt_raw.items() if k in WatcherConfig.__dataclass_fields__}),
             )
 
     raise FileNotFoundError(

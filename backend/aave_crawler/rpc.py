@@ -232,6 +232,11 @@ async def get_assets_prices(w3: AsyncWeb3, assets: list[str]) -> list[int]:
 
 # ── 高层查询（单用户完整仓位） ────────────────────────────────────────────────
 
+# 哨兵值：账户在 Aave 无任何仓位（totalCollateral==0 && totalDebt==0）
+# 与 None（RPC 报错）区分开，供调用方分别统计
+EMPTY_POSITION = object()
+
+
 async def fetch_user_position(
     w3: AsyncWeb3,
     user_address: str,
@@ -239,19 +244,22 @@ async def fetch_user_position(
     reserve_configs: dict[str, ReserveConfig],
     asset_prices: dict[str, int],
     semaphore: asyncio.Semaphore,
-) -> UserPosition | None:
+) -> "UserPosition | object | None":
     """
     查询单个用户的全部 Aave 仓位。
-    reserve_tokens / reserve_configs / asset_prices 由调用方预先批量获取并传入，
-    避免每个用户都重复查询这些公共数据。
+
+    返回值说明：
+    - UserPosition   : 有效仓位数据
+    - EMPTY_POSITION : 账户当前在 Aave 无任何抵押/借贷（历史地址已平仓）
+    - None           : RPC 调用失败
     """
     async with semaphore:
         try:
             summary = await get_user_account_data(w3, user_address)
 
-            # 快速跳过：既没有抵押品也没有借贷的地址，无需查明细
+            # 快速跳过：既没有抵押品也没有借贷，返回哨兵（≠ 报错）
             if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
-                return None
+                return EMPTY_POSITION
 
             block = await w3.eth.block_number
 

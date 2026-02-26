@@ -22,6 +22,7 @@ from .config import AppConfig
 from .db import ensure_tables, fetch_user_addresses, upsert_positions
 from .models import UserPosition
 from .rpc import (
+    EMPTY_POSITION,
     build_web3,
     fetch_user_position,
     get_all_reserve_tokens,
@@ -96,6 +97,7 @@ async def run_crawler(
     pending_batch: list[UserPosition] = []
     total_ok = 0
     total_fail = 0
+    total_skip = 0
 
     # 将所有用户任务一次性提交，由 semaphore 控制实际并发数。
     # 使用 asyncio.as_completed 流式收取结果，避免慢用户阻塞整批；
@@ -115,6 +117,9 @@ async def run_crawler(
         for coro in asyncio.as_completed(all_tasks):
             pos = await coro
             pbar.update(1)
+            if pos is EMPTY_POSITION:
+                total_skip += 1
+                continue
             if pos is None:
                 total_fail += 1
                 continue
@@ -137,4 +142,4 @@ async def run_crawler(
     if pending_batch and not dry_run:
         await upsert_positions(pool, pending_batch)
 
-    logger.info("爬取完成：成功 %d，失败 %d", total_ok, total_fail)
+    logger.info("爬取完成：有仓位 %d，无仓位跳过 %d，RPC 报错 %d", total_ok, total_skip, total_fail)
