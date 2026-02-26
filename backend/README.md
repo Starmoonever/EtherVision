@@ -1,6 +1,9 @@
 # aave-crawler（后端）
 
-批量查询 Aave V3 Base Mainnet 上所有用户的仓位，并持久化到 PostgreSQL。
+以太主网 Aave V3 后端，提供两项功能：
+
+1. **批量爬取**：从 PostgreSQL 读取用户地址，并发查询链上 Aave 仓位，将结果持久化回库
+2. **REST API**：提供给前端调用的 HTTP 接口，实时查询单个用户仓位及 ETH 清算价格
 
 ## 依赖
 
@@ -66,6 +69,89 @@ uv run aave-crawler check 0xYourAddress
 uv run aave-crawler check 0xYourAddress --verbose
 ```
 
+## API 服务
+
+### 启动
+
+```bash
+# 默认监听 0.0.0.0:8000
+uv run aave-api
+
+# 自定义端口，开发热重载
+uv run aave-api --port 8080 --reload
+
+# 生产多进程
+uv run aave-api --workers 4
+```
+
+启动后自动连接 `config.yaml` 中配置的 RPC 节点。
+
+### 接口文档
+
+服务启动后访问 `http://localhost:8000/docs` 查看交互式 Swagger 文档。
+
+### 端点
+
+#### `GET /api/user/position?address=`
+
+实时从链上查询用户的 Aave V3 完整仓位。
+
+```bash
+curl "http://localhost:8000/api/user/position?address=0xYourAddress"
+```
+
+响应示例：
+```json
+{
+  "address": "0xabc...",
+  "block_number": 21900000,
+  "summary": {
+    "total_collateral_usd": "5000.00",
+    "total_debt_usd": "2000.00",
+    "health_factor": "2.1250",
+    "ltv": "0.4000",
+    "liq_threshold": "0.8500"
+  },
+  "reserves": [
+    {
+      "symbol": "WETH",
+      "price_usd": "2500.00",
+      "supply_amount": "2.000000",
+      "supply_usd": "5000.00",
+      "variable_debt_amount": "0.800000",
+      "total_debt_usd": "2000.00",
+      "use_as_collateral": true
+    }
+  ]
+}
+```
+
+#### `GET /api/user/liquidation_line?address=`
+
+计算 ETH 价格跌至多少时触发清算风险（HF → 1.0）。
+
+```bash
+curl "http://localhost:8000/api/user/liquidation_line?address=0xYourAddress"
+```
+
+响应示例：
+```json
+{
+  "address": "0xabc...",
+  "current_eth_price_usd": "2500.00",
+  "liquidation_eth_price_usd": "1176.47",
+  "distance_pct": "52.94",
+  "health_factor": "2.1250",
+  "note": ""
+}
+```
+
+`distance_pct`：当前价格距清算价的安全空间百分比（正数 = 安全）。
+
+#### `GET /health`
+
+服务健康检查，返回 `{"status": "ok"}`。
+
 ## 目标表结构
 
 ### `loan.aave_v3_eth_positions`（账户汇总）
@@ -107,12 +193,17 @@ backend/
 ├── config.yaml.example
 ├── config.yaml              # 本地配置（gitignored）
 └── aave_crawler/
-    ├── cli.py               # Click CLI 入口
+    ├── cli.py               # Click CLI 入口（aave-crawler 命令）
+    ├── server.py            # FastAPI app 工厂 + uvicorn 入口（aave-api 命令）
     ├── config.py            # 配置加载
     ├── models.py            # 数据模型（dataclass）
     ├── rpc.py               # 合约调用（web3.py AsyncWeb3）
     ├── db.py                # asyncpg，DDL + UPSERT
-    └── crawler.py           # 并发批量爬取主流程
+    ├── crawler.py           # 并发批量爬取主流程
+    └── api/
+        ├── schemas.py       # Pydantic 响应模型
+        ├── service.py       # 业务逻辑（仓位查询、清算价计算）
+        └── routes.py        # FastAPI 路由
 ```
 
 ## 常用 uv 命令
