@@ -1,5 +1,5 @@
 """
-Aave V3 Base 合约调用层。
+Aave V3 Ethereum Mainnet 合约调用层。
 
 使用 web3.py AsyncWeb3 + AsyncHTTPProvider，支持多公共节点后备。
 所有返回值保持链上原始整数，不做精度转换。
@@ -26,19 +26,20 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# ── 合约地址（Base Mainnet Aave V3） ─────────────────────────────────────────
-POOL_ADDRESS = AsyncWeb3.to_checksum_address("0xA238Dd80C259a72e81d7e4664a9801593F98d1c5")
-DATA_PROVIDER_ADDRESS = AsyncWeb3.to_checksum_address("0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A")
-ORACLE_ADDRESS = AsyncWeb3.to_checksum_address("0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156")
+# ── 合约地址（Ethereum Mainnet Aave V3） ─────────────────────────────────────────────────
+# 与 rpc_example.py 中使用的地址一致
+POOL_ADDRESS = AsyncWeb3.to_checksum_address("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
+DATA_PROVIDER_ADDRESS = AsyncWeb3.to_checksum_address("0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3")
+ORACLE_ADDRESS = AsyncWeb3.to_checksum_address("0x54586bE62E3c3580375aE3723C145253060Ca0C2")
 
-BASE_CHAIN_ID = 8453
+ETH_CHAIN_ID = 1
 
 PUBLIC_RPCS = [
-    "https://base.llamarpc.com",
-    "https://base-rpc.publicnode.com",
-    "https://1rpc.io/base",
-    "https://base.drpc.org",
-    "https://mainnet.base.org",
+    "https://eth.llamarpc.com",
+    "https://ethereum-rpc.publicnode.com",
+    "https://1rpc.io/eth",
+    "https://rpc.ankr.com/eth",
+    "https://cloudflare-eth.com",
 ]
 
 # ── ABI ──────────────────────────────────────────────────────────────────────
@@ -131,8 +132,8 @@ ORACLE_ABI: list[dict[str, Any]] = [
 async def build_web3(cfg: AppConfig) -> AsyncWeb3:
     """
     构建 AsyncWeb3 实例。
-    若配置了自定义 rpc_url，先验证 chain_id；
-    若不通过或未配置，则顺序尝试公共节点。
+    若配置了自定义 rpc_url，验证其 chain_id 是否为以太主网（1）；
+    若不通过或未配置，则顺序尝试公共以太节点。
     """
     timeout = cfg.crawler.rpc_timeout
 
@@ -140,10 +141,10 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
         w3 = AsyncWeb3(AsyncHTTPProvider(url, request_kwargs={"timeout": timeout}))
         try:
             chain_id = await w3.eth.chain_id
-            if chain_id != BASE_CHAIN_ID:
-                logger.warning("RPC %s chain_id=%d，不是 Base（%d），跳过", url, chain_id, BASE_CHAIN_ID)
+            if chain_id != ETH_CHAIN_ID:
+                logger.warning("RPC %s chain_id=%d，不是以太主网（%d），跳过", url, chain_id, ETH_CHAIN_ID)
                 return None
-            logger.info("使用 RPC: %s", url)
+            logger.info("使用 RPC: %s (chain_id=1)", url)
             return w3
         except Exception as exc:
             logger.debug("RPC %s 探测失败: %s", url, exc)

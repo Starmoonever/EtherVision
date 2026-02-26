@@ -2,11 +2,11 @@
 批量爬取主流程。
 
 流程：
-1. 从 DB 读取用户列表
-2. 预取公共数据（资产列表、配置、价格）
-3. 并发查询每个用户仓位（asyncio.Semaphore 控制并发数）
-4. 按批次写入 DB
-5. 断点续传（TODO：待表结构确定后记录已处理地址）
+1. 自动建表（ensure_tables）
+2. 从 DB 读取用户列表
+3. 预取公共数据（资产列表、配置、价格）
+4. 并发查询每个用户仓位（asyncio.Semaphore 控制并发数）
+5. 按批次 UPSERT 写入 DB
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from tqdm import tqdm
 from web3 import AsyncWeb3
 
 from .config import AppConfig
-from .db import fetch_user_addresses, upsert_positions
+from .db import ensure_tables, fetch_user_addresses, upsert_positions
 from .models import UserPosition
 from .rpc import (
     build_web3,
@@ -78,6 +78,9 @@ async def run_crawler(
     :param dry_run: 只查询不写入 DB
     """
     w3 = await build_web3(cfg)
+
+    # 确保目标表已存在
+    await ensure_tables(pool)
 
     # 预取公共数据（所有用户共享）
     reserve_tokens, reserve_configs, asset_prices = await prefetch_common_data(w3)
