@@ -41,7 +41,7 @@ export default function App() {
             <span className="logo-icon">⚡</span>
             <span className="logo-text">Aave V3 仓位查询</span>
           </div>
-          <span className="network-badge">Ethereum Mainnet</span>
+          <span className="network-badge">Base Mainnet</span>
         </div>
       </header>
 
@@ -84,7 +84,7 @@ export default function App() {
         {/* No position */}
         {!loading && !error && position && !hasPosition && (
           <div className="status-block">
-            <p>该地址在 Aave V3 (Ethereum) 上暂无任何仓位</p>
+            <p>该地址在 Aave V3 (Base) 上暂无任何仓位</p>
           </div>
         )}
 
@@ -98,7 +98,7 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        数据来源：Aave V3 Ethereum Mainnet 智能合约
+        数据来源：Aave V3 Base Mainnet 智能合约
       </footer>
     </div>
   );

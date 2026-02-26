@@ -290,6 +290,7 @@
   font-size: 0.88rem;
 }
 .bold { font-weight: 700; }
+.red-text { color: #f87171; }
 .empty-text {
   color: #475569;
   font-size: 0.9rem;
@@ -313,3 +314,57 @@
   color: #334155;
   border-top: 1px solid #1e293b;
 }
+/* ── Filter Banner ───────────────────────────────────────────────────────────── */
+.filter-banner {
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+  border-width: 1px;
+  border-style: solid;
+}
+.filter-pass {
+  background: #052e16;
+  border-color: #166534;
+}
+.filter-fail {
+  background: #1c0a0a;
+  border-color: #7f1d1d;
+}
+.filter-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.8rem;
+}
+.filter-pass .filter-title { color: #86efac; }
+.filter-fail .filter-title { color: #fca5a5; }
+.filter-icon { font-size: 1rem; }
+
+.filter-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.filter-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+.check-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-ok   { background: #4ade80; }
+.dot-fail { background: #f87171; }
+.check-label { color: #cbd5e1; }
+.check-detail {
+  color: #94a3b8;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+.check-warn { color: #fbbf24; }

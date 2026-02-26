@@ -1,10 +1,11 @@
 import { createPublicClient, http, formatUnits, isAddress, type Address } from 'viem';
-import { mainnet } from 'viem/chains';
+import { base } from 'viem/chains';
 
-// ── 合约地址 (Ethereum Mainnet Aave V3) ──────────────────────────────────────
+// ── 合约地址 (Base Mainnet Aave V3) ──────────────────────────────────────────
 export const AAVE_ADDRESSES = {
-  pool: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2' as Address,
-  dataProvider: '0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3' as Address,
+  pool: '0xA238Dd80C259a72e81d7e4664a9801593F98d1c5' as Address,
+  dataProvider: '0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A' as Address,
+  oracle: '0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156' as Address,
 };
 
 // ── ABI ──────────────────────────────────────────────────────────────────────
@@ -82,6 +83,16 @@ const DATA_PROVIDER_ABI = [
   },
 ] as const;
 
+const ORACLE_ABI = [
+  {
+    inputs: [{ name: 'assets', type: 'address[]' }],
+    name: 'getAssetsPrices',
+    outputs: [{ name: '', type: 'uint256[]' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
 // ── 类型 ──────────────────────────────────────────────────────────────────────
 export interface AccountSummary {
   totalCollateralUSD: string;
@@ -97,9 +108,15 @@ export interface ReservePosition {
   symbol: string;
   tokenAddress: Address;
   decimals: number;
+  /** 资产价格 (USD，8位精度原始值) */
+  priceRaw: bigint;
+  /** 资产价格 (USD 字符串，2位小数) */
+  priceUSD: string;
   // 供给
   supplyBalance: string;
   supplyBalanceRaw: bigint;
+  /** 供给的 USD 估值 */
+  supplyValueUSD: string;
   usageAsCollateralEnabled: boolean;
   // 借贷
   stableDebt: string;
@@ -107,6 +124,8 @@ export interface ReservePosition {
   variableDebt: string;
   variableDebtRaw: bigint;
   totalDebt: string;
+  /** 借贷的 USD 估值 */
+  totalDebtValueUSD: string;
 }
 
 export interface UserPosition {
@@ -114,20 +133,19 @@ export interface UserPosition {
   reserves: ReservePosition[];
 }
 
-// ── 备用 RPC 列表（按优先级排序；配置了 VITE_ETH_RPC_URL 时优先使用）─────────────
+// ── 备用 RPC 列表（Base Mainnet，VITE_ETH_RPC_URL 优先）────────────────────────
 const PUBLIC_RPCS = [
-  'https://eth.llamarpc.com',
-  'https://rpc.ankr.com/eth',
-  'https://ethereum.publicnode.com',
-  'https://1rpc.io/eth',
-  'https://cloudflare-eth.com',
+  'https://mainnet.base.org',
+  'https://base.llamarpc.com',
+  'https://base.publicnode.com',
+  'https://1rpc.io/base',
 ];
 
 function getClient() {
   const custom = import.meta.env.VITE_ETH_RPC_URL as string | undefined;
   const rpcUrl = custom && custom.trim() ? custom.trim() : PUBLIC_RPCS[0];
   return createPublicClient({
-    chain: mainnet,
+    chain: base,
     transport: http(rpcUrl, {
       timeout: 20_000,
       retryCount: 2,
@@ -301,15 +319,57 @@ export async function fetchUserPosition(userAddress: string): Promise<UserPositi
       symbol: token.symbol,
       tokenAddress: token.tokenAddress,
       decimals,
+      // 价格字段占位，稍后填充
+      priceRaw: 0n,
+      priceUSD: '0',
       supplyBalance: parseFloat(formatUnits(currentATokenBalance, decimals)).toFixed(6),
       supplyBalanceRaw: currentATokenBalance,
+      supplyValueUSD: '0',
       usageAsCollateralEnabled,
       stableDebt: parseFloat(formatUnits(currentStableDebt, decimals)).toFixed(6),
       stableDebtRaw: currentStableDebt,
       variableDebt: parseFloat(formatUnits(currentVariableDebt, decimals)).toFixed(6),
       variableDebtRaw: currentVariableDebt,
       totalDebt: parseFloat(formatUnits(totalDebtRaw, decimals)).toFixed(6),
+      totalDebtValueUSD: '0',
     });
+  }
+
+  // 5. 批量查询所有有仓位资产的价格（USD，8位精度）
+  if (reserves.length > 0) {
+    let prices: readonly bigint[] = [];
+    try {
+      prices = await client.readContract({
+        address: AAVE_ADDRESSES.oracle,
+        abi: ORACLE_ABI,
+        functionName: 'getAssetsPrices',
+        args: [reserves.map((r) => r.tokenAddress)],
+      });
+    } catch {
+      // 价格查询失败不影响主流程，保持 priceUSD = '0'
+    }
+
+    for (let i = 0; i < reserves.length; i++) {
+      const priceRaw = prices[i] ?? 0n;
+      const r = reserves[i];
+      const tokenAmt = parseFloat(formatUnits(r.supplyBalanceRaw, r.decimals));
+      const debtAmt = parseFloat(formatUnits(r.stableDebtRaw + r.variableDebtRaw, r.decimals));
+      const priceNum = parseFloat(formatUnits(priceRaw, 8));
+
+      r.priceRaw = priceRaw;
+      r.priceUSD = priceNum.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: priceNum < 0.01 ? 8 : 2,
+      });
+      r.supplyValueUSD = (tokenAmt * priceNum).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+      r.totalDebtValueUSD = (debtAmt * priceNum).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
   }
 
   return { summary, reserves };
