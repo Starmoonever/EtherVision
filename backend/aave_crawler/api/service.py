@@ -22,6 +22,8 @@ from ..rpc import (
 )
 from .schemas import (
     LiquidationLineResponse,
+    HistoricalPositionResponse,
+    HistoricalReserveDetail,
     PositionResponse,
     PriceResponse,
 )
@@ -425,3 +427,366 @@ async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None)
             timestamp=_ts_to_utc_str(actual_ts),
             source="defillama",
         )
+
+
+# ── 历史仓位重建（基于 aave.aave_history + aave_reserve_data） ─────────────────
+
+# 常见稳定币符号（历史价格视为 $1）
+_STABLECOINS = {
+    "USDC", "USDT", "DAI", "GHO", "LUSD", "FRAX",
+    "USDE", "CRVUSD", "PYUSD", "SUSD", "TUSD", "BUSD",
+}
+
+# 单用户历史仓位 SQL（含利息：scaled balance × index_at_T）
+# RAY = 1e27（Aave 内部利率精度）
+_SQL_USER_HISTORY = """
+WITH target_block AS (
+    SELECT COALESCE(MAX(block_number), 0) AS blk
+    FROM aave.aave_history
+    WHERE created_at <= $2
+),
+ops AS (
+    SELECT
+        convert_from(h.token_address, 'UTF8')            AS token_addr,
+        h.token_symbol,
+        h.decimals,
+        h.operation_type,
+        h.amount,
+        COALESCE(liq_r.liquidity_index,         1000000000000000000000000000::numeric) AS liq_idx_op,
+        COALESCE(borrow_r.variable_borrow_index, 1000000000000000000000000000::numeric) AS borrow_idx_op
+    FROM aave.aave_history h
+    LEFT JOIN LATERAL (
+        SELECT r.liquidity_index
+        FROM   aave.aave_reserve_data r
+        WHERE  r.underlying_token_address = h.token_address
+          AND  r.block_number <= h.block_number
+        ORDER BY r.block_number DESC LIMIT 1
+    ) liq_r ON true
+    LEFT JOIN LATERAL (
+        SELECT r.variable_borrow_index
+        FROM   aave.aave_reserve_data r
+        WHERE  r.underlying_token_address = h.token_address
+          AND  r.block_number <= h.block_number
+        ORDER BY r.block_number DESC LIMIT 1
+    ) borrow_r ON true
+    WHERE convert_from(h.user_address, 'UTF8') ILIKE $1
+      AND h.created_at   <= $2
+      AND h.operation_type IN ('deposit', 'withdraw', 'borrow', 'repay')
+),
+current_idx AS (
+    SELECT DISTINCT ON (underlying_token_address)
+        convert_from(underlying_token_address, 'UTF8') AS token_addr,
+        liquidity_index          AS cur_liq,
+        variable_borrow_index    AS cur_borrow
+    FROM aave.aave_reserve_data
+    WHERE block_number <= (SELECT blk FROM target_block)
+    ORDER BY underlying_token_address, block_number DESC
+),
+scaled AS (
+    SELECT
+        o.token_addr, o.token_symbol, o.decimals,
+        SUM(CASE
+            WHEN o.operation_type = 'deposit'  THEN  o.amount / o.liq_idx_op
+            WHEN o.operation_type = 'withdraw' THEN -o.amount / o.liq_idx_op
+            ELSE 0
+        END) AS sc_supply,
+        SUM(CASE
+            WHEN o.operation_type = 'borrow' THEN  o.amount / o.borrow_idx_op
+            WHEN o.operation_type = 'repay'  THEN -o.amount / o.borrow_idx_op
+            ELSE 0
+        END) AS sc_debt
+    FROM ops o
+    GROUP BY o.token_addr, o.token_symbol, o.decimals
+)
+SELECT
+    s.token_addr,
+    s.token_symbol,
+    s.decimals,
+    GREATEST(s.sc_supply * COALESCE(ci.cur_liq,    1000000000000000000000000000::numeric)
+             / 1000000000000000000000000000::numeric / POWER(10::numeric, s.decimals), 0) AS supply_amount,
+    GREATEST(s.sc_debt   * COALESCE(ci.cur_borrow, 1000000000000000000000000000::numeric)
+             / 1000000000000000000000000000::numeric / POWER(10::numeric, s.decimals), 0) AS debt_amount
+FROM scaled s
+LEFT JOIN current_idx ci ON ci.token_addr = s.token_addr
+WHERE s.sc_supply > 1e-9 OR s.sc_debt > 1e-9
+ORDER BY s.token_symbol;
+"""
+
+# 批量历史仓位 SQL（近似：直接累加原始金额，不含利息，速度快）
+_SQL_BATCH_HISTORY = """
+WITH user_token_ops AS (
+    SELECT
+        convert_from(h.user_address,  'UTF8') AS address,
+        convert_from(h.token_address, 'UTF8') AS token_addr,
+        h.token_symbol,
+        h.decimals,
+        SUM(CASE
+            WHEN operation_type = 'deposit'  THEN  amount / POWER(10::numeric, decimals)
+            WHEN operation_type = 'withdraw' THEN -amount / POWER(10::numeric, decimals)
+            ELSE 0
+        END) AS net_supply,
+        SUM(CASE
+            WHEN operation_type = 'borrow' THEN  amount / POWER(10::numeric, decimals)
+            WHEN operation_type = 'repay'  THEN -amount / POWER(10::numeric, decimals)
+            ELSE 0
+        END) AS net_debt
+    FROM aave.aave_history
+    WHERE created_at <= $1
+      AND operation_type IN ('deposit', 'withdraw', 'borrow', 'repay')
+    GROUP BY 1, 2, 3, 4
+),
+top_eth AS (
+    SELECT address,
+           SUM(GREATEST(net_supply, 0)) AS eth_amount
+    FROM   user_token_ops
+    WHERE  UPPER(token_symbol) IN ('WETH','ETH','CBETH','WSTETH','RETH')
+    GROUP BY address
+    HAVING SUM(GREATEST(net_supply, 0)) > 0.001
+    ORDER BY eth_amount DESC
+    LIMIT  $2
+)
+SELECT
+    t.address,
+    t.eth_amount,
+    u.token_addr,
+    u.token_symbol,
+    GREATEST(u.net_debt, 0) AS debt_amount
+FROM top_eth t
+LEFT JOIN user_token_ops u ON u.address = t.address AND GREATEST(u.net_debt, 0) > 1e-6
+ORDER BY t.eth_amount DESC, t.address, u.token_symbol;
+"""
+
+
+async def _defillama_prices_bulk(
+    token_map: dict[str, str],   # symbol → "ethereum:0x..." (or "coingecko:...")
+    timestamp: int,
+) -> dict[str, Decimal]:
+    """批量从 DeFiLlama 获取多个资产在同一时间点的历史价格。
+    返回 symbol → Decimal(price_usd)。
+    稳定币直接返回 1，其余并发查询。
+    """
+    import aiohttp
+    from datetime import datetime, timezone
+
+    result: dict[str, Decimal] = {}
+    to_fetch: list[tuple[str, str]] = []   # [(symbol, coin_key), ...]
+
+    for sym, coin_key in token_map.items():
+        if sym.upper() in _STABLECOINS:
+            result[sym] = Decimal("1")
+        else:
+            to_fetch.append((sym, coin_key))
+
+    if not to_fetch:
+        return result
+
+    async def _fetch_one(session: aiohttp.ClientSession, sym: str, coin_key: str) -> tuple[str, Decimal]:
+        url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
+        try:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                entry = data.get("coins", {}).get(coin_key, {})
+                price = Decimal(str(entry["price"])) if "price" in entry else Decimal("0")
+        except Exception:
+            price = Decimal("0")
+        return sym, price
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
+        tasks = [_fetch_one(sess, sym, ck) for sym, ck in to_fetch]
+        results = await asyncio.gather(*tasks)
+        for sym, price in results:
+            result[sym] = price
+
+    return result
+
+
+async def get_user_position_history(
+    pool,
+    address: str,
+    at_time_ts: int,
+) -> HistoricalPositionResponse | None:
+    """
+    从 aave.aave_history + aave_reserve_data 重建指定用户在历史时间点的仓位。
+
+    供给量使用 scaled balance × liquidity_index(T) 计算，含利息。
+    但不包含用户最后一次操作到时间点 T 之间的利息累积。
+    历史 USD 价格来自 DeFiLlama。
+    """
+    from datetime import datetime, timezone
+
+    def _ts_to_utc(ts: int) -> str:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    at_dt = datetime.fromtimestamp(at_time_ts, tz=timezone.utc)
+
+    rows = await pool.fetch(_SQL_USER_HISTORY, address.lower(), at_dt)
+
+    if not rows:
+        # 无操作记录 → 返回 None，由调用方决定如何回退
+        return None
+
+    # 过滤掉供给和债务都为 0 的行
+    rows = [r for r in rows if Decimal(str(r["supply_amount"])) > Decimal("1e-6")
+            or Decimal(str(r["debt_amount"])) > Decimal("1e-6")]
+    if not rows:
+        # 有操作记录但净额为零 → 已平仓，返回空仓位
+        return HistoricalPositionResponse(
+            address=address,
+            at_time=_ts_to_utc(at_time_ts),
+            eth_collateral_amount="0",
+            eth_price_usd="0",
+            eth_collateral_usd="0",
+            total_debt_approx_usd="0",
+            liq_price="0",
+            reserves=[],
+            note="该地址在此时间点的净仓位为零（存取相抵）",
+        )
+
+    # 收集需要查历史价格的 token
+    # ETH 类代币：使用 WETH 地址代表 ETH 价格
+    eth_syms = {"WETH", "ETH", "CBETH", "WSTETH", "RETH"}
+    token_map: dict[str, str] = {}   # symbol → defillama coin_key
+    for row in rows:
+        sym = row["token_symbol"].upper()
+        if sym not in _STABLECOINS:
+            token_map[sym] = f"ethereum:{row['token_addr'].lower()}"
+
+    prices = await _defillama_prices_bulk(token_map, at_time_ts)
+
+    # 计算汇总
+    eth_collateral = Decimal("0")
+    total_debt_usd = Decimal("0")
+    reserves: list[HistoricalReserveDetail] = []
+
+    for row in rows:
+        sym = row["token_symbol"].upper()
+        supply = Decimal(str(row["supply_amount"]))
+        debt   = Decimal(str(row["debt_amount"]))
+        price  = prices.get(sym, Decimal("1"))  # 未知价格 fallback 为 1
+
+        if sym in eth_syms and supply > 0:
+            eth_collateral += supply
+
+        if debt > 0:
+            total_debt_usd += debt * price
+
+        if supply > Decimal("1e-6") or debt > Decimal("1e-6"):
+            reserves.append(HistoricalReserveDetail(
+                symbol=row["token_symbol"],
+                token_address=row["token_addr"],
+                supply_amount=_fmt(supply, 6),
+                debt_amount=_fmt(debt, 6),
+            ))
+
+    # ETH 价格：优先从 prices 字典取 WETH，其次 ETH
+    eth_price = prices.get("WETH") or prices.get("ETH") or Decimal("0")
+    eth_collateral_usd = eth_collateral * eth_price
+
+    # liq_price（使用与实时端点相同公式，liq_threshold 近似 0.825 for WETH on ETH mainnet）
+    _DEFAULT_LIQ_THRESHOLD = Decimal("0.825")
+    if total_debt_usd > 0 and eth_collateral > 0:
+        liq_price = total_debt_usd / (eth_collateral * _DEFAULT_LIQ_THRESHOLD)
+    else:
+        liq_price = Decimal("0")
+
+    return HistoricalPositionResponse(
+        address=address,
+        at_time=_ts_to_utc(at_time_ts),
+        eth_collateral_amount=_fmt(eth_collateral, 6),
+        eth_price_usd=_fmt(eth_price, 2),
+        eth_collateral_usd=_fmt(eth_collateral_usd, 2),
+        total_debt_approx_usd=_fmt(total_debt_usd, 2),
+        liq_price=_fmt(liq_price, 2) if liq_price > 0 else "0",
+        reserves=reserves,
+        note=(
+            "供给量通过 scaled_balance × liquidity_index(T) 计算（含利息），"
+            "但最后一次操作到 T 之间的利息未计。"
+            "liq_price 使用 WETH liq_threshold=0.825 近似计算。"
+        ),
+    )
+
+
+async def get_positions_history(
+    pool,
+    at_time_ts: int,
+    limit: int = 10,
+) -> list[HistoricalPositionResponse]:
+    """
+    批量重建历史时间点的仓位（近似，不含利息），按 ETH 抵押量降序排列。
+    仅扫描 aave.aave_history，无需逐行联 aave_reserve_data（速度快）。
+    历史 USD 价格来自 DeFiLlama。
+    """
+    from datetime import datetime, timezone
+    from fastapi import HTTPException
+
+    def _ts_to_utc(ts: int) -> str:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    at_dt = datetime.fromtimestamp(at_time_ts, tz=timezone.utc)
+    rows = await pool.fetch(_SQL_BATCH_HISTORY, at_dt, limit)
+    if not rows:
+        raise HTTPException(status_code=404, detail="该时间点之前无 Aave 操作记录")
+
+    # 收集所有需要查价格的 token
+    token_map: dict[str, str] = {}
+    for row in rows:
+        sym = row["token_symbol"].upper() if row["token_symbol"] else None
+        if sym and sym not in _STABLECOINS:
+            token_map[sym] = f"ethereum:{row['token_addr'].lower()}"
+
+    prices = await _defillama_prices_bulk(token_map, at_time_ts)
+    eth_price = prices.get("WETH") or prices.get("ETH") or Decimal("0")
+    _DEFAULT_LIQ_THRESHOLD = Decimal("0.825")
+
+    # 按 address 分组
+    from collections import defaultdict
+    addr_eth: dict[str, Decimal] = {}
+    addr_debts: dict[str, list[tuple[str, str, Decimal]]] = defaultdict(list)  # addr → [(sym, ta, debt)]
+
+    seen = set()
+    for row in rows:
+        addr = row["address"]
+        if addr not in addr_eth:
+            addr_eth[addr] = Decimal(str(row["eth_amount"]))
+        sym = row["token_symbol"]
+        ta  = row["token_addr"]
+        if sym and ta:
+            key = (addr, ta)
+            if key not in seen:
+                seen.add(key)
+                addr_debts[addr].append((sym, ta, Decimal(str(row["debt_amount"]))))
+
+    result: list[HistoricalPositionResponse] = []
+    for addr in addr_eth:
+        eth_amt = addr_eth[addr]
+        total_debt_usd = Decimal("0")
+        reserves: list[HistoricalReserveDetail] = []
+        for sym, ta, debt in addr_debts.get(addr, []):
+            sym_up = sym.upper()
+            price = prices.get(sym_up, Decimal("1"))
+            total_debt_usd += debt * price
+            reserves.append(HistoricalReserveDetail(
+                symbol=sym,
+                token_address=ta,
+                supply_amount="0",
+                debt_amount=_fmt(debt, 6),
+            ))
+
+        liq_price = (
+            total_debt_usd / (eth_amt * _DEFAULT_LIQ_THRESHOLD)
+            if total_debt_usd > 0 and eth_amt > 0
+            else Decimal("0")
+        )
+        result.append(HistoricalPositionResponse(
+            address=addr,
+            at_time=_ts_to_utc(at_time_ts),
+            eth_collateral_amount=_fmt(eth_amt, 6),
+            eth_price_usd=_fmt(eth_price, 2),
+            eth_collateral_usd=_fmt(eth_amt * eth_price, 2),
+            total_debt_approx_usd=_fmt(total_debt_usd, 2),
+            liq_price=_fmt(liq_price, 2) if liq_price > 0 else "0",
+            reserves=reserves,
+            note="近似值：直接累加操作金额，未计利息；liq_price 使用 WETH liq_threshold=0.825",
+        ))
+
+    return result

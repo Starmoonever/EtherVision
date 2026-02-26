@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .schemas import LiquidationLineResponse, PositionResponse, PriceResponse
+from .schemas import LiquidationLineResponse, PriceResponse
 from .service import (
     get_eth_price,
     get_liquidation_line,
     get_sorted_positions,
     get_user_position,
+    get_user_position_history,
+    get_positions_history,
 )
 
 router = APIRouter(prefix="/api")
@@ -31,17 +33,52 @@ def _pool(request: Request):
     return pool
 
 
+def _parse_utc_time(time_str: str) -> int:
+    """UTC 时间字符串 → Unix 秒级时间戳，失败抛 HTTPException。"""
+    from datetime import datetime, timezone
+    _FMTS = [
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ]
+    for fmt in _FMTS:
+        try:
+            return int(datetime.strptime(time_str, fmt).replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=400,
+        detail="date/time 格式无法识别，支持示例：2024-11-14T12:00:00Z、2024-11-14 12:00:00、2024-11-14",
+    )
+
+
 @router.get(
     "/user/position",
-    response_model=PositionResponse,
     summary="查询用户 Aave 仓位",
-    description="实时从以太主网链上查询指定地址的 Aave V3 仓位数据",
+    description=(
+        "查询指定地址的 Aave V3 仓位。\n\n"
+        "- 省略 `date`：实时从以太主网链上查询\n"
+        "- 指定 `date`：从 aave.aave_history 重建历史时间点仓位（含利息估算，价格来自 DeFiLlama）\n\n"
+        "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
+    ),
 )
 async def user_position(
     request: Request,
     address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
-) -> PositionResponse:
-    return await get_user_position(_w3(request), address)
+    date: str | None = Query(
+        None,
+        description="历史时间点（UTC），如 2024-01-01；省略则查询实时链上数据",
+    ),
+) -> Any:
+    if date is None:
+        return await get_user_position(_w3(request), address)
+    ts = _parse_utc_time(date)
+    result = await get_user_position_history(_pool(request), address, ts)
+    if result is None:
+        # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
+        return await get_user_position(_w3(request), address)
+    return result
 
 
 @router.get(
@@ -59,25 +96,36 @@ async def user_liquidation_line(
 
 @router.get(
     "/positions",
-    response_model=list[PositionResponse],
     summary="批量查询仓位排行",
-    description="从数据库中读取已爬取的仓位数据，按 liq_price 或健康系数排序",
+    description=(
+        "查询 Aave V3 仓位排行。\n\n"
+        "- 省略 `date`：从数据库读取已爬取的实时快照，支持 `orderby` / `order` 排序，最多 200 条\n"
+        "- 指定 `date`：从 aave.aave_history 计算历史时间点 top-N 用户（按 ETH 抵押量降序，近似值，最多 100 条）\n\n"
+        "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
+    ),
 )
 async def positions(
     request: Request,
     orderby: Literal["liquidation_price", "health_factor"] = Query(
         "liquidation_price",
-        description="排序字段：liquidation_price（清算价，越低越危险）或 health_factor",
+        description="排序字段（仅实时模式有效）：liquidation_price 或 health_factor",
     ),
     order: Literal["asc", "desc"] = Query(
         "asc",
-        description="排序方向：asc=最危险的在前，desc=最安全的在前",
+        description="排序方向（仅实时模式有效）：asc=最危险在前，desc=最安全在前",
     ),
-    limit: int = Query(10, ge=1, le=200, description="返回记录数，最多 200"),
-) -> list[PositionResponse]:
-    return await get_sorted_positions(
-        _pool(request), orderby=orderby, order=order, limit=limit
-    )
+    limit: int = Query(10, ge=1, le=200, description="返回记录数（实时模式最多 200，历史模式最多 100）"),
+    date: str | None = Query(
+        None,
+        description="历史时间点（UTC），如 2024-01-01；省略则查询数据库实时快照",
+    ),
+) -> Any:
+    if date is None:
+        return await get_sorted_positions(
+            _pool(request), orderby=orderby, order=order, limit=limit
+        )
+    ts = _parse_utc_time(date)
+    return await get_positions_history(_pool(request), ts, limit=min(limit, 100))
 
 
 @router.get(
@@ -101,28 +149,5 @@ async def asset_price(
 ) -> PriceResponse:
     if time == "now":
         return await get_eth_price(_w3(request), asset)
-
-    # 解析 UTC 时间字符串 → Unix 秒级时间戳
-    from datetime import datetime, timezone
-
-    _FMTS = [
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
-    ]
-    ts: int | None = None
-    for fmt in _FMTS:
-        try:
-            dt = datetime.strptime(time, fmt).replace(tzinfo=timezone.utc)
-            ts = int(dt.timestamp())
-            break
-        except ValueError:
-            continue
-
-    if ts is None:
-        raise HTTPException(
-            status_code=400,
-            detail="time 格式无法识别，支持示例：2024-11-14T12:00:00Z、2024-11-14 12:00:00、2024-11-14",
-        )
+    ts = _parse_utc_time(time)
     return await get_eth_price(_w3(request), asset, timestamp=ts)

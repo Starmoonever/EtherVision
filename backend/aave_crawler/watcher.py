@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # 查询自水位线以来有活动的地址（aave.aave_history 的地址列是 bytea）
 # UNION 自动去重；target_user_address 为 NULL 的行（如 flashloan 无 borrower）自动过滤
 _SQL_CHANGED_USERS = """
-SELECT DISTINCT '0x' || encode(addr, 'hex') AS address
+SELECT DISTINCT convert_from(addr, 'UTF8') AS address
 FROM (
     SELECT user_address AS addr, created_at
       FROM aave.aave_history
