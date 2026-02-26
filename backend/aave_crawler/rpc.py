@@ -247,8 +247,13 @@ async def fetch_user_position(
     """
     async with semaphore:
         try:
-            block = await w3.eth.block_number
             summary = await get_user_account_data(w3, user_address)
+
+            # 快速跳过：既没有抵押品也没有借贷的地址，无需查明细
+            if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
+                return None
+
+            block = await w3.eth.block_number
 
             # 并发查询该用户在所有资产的仓位
             tasks = [

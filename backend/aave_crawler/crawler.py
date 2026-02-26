@@ -97,34 +97,44 @@ async def run_crawler(
     total_ok = 0
     total_fail = 0
 
+    # 将所有用户任务一次性提交，由 semaphore 控制实际并发数。
+    # 使用 asyncio.as_completed 流式收取结果，避免慢用户阻塞整批；
+    # DB 写入与后续 RPC 查询并发执行，充分利用网络和数据库 I/O 窗口。
+    all_tasks = [
+        asyncio.ensure_future(
+            fetch_user_position(
+                w3, addr, reserve_tokens, reserve_configs, asset_prices, semaphore
+            )
+        )
+        for addr in users
+    ]
+
+    db_write_task: asyncio.Task | None = None  # 当前正在后台写入的任务
+
     with tqdm(total=len(users), desc="查询仓位", unit="user") as pbar:
-        # 分批提交任务
-        for i in range(0, len(users), batch_size * 2):
-            chunk = users[i : i + batch_size * 2]
-            tasks = [
-                fetch_user_position(
-                    w3, addr, reserve_tokens, reserve_configs, asset_prices, semaphore
-                )
-                for addr in chunk
-            ]
-            results = await asyncio.gather(*tasks)
+        for coro in asyncio.as_completed(all_tasks):
+            pos = await coro
+            pbar.update(1)
+            if pos is None:
+                total_fail += 1
+                continue
+            total_ok += 1
+            pending_batch.append(pos)
 
-            for pos in results:
-                pbar.update(1)
-                if pos is None:
-                    total_fail += 1
-                    continue
-                total_ok += 1
-                pending_batch.append(pos)
+            if len(pending_batch) >= batch_size:
+                # 等待上一次 DB 写入完成，再发起新的写入
+                if db_write_task is not None:
+                    await db_write_task
+                if not dry_run:
+                    db_write_task = asyncio.ensure_future(
+                        upsert_positions(pool, list(pending_batch))
+                    )
+                pending_batch.clear()
 
-                # 积攒到 batch_size 后写入
-                if len(pending_batch) >= batch_size:
-                    if not dry_run:
-                        await upsert_positions(pool, pending_batch)
-                    pending_batch.clear()
-
-        # 写入剩余
-        if pending_batch and not dry_run:
-            await upsert_positions(pool, pending_batch)
+    # 等待最后一次后台写入完成
+    if db_write_task is not None:
+        await db_write_task
+    if pending_batch and not dry_run:
+        await upsert_positions(pool, pending_batch)
 
     logger.info("爬取完成：成功 %d，失败 %d", total_ok, total_fail)

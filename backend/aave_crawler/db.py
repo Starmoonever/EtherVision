@@ -119,11 +119,17 @@ def _price_decimal(price_raw: int) -> Decimal:
 
 async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition]) -> None:
     """
-    批量 UPSERT 仓位数据。
-    策略：覆盖（ON CONFLICT DO UPDATE），reserve_positions 先删再插保证数据干净。
-    每个用户在同一个事务内完成，保证 summary 与明细一致。
+    批量 UPSERT 仓位数据（高性能版）。
+
+    策略：
+    1. executemany 批量 UPSERT 所有用户 summary（一次 round-trip）
+    2. DELETE ... WHERE user_address = ANY($1) 一次清空整批的明细旧数据
+    3. copy_records_to_table 使用 PostgreSQL COPY 协议批量写入明细（比 executemany 快 10-50x）
+    整批在同一个事务内完成，保证 summary 与明细一致。
     """
     now = datetime.now(tz=timezone.utc)
+    _MAX_HF = Decimal("1e18")
+    _MAX_UINT256 = (1 << 256) - 1
 
     _SQL_UPSERT_POS = """
         INSERT INTO loan.aave_v3_eth_positions
@@ -142,78 +148,76 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition]) ->
             liq_threshold         = EXCLUDED.liq_threshold;
     """
 
-    _SQL_DELETE_RESERVES = """
-        DELETE FROM loan.aave_v3_eth_reserve_positions
-        WHERE user_address = $1;
-    """
+    # ── 1. 构建所有 summary 行 ──────────────────────────────────────────────
+    summary_rows: list[tuple] = []
+    for pos in positions:
+        s = pos.summary
+        hf_raw = s.health_factor
+        hf_decimal = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
+        useraddr = pos.user_address.lower()
+        summary_rows.append((
+            useraddr,
+            pos.block_number,
+            now,
+            _raw_to_decimal(s.total_collateral_base, 8),
+            _raw_to_decimal(s.total_debt_base, 8),
+            _raw_to_decimal(s.available_borrows_base, 8),
+            hf_decimal,
+            Decimal(s.ltv) / Decimal(10000),
+            Decimal(s.current_liquidation_threshold) / Decimal(10000),
+        ))
 
-    _SQL_INSERT_RESERVE = """
-        INSERT INTO loan.aave_v3_eth_reserve_positions
-            (user_address, token_address, symbol, block_number, scanned_at,
-             decimals, price_usd, supply_raw, supply_usd,
-             stable_debt_raw, variable_debt_raw, total_debt_usd,
-             use_as_collateral)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);
-    """
-
-    # MAX_UINT256：healthFactor = ∞ 时的值，存为极大数或特定标志值
-    _MAX_HF = Decimal("1e18")   # 存为 1e18 表示无穷（UI 层特判）
+    # ── 2. 构建所有明细行 ────────────────────────────────────────────────────
+    all_user_addrs = [pos.user_address.lower() for pos in positions]
+    all_reserve_rows: list[tuple] = []
+    for pos in positions:
+        useraddr = pos.user_address.lower()
+        for r in pos.reserves:
+            price = _price_decimal(r.price_raw)
+            supply_dec = _raw_to_decimal(r.supply_raw, r.decimals)
+            stable_dec = _raw_to_decimal(r.stable_debt_raw, r.decimals)
+            variable_dec = _raw_to_decimal(r.variable_debt_raw, r.decimals)
+            all_reserve_rows.append((
+                useraddr,
+                r.token_address.lower(),
+                r.symbol,
+                pos.block_number,
+                now,
+                r.decimals,
+                price,
+                Decimal(r.supply_raw),
+                supply_dec * price,
+                Decimal(r.stable_debt_raw),
+                Decimal(r.variable_debt_raw),
+                (stable_dec + variable_dec) * price,
+                r.usage_as_collateral_enabled,
+            ))
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for pos in positions:
-                s = pos.summary
+            # 1. 一次 executemany UPSERT 所有 summary
+            await conn.executemany(_SQL_UPSERT_POS, summary_rows)
 
-                # health_factor：max uint256 表示无限，存为约定值 1e18
-                _MAX_UINT256 = (1 << 256) - 1
-                hf_raw = s.health_factor
-                if hf_raw >= _MAX_UINT256:
-                    hf_decimal = _MAX_HF
-                else:
-                    hf_decimal = _raw_to_decimal(hf_raw, 18)
+            # 2. 一条语句删除整批用户的旧明细
+            await conn.execute(
+                "DELETE FROM loan.aave_v3_eth_reserve_positions"
+                " WHERE user_address = ANY($1::text[])",
+                all_user_addrs,
+            )
 
-                useraddr = pos.user_address.lower()
-
-                await conn.execute(
-                    _SQL_UPSERT_POS,
-                    useraddr,
-                    pos.block_number,
-                    now,
-                    _raw_to_decimal(s.total_collateral_base, 8),
-                    _raw_to_decimal(s.total_debt_base, 8),
-                    _raw_to_decimal(s.available_borrows_base, 8),
-                    hf_decimal,
-                    Decimal(s.ltv) / Decimal(10000),
-                    Decimal(s.current_liquidation_threshold) / Decimal(10000),
+            # 3. COPY 协议批量写入所有明细（最快写入方式）
+            if all_reserve_rows:
+                await conn.copy_records_to_table(
+                    "aave_v3_eth_reserve_positions",
+                    schema_name="loan",
+                    records=all_reserve_rows,
+                    columns=[
+                        "user_address", "token_address", "symbol",
+                        "block_number", "scanned_at", "decimals",
+                        "price_usd", "supply_raw", "supply_usd",
+                        "stable_debt_raw", "variable_debt_raw", "total_debt_usd",
+                        "use_as_collateral",
+                    ],
                 )
 
-                # 明细：先删该用户所有行，再批量插入最新快照
-                await conn.execute(_SQL_DELETE_RESERVES, useraddr)
-
-                reserve_rows = []
-                for r in pos.reserves:
-                    price = _price_decimal(r.price_raw)
-                    supply_dec = _raw_to_decimal(r.supply_raw, r.decimals)
-                    stable_dec = _raw_to_decimal(r.stable_debt_raw, r.decimals)
-                    variable_dec = _raw_to_decimal(r.variable_debt_raw, r.decimals)
-                    total_debt = stable_dec + variable_dec
-                    reserve_rows.append((
-                        useraddr,
-                        r.token_address.lower(),
-                        r.symbol,
-                        pos.block_number,
-                        now,
-                        r.decimals,
-                        price,
-                        Decimal(r.supply_raw),
-                        supply_dec * price,
-                        Decimal(r.stable_debt_raw),
-                        Decimal(r.variable_debt_raw),
-                        total_debt * price,
-                        r.usage_as_collateral_enabled,
-                    ))
-
-                if reserve_rows:
-                    await conn.executemany(_SQL_INSERT_RESERVE, reserve_rows)
-
-    logger.debug("UPSERT 完成：%d 个用户", len(positions))
+    logger.debug("UPSERT 完成：%d 个用户，%d 条明细", len(positions), len(all_reserve_rows))
