@@ -72,9 +72,9 @@ export default function App() {
                   {line}
                 </p>
               ))}
-              {error.includes('VITE_ETH_RPC_URL') && (
+              {error.includes('config.yaml') && (
                 <p className="rpc-hint">
-                  参考 <code>.env.example</code>，在项目根目录创建 <code>.env.local</code> 并填入 RPC 地址后重启开发服务器。
+                  参考 <code>config.yaml.example</code>，在项目根目录创建 <code>config.yaml</code> 并填入 <code>rpc_url</code> 后重启开发服务器。
                 </p>
               )}
             </div>

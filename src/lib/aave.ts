@@ -1,4 +1,4 @@
-import { createPublicClient, http, formatUnits, isAddress, type Address } from 'viem';
+import { createPublicClient, http, fallback, formatUnits, isAddress, type Address } from 'viem';
 import { base } from 'viem/chains';
 
 // ── 合约地址 (Base Mainnet Aave V3) ──────────────────────────────────────────
@@ -134,23 +134,57 @@ export interface UserPosition {
 }
 
 // ── 备用 RPC 列表（Base Mainnet，VITE_ETH_RPC_URL 优先）────────────────────────
+// 任一节点返回 429 / 超时，viem fallback transport 自动切换下一个
 const PUBLIC_RPCS = [
-  'https://mainnet.base.org',
   'https://base.llamarpc.com',
-  'https://base.publicnode.com',
+  'https://base-rpc.publicnode.com',
   'https://1rpc.io/base',
+  'https://base.drpc.org',
+  'https://mainnet.base.org',          // 官方节点限流严重，排最后
 ];
 
-function getClient() {
-  const custom = import.meta.env.VITE_ETH_RPC_URL as string | undefined;
-  const rpcUrl = custom && custom.trim() ? custom.trim() : PUBLIC_RPCS[0];
+const BASE_CHAIN_ID = 8453;
+
+async function getClient() {
+  const custom = import.meta.env.VITE_RPC_URL as string | undefined;
+  const publicTransports = PUBLIC_RPCS.map((url) => http(url, { timeout: 15_000 }));
+
+  if (custom && custom.trim()) {
+    // 验证自定义节点是否连接到 Base（chainId 8453）
+    try {
+      const probe = createPublicClient({
+        transport: http(custom.trim(), { timeout: 8_000 }),
+      });
+      const chainId = await probe.getChainId();
+      if (chainId !== BASE_CHAIN_ID) {
+        console.warn(
+          `[aave] 自定义 RPC 连接的链 ID 为 ${chainId}，不是 Base（${BASE_CHAIN_ID}），已跳过，仅使用公共节点。`
+        );
+        return createPublicClient({
+          chain: base,
+          transport: fallback(publicTransports, { rank: false, retryCount: 2 }),
+        });
+      }
+    } catch {
+      console.warn('[aave] 自定义 RPC 探测失败，已跳过，仅使用公共节点。');
+      return createPublicClient({
+        chain: base,
+        transport: fallback(publicTransports, { rank: false, retryCount: 2 }),
+      });
+    }
+    // 自定义节点通过验证，优先使用，公共节点作为后备
+    return createPublicClient({
+      chain: base,
+      transport: fallback(
+        [http(custom.trim(), { timeout: 20_000 }), ...publicTransports],
+        { rank: false, retryCount: 2 }
+      ),
+    });
+  }
+
   return createPublicClient({
     chain: base,
-    transport: http(rpcUrl, {
-      timeout: 20_000,
-      retryCount: 2,
-      retryDelay: 1_500,
-    }),
+    transport: fallback(publicTransports, { rank: false, retryCount: 2 }),
   });
 }
 
@@ -158,11 +192,19 @@ function getClient() {
 function classifyRpcError(err: unknown): never {
   const msg = err instanceof Error ? err.message : String(err);
 
-  // JSON-RPC -32603 / Internal error  →  RPC 节点自身故障或限流
+  // 429 / over rate limit
+  if (/429|rate.?limit|over rate/i.test(msg)) {
+    throw new Error(
+      '所有公共 RPC 节点均已触发限流（429）。\n' +
+      '请在项目根目录的 config.yaml 中配置 rpc_url，推荐使用 Alchemy / QuickNode 的 Base 私有节点。'
+    );
+  }
+
+  // JSON-RPC -32603 / Internal error
   if (/internal error/i.test(msg)) {
     throw new Error(
       'RPC 节点返回内部错误（可能被限流或节点故障）。\n' +
-      '建议在 .env.local 中配置 VITE_ETH_RPC_URL 使用 Infura / Alchemy 等私有节点，然后刷新页面重试。'
+      '请在 config.yaml 中配置 rpc_url 使用私有 Base 节点，然后刷新页面重试。'
     );
   }
 
@@ -185,7 +227,7 @@ export async function fetchUserPosition(userAddress: string): Promise<UserPositi
     throw new Error('无效的以太坊地址');
   }
 
-  const client = getClient();
+  const client = await getClient();
   const user = userAddress as Address;
 
   // 1. 获取账户汇总数据

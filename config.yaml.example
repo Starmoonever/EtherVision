@@ -1,0 +1,7 @@
+# Aave V3 Base 仓位查询 - 配置文件
+# 复制此文件为 config.yaml 并填入实际值
+
+# Base 网络 RPC 端点
+# 不填则自动轮换公共节点（可能触发限流）
+# 推荐使用 Alchemy / QuickNode / Infura 私有节点
+rpc_url: ""
