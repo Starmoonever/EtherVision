@@ -126,12 +126,12 @@ curl "http://localhost:8000/api/user/position?address=0xYourAddress"
 }
 ```
 
-#### `GET /api/user/liquidation_line?address=`
+#### `GET /api/user/liq_price?address=`
 
 计算 ETH 价格跌至多少时触发清算风险（HF → 1.0）。
 
 ```bash
-curl "http://localhost:8000/api/user/liquidation_line?address=0xYourAddress"
+curl "http://localhost:8000/api/user/liq_price?address=0xYourAddress"
 ```
 
 响应示例：
