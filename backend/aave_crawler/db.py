@@ -157,17 +157,27 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
 async def fetch_user_addresses(
     pool: asyncpg.Pool,
     schema: str = "loan",
-    table: str = "all_aave_eth_users",
-    address_column: str = "walletaddress",
+    table: str = "aave_v3_eth_weth_collateral",
+    address_column: str = "walletAddress",
+    amount_column: str = "wethAmount_ETH",
     limit: int | None = None,
 ) -> list[str]:
-    """从源表读取所有待查询的用户地址"""
-    q = f'SELECT "{address_column}" FROM {schema}."{table}"'
-    if limit:
-        q += f" LIMIT {limit}"
+    """从源表读取所有待查询的用户地址，跳过 amount_column = 0 的行。
+
+    Args:
+        pool: asyncpg 连接池
+        schema: 表所在 schema
+        table: 源表名
+        address_column: 地址列名
+        amount_column: 金额列名；不为空时自动添加 ``WHERE {amount_column} > 0`` 过滤条件
+        limit: 最多读取行数（调试用）
+    """
+    where = f'WHERE "{amount_column}" > 0' if amount_column else ""
+    limit_clause = f"LIMIT {limit}" if limit else ""
+    q = f'SELECT "{address_column}" FROM {schema}."{table}" {where} {limit_clause}'.strip()
     rows = await pool.fetch(q)
     addresses = [str(row[address_column]) for row in rows]
-    logger.info("读取到 %d 个用户地址", len(addresses))
+    logger.info("读取到 %d 个用户地址（已过滤 %s = 0 的行）", len(addresses), amount_column)
     return addresses
 
 
