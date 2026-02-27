@@ -6,10 +6,10 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .schemas import LiquidationLineResponse, PriceResponse
+from .schemas import LiqPriceResponse, PriceResponse
 from .service import (
     get_eth_price,
-    get_liquidation_line,
+    get_liq_price,
     get_sorted_positions,
     get_user_position,
     get_user_position_history,
@@ -82,16 +82,16 @@ async def user_position(
 
 
 @router.get(
-    "/user/liquidation_line",
-    response_model=LiquidationLineResponse,
+    "/user/liq_price",
+    response_model=LiqPriceResponse,
     summary="查询 ETH liq_price",
     description="计算当 ETH 价格跌至多少时，该用户的 Aave 健康系数将触碰 1.0",
 )
-async def user_liquidation_line(
+async def user_liq_price(
     request: Request,
     address: str = Query(..., description="以太坊钱包地址"),
-) -> LiquidationLineResponse:
-    return await get_liquidation_line(_w3(request), address)
+) -> LiqPriceResponse:
+    return await get_liq_price(_w3(request), address)
 
 
 @router.get(
@@ -106,13 +106,13 @@ async def user_liquidation_line(
 )
 async def positions(
     request: Request,
-    orderby: Literal["liquidation_price", "health_factor"] = Query(
-        "liquidation_price",
-        description="排序字段（仅实时模式有效）：liquidation_price 或 health_factor",
+    orderby: Literal["liq_price", "health_factor"] = Query(
+        "liq_price",
+        description="排序字段（仅实时模式有效）：liq_price 或 health_factor",
     ),
     order: Literal["asc", "desc"] = Query(
         "asc",
-        description="排序方向（仅实时模式有效）：asc=最危险在前，desc=最安全在前",
+        description="排序方向（仅实时模式有效）：asc=升序，desc=降序",
     ),
     limit: int = Query(10, ge=1, le=200, description="返回记录数（实时模式最多 200，历史模式最多 100）"),
     date: str | None = Query(

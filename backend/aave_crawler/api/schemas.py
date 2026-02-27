@@ -38,7 +38,7 @@ class PositionResponse(BaseModel):
     liq_price: str = Field(description="ETH 跌至这个价格时触发清算风险；无借贷或无法计算时返回 '0'")
 
 
-class LiquidationLineResponse(BaseModel):
+class LiqPriceResponse(BaseModel):
     address: str
     current_eth_price_usd: str = Field(description="当前 ETH/USD 价格（来自链上 Oracle）")
     liquidation_eth_price_usd: str = Field(

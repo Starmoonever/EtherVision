@@ -21,7 +21,7 @@ from ..rpc import (
     get_reserve_config,
 )
 from .schemas import (
-    LiquidationLineResponse,
+    LiqPriceResponse,
     HistoricalPositionResponse,
     HistoricalReserveDetail,
     PositionResponse,
@@ -129,7 +129,7 @@ def _format_position(pos: UserPosition) -> PositionResponse:
     )
 
 
-def _calc_liquidation_line(pos: UserPosition) -> LiquidationLineResponse:
+def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
     """
     计算 ETH 价格降至多少时触发清算风险（Health Factor ≤ 1）。
 
@@ -161,7 +161,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiquidationLineResponse:
         current_eth_price = (
             _raw_to_dec(eth_reserve.price_raw, 8) if eth_reserve else Decimal("0")
         )
-        return LiquidationLineResponse(
+        return LiqPriceResponse(
             address=addr,
             current_eth_price_usd=_fmt(current_eth_price),
             liquidation_eth_price_usd="0",
@@ -176,7 +176,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiquidationLineResponse:
 
     if eth_reserve is None:
         # 无 ETH 抵押品，无法计算 ETH 清算价
-        return LiquidationLineResponse(
+        return LiqPriceResponse(
             address=addr,
             current_eth_price_usd="0",
             liquidation_eth_price_usd="0",
@@ -189,7 +189,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiquidationLineResponse:
     eth_amount = _raw_to_dec(eth_reserve.supply_raw, eth_reserve.decimals)
 
     if eth_amount == 0 or liq_threshold == 0:
-        return LiquidationLineResponse(
+        return LiqPriceResponse(
             address=addr,
             current_eth_price_usd=_fmt(current_eth_price),
             liquidation_eth_price_usd="0",
@@ -221,7 +221,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiquidationLineResponse:
         distance = (current_eth_price - liq_price) / current_eth_price * 100
         distance_pct = _fmt(distance, 2)
 
-    return LiquidationLineResponse(
+    return LiqPriceResponse(
         address=addr,
         current_eth_price_usd=_fmt(current_eth_price),
         liquidation_eth_price_usd=_fmt(liq_price),
@@ -246,7 +246,7 @@ async def get_user_position(w3: AsyncWeb3, address: str) -> PositionResponse:
     return _format_position(pos)
 
 
-async def get_liquidation_line(w3: AsyncWeb3, address: str) -> LiquidationLineResponse:
+async def get_liq_price(w3: AsyncWeb3, address: str) -> LiqPriceResponse:
     reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3)
     sem = asyncio.Semaphore(1)
     pos = await fetch_user_position(
@@ -275,7 +275,7 @@ _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
 
 async def get_sorted_positions(
     pool,
-    orderby: str = "liquidation_price",
+    orderby: str = "liq_price",
     order: str = "asc",
     limit: int = 10,
 ) -> list[PositionResponse]:
