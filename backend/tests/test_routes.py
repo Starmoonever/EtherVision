@@ -6,6 +6,7 @@ API 路由单元测试。
   - GET /api/user/liq_price
   - GET /api/positions
   - GET /api/price
+  - GET /api/price/period
 
 使用 starlette.testclient.TestClient（同步），mock 所有 service 函数，
 无需真实 RPC 或数据库连接。
@@ -28,6 +29,7 @@ from tests.conftest import (
     MOCK_POSITIONS_LIST,
     MOCK_PRICE_HIST,
     MOCK_PRICE_ONCHAIN,
+    MOCK_PRICE_PERIOD,
     MOCK_SIM_EMPTY,
     MOCK_SIM_RESPONSE,
     _make_app,
@@ -650,3 +652,119 @@ class TestLiquidateSimulation:
         assert kwargs["orderby"] == "liq_price"
         assert kwargs["order"] == "desc"
         assert kwargs["limit"] == 100
+
+
+class TestPricePeriod:
+    """GET /api/price/period — 按间隔查询资产历史价格序列。"""
+
+    _BASE_PARAMS = {
+        "asset": "eth",
+        "start": "2024-06-01",
+        "end": "2024-06-03",
+        "interval": 24,
+    }
+
+    def test_ok_returns_price_period(self, client: TestClient):
+        """正常请求返回 200 和价格序列。"""
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD):
+            resp = client.get("/api/price/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["asset"] == "ETH"
+        assert data["source"] == "defillama"
+        assert isinstance(data["prices"], list)
+        assert len(data["prices"]) == 3
+        assert "price_usd" in data["prices"][0]
+        assert "timestamp" in data["prices"][0]
+
+    def test_service_receives_correct_params(self, client: TestClient):
+        """验证 service 接收到正确解析后的参数。"""
+        from datetime import datetime, timezone
+        expected_start = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+        expected_end = int(datetime(2024, 6, 3, tzinfo=timezone.utc).timestamp())
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD) as mock_svc:
+            client.get("/api/price/period", params=self._BASE_PARAMS)
+        _, kwargs = mock_svc.call_args
+        assert kwargs["start_ts"] == expected_start
+        assert kwargs["end_ts"] == expected_end
+        assert kwargs["interval_hours"] == 24
+
+    def test_default_interval_is_24(self, client: TestClient):
+        """省略 interval 时默认 24 小时。"""
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD) as mock_svc:
+            client.get("/api/price/period",
+                        params={"asset": "eth", "start": "2024-06-01", "end": "2024-06-03"})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["interval_hours"] == 24
+
+    @pytest.mark.parametrize("interval", [1, 6, 12, 24, 168])
+    def test_various_intervals_accepted(self, client: TestClient, interval: int):
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD):
+            resp = client.get("/api/price/period",
+                               params={"asset": "eth", "start": "2024-06-01",
+                                       "end": "2024-06-30", "interval": interval})
+        assert resp.status_code == 200
+
+    def test_interval_zero_returns_422(self, client: TestClient):
+        """interval < 1 应返回 422 Unprocessable Entity。"""
+        resp = client.get("/api/price/period",
+                          params={"asset": "eth", "start": "2024-06-01",
+                                  "end": "2024-06-30", "interval": 0})
+        assert resp.status_code == 422
+
+    def test_missing_start_returns_422(self, client: TestClient):
+        resp = client.get("/api/price/period",
+                          params={"asset": "eth", "end": "2024-06-30"})
+        assert resp.status_code == 422
+
+    def test_missing_end_returns_422(self, client: TestClient):
+        resp = client.get("/api/price/period",
+                          params={"asset": "eth", "start": "2024-06-01"})
+        assert resp.status_code == 422
+
+    def test_invalid_start_time_returns_400(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD):
+            resp = client.get("/api/price/period",
+                              params={"asset": "eth", "start": "not-a-date",
+                                      "end": "2024-06-30"})
+        assert resp.status_code == 400
+
+    def test_invalid_end_time_returns_400(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD):
+            resp = client.get("/api/price/period",
+                              params={"asset": "eth", "start": "2024-06-01",
+                                      "end": "invalid"})
+        assert resp.status_code == 400
+
+    def test_no_w3_returns_503(self, app_no_w3):
+        with TestClient(app_no_w3) as c:
+            resp = c.get("/api/price/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 503
+
+    def test_unknown_asset_returns_404(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   side_effect=HTTPException(status_code=404, detail="未找到资产")):
+            resp = client.get("/api/price/period",
+                              params={"asset": "FAKETOKEN", "start": "2024-06-01",
+                                      "end": "2024-06-30"})
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize("time_str", [
+        "2024-06-01",
+        "2024-06-01T12:00:00Z",
+        "2024-06-01T12:00:00",
+        "2024-06-01 12:00:00",
+    ])
+    def test_various_time_formats_accepted(self, client: TestClient, time_str: str):
+        with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
+                   return_value=MOCK_PRICE_PERIOD):
+            resp = client.get("/api/price/period",
+                              params={"asset": "eth", "start": time_str,
+                                      "end": time_str, "interval": 24})
+        assert resp.status_code == 200

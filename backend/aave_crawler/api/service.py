@@ -26,6 +26,8 @@ from .schemas import (
     HistoricalReserveDetail,
     PositionResponse,
     PriceResponse,
+    PricePeriodItem,
+    PricePeriodResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -528,6 +530,95 @@ async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None)
             timestamp=_ts_to_utc_str(actual_ts),
             source="defillama",
         )
+
+
+async def get_price_period(
+    w3: AsyncWeb3,
+    asset: str,
+    start_ts: int,
+    end_ts: int,
+    interval_hours: int,
+) -> PricePeriodResponse:
+    """查询资产在指定时间段内按固定间隔的历史价格序列（来自 DeFiLlama）。
+
+    Args:
+        w3:             AsyncWeb3 实例（用于解析 token_address）
+        asset:          资产符号，如 ``eth``、``wbtc``；大小写不敏感
+        start_ts:       起始 Unix 时间戳（秒）
+        end_ts:         结束 Unix 时间戳（秒，含）
+        interval_hours: 采样间隔（小时，>= 1）
+    """
+    import aiohttp
+    from datetime import datetime, timezone
+    from fastapi import HTTPException
+
+    def _ts_to_utc_str(ts: int) -> str:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if end_ts < start_ts:
+        raise HTTPException(status_code=400, detail="end 必须晚于或等于 start")
+    if interval_hours < 1:
+        raise HTTPException(status_code=400, detail="interval 必须 >= 1 小时")
+
+    # 解析 token_address（复用 _get_common_data 缓存）
+    await _get_common_data(w3)
+    target = asset.upper()
+    if target == "ETH":
+        target = "WETH"
+    reserve_tokens = _cache["reserve_tokens"]
+    matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
+    if not matching:
+        raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
+    token_address = matching[0].token_address
+    coin_key = f"ethereum:{token_address.lower()}"
+
+    # 生成时间戳序列
+    step = interval_hours * 3600
+    timestamps: list[int] = []
+    ts = start_ts
+    while ts <= end_ts:
+        timestamps.append(ts)
+        ts += step
+    if not timestamps:
+        raise HTTPException(status_code=400, detail="时间范围内未能生成任何采样点，请检查 start/end/interval 参数")
+
+    # 并发查询 DeFiLlama
+    async def _fetch_one(
+        session: aiohttp.ClientSession, point_ts: int
+    ) -> PricePeriodItem:
+        url = f"https://coins.llama.fi/prices/historical/{point_ts}/{coin_key}"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return PricePeriodItem(
+                        price_usd="0.00",
+                        timestamp=_ts_to_utc_str(point_ts),
+                    )
+                data = await resp.json()
+        except aiohttp.ClientError:
+            return PricePeriodItem(
+                price_usd="0.00",
+                timestamp=_ts_to_utc_str(point_ts),
+            )
+        entry = data.get("coins", {}).get(coin_key, {})
+        price = Decimal(str(entry["price"])) if "price" in entry else Decimal("0")
+        actual_ts = int(entry.get("timestamp", point_ts))
+        return PricePeriodItem(
+            price_usd=_fmt(price, 2),
+            timestamp=_ts_to_utc_str(actual_ts),
+        )
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
+        items: list[PricePeriodItem] = list(
+            await asyncio.gather(*[_fetch_one(sess, t) for t in timestamps])
+        )
+
+    return PricePeriodResponse(
+        asset=asset.upper(),
+        token_address=token_address,
+        source="defillama",
+        prices=items,
+    )
 
 
 # ── 历史仓位重建（基于 aave.aave_history + aave_reserve_data） ─────────────────

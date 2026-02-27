@@ -10,10 +10,12 @@ from .schemas import (
     LiquidationSimResponse,
     PositionResponse,
     PriceResponse,
+    PricePeriodResponse,
 )
 from .service import (
     get_eth_price,
     get_liq_price,
+    get_price_period,
     get_sorted_positions,
     get_user_position,
     get_user_position_history,
@@ -208,3 +210,24 @@ async def liquidate_simulation(
         order=order,
         limit=limit,
     )
+
+
+@router.get(
+    "/price/period",
+    response_model=PricePeriodResponse,
+    summary="查询资产历史价格序列",
+    description=(
+        "从 DeFiLlama 查询指定资产在 start～end 时间段内，按 interval 小时间隔的历史 USD 价格序列。\n\n"
+        "支持时间格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
+    ),
+)
+async def asset_price_period(
+    request: Request,
+    asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
+    start: str = Query(..., description="起始 UTC 时间，如 2024-01-01"),
+    end: str = Query(..., description="结束 UTC 时间，如 2024-12-31"),
+    interval: int = Query(24, ge=1, description="采样间隔（小时），最小 1"),
+) -> PricePeriodResponse:
+    start_ts = _parse_utc_time(start)
+    end_ts = _parse_utc_time(end)
+    return await get_price_period(_w3(request), asset, start_ts=start_ts, end_ts=end_ts, interval_hours=interval)

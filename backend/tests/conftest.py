@@ -17,6 +17,8 @@ from aave_crawler.api.schemas import (
     LiquidationSimResponse,
     PositionResponse,
     PriceResponse,
+    PricePeriodItem,
+    PricePeriodResponse,
 )
 
 # ── 测试用地址 ────────────────────────────────────────────────────────────────
@@ -85,6 +87,17 @@ MOCK_HIST_POSITION = HistoricalPositionResponse(
 
 MOCK_POSITIONS_LIST = [MOCK_POSITION]
 MOCK_HIST_POSITIONS_LIST = [MOCK_HIST_POSITION]
+
+MOCK_PRICE_PERIOD = PricePeriodResponse(
+    asset="ETH",
+    token_address=WETH_ADDR,
+    source="defillama",
+    prices=[
+        PricePeriodItem(price_usd="2800.00", timestamp="2024-06-01T00:00:00Z"),
+        PricePeriodItem(price_usd="2900.00", timestamp="2024-06-02T00:00:00Z"),
+        PricePeriodItem(price_usd="3000.00", timestamp="2024-06-03T00:00:00Z"),
+    ],
+)
 
 MOCK_SIM_RESPONSE = LiquidationSimResponse(
     simulated_eth_price="1500.00",
