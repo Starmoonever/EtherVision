@@ -35,11 +35,7 @@ export function LiquidationChart({ currentEthPrice, priceChange }: LiquidationCh
       setLoading(true);
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-<<<<<<< HEAD
-        const response = await fetch(`${baseUrl}/liquidate?eth_price=${simulatedPrice}&eth_ratio=0.1`);
-=======
         const response = await fetch(`${baseUrl}/liquidate?eth_price=${simulatedPrice}&eth_ratio=0.4`);
->>>>>>> feat/charts
         if (!response.ok) throw new Error('无法获取清算数据');
         
         const result = await response.json();
