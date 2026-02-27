@@ -661,7 +661,7 @@ class TestPricePeriod:
         "asset": "eth",
         "start": "2024-06-01",
         "end": "2024-06-03",
-        "interval": 24,
+        "interval": 60,
     }
 
     def test_ok_returns_price_period(self, client: TestClient):
@@ -689,18 +689,18 @@ class TestPricePeriod:
         _, kwargs = mock_svc.call_args
         assert kwargs["start_ts"] == expected_start
         assert kwargs["end_ts"] == expected_end
-        assert kwargs["interval_hours"] == 24
+        assert kwargs["interval_minutes"] == 60
 
-    def test_default_interval_is_24(self, client: TestClient):
-        """省略 interval 时默认 24 小时。"""
+    def test_default_interval_is_60(self, client: TestClient):
+        """省略 interval 时默认 60 分钟。"""
         with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
                    return_value=MOCK_PRICE_PERIOD) as mock_svc:
             client.get("/api/price/period",
                         params={"asset": "eth", "start": "2024-06-01", "end": "2024-06-03"})
         _, kwargs = mock_svc.call_args
-        assert kwargs["interval_hours"] == 24
+        assert kwargs["interval_minutes"] == 60
 
-    @pytest.mark.parametrize("interval", [1, 6, 12, 24, 168])
+    @pytest.mark.parametrize("interval", [1, 15, 30, 60, 1440])
     def test_various_intervals_accepted(self, client: TestClient, interval: int):
         with patch(f"{_ROUTES}.get_price_period", new_callable=AsyncMock,
                    return_value=MOCK_PRICE_PERIOD):
@@ -766,5 +766,5 @@ class TestPricePeriod:
                    return_value=MOCK_PRICE_PERIOD):
             resp = client.get("/api/price/period",
                               params={"asset": "eth", "start": time_str,
-                                      "end": time_str, "interval": 24})
+                                      "end": time_str, "interval": 60})
         assert resp.status_code == 200

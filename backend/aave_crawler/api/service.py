@@ -537,16 +537,16 @@ async def get_price_period(
     asset: str,
     start_ts: int,
     end_ts: int,
-    interval_hours: int,
+    interval_minutes: int,
 ) -> PricePeriodResponse:
     """查询资产在指定时间段内按固定间隔的历史价格序列（来自 DeFiLlama）。
 
     Args:
-        w3:             AsyncWeb3 实例（用于解析 token_address）
-        asset:          资产符号，如 ``eth``、``wbtc``；大小写不敏感
-        start_ts:       起始 Unix 时间戳（秒）
-        end_ts:         结束 Unix 时间戳（秒，含）
-        interval_hours: 采样间隔（小时，>= 1）
+        w3:               AsyncWeb3 实例（用于解析 token_address）
+        asset:            资产符号，如 ``eth``、``wbtc``；大小写不敏感
+        start_ts:         起始 Unix 时间戳（秒）
+        end_ts:           结束 Unix 时间戳（秒，含）
+        interval_minutes: 采样间隔（分钟，>= 1）
     """
     import aiohttp
     from datetime import datetime, timezone
@@ -557,8 +557,8 @@ async def get_price_period(
 
     if end_ts < start_ts:
         raise HTTPException(status_code=400, detail="end 必须晚于或等于 start")
-    if interval_hours < 1:
-        raise HTTPException(status_code=400, detail="interval 必须 >= 1 小时")
+    if interval_minutes < 1:
+        raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
 
     # 解析 token_address（复用 _get_common_data 缓存）
     await _get_common_data(w3)
@@ -573,7 +573,7 @@ async def get_price_period(
     coin_key = f"ethereum:{token_address.lower()}"
 
     # 生成时间戳序列
-    step = interval_hours * 3600
+    step = interval_minutes * 60
     timestamps: list[int] = []
     ts = start_ts
     while ts <= end_ts:
