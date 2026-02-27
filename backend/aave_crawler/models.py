@@ -66,6 +66,8 @@ class ReservePosition:
     # 供给
     supply_raw: int
     usage_as_collateral_enabled: bool
+    # 清算阈值（basis points，0-10000），来自 getReserveConfigurationData
+    liquidation_threshold: int
     # 借贷
     stable_debt_raw: int
     variable_debt_raw: int

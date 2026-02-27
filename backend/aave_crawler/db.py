@@ -125,31 +125,63 @@ _ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rET
 
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:
-    """计算 ETH 清算触发价（简化公式，与 DB 查询时一致）。
+    """计算 ETH 清算触发价。
 
-    公式：liq_price = total_debt_usd / (eth_amount × liq_threshold)
-    ETH 供给量取第一个用作抵押品且有余额的 ETH 系资产仓位。
-    以下情况返回 0：无债务、liq_threshold=0、无 ETH 系抵押品。
+    正确公式（HF = 1 时触发清算）：
+        eth_amount × P × liq_threshold_ETH + Σ(other_i_USD × liq_threshold_i) = total_debt
+        => P = (total_debt - Σ(other_i_USD × liq_threshold_i)) / (eth_amount × liq_threshold_ETH)
+
+    每个资产使用其自身的 liquidation_threshold（来自 ReservePosition.liquidation_threshold）。
+    以下情况返回 0：无债务、ETH liq_threshold=0、无 ETH 系抵押品。
     超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
     """
     _LIQ_PRICE_CAP = Decimal("9999999.99999999")  # ~1000 万 USD，ETH 实际不可达
 
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
-    liq_threshold = Decimal(s.current_liquidation_threshold) / Decimal(10000)
 
-    if total_debt == 0 or liq_threshold == 0:
+    if total_debt == 0:
         return Decimal("0")
 
+    # 找第一个 ETH 系抵押品，取其独立 liq_threshold
+    eth_reserve = None
     for r in pos.reserves:
         if r.symbol.upper() in _ETH_SYMBOLS and r.usage_as_collateral_enabled and r.supply_raw > 0:
-            eth_amount = _raw_to_decimal(r.supply_raw, r.decimals)
-            if eth_amount == 0:
-                return Decimal("0")
-            liq_price = total_debt / (eth_amount * liq_threshold)
-            return min(liq_price, _LIQ_PRICE_CAP)
+            eth_reserve = r
+            break
 
-    return Decimal("0")
+    if eth_reserve is None:
+        return Decimal("0")
+
+    eth_liq_threshold = Decimal(eth_reserve.liquidation_threshold) / Decimal(10000)
+    if eth_liq_threshold == 0:
+        return Decimal("0")
+
+    eth_amount = _raw_to_decimal(eth_reserve.supply_raw, eth_reserve.decimals)
+    if eth_amount == 0:
+        return Decimal("0")
+
+    # 其他（非 ETH）抵押品的安全垫，使用各自独立 liq_threshold
+    other_safe = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() in _ETH_SYMBOLS:
+            continue
+        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
+            continue
+        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
+        if r_liq_threshold == 0:
+            continue
+        amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        price = _raw_to_decimal(r.price_raw, 8)
+        other_safe += amount * price * r_liq_threshold
+
+    numerator = total_debt - other_safe
+    if numerator <= 0:
+        # 其他抵押品已足够覆盖债务，ETH 降到 0 也不触发清算
+        return Decimal("0")
+
+    liq_price = numerator / (eth_amount * eth_liq_threshold)
+    return min(liq_price, _LIQ_PRICE_CAP)
 
 
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────

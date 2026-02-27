@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from .constants import ETH_COLLATERAL_RATIO_MIN
 from .schemas import (
     HistoricalPositionResponse,
     LiqPriceResponse,
@@ -203,6 +204,12 @@ async def liquidate_simulation(
         "desc",
         description="排序方向：desc=降序（默认），asc=升序",
     ),
+    eth_ratio: float = Query(
+        float(ETH_COLLATERAL_RATIO_MIN),
+        ge=0.0,
+        le=1.0,
+        description="ETH 抵押品占比过滤阈値：仅当 eth_collateral_usd / total_collateral_usd >= 该値时才纳入计算，取値 [0, 1]，默认 " + str(ETH_COLLATERAL_RATIO_MIN),
+    ),
 ) -> LiquidationSimResponse:
     from decimal import Decimal
     return await simulate_liquidation(
@@ -211,6 +218,7 @@ async def liquidate_simulation(
         orderby=orderby,
         order=order,
         limit=limit,
+        eth_ratio=Decimal(str(eth_ratio)),
     )
 
 
@@ -250,6 +258,12 @@ async def liquidate_period(
     start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
     end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
     interval: float = Query(..., gt=0, description="价格步长（USD），必须大于 0"),
+    eth_ratio: float = Query(
+        float(ETH_COLLATERAL_RATIO_MIN),
+        ge=0.0,
+        le=1.0,
+        description="ETH 抵押品占比过滤阈値，取値 [0, 1]，默认 " + str(ETH_COLLATERAL_RATIO_MIN),
+    ),
 ) -> list[LiquidationPeriodItem]:
     from decimal import Decimal
     return await simulate_liquidation_period(
@@ -257,4 +271,5 @@ async def liquidate_period(
         start_price=Decimal(str(start)),
         end_price=Decimal(str(end)),
         interval=Decimal(str(interval)),
+        eth_ratio=Decimal(str(eth_ratio)),
     )

@@ -287,6 +287,7 @@ async def fetch_user_position(
                         price_raw=asset_prices.get(rt.token_address, 0),
                         supply_raw=res.current_atoken_balance,
                         usage_as_collateral_enabled=res.usage_as_collateral_enabled,
+                        liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
                         stable_debt_raw=res.current_stable_debt,
                         variable_debt_raw=res.current_variable_debt,
                     )
