@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { LiquidationChart } from './LiquidationChart';
 
 export function MarketAssessment() {
   const [ethPrice, setEthPrice] = useState<number>(3500); // Default fallback
