@@ -30,6 +30,7 @@ from .schemas import (
     PricePeriodItem,
     PricePeriodResponse,
 )
+from .constants import ETH_COLLATERAL_RATIO_MIN
 
 logger = logging.getLogger(__name__)
 
@@ -106,19 +107,25 @@ def _format_position(pos: UserPosition) -> PositionResponse:
         eth_collateral_usd = "0"
 
     # 计算清算价
-    if total_debt == 0 or eth_amount == 0 or liq_threshold == 0:
+    # ETH 自身的清算阈值（精确值，不使用组合加权平均）
+    eth_liq_threshold = (
+        Decimal(eth_reserve.liquidation_threshold) / Decimal(10000)
+        if eth_reserve is not None else Decimal("0")
+    )
+    if total_debt == 0 or eth_amount == 0 or eth_liq_threshold == 0:
         liq_price_str = "0"
     else:
-        # 其他（非 ETH）抵押品的加权安全垫
+        # 其他（非 ETH）抵押品的安全垫，使用各资产独立 liq_threshold
         other_safe = Decimal("0")
         for r in pos.reserves:
             if r.symbol.upper() in _ETH_SYMBOLS:
                 continue
             if not r.usage_as_collateral_enabled or r.supply_raw == 0:
                 continue
-            other_safe += _raw_to_dec(r.supply_raw, r.decimals) * _raw_to_dec(r.price_raw, 8) * liq_threshold
+            r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
+            other_safe += _raw_to_dec(r.supply_raw, r.decimals) * _raw_to_dec(r.price_raw, 8) * r_liq_threshold
         numerator = total_debt - other_safe
-        liq_price_str = "0" if numerator <= 0 else _fmt(numerator / (eth_amount * liq_threshold))
+        liq_price_str = "0" if numerator <= 0 else _fmt(numerator / (eth_amount * eth_liq_threshold))
 
     return PositionResponse(
         address=pos.user_address,
@@ -148,9 +155,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
     """
     s = pos.summary
 
-    total_collateral = _raw_to_dec(s.total_collateral_base, 8)
     total_debt = _raw_to_dec(s.total_debt_base, 8)
-    liq_threshold = Decimal(s.current_liquidation_threshold) / Decimal(10000)
 
     # 找 ETH/WETH 抵押仓位
     eth_reserve: ReservePosition | None = None
@@ -192,8 +197,9 @@ def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
 
     current_eth_price = _raw_to_dec(eth_reserve.price_raw, 8)
     eth_amount = _raw_to_dec(eth_reserve.supply_raw, eth_reserve.decimals)
+    eth_liq_threshold = Decimal(eth_reserve.liquidation_threshold) / Decimal(10000)
 
-    if eth_amount == 0 or liq_threshold == 0:
+    if eth_amount == 0 or eth_liq_threshold == 0:
         return LiqPriceResponse(
             address=addr,
             current_eth_price_usd=_fmt(current_eth_price),
@@ -203,26 +209,26 @@ def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
             note="ETH 供给量或清算阈值为 0，无法计算",
         )
 
-    # 其他（非 ETH）抵押品的加权安全垫
+    # 其他（非 ETH）抵押品的安全垫，使用各资产独立 liq_threshold
     other_safe = Decimal("0")
     for r in pos.reserves:
         if r.symbol.upper() in _ETH_SYMBOLS:
             continue
         if not r.usage_as_collateral_enabled or r.supply_raw == 0:
             continue
+        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
         price = _raw_to_dec(r.price_raw, 8)
         amount = _raw_to_dec(r.supply_raw, r.decimals)
-        # 用 summary 的 liq_threshold 作为近似（精确需逐资产查配置）
-        other_safe += amount * price * liq_threshold
+        other_safe += amount * price * r_liq_threshold
 
-    # P * eth_amount * liq_threshold = total_debt - other_safe
+    # P * eth_amount * eth_liq_threshold = total_debt - other_safe
     numerator = total_debt - other_safe
     if numerator <= 0:
         # other_safe 已足以覆盖 debt，ETH 价格降到 0 也不会清算
         liq_price = Decimal("0")
         distance_pct = "inf"
     else:
-        liq_price = numerator / (eth_amount * liq_threshold)
+        liq_price = numerator / (eth_amount * eth_liq_threshold)
         distance = (current_eth_price - liq_price) / current_eth_price * 100
         distance_pct = _fmt(distance, 2)
 
@@ -365,7 +371,8 @@ def _build_simulate_sql(order_col: str, order_dir: str) -> str:
 WITH eth_col AS (
     SELECT
         user_address,
-        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount
+        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        supply_usd                                           AS eth_supply_usd_stored
     FROM loan.aave_v3_eth_reserve_positions
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
@@ -375,6 +382,8 @@ SELECT
     p.user_address                                                AS address,
     COALESCE(e.eth_amount, 0::numeric)                            AS eth_collateral_amount,
     COALESCE(e.eth_amount, 0::numeric) * $1::numeric              AS eth_collateral_usd,
+    COALESCE(e.eth_supply_usd_stored, 0::numeric)                 AS eth_supply_usd_stored,
+    p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
 FROM loan.aave_v3_eth_positions p
@@ -391,6 +400,7 @@ async def simulate_liquidation(
     orderby: str = "liq_price",
     order: str = "desc",
     limit: int = 100,
+    eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
 ) -> LiquidationSimResponse:
     """模拟当 ETH 价格为 eth_price 时，哪些仓位将被触发清算及汇总统计。
 
@@ -413,8 +423,14 @@ async def simulate_liquidation(
     for row in rows:
         eth_amt = Decimal(str(row["eth_collateral_amount"]))
         eth_usd = Decimal(str(row["eth_collateral_usd"]))
+        eth_usd_stored = Decimal(str(row["eth_supply_usd_stored"]))
+        total_col_usd = Decimal(str(row["total_collateral_usd"]))
         debt_usd = Decimal(str(row["total_debt_usd"]))
         liq_p = Decimal(str(row["liq_price"]))
+
+        # ETH 抵押品比例过滤：使用爬取时存储价值，避免模拟价格远低于爬取价格时比例失真
+        if total_col_usd <= 0 or eth_usd_stored / total_col_usd < eth_ratio:
+            continue
 
         # 清算人实际可获取的抵押品价值：不超过可用抵押品，含 5% 奖励加码
         seized = min(debt_usd * _WETH_LIQ_BONUS, eth_usd)
@@ -439,7 +455,8 @@ async def simulate_liquidation(
         f"（本次返回前 {len(items)} 条）；"
         f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
         f"total_liquidation_usd = Σ min(债务 × {_WETH_LIQ_BONUS}, ETH抵押品USD)，"
-        f"统计基于全部 {total_count} 个仓位"
+        f"统计基于全部 {total_count} 个仓位；"
+        f"ETH 抵押品占比过滤：>= {eth_ratio}"
     )
 
     return LiquidationSimResponse(
@@ -458,14 +475,17 @@ _SQL_ALL_LIQ_POSITIONS = """
 WITH eth_col AS (
     SELECT
         user_address,
-        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount
+        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        supply_usd                                           AS eth_supply_usd_stored
     FROM loan.aave_v3_eth_reserve_positions
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
 )
 SELECT
-    COALESCE(e.eth_amount, 0::numeric) AS eth_collateral_amount,
+    COALESCE(e.eth_amount, 0::numeric)           AS eth_collateral_amount,
+    COALESCE(e.eth_supply_usd_stored, 0::numeric) AS eth_supply_usd_stored,
+    p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
 FROM loan.aave_v3_eth_positions p
@@ -479,6 +499,7 @@ async def simulate_liquidation_period(
     start_price: Decimal,
     end_price: Decimal,
     interval: Decimal,
+    eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
 ) -> list[LiquidationPeriodItem]:
     """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的清算汇总。
 
@@ -495,6 +516,8 @@ async def simulate_liquidation_period(
     positions = [
         (
             Decimal(str(r["eth_collateral_amount"])),
+            Decimal(str(r["eth_supply_usd_stored"])),
+            Decimal(str(r["total_collateral_usd"])),
             Decimal(str(r["total_debt_usd"])),
             Decimal(str(r["liq_price"])),
         )
@@ -508,9 +531,12 @@ async def simulate_liquidation_period(
         total_eth_usd = Decimal("0")
         total_liq_usd = Decimal("0")
         cnt = 0
-        for eth_amt, debt_usd, liq_p in positions:
+        for eth_amt, eth_usd_stored, total_col_usd, debt_usd, liq_p in positions:
             if liq_p >= price:
                 eth_usd = eth_amt * price
+                # ETH 抵押品比例过滤：使用爬取时存储价值，避免模拟价格远低于爬取价格时比例失真
+                if total_col_usd <= 0 or eth_usd_stored / total_col_usd < eth_ratio:
+                    continue
                 seized = min(debt_usd * _WETH_LIQ_BONUS, eth_usd)
                 total_eth_amount += eth_amt
                 total_eth_usd += eth_usd

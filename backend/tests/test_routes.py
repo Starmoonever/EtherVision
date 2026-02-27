@@ -654,6 +654,33 @@ class TestLiquidateSimulation:
         assert kwargs["order"] == "desc"
         assert kwargs["limit"] == 100
 
+    def test_eth_ratio_passed_to_service(self, client: TestClient):
+        """自定义 eth_ratio 应传递给 service。"""
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SIM_EMPTY) as mock_svc:
+            client.get("/api/liquidate", params={"eth_price": 1500, "eth_ratio": 0.9})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.9")
+
+    def test_default_eth_ratio_is_constant(self, client: TestClient):
+        """默认 eth_ratio 应为 ETH_COLLATERAL_RATIO_MIN。"""
+        from decimal import Decimal
+        from aave_crawler.api.constants import ETH_COLLATERAL_RATIO_MIN
+        with patch(f"{_ROUTES}.simulate_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SIM_EMPTY) as mock_svc:
+            client.get("/api/liquidate", params={"eth_price": 1500})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal(str(ETH_COLLATERAL_RATIO_MIN))
+
+    def test_eth_ratio_out_of_range_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate", params={"eth_price": 1500, "eth_ratio": 1.5})
+        assert resp.status_code == 422
+
+    def test_eth_ratio_negative_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate", params={"eth_price": 1500, "eth_ratio": -0.1})
+        assert resp.status_code == 422
+
 
 class TestPricePeriod:
     """GET /api/price/period — 按间隔查询资产历史价格序列。"""
@@ -853,3 +880,33 @@ class TestLiquidatePeriod:
             resp = client.get("/api/liquidate/period",
                                params={"start": 500, "end": 3000, "interval": interval})
         assert resp.status_code == 200
+
+    def test_eth_ratio_passed_to_service(self, client: TestClient):
+        """自定义 eth_ratio 应传递给 service。"""
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_LIQ_PERIOD) as mock_svc:
+            client.get("/api/liquidate/period",
+                        params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": 0.6})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.6")
+
+    def test_default_eth_ratio_is_constant(self, client: TestClient):
+        """默认 eth_ratio 应为 ETH_COLLATERAL_RATIO_MIN。"""
+        from decimal import Decimal
+        from aave_crawler.api.constants import ETH_COLLATERAL_RATIO_MIN
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_LIQ_PERIOD) as mock_svc:
+            client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal(str(ETH_COLLATERAL_RATIO_MIN))
+
+    def test_eth_ratio_out_of_range_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period",
+                          params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": 1.5})
+        assert resp.status_code == 422
+
+    def test_eth_ratio_negative_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period",
+                          params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": -0.1})
+        assert resp.status_code == 422

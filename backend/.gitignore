@@ -15,3 +15,5 @@ config.yaml
 # 构建产物
 dist/
 *.egg-info/
+
+.pytest_cache/
