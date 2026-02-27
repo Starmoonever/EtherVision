@@ -59,15 +59,15 @@ export function MarketAssessment() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <span className="check-label">假设价格变动幅度</span>
+                <span className="check-label">价格变动幅度</span>
                 <span className={`mono bold ${priceChange < 0 ? 'red-text' : 'green-text'}`}>
                   {priceChange > 0 ? '+' : ''}{priceChange}%
                 </span>
               </div>
               <input 
                 type="range" 
-                min="-50" 
-                max="50" 
+                min="-100" 
+                max="0" 
                 value={priceChange} 
                 onChange={(e) => setPriceChange(Number(e.target.value))}
                 style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
@@ -85,6 +85,11 @@ export function MarketAssessment() {
             </div>
           </div>
         </div>
+      </div>
+      
+      {/* Module 3: Liquidation Chart */}
+      <div style={{ marginTop: '1.5rem' }}>
+        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} />
       </div>
     </div>
   );
