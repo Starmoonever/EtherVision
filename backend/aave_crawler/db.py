@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS loan.aave_v3_eth_positions (
     available_borrows_usd   NUMERIC(20, 8) NOT NULL,
     health_factor           NUMERIC(40, 18) NOT NULL,  -- ∞ 时存 1e18（19位整数位），需 40 总精度
     ltv                     NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
-    liq_threshold           NUMERIC(8, 4)   NOT NULL    -- basis points / 10000
+    liq_threshold           NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
+    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
 );
 """
 
@@ -63,7 +64,7 @@ async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
 
 
 async def ensure_tables(pool: asyncpg.Pool) -> None:
-    """若目标表不存在则自动创建；若 health_factor 列精度不足则自动升级（幂等）"""
+    """若目标表不存在则自动创建；幂等迁移旧表（精度升级、新增列）"""
     async with pool.acquire() as conn:
         await conn.execute(_DDL_POSITIONS)
         await conn.execute(_DDL_RESERVE_POSITIONS)
@@ -83,7 +84,72 @@ async def ensure_tables(pool: asyncpg.Pool) -> None:
                 END IF;
             END$$;
         """)
+        # 为旧表添加 liq_price 列（新建表时已含此列，旧表需迁移）
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'loan'
+                      AND table_name   = 'aave_v3_eth_positions'
+                      AND column_name  = 'liq_price'
+                ) THEN
+                    ALTER TABLE loan.aave_v3_eth_positions
+                        ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
+                END IF;
+            END$$;
+        """)
+        # 将 liq_price 精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)（旧列精度不足）
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'loan'
+                      AND table_name   = 'aave_v3_eth_positions'
+                      AND column_name  = 'liq_price'
+                      AND numeric_precision < 30
+                ) THEN
+                    ALTER TABLE loan.aave_v3_eth_positions
+                        ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
+                END IF;
+            END$$;
+        """)
     logger.info("目标表已就绪：aave_v3_eth_positions, aave_v3_eth_reserve_positions")
+
+
+# ── 辅助：liq_price 计算 ─────────────────────────────────────────────────────
+
+# ETH 系资产符号（与 service.py simulate SQL 保持一致）
+_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH"})
+
+
+def _calc_liq_price(pos: UserPosition) -> Decimal:
+    """计算 ETH 清算触发价（简化公式，与 DB 查询时一致）。
+
+    公式：liq_price = total_debt_usd / (eth_amount × liq_threshold)
+    ETH 供给量取第一个用作抵押品且有余额的 ETH 系资产仓位。
+    以下情况返回 0：无债务、liq_threshold=0、无 ETH 系抵押品。
+    超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
+    """
+    _LIQ_PRICE_CAP = Decimal("9999999.99999999")  # ~1000 万 USD，ETH 实际不可达
+
+    s = pos.summary
+    total_debt = _raw_to_decimal(s.total_debt_base, 8)
+    liq_threshold = Decimal(s.current_liquidation_threshold) / Decimal(10000)
+
+    if total_debt == 0 or liq_threshold == 0:
+        return Decimal("0")
+
+    for r in pos.reserves:
+        if r.symbol.upper() in _ETH_SYMBOLS and r.usage_as_collateral_enabled and r.supply_raw > 0:
+            eth_amount = _raw_to_decimal(r.supply_raw, r.decimals)
+            if eth_amount == 0:
+                return Decimal("0")
+            liq_price = total_debt / (eth_amount * liq_threshold)
+            return min(liq_price, _LIQ_PRICE_CAP)
+
+    return Decimal("0")
 
 
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────
@@ -135,8 +201,8 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition]) ->
         INSERT INTO loan.aave_v3_eth_positions
             (user_address, block_number, scanned_at,
              total_collateral_usd, total_debt_usd, available_borrows_usd,
-             health_factor, ltv, liq_threshold)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             health_factor, ltv, liq_threshold, liq_price)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT (user_address) DO UPDATE SET
             block_number          = EXCLUDED.block_number,
             scanned_at            = EXCLUDED.scanned_at,
@@ -145,7 +211,8 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition]) ->
             available_borrows_usd = EXCLUDED.available_borrows_usd,
             health_factor         = EXCLUDED.health_factor,
             ltv                   = EXCLUDED.ltv,
-            liq_threshold         = EXCLUDED.liq_threshold;
+            liq_threshold         = EXCLUDED.liq_threshold,
+            liq_price             = EXCLUDED.liq_price;
     """
 
     # ── 1. 构建所有 summary 行 ──────────────────────────────────────────────
@@ -165,6 +232,7 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition]) ->
             hf_decimal,
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
+            _calc_liq_price(pos),
         ))
 
     # ── 2. 构建所有明细行 ────────────────────────────────────────────────────

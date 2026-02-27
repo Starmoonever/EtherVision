@@ -63,6 +63,8 @@ class TestUserPosition:
         assert data["address"] == ADDR
         assert "health_factor" in data
         assert "liq_price" in data
+        assert "total_collateral_usd" in data
+        assert "available_borrows_usd" in data
         assert "at_time" not in data  # PositionResponse，不含历史字段
 
     def test_realtime_empty_position_returns_404(self, client: TestClient):
@@ -234,7 +236,13 @@ class TestPositions:
         assert kwargs.get("orderby", mock_svc.call_args.args[1] if len(mock_svc.call_args.args) > 1 else "liq_price") is not None
         data = resp.json()
         assert isinstance(data, list)
-        assert data[0]["address"] == ADDR
+        item = data[0]
+        assert item["address"] == ADDR
+        assert "liq_price" in item
+        assert "total_collateral_usd" in item
+        assert "available_borrows_usd" in item
+        assert "total_debt_usd" in item
+        assert "health_factor" in item
 
     @pytest.mark.parametrize("orderby", ["liq_price", "health_factor"])
     def test_orderby_variants(self, client: TestClient, orderby: str):

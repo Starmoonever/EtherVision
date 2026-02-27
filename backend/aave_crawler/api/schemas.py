@@ -29,6 +29,8 @@ class PositionResponse(BaseModel):
     address: str
     eth_collateral_amount: str = Field(description="ETH/WETH 抵押数量")
     eth_collateral_usd: str = Field(description="ETH/WETH 抵押的 USD 估値")
+    total_collateral_usd: str = Field(description="总抵押 USD 估值（含 ETH 和其他资产）")
+    available_borrows_usd: str = Field(description="可借 USD 额度")
     total_debt_usd: str = Field(description="总借贷 USD")
     health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
     ltv: str = Field(description="贷款价値比（0~1）")
@@ -72,8 +74,8 @@ class LiquidationSimResponse(BaseModel):
     simulated_eth_price: str = Field(description="本次模拟使用的 ETH 价格（USD）")
     positions: list[LiquidationSimItem] = Field(
         description="在此价格下触发清算的所有仓位，按 liq_price 降序排列"
-    ),
-    positions_cnt: str = Field(description="触发清算的仓位数量"),
+    )
+    positions_cnt: str = Field(description="触发清算的仓位数量")
     total_eth_collateral_amount: str = Field(description="可被清算的 ETH 抵押品总量")
     total_eth_collateral_usd: str = Field(
         description="可被清算的 ETH 抵押品在模拟价格下的总 USD 估值"

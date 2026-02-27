@@ -30,6 +30,8 @@ MOCK_POSITION = PositionResponse(
     address=ADDR,
     eth_collateral_amount="1.500000",
     eth_collateral_usd="4500.00",
+    total_collateral_usd="4500.00",
+    available_borrows_usd="925.00",
     total_debt_usd="2000.00",
     health_factor="1.6875",
     ltv="0.6500",
@@ -95,6 +97,7 @@ MOCK_SIM_RESPONSE = LiquidationSimResponse(
             total_debt_usd="2000.00",
         )
     ],
+    positions_cnt="1",
     total_eth_collateral_amount="1.500000",
     total_eth_collateral_usd="2250.00",
     total_liquidation_usd="2100.00",
@@ -104,6 +107,7 @@ MOCK_SIM_RESPONSE = LiquidationSimResponse(
 MOCK_SIM_EMPTY = LiquidationSimResponse(
     simulated_eth_price="100.00",
     positions=[],
+    positions_cnt="0",
     total_eth_collateral_amount="0.000000",
     total_eth_collateral_usd="0.00",
     total_liquidation_usd="0.00",

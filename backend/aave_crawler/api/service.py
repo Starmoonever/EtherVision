@@ -121,6 +121,8 @@ def _format_position(pos: UserPosition) -> PositionResponse:
         address=pos.user_address,
         eth_collateral_amount=eth_collateral_amount,
         eth_collateral_usd=eth_collateral_usd,
+        total_collateral_usd=_fmt(_raw_to_dec(s.total_collateral_base, 8)),
+        available_borrows_usd=_fmt(_raw_to_dec(s.available_borrows_base, 8)),
         total_debt_usd=_fmt(total_debt),
         health_factor=hf_str,
         ltv=_fmt(Decimal(s.ltv) / Decimal(10000), 4),
@@ -300,28 +302,20 @@ WITH eth_col AS (
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
-),
-computed AS (
-    SELECT
-        p.user_address                                            AS address,
-        COALESCE(e.eth_amount,        0::numeric)                AS eth_collateral_amount,
-        COALESCE(e.eth_collateral_usd, 0::numeric)               AS eth_collateral_usd,
-        p.total_debt_usd,
-        p.health_factor,
-        p.ltv,
-        p.liq_threshold,
-        CASE
-            WHEN p.total_debt_usd = 0
-              OR COALESCE(e.eth_amount, 0::numeric) = 0
-              OR p.liq_threshold = 0
-            THEN 0::numeric
-            ELSE p.total_debt_usd
-                 / (COALESCE(e.eth_amount, 0::numeric) * p.liq_threshold)
-        END AS liq_price
-    FROM loan.aave_v3_eth_positions p
-    LEFT JOIN eth_col e ON p.user_address = e.user_address
 )
-SELECT * FROM computed
+SELECT
+    p.user_address                                            AS address,
+    COALESCE(e.eth_amount,        0::numeric)                AS eth_collateral_amount,
+    COALESCE(e.eth_collateral_usd, 0::numeric)               AS eth_collateral_usd,
+    p.total_collateral_usd,
+    p.available_borrows_usd,
+    p.total_debt_usd,
+    p.health_factor,
+    p.ltv,
+    p.liq_threshold,
+    p.liq_price
+FROM loan.aave_v3_eth_positions p
+LEFT JOIN eth_col e ON p.user_address = e.user_address
 ORDER BY {order_col} {order_dir}
 LIMIT $1
 """
@@ -339,6 +333,8 @@ LIMIT $1
                 address=row["address"],
                 eth_collateral_amount=_fmt(Decimal(str(row["eth_collateral_amount"])), 6),
                 eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"]))),
+                total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"]))),
+                available_borrows_usd=_fmt(Decimal(str(row["available_borrows_usd"]))),
                 total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
                 health_factor=hf_str,
                 ltv=_fmt(Decimal(str(row["ltv"])), 4),
@@ -371,34 +367,17 @@ WITH eth_col AS (
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
-),
-computed AS (
-    SELECT
-        p.user_address                                                AS address,
-        COALESCE(e.eth_amount, 0::numeric)                            AS eth_collateral_amount,
-        COALESCE(e.eth_amount, 0::numeric) * $1::numeric              AS eth_collateral_usd,
-        p.total_debt_usd,
-        p.liq_threshold,
-        CASE
-            WHEN p.total_debt_usd = 0
-              OR COALESCE(e.eth_amount, 0::numeric) = 0
-              OR p.liq_threshold = 0
-            THEN 0::numeric
-            ELSE p.total_debt_usd
-                 / (COALESCE(e.eth_amount, 0::numeric) * p.liq_threshold)
-        END AS liq_price
-    FROM loan.aave_v3_eth_positions p
-    LEFT JOIN eth_col e ON p.user_address = e.user_address
 )
 SELECT
-    address,
-    eth_collateral_amount,
-    eth_collateral_usd,
-    total_debt_usd,
-    liq_price
-FROM computed
-WHERE liq_price > 0
-  AND liq_price >= $1::numeric
+    p.user_address                                                AS address,
+    COALESCE(e.eth_amount, 0::numeric)                            AS eth_collateral_amount,
+    COALESCE(e.eth_amount, 0::numeric) * $1::numeric              AS eth_collateral_usd,
+    p.total_debt_usd,
+    p.liq_price
+FROM loan.aave_v3_eth_positions p
+LEFT JOIN eth_col e ON p.user_address = e.user_address
+WHERE p.liq_price > 0
+  AND p.liq_price >= $1::numeric
 ORDER BY {order_col} {order_dir}
 """
 
@@ -817,6 +796,7 @@ async def get_user_position_history(
         eth_collateral_amount=_fmt(eth_collateral, 6),
         eth_price_usd=_fmt(eth_price, 2),
         eth_collateral_usd=_fmt(eth_collateral_usd, 2),
+
         total_debt_approx_usd=_fmt(total_debt_usd, 2),
         liq_price=_fmt(liq_price, 2) if liq_price > 0 else "0",
         reserves=reserves,
