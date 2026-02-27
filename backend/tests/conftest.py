@@ -13,6 +13,8 @@ from aave_crawler.api.schemas import (
     HistoricalPositionResponse,
     HistoricalReserveDetail,
     LiqPriceResponse,
+    LiquidationSimItem,
+    LiquidationSimResponse,
     PositionResponse,
     PriceResponse,
 )
@@ -81,6 +83,32 @@ MOCK_HIST_POSITION = HistoricalPositionResponse(
 
 MOCK_POSITIONS_LIST = [MOCK_POSITION]
 MOCK_HIST_POSITIONS_LIST = [MOCK_HIST_POSITION]
+
+MOCK_SIM_RESPONSE = LiquidationSimResponse(
+    simulated_eth_price="1500.00",
+    positions=[
+        LiquidationSimItem(
+            address=ADDR,
+            liq_price="1666.67",
+            eth_collateral_amount="1.500000",
+            eth_collateral_usd="2250.00",
+            total_debt_usd="2000.00",
+        )
+    ],
+    total_eth_collateral_amount="1.500000",
+    total_eth_collateral_usd="2250.00",
+    total_liquidation_usd="2100.00",
+    note="共 1 个仓位",
+)
+
+MOCK_SIM_EMPTY = LiquidationSimResponse(
+    simulated_eth_price="100.00",
+    positions=[],
+    total_eth_collateral_amount="0.000000",
+    total_eth_collateral_usd="0.00",
+    total_liquidation_usd="0.00",
+    note="共 0 个仓位",
+)
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────

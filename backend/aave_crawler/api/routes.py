@@ -1,12 +1,16 @@
 """FastAPI 路由"""
 
-from __future__ import annotations
-
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .schemas import LiqPriceResponse, PriceResponse
+from .schemas import (
+    HistoricalPositionResponse,
+    LiqPriceResponse,
+    LiquidationSimResponse,
+    PositionResponse,
+    PriceResponse,
+)
 from .service import (
     get_eth_price,
     get_liq_price,
@@ -14,6 +18,7 @@ from .service import (
     get_user_position,
     get_user_position_history,
     get_positions_history,
+    simulate_liquidation,
 )
 
 router = APIRouter(prefix="/api")
@@ -55,22 +60,23 @@ def _parse_utc_time(time_str: str) -> int:
 
 @router.get(
     "/user/position",
+    response_model=PositionResponse | HistoricalPositionResponse,
     summary="查询用户 Aave 仓位",
     description=(
         "查询指定地址的 Aave V3 仓位。\n\n"
-        "- 省略 `date`：实时从以太主网链上查询\n"
-        "- 指定 `date`：从 aave.aave_history 重建历史时间点仓位（含利息估算，价格来自 DeFiLlama）\n\n"
+        "- 省略 `date`：实时从以太主网链上查询，返回 `PositionResponse`\n"
+        "- 指定 `date`：从 aave.aave_history 重建历史时间点仓位（含利息估算，价格来自 DeFiLlama），返回 `HistoricalPositionResponse`\n\n"
         "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
     ),
 )
 async def user_position(
     request: Request,
-    address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
+    address: str = Query(..., description="以太坊錢包地址（支持校验和或小写）"),
     date: str | None = Query(
         None,
         description="历史时间点（UTC），如 2024-01-01；省略则查询实时链上数据",
     ),
-) -> Any:
+) -> PositionResponse | HistoricalPositionResponse:
     if date is None:
         return await get_user_position(_w3(request), address)
     ts = _parse_utc_time(date)
@@ -96,11 +102,12 @@ async def user_liq_price(
 
 @router.get(
     "/positions",
+    response_model=list[PositionResponse] | list[HistoricalPositionResponse],
     summary="批量查询仓位排行",
     description=(
         "查询 Aave V3 仓位排行。\n\n"
-        "- 省略 `date`：从数据库读取已爬取的实时快照，支持 `orderby` / `order` 排序，最多 200 条\n"
-        "- 指定 `date`：从 aave.aave_history 计算历史时间点 top-N 用户（按 ETH 抵押量降序，近似值，最多 100 条）\n\n"
+        "- 省略 `date`：从数据库读取已爬取的实时快照，支持 `orderby` / `order` 排序，最多 200 条，返回 `list[PositionResponse]`\n"
+        "- 指定 `date`：从 aave.aave_history 计算历史时间点 top-N 用户（按 ETH 抵押量降序，近似值，最多 100 条），返回 `list[HistoricalPositionResponse]`\n\n"
         "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
     ),
 )
@@ -119,7 +126,7 @@ async def positions(
         None,
         description="历史时间点（UTC），如 2024-01-01；省略则查询数据库实时快照",
     ),
-) -> Any:
+) -> list[PositionResponse] | list[HistoricalPositionResponse]:
     if date is None:
         return await get_sorted_positions(
             _pool(request), orderby=orderby, order=order, limit=limit
@@ -151,3 +158,53 @@ async def asset_price(
         return await get_eth_price(_w3(request), asset)
     ts = _parse_utc_time(time)
     return await get_eth_price(_w3(request), asset, timestamp=ts)
+
+
+@router.get(
+    "/liquidate",
+    response_model=LiquidationSimResponse,
+    summary="模拟 ETH 价格下跌时的清算情况",
+    description=(
+        "模拟当 ETH 价格跌至指定值时，有哪些账户会被清算，"
+        "以及清算人可获取的抵押品总价值（含 5% 清算奖励折价）。\n\n"
+        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl`）。\n\n"
+        "**清算折价说明**：Aave V3 WETH 清算奖励系数为 1.05，"
+        "即清算人偿还 1 USD 债务可获得 1.05 USD 的 ETH 抵押品。\n"
+        "`total_liquidation_usd = Σ min(债务 × 1.05, ETH抵押品USD)`"
+    ),
+)
+async def liquidate_simulation(
+    request: Request,
+    eth_price: float = Query(
+        ...,
+        gt=0,
+        description="模拟的 ETH 价格（USD），必须大于 0",
+    ),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=1000,
+        description="返回的仓位数量，默认 100，最多 1000",
+    ),
+    orderby: Literal[
+        "liq_price",
+        "eth_collateral_amount",
+        "eth_collateral_usd",
+        "total_debt_usd",
+    ] = Query(
+        "liq_price",
+        description="排序字段：liq_price / eth_collateral_amount / eth_collateral_usd / total_debt_usd",
+    ),
+    order: Literal["desc", "asc"] = Query(
+        "desc",
+        description="排序方向：desc=降序（默认），asc=升序",
+    ),
+) -> LiquidationSimResponse:
+    from decimal import Decimal
+    return await simulate_liquidation(
+        _pool(request),
+        Decimal(str(eth_price)),
+        orderby=orderby,
+        order=order,
+        limit=limit,
+    )

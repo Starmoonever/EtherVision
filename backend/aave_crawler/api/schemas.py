@@ -1,7 +1,5 @@
 """API 层 Pydantic 响应模型"""
 
-from __future__ import annotations
-
 from pydantic import BaseModel, Field
 
 
@@ -58,6 +56,36 @@ class PriceResponse(BaseModel):
     token_address: str = Field(description="对应的代币合约地址")
     timestamp: str = Field(description="价格对应的 UTC 时间，格式如 2024-11-14T12:00:00Z")
     source: str = Field(description="数据来源：on-chain（链上 Oracle）或 defillama（DeFiLlama 历史）")
+
+
+class LiquidationSimItem(BaseModel):
+    address: str
+    liq_price: str = Field(description="该地址的 ETH 清算触发价（USD）")
+    eth_collateral_amount: str = Field(description="ETH/WETH 抵押数量")
+    eth_collateral_usd: str = Field(
+        description="ETH 抵押品在模拟价格下的 USD 估值（eth_collateral_amount × eth_price）"
+    )
+    total_debt_usd: str = Field(description="总借贷 USD（快照时刻）")
+
+
+class LiquidationSimResponse(BaseModel):
+    simulated_eth_price: str = Field(description="本次模拟使用的 ETH 价格（USD）")
+    positions: list[LiquidationSimItem] = Field(
+        description="在此价格下触发清算的所有仓位，按 liq_price 降序排列"
+    ),
+    positions_cnt: str = Field(description="触发清算的仓位数量"),
+    total_eth_collateral_amount: str = Field(description="可被清算的 ETH 抵押品总量")
+    total_eth_collateral_usd: str = Field(
+        description="可被清算的 ETH 抵押品在模拟价格下的总 USD 估值"
+    )
+    total_liquidation_usd: str = Field(
+        description=(
+            "清算人实际可获取的抵押品 USD 总估值（含清算奖励折价）。"
+            "计算方式：min(债务 × 清算奖励系数, ETH 抵押品 USD) 逐仓累加，"
+            "默认使用 Aave V3 WETH 清算奖励系数 1.05（5% 折价优惠）。"
+        )
+    )
+    note: str = Field(default="", description="备注，如参与计算的仓位数量、使用的清算奖励系数等")
 
 
 class HistoricalReserveDetail(BaseModel):

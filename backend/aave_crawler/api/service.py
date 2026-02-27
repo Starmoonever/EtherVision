@@ -4,8 +4,6 @@
 - 计算 ETH liq_price
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from decimal import Decimal, ROUND_HALF_UP
@@ -22,6 +20,8 @@ from ..rpc import (
 )
 from .schemas import (
     LiqPriceResponse,
+    LiquidationSimItem,
+    LiquidationSimResponse,
     HistoricalPositionResponse,
     HistoricalReserveDetail,
     PositionResponse,
@@ -347,6 +347,128 @@ LIMIT $1
             )
         )
     return results
+
+
+# Aave V3 WETH 默认清算奖励系数（liquidation_bonus = 5%，即 0.05 on top of debt）
+_WETH_LIQ_BONUS = Decimal("1.05")
+
+# 清算模拟排序字段白名单
+_SIM_SORT_COLS = {
+    "liq_price":              "liq_price",
+    "eth_collateral_amount":  "eth_collateral_amount",
+    "eth_collateral_usd":     "eth_collateral_usd",
+    "total_debt_usd":         "total_debt_usd",
+}
+
+
+def _build_simulate_sql(order_col: str, order_dir: str) -> str:
+    return f"""
+WITH eth_col AS (
+    SELECT
+        user_address,
+        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount
+    FROM loan.aave_v3_eth_reserve_positions
+    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+      AND use_as_collateral = true
+      AND supply_raw > 0
+),
+computed AS (
+    SELECT
+        p.user_address                                                AS address,
+        COALESCE(e.eth_amount, 0::numeric)                            AS eth_collateral_amount,
+        COALESCE(e.eth_amount, 0::numeric) * $1::numeric              AS eth_collateral_usd,
+        p.total_debt_usd,
+        p.liq_threshold,
+        CASE
+            WHEN p.total_debt_usd = 0
+              OR COALESCE(e.eth_amount, 0::numeric) = 0
+              OR p.liq_threshold = 0
+            THEN 0::numeric
+            ELSE p.total_debt_usd
+                 / (COALESCE(e.eth_amount, 0::numeric) * p.liq_threshold)
+        END AS liq_price
+    FROM loan.aave_v3_eth_positions p
+    LEFT JOIN eth_col e ON p.user_address = e.user_address
+)
+SELECT
+    address,
+    eth_collateral_amount,
+    eth_collateral_usd,
+    total_debt_usd,
+    liq_price
+FROM computed
+WHERE liq_price > 0
+  AND liq_price >= $1::numeric
+ORDER BY {order_col} {order_dir}
+"""
+
+
+async def simulate_liquidation(
+    pool,
+    eth_price: Decimal,
+    orderby: str = "liq_price",
+    order: str = "desc",
+    limit: int = 100,
+) -> LiquidationSimResponse:
+    """模拟当 ETH 价格为 eth_price 时，哪些仓位将被触发清算及汇总统计。
+
+    清算奖励折价说明：
+        Aave V3 WETH 清算奖励系数为 1.05（5%），即清算人偿还 1 USD 债务
+        可从协议获得价值 1.05 USD 的 ETH 抵押品。
+        因此 ``total_liquidation_usd`` = sum( min(debt × 1.05, eth_collateral_usd) )。
+    """
+    order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
+    order_dir = "DESC" if order.lower() == "desc" else "ASC"
+    sql = _build_simulate_sql(order_col, order_dir)
+    # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
+    rows = await pool.fetch(sql, float(eth_price))
+
+    total_eth_amount = Decimal("0")
+    total_eth_usd = Decimal("0")
+    total_liq_usd = Decimal("0")
+    all_items: list[LiquidationSimItem] = []
+
+    for row in rows:
+        eth_amt = Decimal(str(row["eth_collateral_amount"]))
+        eth_usd = Decimal(str(row["eth_collateral_usd"]))
+        debt_usd = Decimal(str(row["total_debt_usd"]))
+        liq_p = Decimal(str(row["liq_price"]))
+
+        # 清算人实际可获取的抵押品价值：不超过可用抵押品，含 5% 奖励加码
+        seized = min(debt_usd * _WETH_LIQ_BONUS, eth_usd)
+
+        total_eth_amount += eth_amt
+        total_eth_usd += eth_usd
+        total_liq_usd += seized
+
+        all_items.append(LiquidationSimItem(
+            address=row["address"],
+            liq_price=_fmt(liq_p),
+            eth_collateral_amount=_fmt(eth_amt, 6),
+            eth_collateral_usd=_fmt(eth_usd),
+            total_debt_usd=_fmt(debt_usd),
+        ))
+
+    total_count = len(all_items)
+    items = all_items[:limit]
+
+    note = (
+        f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发清算"
+        f"（本次返回前 {len(items)} 条）；"
+        f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
+        f"total_liquidation_usd = Σ min(债务 × {_WETH_LIQ_BONUS}, ETH抵押品USD)，"
+        f"统计基于全部 {total_count} 个仓位"
+    )
+
+    return LiquidationSimResponse(
+        simulated_eth_price=_fmt(eth_price),
+        positions=items,
+        positions_cnt=str(total_count),
+        total_eth_collateral_amount=_fmt(total_eth_amount, 6),
+        total_eth_collateral_usd=_fmt(total_eth_usd),
+        total_liquidation_usd=_fmt(total_liq_usd),
+        note=note,
+    )
 
 
 async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None) -> PriceResponse:
