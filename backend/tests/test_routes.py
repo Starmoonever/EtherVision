@@ -25,6 +25,7 @@ from tests.conftest import (
     MOCK_HIST_POSITION,
     MOCK_HIST_POSITIONS_LIST,
     MOCK_LIQ,
+    MOCK_LIQ_PERIOD,
     MOCK_POSITION,
     MOCK_POSITIONS_LIST,
     MOCK_PRICE_HIST,
@@ -767,4 +768,88 @@ class TestPricePeriod:
             resp = client.get("/api/price/period",
                               params={"asset": "eth", "start": time_str,
                                       "end": time_str, "interval": 60})
+        assert resp.status_code == 200
+
+
+class TestLiquidatePeriod:
+    """GET /api/liquidate/period — ETH 价格区间清算汇总序列。"""
+
+    _BASE_PARAMS = {"start": 1000, "end": 2000, "interval": 500}
+
+    def test_ok_returns_list(self, client: TestClient):
+        """正常请求返回 200 和列表。"""
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_LIQ_PERIOD):
+            resp = client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 3
+        item = data[0]
+        assert "simulated_eth_price" in item
+        assert "positions_cnt" in item
+        assert "total_eth_collateral_amount" in item
+        assert "total_eth_collateral_usd" in item
+        assert "total_liquidation_usd" in item
+
+    def test_service_receives_correct_params(self, client: TestClient):
+        """验证 service 接收到正确的 Decimal 参数。"""
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_LIQ_PERIOD) as mock_svc:
+            client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+        _, kwargs = mock_svc.call_args
+        assert kwargs["start_price"] == Decimal("1000")
+        assert kwargs["end_price"] == Decimal("2000")
+        assert kwargs["interval"] == Decimal("500")
+
+    def test_missing_start_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period", params={"end": 2000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_missing_end_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period", params={"start": 1000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_missing_interval_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period", params={"start": 1000, "end": 2000})
+        assert resp.status_code == 422
+
+    def test_start_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period",
+                          params={"start": 0, "end": 2000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_interval_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/period",
+                          params={"start": 1000, "end": 2000, "interval": 0})
+        assert resp.status_code == 422
+
+    def test_start_greater_than_end_returns_400(self, client: TestClient):
+        """start > end 应返回 400。"""
+        from fastapi import HTTPException
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   side_effect=HTTPException(status_code=400, detail="start 必须 <= end")):
+            resp = client.get("/api/liquidate/period",
+                              params={"start": 3000, "end": 1000, "interval": 500})
+        assert resp.status_code == 400
+
+    def test_no_pool_returns_503(self, app_no_pool):
+        with TestClient(app_no_pool) as c:
+            resp = c.get("/api/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 503
+
+    def test_empty_result_returns_empty_list(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=[]):
+            resp = client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    @pytest.mark.parametrize("interval", [100, 500, 1000])
+    def test_various_intervals(self, client: TestClient, interval: int):
+        with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_LIQ_PERIOD):
+            resp = client.get("/api/liquidate/period",
+                               params={"start": 500, "end": 3000, "interval": interval})
         assert resp.status_code == 200

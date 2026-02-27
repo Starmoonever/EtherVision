@@ -20,6 +20,7 @@ from ..rpc import (
 )
 from .schemas import (
     LiqPriceResponse,
+    LiquidationPeriodItem,
     LiquidationSimItem,
     LiquidationSimResponse,
     HistoricalPositionResponse,
@@ -450,6 +451,80 @@ async def simulate_liquidation(
         total_liquidation_usd=_fmt(total_liq_usd),
         note=note,
     )
+
+
+# 全量拉取所有有清算价的仓位（用于区间模拟，避免每个价格点单独查询）
+_SQL_ALL_LIQ_POSITIONS = """
+WITH eth_col AS (
+    SELECT
+        user_address,
+        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount
+    FROM loan.aave_v3_eth_reserve_positions
+    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+      AND use_as_collateral = true
+      AND supply_raw > 0
+)
+SELECT
+    COALESCE(e.eth_amount, 0::numeric) AS eth_collateral_amount,
+    p.total_debt_usd,
+    p.liq_price
+FROM loan.aave_v3_eth_positions p
+LEFT JOIN eth_col e ON p.user_address = e.user_address
+WHERE p.liq_price > 0
+"""
+
+
+async def simulate_liquidation_period(
+    pool,
+    start_price: Decimal,
+    end_price: Decimal,
+    interval: Decimal,
+) -> list[LiquidationPeriodItem]:
+    """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的清算汇总。
+
+    - 仅做一次数据库查询，在内存中对每个价格点分别统计，效率较高。
+    - 返回按价格升序排列的清算快照列表，可观察不同价格下清算量的变化趋势。
+    """
+    from fastapi import HTTPException
+
+    if start_price > end_price:
+        raise HTTPException(status_code=400, detail="start 必须 <= end")
+
+    # 一次拉取所有有清算价的仓位
+    rows = await pool.fetch(_SQL_ALL_LIQ_POSITIONS)
+    positions = [
+        (
+            Decimal(str(r["eth_collateral_amount"])),
+            Decimal(str(r["total_debt_usd"])),
+            Decimal(str(r["liq_price"])),
+        )
+        for r in rows
+    ]
+
+    result: list[LiquidationPeriodItem] = []
+    price = start_price
+    while price <= end_price:
+        total_eth_amount = Decimal("0")
+        total_eth_usd = Decimal("0")
+        total_liq_usd = Decimal("0")
+        cnt = 0
+        for eth_amt, debt_usd, liq_p in positions:
+            if liq_p >= price:
+                eth_usd = eth_amt * price
+                seized = min(debt_usd * _WETH_LIQ_BONUS, eth_usd)
+                total_eth_amount += eth_amt
+                total_eth_usd += eth_usd
+                total_liq_usd += seized
+                cnt += 1
+        result.append(LiquidationPeriodItem(
+            simulated_eth_price=_fmt(price),
+            positions_cnt=str(cnt),
+            total_eth_collateral_amount=_fmt(total_eth_amount, 6),
+            total_eth_collateral_usd=_fmt(total_eth_usd),
+            total_liquidation_usd=_fmt(total_liq_usd),
+        ))
+        price += interval
+    return result
 
 
 async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None) -> PriceResponse:

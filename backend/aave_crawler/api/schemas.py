@@ -102,6 +102,14 @@ class LiquidationSimResponse(BaseModel):
     note: str = Field(default="", description="备注，如参与计算的仓位数量、使用的清算奖励系数等")
 
 
+class LiquidationPeriodItem(BaseModel):
+    simulated_eth_price: str = Field(description="模拟 ETH 价格（USD）")
+    positions_cnt: str = Field(description="在此价格下触发清算的仓位数量")
+    total_eth_collateral_amount: str = Field(description="可被清算的 ETH 抵押品总量")
+    total_eth_collateral_usd: str = Field(description="可被清算的 ETH 抵押品总 USD 估值（按模拟价格）")
+    total_liquidation_usd: str = Field(description="清算人可获得的抵押品总 USD 价值（含 5% 清算奖励）")
+
+
 class HistoricalReserveDetail(BaseModel):
     symbol: str
     token_address: str

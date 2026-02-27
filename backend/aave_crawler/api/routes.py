@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from .schemas import (
     HistoricalPositionResponse,
     LiqPriceResponse,
+    LiquidationPeriodItem,
     LiquidationSimResponse,
     PositionResponse,
     PriceResponse,
@@ -21,6 +22,7 @@ from .service import (
     get_user_position_history,
     get_positions_history,
     simulate_liquidation,
+    simulate_liquidation_period,
 )
 
 router = APIRouter(prefix="/api")
@@ -231,3 +233,28 @@ async def asset_price_period(
     start_ts = _parse_utc_time(start)
     end_ts = _parse_utc_time(end)
     return await get_price_period(_w3(request), asset, start_ts=start_ts, end_ts=end_ts, interval_minutes=interval)
+
+
+@router.get(
+    "/liquidate/period",
+    response_model=list[LiquidationPeriodItem],
+    summary="模拟 ETH 价格在区间内波动时的清算变化",
+    description=(
+        "分析 ETH 价格在 start～end 区间内，每隔 interval 步长时触发清算的汇总统计。\n\n"
+        "返回按价格升序排列的清算快照序列，可观察不同价格点的清算量和可清算抵押品变化趋势。\n\n"
+        "**注意**：start 必须 <= end，interval 必须大于 0。"
+    ),
+)
+async def liquidate_period(
+    request: Request,
+    start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
+    end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
+    interval: float = Query(..., gt=0, description="价格步长（USD），必须大于 0"),
+) -> list[LiquidationPeriodItem]:
+    from decimal import Decimal
+    return await simulate_liquidation_period(
+        _pool(request),
+        start_price=Decimal(str(start)),
+        end_price=Decimal(str(end)),
+        interval=Decimal(str(interval)),
+    )

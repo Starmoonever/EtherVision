@@ -4,7 +4,7 @@
 
 1. **批量快照**（`crawl`）：从 PostgreSQL 读取所有用户地址，并发拉取链上仓位数据，持久化为可查询快照
 2. **增量监听**（`watch`）：持续轮询链上历史事件，仅重爬有操作的用户，保持快照实时性
-3. **REST API**：5 个 HTTP 端点，支持实时链上查询、历史仓位重建与清算模拟
+3. **REST API**：7 个 HTTP 端点，支持实时链上查询、历史仓位重建、价格区间查询与清算模拟
 
 ## 依赖
 
@@ -150,7 +150,9 @@ uv run aave-api --workers 4
 | GET | `/api/user/liq_price` | 计算单用户 ETH 清算触发价 |
 | GET | `/api/positions` | 批量仓位排行（实时快照或历史重建） |
 | GET | `/api/price` | 查询资产价格（实时链上或 DeFiLlama 历史） |
+| GET | `/api/price/period` | 查询资产在时间段内按分钟间隔的历史价格序列 |
 | GET | `/api/liquidate` | 模拟指定 ETH 价格下的全网清算情况 |
+| GET | `/api/liquidate/period` | 模拟 ETH 价格在区间内波动时清算量的变化趋势 |
 | GET | `/health` | 服务健康检查 |
 
 ---
@@ -298,6 +300,44 @@ curl "http://localhost:8000/api/price?asset=eth&time=2024-11-14T12:00:00Z"
 
 ---
 
+### `GET /api/price/period`
+
+从 DeFiLlama 批量查询资产在指定时间段内，按固定分钟间隔的历史价格序列。仅发起一次 HTTP 请求后在内存中生成序列（并发逐点查询 DeFiLlama）。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `asset` | string | `eth` | 资产名称，如 `eth`、`wbtc`、`usdc` |
+| `start` | string | （必填） | 起始 UTC 时间，如 `2025-01-01T00:00:00Z`、`2025-01-01` |
+| `end` | string | （必填） | 结束 UTC 时间（含），格式同上 |
+| `interval` | int ≥ 1 | `60` | 采样间隔（分钟） |
+
+支持时间格式：`2025-01-01T12:00:00Z` / `2025-01-01T12:00:00` / `2025-01-01 12:00:00` / `2025-01-01`
+
+```bash
+# 查询 ETH 在 2025-02-01 内每小时的价格
+curl "http://localhost:8000/api/price/period?asset=eth&start=2025-02-01&end=2025-02-02&interval=60"
+
+# USDT 每 30 分钟一个采样点
+curl "http://localhost:8000/api/price/period?asset=usdt&start=2025-02-01&end=2025-02-01T06:00:00Z&interval=30"
+```
+
+```json
+{
+  "asset": "ETH",
+  "token_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  "source": "defillama",
+  "prices": [
+    { "price_usd": "2800.00", "timestamp": "2025-02-01T00:00:00Z" },
+    { "price_usd": "2815.30", "timestamp": "2025-02-01T01:00:00Z" },
+    { "price_usd": "2790.45", "timestamp": "2025-02-01T02:00:00Z" }
+  ]
+}
+```
+
+> 若 DeFiLlama 查询某采样点失败，该点 `price_usd` 设为 `"0.00"` 而非中断整个请求。
+
+---
+
 ### `GET /api/liquidate`
 
 模拟当 ETH 价格跌至指定值时，哪些账户将被触发清算，以及可供清算人获取的抵押品总额。
@@ -340,6 +380,48 @@ curl "http://localhost:8000/api/liquidate?eth_price=2000&orderby=eth_collateral_
 $$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \text{eth\_collateral\_usd}\right)$$
 
 > `total_eth_collateral_usd` 及 `total_liquidation_usd` 始终基于**全部**触发仓位，不受 `limit` 影响。
+
+---
+
+### `GET /api/liquidate/period`
+
+分析 ETH 价格在指定区间内以固定步长变化时，各价格点对应的清算量汇总。仅进行**一次**数据库查询，之后在内存中对每个价格点做过滤统计，效率较高。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `start` | float > 0 | （必填） | 起始 ETH 价格（USD） |
+| `end` | float > 0 | （必填） | 结束 ETH 价格（USD），须 >= `start` |
+| `interval` | float > 0 | （必填） | 价格步长（USD） |
+
+```bash
+# 分析 ETH 从 $500 跌至 $2000，每 $100 一个价格点的清算情况
+curl "http://localhost:8000/api/liquidate/period?start=500&end=2000&interval=100" | jq .
+```
+
+```json
+[
+  {
+    "simulated_eth_price": "500.00",
+    "positions_cnt": "312",
+    "total_eth_collateral_amount": "1840.230000",
+    "total_eth_collateral_usd": "920115.00",
+    "total_liquidation_usd": "880000.00"
+  },
+  {
+    "simulated_eth_price": "600.00",
+    "positions_cnt": "287",
+    "total_eth_collateral_amount": "1650.100000",
+    "total_eth_collateral_usd": "990060.00",
+    "total_liquidation_usd": "850000.00"
+  }
+]
+```
+
+返回列表按价格**升序**排列（从 `start` 到 `end`），可直接用于绘制清算量随价格变化的折线图。
+
+**清算折价说明**（同 `/api/liquidate`）：
+
+$$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \text{eth\_collateral\_usd}\right)$$
 
 ---
 
@@ -400,7 +482,7 @@ backend/
 ├── config.yaml              # 本地配置（gitignored）
 ├── tests/
 │   ├── conftest.py          # pytest fixtures & mock 数据
-│   └── test_routes.py       # 106 个路由单元测试（全 mock，无需真实 DB/RPC）
+│   └── test_routes.py       # 138 个路由单元测试（全 mock，无需真实 DB/RPC）
 └── aave_crawler/
     ├── cli.py               # Click CLI 入口（aave-crawler 命令）
     ├── server.py            # FastAPI app 工厂 + uvicorn 入口（aave-api 命令）
@@ -412,8 +494,8 @@ backend/
     ├── watcher.py           # 增量监听主流程
     └── api/
         ├── schemas.py       # Pydantic 响应模型
-        ├── service.py       # 业务逻辑（仓位查询、清算价计算、模拟清算）
-        └── routes.py        # FastAPI 路由（5 个端点）
+        ├── service.py       # 业务逻辑（仓位查询、清算价计算、模拟清算、价格序列）
+        └── routes.py        # FastAPI 路由（7 个端点）
 ```
 
 ---
