@@ -43,16 +43,18 @@ export function AddressInput({ onSearch, loading }: Props) {
     onSearch(trimmed);
   };
 
-  
+  /* 定义用户在页面上看到的输入框什么样，用户输入时，程序如何实时响应。*/
   return (
+    /* 表单提交时触发 handleSubmit 函数 */
     <form onSubmit={handleSubmit} className="input-form">
       <div className="input-row">
+        {/* 输入框 ,用户输入时，实时更新 value 状态 */}
         <input
           type="text"
           value={value}
           onChange={(e) => {
-            setValue(e.target.value);
-            setError('');
+            setValue(e.target.value); /* 实时更新 value 内容 */
+            setError(''); /* 清空之前的错误提示 */
           }}
           placeholder="输入抵押ETH的钱包地址 (0x...)"
           className="address-input"

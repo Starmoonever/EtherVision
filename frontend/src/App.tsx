@@ -2,103 +2,95 @@ import { useState } from 'react';
 import { AddressInput } from './components/AddressInput';
 import { SummaryCard } from './components/SummaryCard';
 import { PositionTable } from './components/PositionTable';
-import { fetchUserPosition, type UserPosition } from './lib/aave';
+import { MarketAssessment } from './components/MarketAssessment';
 import './App.css';
 
 export default function App() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [position, setPosition] = useState<UserPosition | null>(null);
   const [queriedAddress, setQueriedAddress] = useState('');
+  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
 
-  const handleSearch = async (address: string) => {
-    setLoading(true);
-    setError('');
-    setPosition(null);
-    setQueriedAddress(address);
-
-    try {
-      const result = await fetchUserPosition(address);
-      setPosition(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '查询失败，请稍后重试');
-    } finally {
-      setLoading(false);
+  const handleSearch = (address: string) => {
+    if (!address.startsWith('0x') || address.length !== 42) {
+      setError('请输入有效的 42 位以太坊地址');
+      setQueriedAddress('');
+      return;
     }
+    setError('');
+    setQueriedAddress(address);
   };
-
-  const hasPosition =
-    position &&
-    (parseFloat(position.summary.totalCollateralUSD) > 0 ||
-      parseFloat(position.summary.totalDebtUSD) > 0);
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="app-header">
         <div className="header-inner">
           <div className="logo">
             <span className="logo-icon">⚡</span>
-            <span className="logo-text">Aave V3 仓位查询</span>
+            <span className="logo-text">Aave V3 抵押ETH清算风险监测</span>
           </div>
-          <span className="network-badge">Base Mainnet</span>
+          <span className="network-badge">数据库版</span>
         </div>
       </header>
 
-      {/* Main */}
       <main className="app-main">
-        <div className="hero">
-          <h1 className="hero-title">查询账户仓位</h1>
-          <p className="hero-sub">输入以太坊地址，实时获取 Aave V3 供给与借贷数据</p>
+        <div className="tabs-container">
+          <button 
+            className={`tab-btn ${activeTab === 'personal' ? 'active' : ''}`}
+            onClick={() => setActiveTab('personal')}
+          >
+            个人账户分析
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'market' ? 'active' : ''}`}
+            onClick={() => setActiveTab('market')}
+          >
+            宏观市场评估
+          </button>
         </div>
 
-        <AddressInput onSearch={handleSearch} loading={loading} />
-
-        {/* Loading */}
-        {loading && (
-          <div className="status-block">
-            <div className="spinner" />
-            <p>正在查询链上数据…</p>
-          </div>
-        )}
-
-        {/* Error */}
-        {!loading && error && (
-          <div className="error-block">
-            <span className="error-icon">⚠️</span>
-            <div>
-              {error.split('\n').map((line, i) => (
-                <p key={i} style={{ margin: i === 0 ? 0 : '0.4rem 0 0' }}>
-                  {line}
-                </p>
-              ))}
-              {error.includes('config.yaml') && (
-                <p className="rpc-hint">
-                  参考 <code>config.yaml.example</code>，在项目根目录创建 <code>config.yaml</code> 并填入 <code>rpc_url</code> 后重启开发服务器。
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* No position */}
-        {!loading && !error && position && !hasPosition && (
-          <div className="status-block">
-            <p>该地址在 Aave V3 (Base) 上暂无任何仓位</p>
-          </div>
-        )}
-
-        {/* Results */}
-        {!loading && !error && position && hasPosition && (
+        {activeTab === 'personal' ? (
           <>
-            <SummaryCard summary={position.summary} address={queriedAddress} />
-            <PositionTable reserves={position.reserves} />
+            <div className="hero">
+              <h1 className="hero-title">个人账户分析</h1>
+              <p className="hero-sub">账户头寸与清算线</p>
+            </div>
+
+            {/* 搜索组件 */}
+            <AddressInput onSearch={handleSearch} loading={false} />
+
+            {error && (
+              <div className="error-block">
+                <span className="error-icon">⚠️</span>
+                <p>{error}</p>
+              </div>
+            )}
+
+            {/* 当有地址时，显示数据看板 */}
+            {queriedAddress && (
+              <div className="results-container" style={{ marginTop: '2rem' }}>
+                {/* 传递地址给子组件，子组件内部去 fetch */}
+                <SummaryCard address={queriedAddress} />
+                
+                <div style={{ marginTop: '2rem' }}>
+                  <h3 className="section-title">资产负债情况</h3>
+                  <PositionTable address={queriedAddress} />
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="hero">
+              <h1 className="hero-title">宏观市场评估</h1>
+              <p className="hero-sub">ETH实时价格与清算模拟</p>
+            </div>
+            <MarketAssessment />
           </>
         )}
       </main>
 
       <footer className="app-footer">
-        数据来源：Aave V3 Base Mainnet 智能合约
+        数据来源：内网 API (10.1.5.183) | Base Mainnet
       </footer>
     </div>
   );
