@@ -5,13 +5,17 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (HistoricalPositionResponse, LiqPriceResponse,
-                      LiquidationPeriodItem, LiquidationSimResponse,
-                      PositionResponse, PricePeriodResponse, PriceResponse)
+from .schemas import (BorrowPositionResponse, HistoricalPositionResponse,
+                      LiqPriceResponse, LiquidationPeriodItem,
+                      LiquidationSimResponse, PositionResponse,
+                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
+                      ShortLiqSimResponse)
 from .service import (get_eth_price, get_liq_price, get_positions_history,
-                      get_price_period, get_sorted_positions,
-                      get_user_position, get_user_position_history,
-                      simulate_liquidation, simulate_liquidation_period)
+                      get_price_period, get_sorted_borrow_positions,
+                      get_sorted_positions, get_user_position,
+                      get_user_position_history, simulate_liquidation,
+                      simulate_liquidation_period, simulate_short_liquidation,
+                      simulate_short_liquidation_period)
 
 router = APIRouter(prefix="/api")
 
@@ -278,4 +282,110 @@ async def liquidate_period(
         interval=Decimal(str(interval)),
         eth_ratio=Decimal(str(eth_ratio)),
         protocol=version,
+    )
+
+
+# ── 借贷端（做空 ETH / borrow WETH）清算分析路由 ─────────────────────────────
+
+@router.get(
+    "/borrow/positions",
+    response_model=list[BorrowPositionResponse],
+    summary="查询借贷端仓位（做空 ETH / 借入 WETH）",
+    description=(
+        "返回数据库中已爬取的借入了 WETH 的仓位，按指定字段排序。\n\n"
+        "**触发清算条件**：ETH 价格上涨至 `liq_price_rise` 时，"
+        "该仓位的健康系数将触碰 1.0，面临被清算风险。\n\n"
+        "`liq_price_rise = 0` 表示该仓位无 ETH 上涨清算风险（例如抵押品中含同比例 ETH 系资产）。\n\n"
+        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl -p v3_borrow`）。"
+    ),
+)
+async def borrow_positions(
+    request: Request,
+    orderby: Literal[
+        "liq_price_rise",
+        "weth_debt_usd",
+        "total_debt_usd",
+        "health_factor",
+    ] = Query("liq_price_rise", description="排序字段"),
+    order: Literal["asc", "desc"] = Query("asc", description="排序方向：asc=升序（默认），desc=降序"),
+    limit: int = Query(10, ge=1, le=200, description="返回数量，最多 200"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+) -> list[BorrowPositionResponse]:
+    protocol = f"{version}_borrow"
+    return await get_sorted_borrow_positions(
+        _pool(request),
+        orderby=orderby,
+        order=order,
+        limit=limit,
+        protocol=protocol,
+    )
+
+
+@router.get(
+    "/borrow/liquidate",
+    response_model=ShortLiqSimResponse,
+    summary="模拟 ETH 价格上涨时的做空清算情况",
+    description=(
+        "模拟当 ETH 价格涨至指定值时，有哪些借入 WETH 的账户会被清算，"
+        "以及清算人可获取的非 ETH 抵押品总价值（含 5% 清算奖励折价）。\n\n"
+        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl -p v3_borrow`）。\n\n"
+        "**触发条件**：`liq_price_rise > 0 AND liq_price_rise <= eth_price`\n\n"
+        "**清算折价说明**：`total_liquidation_usd = Σ min(WETH债务USD × 1.05, 总抵押USD)`"
+    ),
+)
+async def borrow_liquidate_simulation(
+    request: Request,
+    eth_price: float = Query(..., gt=0, description="模拟的 ETH 价格（USD），必须大于 0"),
+    limit: int = Query(100, ge=1, le=1000, description="返回的仓位数量，默认 100，最多 1000"),
+    orderby: Literal[
+        "liq_price_rise",
+        "weth_debt_usd",
+        "total_debt_usd",
+    ] = Query("liq_price_rise", description="排序字段"),
+    order: Literal["desc", "asc"] = Query("asc", description="排序方向：asc=升序（默认），desc=降序"),
+    cap: float | None = Query(
+        None,
+        gt=0,
+        description="liq_price_rise 上限（USD）：仅返回 liq_price_rise < cap 的地址；省略则返回全部",
+    ),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+) -> ShortLiqSimResponse:
+    from decimal import Decimal
+    protocol = f"{version}_borrow"
+    return await simulate_short_liquidation(
+        _pool(request),
+        Decimal(str(eth_price)),
+        orderby=orderby,
+        order=order,
+        limit=limit,
+        protocol=protocol,
+        cap=Decimal(str(cap)) if cap is not None else None,
+    )
+
+
+@router.get(
+    "/borrow/liquidate/period",
+    response_model=list[ShortLiqPeriodItem],
+    summary="模拟 ETH 价格在区间内上涨时的做空清算变化",
+    description=(
+        "分析 ETH 价格在 start～end 区间内，每隔 interval 步长时借贷端触发清算的汇总统计。\n\n"
+        "返回按价格升序排列的清算快照序列，可观察不同价格点的做空清算量变化趋势。\n\n"
+        "**注意**：start 必须 <= end，interval 必须大于 0。"
+    ),
+)
+async def borrow_liquidate_period(
+    request: Request,
+    start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
+    end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
+    interval: float = Query(..., gt=0, description="价格步长（USD），必须大于 0"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+) -> list[ShortLiqPeriodItem]:
+    from decimal import Decimal
+    protocol = f"{version}_borrow"
+    return await simulate_short_liquidation_period(
+        _pool(request),
+        start_price=Decimal(str(start)),
+        end_price=Decimal(str(end)),
+        interval=Decimal(str(interval)),
+        protocol=protocol,
     )

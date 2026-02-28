@@ -133,3 +133,56 @@ class HistoricalPositionResponse(BaseModel):
             "但不含用户最后一次操作到查询时间之间的利息累积"
         ),
     )
+
+
+# ── 借贷端（做空 ETH / borrow WETH）清算分析 ─────────────────────────────────
+
+class BorrowPositionResponse(BaseModel):
+    """借贷端仓位：用户借入 WETH，ETH 上涨时面临清算风险。"""
+    address: str
+    weth_debt_amount: str = Field(description="ETH 系负债合计数量（换算 decimals 后）")
+    weth_debt_usd: str = Field(description="ETH 系负债 USD 估值（快照时刻价格）")
+    total_collateral_usd: str = Field(description="总抵押 USD 估值")
+    total_debt_usd: str = Field(description="总借贷 USD 估值")
+    health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
+    liq_price_rise: str = Field(
+        description="ETH 涨至该价格时健康系数将触碰 1.0（触发清算风险）；"
+                    "0 表示不存在 ETH 上涨清算风险（如抵押品也含 ETH 系资产）"
+    )
+
+
+class ShortLiqSimItem(BaseModel):
+    """单个做空仓位在模拟 ETH 价格下的清算信息。"""
+    address: str
+    liq_price_rise: str = Field(description="该地址的 ETH 上涨清算触发价（USD）")
+    weth_debt_amount: str = Field(description="ETH 系负债数量")
+    weth_debt_usd: str = Field(description="ETH 系负债在模拟价格下的 USD 估值（weth_debt_amount × eth_price）")
+    total_collateral_usd: str = Field(description="总抵押 USD 估值（快照时刻，主要为非 ETH 资产）")
+
+
+class ShortLiqSimResponse(BaseModel):
+    """做空清算模拟汇总：ETH 上涨至 simulated_eth_price 时的清算统计。"""
+    simulated_eth_price: str = Field(description="本次模拟使用的 ETH 价格（USD）")
+    positions: list[ShortLiqSimItem] = Field(
+        description="在此价格下触发清算的所有借贷仓位，按 liq_price_rise 升序排列"
+    )
+    positions_cnt: str = Field(description="触发清算的仓位数量")
+    total_weth_debt_amount: str = Field(description="可被清算的 ETH 系负债总量")
+    total_weth_debt_usd: str = Field(description="可被清算的 ETH 系负债在模拟价格下的总 USD 估值")
+    total_liquidation_usd: str = Field(
+        description=(
+            "清算人实际可获取的抵押品 USD 总估值（含清算奖励折价）。"
+            "计算方式：min(WETH债务USD × 清算奖励系数, 总抵押USD) 逐仓累加，"
+            "默认使用 Aave V3 WETH 清算奖励系数 1.05。"
+        )
+    )
+    note: str = Field(default="", description="备注")
+
+
+class ShortLiqPeriodItem(BaseModel):
+    """做空清算区间模拟的单个价格点汇总。"""
+    simulated_eth_price: str = Field(description="模拟 ETH 价格（USD）")
+    positions_cnt: str = Field(description="在此价格下触发清算的仓位数量")
+    total_weth_debt_amount: str = Field(description="可被清算的 ETH 系负债总量")
+    total_weth_debt_usd: str = Field(description="可被清算的 ETH 系负债总 USD 估值（按模拟价格）")
+    total_liquidation_usd: str = Field(description="清算人可获得的抵押品总 USD 价值（含 5% 清算奖励）")

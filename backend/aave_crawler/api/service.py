@@ -14,11 +14,12 @@ from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
 from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (HistoricalPositionResponse, HistoricalReserveDetail,
-                      LiqPriceResponse, LiquidationPeriodItem,
-                      LiquidationSimItem, LiquidationSimResponse,
-                      PositionResponse, PricePeriodItem, PricePeriodResponse,
-                      PriceResponse)
+from .schemas import (BorrowPositionResponse, HistoricalPositionResponse,
+                      HistoricalReserveDetail, LiqPriceResponse,
+                      LiquidationPeriodItem, LiquidationSimItem,
+                      LiquidationSimResponse, PositionResponse,
+                      PricePeriodItem, PricePeriodResponse, PriceResponse,
+                      ShortLiqPeriodItem, ShortLiqSimItem, ShortLiqSimResponse)
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +581,224 @@ async def simulate_liquidation_period(
             positions_cnt=str(cnt),
             total_eth_collateral_amount=_fmt(total_eth_amount, 6),
             total_eth_collateral_usd=_fmt(total_eth_usd),
+            total_liquidation_usd=_fmt(total_liq_usd),
+        ))
+        price += interval
+    return result
+
+
+# ── 借贷端（做空 ETH / borrow WETH）清算分析 ─────────────────────────────────
+
+# 借贷端排序字段白名单
+_BORROW_SORT_COLS = {
+    "liq_price_rise":   "liq_price_rise",
+    "weth_debt_usd":    "weth_debt_usd",
+    "total_debt_usd":   "total_debt_usd",
+    "health_factor":    "health_factor",
+}
+
+
+async def get_sorted_borrow_positions(
+    pool,
+    orderby: str = "liq_price_rise",
+    order: str = "asc",
+    limit: int = 10,
+    protocol: str = "v3_borrow",
+) -> list[BorrowPositionResponse]:
+    """从数据库读取借贷端仓位（借入 WETH），按指定字段排序后返回。
+
+    Args:
+        pool:    asyncpg 连接池
+        orderby: 排序字段，liq_price_rise / weth_debt_usd / total_debt_usd / health_factor
+        order:   方向，asc 或 desc
+        limit:   最多返回多少条
+        protocol: v3_borrow 或 v2_borrow
+    """
+    order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
+    order_dir = _SORT_DIRS.get(order, "ASC")
+    pos_table, _ = _tables(protocol)
+
+    # 仅返回有上涨清算风险的仓位（liq_price_rise > 0），weth_debt_amount 通过 raw/1e18 计算
+    sql = f"""
+SELECT
+    p.user_address                                                      AS address,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18))                 AS weth_debt_amount,
+    p.weth_debt_usd,
+    p.total_collateral_usd,
+    p.total_debt_usd,
+    p.health_factor,
+    p.liq_price_rise
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+ORDER BY {order_col} {order_dir}
+LIMIT $1
+"""
+    rows = await pool.fetch(sql, limit)
+
+    results: list[BorrowPositionResponse] = []
+    for row in rows:
+        hf = Decimal(str(row["health_factor"]))
+        hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
+        results.append(
+            BorrowPositionResponse(
+                address=row["address"],
+                weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
+                weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"]))),
+                total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"]))),
+                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                health_factor=hf_str,
+                liq_price_rise=_fmt(Decimal(str(row["liq_price_rise"]))),
+            )
+        )
+    return results
+
+
+async def simulate_short_liquidation(
+    pool,
+    eth_price: Decimal,
+    orderby: str = "liq_price_rise",
+    order: str = "asc",
+    limit: int = 100,
+    protocol: str = "v3_borrow",
+    cap: Decimal | None = None,
+) -> ShortLiqSimResponse:
+    """模拟当 ETH 价格涨至 eth_price 时，哪些借贷仓位将被触发清算及汇总统计。
+
+    触发条件：liq_price_rise > 0 AND liq_price_rise <= eth_price
+    （即 ETH 实际价格已超过该仓位的做空清算触发线）
+    """
+    order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
+    order_dir = "DESC" if order.lower() == "desc" else "ASC"
+    pos_table, _ = _tables(protocol)
+
+    cap_filter = "  AND p.liq_price_rise < $2::numeric" if cap is not None else ""
+    sql = f"""
+SELECT
+    p.user_address                                                          AS address,
+    p.liq_price_rise,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18))                     AS weth_debt_amount,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) * $1::numeric       AS weth_debt_usd_sim,
+    p.weth_debt_usd                                                         AS weth_debt_usd_stored,
+    p.total_collateral_usd,
+    p.total_debt_usd
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+  AND p.liq_price_rise <= $1::numeric
+{cap_filter}
+ORDER BY {order_col} {order_dir}
+"""
+    fetch_args: list = [float(eth_price)]
+    if cap is not None:
+        fetch_args.append(float(cap))
+    rows = await pool.fetch(sql, *fetch_args)
+
+    total_weth_amount = Decimal("0")
+    total_weth_usd = Decimal("0")
+    total_liq_usd = Decimal("0")
+    all_items: list[ShortLiqSimItem] = []
+
+    for row in rows:
+        weth_amt = Decimal(str(row["weth_debt_amount"]))
+        weth_usd_sim = Decimal(str(row["weth_debt_usd_sim"]))
+        total_col_usd = Decimal(str(row["total_collateral_usd"]))
+        liq_r = Decimal(str(row["liq_price_rise"]))
+
+        # 清算人偿还 WETH 债务并获取抵押品（不超过可用抵押品）
+        seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
+
+        total_weth_amount += weth_amt
+        total_weth_usd += weth_usd_sim
+        total_liq_usd += seized
+
+        all_items.append(ShortLiqSimItem(
+            address=row["address"],
+            liq_price_rise=_fmt(liq_r),
+            weth_debt_amount=_fmt(weth_amt, 6),
+            weth_debt_usd=_fmt(weth_usd_sim),
+            total_collateral_usd=_fmt(total_col_usd),
+        ))
+
+    total_count = len(all_items)
+    items = all_items[:limit]
+
+    cap_note = f"；liq_price_rise 上限过滤：< {cap}" if cap is not None else ""
+    note = (
+        f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发做空清算"
+        f"（本次返回前 {len(items)} 条）；"
+        f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
+        f"total_liquidation_usd = Σ min(WETH债务USD × {_WETH_LIQ_BONUS}, 总抵押USD)；"
+        f"统计基于全部 {total_count} 个仓位"
+        f"{cap_note}"
+    )
+
+    return ShortLiqSimResponse(
+        simulated_eth_price=_fmt(eth_price),
+        positions=items,
+        positions_cnt=str(total_count),
+        total_weth_debt_amount=_fmt(total_weth_amount, 6),
+        total_weth_debt_usd=_fmt(total_weth_usd),
+        total_liquidation_usd=_fmt(total_liq_usd),
+        note=note,
+    )
+
+
+async def simulate_short_liquidation_period(
+    pool,
+    start_price: Decimal,
+    end_price: Decimal,
+    interval: Decimal,
+    protocol: str = "v3_borrow",
+) -> list[ShortLiqPeriodItem]:
+    """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的做空清算汇总。
+
+    - 仅做一次数据库查询，在内存中对每个价格点分别统计，效率较高。
+    - 返回按价格升序排列的清算快照列表，可观察不同价格下清算量的变化趋势。
+    """
+    from fastapi import HTTPException
+
+    if start_price > end_price:
+        raise HTTPException(status_code=400, detail="start 必须 <= end")
+
+    pos_table, _ = _tables(protocol)
+    sql = f"""
+SELECT
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) AS weth_debt_amount,
+    p.total_collateral_usd,
+    p.liq_price_rise
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+"""
+    rows = await pool.fetch(sql)
+    # (weth_debt_amount, total_collateral_usd, liq_price_rise)
+    positions = [
+        (
+            Decimal(str(r["weth_debt_amount"])),
+            Decimal(str(r["total_collateral_usd"])),
+            Decimal(str(r["liq_price_rise"])),
+        )
+        for r in rows
+    ]
+
+    result: list[ShortLiqPeriodItem] = []
+    price = start_price
+    while price <= end_price:
+        total_weth_amount = Decimal("0")
+        total_weth_usd = Decimal("0")
+        total_liq_usd = Decimal("0")
+        cnt = 0
+        for weth_amt, total_col_usd, liq_r in positions:
+            if liq_r <= price:  # ETH 已涨超触发价
+                weth_usd_sim = weth_amt * price
+                seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
+                total_weth_amount += weth_amt
+                total_weth_usd += weth_usd_sim
+                total_liq_usd += seized
+                cnt += 1
+        result.append(ShortLiqPeriodItem(
+            simulated_eth_price=_fmt(price),
+            positions_cnt=str(cnt),
+            total_weth_debt_amount=_fmt(total_weth_amount, 6),
+            total_weth_debt_usd=_fmt(total_weth_usd),
             total_liquidation_usd=_fmt(total_liq_usd),
         ))
         price += interval

@@ -19,11 +19,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
-from tests.conftest import (ADDR, MOCK_HIST_POSITION, MOCK_HIST_POSITIONS_LIST,
+from tests.conftest import (ADDR, MOCK_BORROW_POSITIONS_LIST,
+                            MOCK_HIST_POSITION, MOCK_HIST_POSITIONS_LIST,
                             MOCK_LIQ, MOCK_LIQ_PERIOD, MOCK_POSITION,
                             MOCK_POSITIONS_LIST, MOCK_PRICE_HIST,
                             MOCK_PRICE_ONCHAIN, MOCK_PRICE_PERIOD,
-                            MOCK_SIM_EMPTY, MOCK_SIM_RESPONSE, _make_app)
+                            MOCK_SHORT_LIQ_PERIOD, MOCK_SHORT_SIM_EMPTY,
+                            MOCK_SHORT_SIM_RESPONSE, MOCK_SIM_EMPTY,
+                            MOCK_SIM_RESPONSE, _make_app)
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
 _ROUTES = "aave_crawler.api.routes"
@@ -901,3 +904,334 @@ class TestLiquidatePeriod:
         resp = client.get("/api/liquidate/period",
                           params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": -0.1})
         assert resp.status_code == 422
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/borrow/positions
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBorrowPositions:
+    """GET /api/borrow/positions — 借贷端仓位列表（借入 WETH / 做空 ETH）。"""
+
+    def test_default_ok(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST):
+            resp = client.get("/api/borrow/positions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+        item = data[0]
+        assert "address" in item
+        assert "weth_debt_amount" in item
+        assert "weth_debt_usd" in item
+        assert "total_collateral_usd" in item
+        assert "total_debt_usd" in item
+        assert "health_factor" in item
+        assert "liq_price_rise" in item
+
+    def test_empty_result(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=[]):
+            resp = client.get("/api/borrow/positions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_no_pool_returns_503(self, app_no_pool):
+        with TestClient(app_no_pool) as c:
+            resp = c.get("/api/borrow/positions")
+        assert resp.status_code == 503
+
+    @pytest.mark.parametrize("orderby", [
+        "liq_price_rise", "weth_debt_usd", "total_debt_usd", "health_factor"
+    ])
+    def test_valid_orderby_values(self, client: TestClient, orderby: str):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST):
+            resp = client.get("/api/borrow/positions", params={"orderby": orderby})
+        assert resp.status_code == 200
+
+    def test_invalid_orderby_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/positions", params={"orderby": "nonexistent_col"})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_valid_order_values(self, client: TestClient, order: str):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST):
+            resp = client.get("/api/borrow/positions", params={"order": order})
+        assert resp.status_code == 200
+
+    def test_invalid_order_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/positions", params={"order": "random"})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("limit", [1, 50, 200])
+    def test_valid_limit_values(self, client: TestClient, limit: int):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST):
+            resp = client.get("/api/borrow/positions", params={"limit": limit})
+        assert resp.status_code == 200
+
+    def test_limit_too_large_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/positions", params={"limit": 201})
+        assert resp.status_code == 422
+
+    def test_limit_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/positions", params={"limit": 0})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("version,expected_protocol", [
+        ("v3", "v3_borrow"),
+        ("v2", "v2_borrow"),
+    ])
+    def test_version_maps_to_borrow_protocol(
+        self, client: TestClient, version: str, expected_protocol: str
+    ):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST) as mock_svc:
+            client.get("/api/borrow/positions", params={"version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected_protocol
+
+    def test_service_receives_correct_params(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_sorted_borrow_positions", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_POSITIONS_LIST) as mock_svc:
+            client.get("/api/borrow/positions",
+                       params={"orderby": "weth_debt_usd", "order": "desc", "limit": 50})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["orderby"] == "weth_debt_usd"
+        assert kwargs["order"] == "desc"
+        assert kwargs["limit"] == 50
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/borrow/liquidate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBorrowLiquidate:
+    """GET /api/borrow/liquidate — 模拟 ETH 上涨时的做空清算情况。"""
+
+    def test_missing_eth_price_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate")
+        assert resp.status_code == 422
+
+    def test_eth_price_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate", params={"eth_price": 0})
+        assert resp.status_code == 422
+
+    def test_eth_price_negative_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate", params={"eth_price": -100})
+        assert resp.status_code == 422
+
+    def test_ok_with_results(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE):
+            resp = client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "simulated_eth_price" in data
+        assert "positions" in data
+        assert "positions_cnt" in data
+        assert "total_weth_debt_amount" in data
+        assert "total_weth_debt_usd" in data
+        assert "total_liquidation_usd" in data
+        assert isinstance(data["positions"], list)
+        item = data["positions"][0]
+        assert "address" in item
+        assert "liq_price_rise" in item
+        assert "weth_debt_amount" in item
+        assert "weth_debt_usd" in item
+        assert "total_collateral_usd" in item
+
+    def test_ok_empty_results(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_EMPTY):
+            resp = client.get("/api/borrow/liquidate", params={"eth_price": 1000})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["positions_cnt"] == "0"
+        assert data["positions"] == []
+
+    def test_no_pool_returns_503(self, app_no_pool):
+        with TestClient(app_no_pool) as c:
+            resp = c.get("/api/borrow/liquidate", params={"eth_price": 2700})
+        assert resp.status_code == 503
+
+    def test_service_receives_decimal_eth_price(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate", params={"eth_price": 2700.5})
+        args, _ = mock_svc.call_args
+        assert args[1] == Decimal("2700.5")
+
+    @pytest.mark.parametrize("orderby", ["liq_price_rise", "weth_debt_usd", "total_debt_usd"])
+    def test_valid_orderby_values(self, client: TestClient, orderby: str):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE):
+            resp = client.get("/api/borrow/liquidate",
+                              params={"eth_price": 2700, "orderby": orderby})
+        assert resp.status_code == 200
+
+    def test_invalid_orderby_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate",
+                          params={"eth_price": 2700, "orderby": "bad_col"})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("limit", [1, 100, 1000])
+    def test_valid_limit_values(self, client: TestClient, limit: int):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE):
+            resp = client.get("/api/borrow/liquidate",
+                              params={"eth_price": 2700, "limit": limit})
+        assert resp.status_code == 200
+
+    def test_limit_too_large_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate",
+                          params={"eth_price": 2700, "limit": 1001})
+        assert resp.status_code == 422
+
+    def test_cap_passed_to_service(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate",
+                       params={"eth_price": 2700, "cap": 3000})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["cap"] == Decimal("3000")
+
+    def test_no_cap_passes_none_to_service(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["cap"] is None
+
+    def test_cap_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate",
+                          params={"eth_price": 2700, "cap": 0})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("version,expected_protocol", [
+        ("v3", "v3_borrow"),
+        ("v2", "v2_borrow"),
+    ])
+    def test_version_maps_to_borrow_protocol(
+        self, client: TestClient, version: str, expected_protocol: str
+    ):
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate",
+                       params={"eth_price": 2700, "version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected_protocol
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/borrow/liquidate/period
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBorrowLiquidatePeriod:
+    """GET /api/borrow/liquidate/period — ETH 上涨区间内的做空清算分布。"""
+
+    _BASE_PARAMS = {"start": 2000, "end": 3000, "interval": 500}
+
+    def test_ok(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD):
+            resp = client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 3
+        item = data[0]
+        assert "simulated_eth_price" in item
+        assert "positions_cnt" in item
+        assert "total_weth_debt_amount" in item
+        assert "total_weth_debt_usd" in item
+        assert "total_liquidation_usd" in item
+
+    def test_empty_result_returns_empty_list(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=[]):
+            resp = client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_no_pool_returns_503(self, app_no_pool):
+        with TestClient(app_no_pool) as c:
+            resp = c.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+        assert resp.status_code == 503
+
+    def test_missing_start_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={"end": 3000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_missing_end_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={"start": 2000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_missing_interval_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={"start": 2000, "end": 3000})
+        assert resp.status_code == 422
+
+    def test_start_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={"start": 0, "end": 3000, "interval": 500})
+        assert resp.status_code == 422
+
+    def test_interval_zero_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={"start": 2000, "end": 3000, "interval": 0})
+        assert resp.status_code == 422
+
+    def test_start_greater_than_end_returns_400(self, client: TestClient):
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   side_effect=HTTPException(status_code=400, detail="start 必须 <= end")):
+            resp = client.get("/api/borrow/liquidate/period",
+                              params={"start": 4000, "end": 2000, "interval": 500})
+        assert resp.status_code == 400
+
+    def test_service_receives_correct_decimal_params(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD) as mock_svc:
+            client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+        _, kwargs = mock_svc.call_args
+        assert kwargs["start_price"] == Decimal("2000")
+        assert kwargs["end_price"] == Decimal("3000")
+        assert kwargs["interval"] == Decimal("500")
+
+    @pytest.mark.parametrize("version,expected_protocol", [
+        ("v3", "v3_borrow"),
+        ("v2", "v2_borrow"),
+    ])
+    def test_version_maps_to_borrow_protocol(
+        self, client: TestClient, version: str, expected_protocol: str
+    ):
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD) as mock_svc:
+            client.get("/api/borrow/liquidate/period",
+                       params={**self._BASE_PARAMS, "version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected_protocol
+
+    def test_invalid_version_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={**self._BASE_PARAMS, "version": "v4"})
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("interval", [100, 500, 1000])
+    def test_various_intervals(self, client: TestClient, interval: int):
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD):
+            resp = client.get("/api/borrow/liquidate/period",
+                              params={"start": 2000, "end": 3000, "interval": interval})
+        assert resp.status_code == 200
