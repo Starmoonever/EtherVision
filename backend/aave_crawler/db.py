@@ -32,27 +32,53 @@ class ProtocolTables:
     source_schema: str = "loan"
     address_column: str = "walletAddress"
     amount_column: str = "wethAmount_ETH"
+    side: str = "collateral"  # "collateral"（ETH 抵押被清算）或 "borrow"（ETH 借入被清算）
 
 
+# ── 抵押方向（ETH 下跌风险）────────────────────────────────────────────────────
 TABLES_V3 = ProtocolTables(
-    positions="aave_v3_eth_positions",
-    reserve_positions="aave_v3_eth_reserve_positions",
+    positions="aave_v3_eth_positions_collateral",
+    reserve_positions="aave_v3_eth_reserve_positions_collateral",
     source_table="aave_v3_eth_weth_collateral",
+    side="collateral",
 )
 
 TABLES_V2 = ProtocolTables(
-    positions="aave_v2_eth_positions",
-    reserve_positions="aave_v2_eth_reserve_positions",
+    positions="aave_v2_eth_positions_collateral",
+    reserve_positions="aave_v2_eth_reserve_positions_collateral",
     source_table="aave_v2_eth_weth_collateral",
+    side="collateral",
 )
 
-_PROTOCOL_TABLES: dict[str, ProtocolTables] = {"v3": TABLES_V3, "v2": TABLES_V2}
+# ── 借贷方向（ETH 上涨风险）────────────────────────────────────────────────────
+TABLES_V3_BORROW = ProtocolTables(
+    positions="aave_v3_eth_positions_borrow",
+    reserve_positions="aave_v3_eth_reserve_positions_borrow",
+    source_table="aave_v3_eth_weth_borrow",
+    amount_column="borrowedWeth_ETH",
+    side="borrow",
+)
+
+TABLES_V2_BORROW = ProtocolTables(
+    positions="aave_v2_eth_positions_borrow",
+    reserve_positions="aave_v2_eth_reserve_positions_borrow",
+    source_table="aave_v2_eth_weth_borrow",
+    amount_column="borrowedWeth_ETH",
+    side="borrow",
+)
+
+_PROTOCOL_TABLES: dict[str, ProtocolTables] = {
+    "v3": TABLES_V3,
+    "v2": TABLES_V2,
+    "v3_borrow": TABLES_V3_BORROW,
+    "v2_borrow": TABLES_V2_BORROW,
+}
 
 
 def get_tables(protocol: str = "v3") -> ProtocolTables:
     t = _PROTOCOL_TABLES.get(protocol.lower())
     if t is None:
-        raise ValueError(f"不支持的协议: {protocol!r}，可选: v2, v3")
+        raise ValueError(f"不支持的协议: {protocol!r}，可选: v2, v3, v3_borrow, v2_borrow")
     return t
 
 # ── DDL ──────────────────────────────────────────────────────────────────────
@@ -69,6 +95,24 @@ CREATE TABLE IF NOT EXISTS loan.{positions} (
     ltv                     NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
     liq_threshold           NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
     liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
+);
+"""
+
+_DDL_BORROW_POSITIONS = """
+CREATE TABLE IF NOT EXISTS loan.{positions} (
+    user_address            TEXT            NOT NULL PRIMARY KEY,
+    block_number            BIGINT          NOT NULL,
+    scanned_at              TIMESTAMPTZ     NOT NULL,
+    total_collateral_usd    NUMERIC(30, 8)  NOT NULL,
+    total_debt_usd          NUMERIC(30, 8)  NOT NULL,
+    available_borrows_usd   NUMERIC(30, 8)  NOT NULL,
+    health_factor           NUMERIC(40, 18) NOT NULL,  -- ∞ 时存 1e18
+    ltv                     NUMERIC(8, 4)   NOT NULL,
+    liq_threshold           NUMERIC(8, 4)   NOT NULL,
+    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 下跌触发价（用户同时有 ETH 抵押时有意义）
+    weth_debt_raw           NUMERIC(40, 0)  NOT NULL DEFAULT 0,  -- ETH 系负债合计（原始 wei）
+    weth_debt_usd           NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 系负债合计 USD（扫描时刻价格）
+    liq_price_rise          NUMERIC(30, 8)  NOT NULL DEFAULT 0   -- ETH 上涨触发清算价（USD）；0 表示无上涨清算风险
 );
 """
 
@@ -100,61 +144,54 @@ async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
 
 
 async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) -> None:
-    """若目标表不存在则自动创建；幂等迁移旧表（精度升级、新增列）"""
+    """若目标表不存在则自动创建；幂等迁移旧表（精度升级、新增列、重命名）"""
     pos = tables.positions
     res = tables.reserve_positions
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_POSITIONS.format(positions=pos))
+        # ── 幂等重命名：将旧表名（无 _collateral 后缀）迁移到新名 ──────────────
+        # 仅对 collateral 表执行，borrow 表是全新建的
+        if tables.side == "collateral":
+            old_pos = pos.replace("_collateral", "")
+            old_res = res.replace("_collateral", "")
+            if old_pos != pos:
+                await conn.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'loan' AND table_name = '{old_pos}'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'loan' AND table_name = '{pos}'
+                        ) THEN
+                            ALTER TABLE loan."{old_pos}" RENAME TO "{pos}";
+                        END IF;
+                    END$$;
+                """)
+            if old_res != res:
+                await conn.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'loan' AND table_name = '{old_res}'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'loan' AND table_name = '{res}'
+                        ) THEN
+                            ALTER TABLE loan."{old_res}" RENAME TO "{res}";
+                        END IF;
+                    END$$;
+                """)
+        # ── 建表（如不存在）─────────────────────────────────────────────────────
+        if tables.side == "borrow":
+            await conn.execute(_DDL_BORROW_POSITIONS.format(positions=pos))
+        else:
+            await conn.execute(_DDL_POSITIONS.format(positions=pos))
         await conn.execute(_DDL_RESERVE_POSITIONS.format(reserve_positions=res))
-        # 修复旧表 health_factor 列精度不足（NUMERIC(30,18) → NUMERIC(40,18)）
-        await conn.execute(f"""
-            DO $$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'loan'
-                      AND table_name   = '{pos}'
-                      AND column_name  = 'health_factor'
-                      AND numeric_precision < 40
-                ) THEN
-                    ALTER TABLE loan."{pos}"
-                        ALTER COLUMN health_factor TYPE NUMERIC(40, 18);
-                END IF;
-            END$$;
-        """)
-        # 为旧表添加 liq_price 列
-        await conn.execute(f"""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'loan'
-                      AND table_name   = '{pos}'
-                      AND column_name  = 'liq_price'
-                ) THEN
-                    ALTER TABLE loan."{pos}"
-                        ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
-                END IF;
-            END$$;
-        """)
-        # 将 liq_price 精度从NUMERIC(20,8)升级为NUMERIC(30,8)
-        await conn.execute(f"""
-            DO $$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'loan'
-                      AND table_name   = '{pos}'
-                      AND column_name  = 'liq_price'
-                      AND numeric_precision < 30
-                ) THEN
-                    ALTER TABLE loan."{pos}"
-                        ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
-                END IF;
-            END$$;
-        """)
-        # 将 positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
-        for _col in ("total_collateral_usd", "total_debt_usd", "available_borrows_usd"):
+        # ── 以下迁移步骤仅适用于 collateral 表（borrow 表是全新建的）────────────
+        if tables.side == "collateral":
+            # 修复旧表 health_factor 列精度不足（NUMERIC(30,18) → NUMERIC(40,18)）
             await conn.execute(f"""
                 DO $$
                 BEGIN
@@ -162,15 +199,63 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                         SELECT 1 FROM information_schema.columns
                         WHERE table_schema = 'loan'
                           AND table_name   = '{pos}'
-                          AND column_name  = '{_col}'
-                          AND numeric_precision < 30
+                          AND column_name  = 'health_factor'
+                          AND numeric_precision < 40
                     ) THEN
                         ALTER TABLE loan."{pos}"
-                            ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                            ALTER COLUMN health_factor TYPE NUMERIC(40, 18);
                     END IF;
                 END$$;
             """)
-        # 将 reserve_positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
+            # 为旧表添加 liq_price 列
+            await conn.execute(f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'loan'
+                          AND table_name   = '{pos}'
+                          AND column_name  = 'liq_price'
+                    ) THEN
+                        ALTER TABLE loan."{pos}"
+                            ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
+                    END IF;
+                END$$;
+            """)
+            # 将 liq_price 精度从NUMERIC(20,8)升级为NUMERIC(30,8)
+            await conn.execute(f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'loan'
+                          AND table_name   = '{pos}'
+                          AND column_name  = 'liq_price'
+                          AND numeric_precision < 30
+                    ) THEN
+                        ALTER TABLE loan."{pos}"
+                            ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
+                    END IF;
+                END$$;
+            """)
+            # 将 positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
+            for _col in ("total_collateral_usd", "total_debt_usd", "available_borrows_usd"):
+                await conn.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{pos}'
+                              AND column_name  = '{_col}'
+                              AND numeric_precision < 30
+                        ) THEN
+                            ALTER TABLE loan."{pos}"
+                                ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                        END IF;
+                    END$$;
+                """)
+        # reserve_positions 精度迁移对两种 side 均执行
         for _col in ("price_usd", "supply_usd", "total_debt_usd"):
             await conn.execute(f"""
                 DO $$
@@ -193,7 +278,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 # ── 辅助：liq_price 计算 ─────────────────────────────────────────────────────
 
 # ETH 系资产符号（与 service.py simulate SQL 保持一致）
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH"})
+# 注意：每当 Aave 新增 ETH LST/LRT 时需同步维护此集合以及 service.py 中的 SQL IN 列表
+_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"})
 
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:
@@ -254,6 +340,113 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
 
     liq_price = numerator / (eth_amount * eth_liq_threshold)
     return min(liq_price, _LIQ_PRICE_CAP)
+
+
+def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
+    """计算 ETH 上涨触发清算价（借入 WETH 场景）。
+
+    场景：用户以稳定币/其他资产为抵押品，借入了 WETH（负债）。
+    当 ETH 价格上涨时，WETH 债务的 USD 价值增大，最终超过抵押品安全边际，触发清算。
+
+    公式（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 ETH 价格）：
+        ETH系抵押品贡献（USD） × P/P_now × θ + C_fixed = ETH系负债贡献（USD） × P/P_now + D_fixed
+        => P = P_now × (D_fixed - C_fixed) / (eth_debt_usd_sum - eth_col_theta_usd_sum)
+
+    其中：
+        eth_debt_usd_sum     = Σ(ETH系负债 USD，按当前价格）
+        eth_col_theta_usd_sum= Σ(ETH系抵押品 USD × 各自 liq_threshold）
+        C_fixed              = Σ(非ETH抵押品 USD × 各自 liq_threshold）
+        D_fixed              = Σ(非ETH负债 USD）
+
+    分母 <= 0 → 净多 ETH（ETH 上涨有益）→ 无上涨清算风险 → 返回 0
+    P_rise <= 0 或无 ETH 系负债 → 返回 0
+    """
+    _LIQ_PRICE_CAP = Decimal("9999999.99999999")
+
+    s = pos.summary
+    total_debt = _raw_to_decimal(s.total_debt_base, 8)
+    if total_debt == 0:
+        return Decimal("0")
+
+    # 寻找 ETH 系资产的参考价格（用于换算 P_now）
+    eth_price_now: Decimal | None = None
+    for r in pos.reserves:
+        if r.symbol.upper() in _ETH_SYMBOLS and r.price_raw > 0:
+            eth_price_now = _raw_to_decimal(r.price_raw, 8)
+            break
+    if eth_price_now is None or eth_price_now == 0:
+        return Decimal("0")
+
+    # 分类汇总各项
+    eth_debt_usd_sum = Decimal("0")      # ETH 系负债 USD（按当前价格）
+    eth_col_theta_usd_sum = Decimal("0") # ETH 系抵押品 USD × liq_threshold
+    d_fixed = Decimal("0")              # 非 ETH 负债 USD
+    c_fixed = Decimal("0")              # 非 ETH 抵押品 USD × liq_threshold
+
+    for r in pos.reserves:
+        price = _raw_to_decimal(r.price_raw, 8)
+        stable_amount = _raw_to_decimal(r.stable_debt_raw, r.decimals)
+        variable_amount = _raw_to_decimal(r.variable_debt_raw, r.decimals)
+        debt_amount = stable_amount + variable_amount
+        supply_amount = _raw_to_decimal(r.supply_raw, r.decimals)
+
+        if r.symbol.upper() in _ETH_SYMBOLS:
+            # ETH 系：负债端
+            if debt_amount > 0:
+                eth_debt_usd_sum += debt_amount * price
+            # ETH 系：抵押品端
+            if supply_amount > 0 and r.usage_as_collateral_enabled:
+                r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
+                eth_col_theta_usd_sum += supply_amount * price * r_liq_threshold
+        else:
+            # 非 ETH 系：负债端
+            if debt_amount > 0:
+                d_fixed += debt_amount * price
+            # 非 ETH 系：抵押品端
+            if supply_amount > 0 and r.usage_as_collateral_enabled:
+                r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
+                c_fixed += supply_amount * price * r_liq_threshold
+
+    if eth_debt_usd_sum == 0:
+        # 没有 ETH 系负债，无上涨清算风险
+        return Decimal("0")
+
+    # 正确推导（HF=1，设 x = P/P_now）：
+    #   (eth_col_theta_usd × x) + C_fixed = (eth_debt_usd × x) + D_fixed
+    #   (eth_col_theta_usd - eth_debt_usd) × x = D_fixed - C_fixed
+    #   x = (D_fixed - C_fixed) / (eth_col_theta_usd - eth_debt_usd)
+    #   P_rise = P_now × x
+    #
+    # denom > 0：ETH 抵押品（加权）> ETH 债务 → ETH 上涨有益 → 无上涨清算风险
+    # denom < 0：ETH 债务 > ETH 抵押品（加权） → ETH 上涨增大净负债 → 存在上涨清算风险
+    denom = eth_col_theta_usd_sum - eth_debt_usd_sum
+    if denom >= 0:
+        return Decimal("0")
+
+    numerator_usd = d_fixed - c_fixed
+    # 纯做空用户：numerator = 非ETH债务 - 非ETH抵押品安全垫 < 0，denom < 0 → P_rise > 0 ✓
+    liq_price_rise = eth_price_now * numerator_usd / denom
+    if liq_price_rise <= 0:
+        return Decimal("0")
+
+    return min(liq_price_rise, _LIQ_PRICE_CAP)
+
+
+def _calc_weth_debt(pos: UserPosition) -> tuple[Decimal, Decimal]:
+    """计算 ETH 系负债汇总（raw wei 合计, USD 合计）。"""
+    weth_debt_raw = Decimal("0")
+    weth_debt_usd = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() not in _ETH_SYMBOLS:
+            continue
+        debt_raw = r.variable_debt_raw + r.stable_debt_raw
+        if debt_raw == 0:
+            continue
+        price = _raw_to_decimal(r.price_raw, 8)
+        amount = _raw_to_decimal(debt_raw, r.decimals)
+        weth_debt_raw += Decimal(debt_raw)
+        weth_debt_usd += amount * price
+    return weth_debt_raw, weth_debt_usd
 
 
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────
@@ -321,23 +514,48 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
     _MAX_HF = Decimal("1e18")
     _MAX_UINT256 = (1 << 256) - 1
 
-    _SQL_UPSERT_POS = f"""
-        INSERT INTO loan."{pos_table}"
-            (user_address, block_number, scanned_at,
-             total_collateral_usd, total_debt_usd, available_borrows_usd,
-             health_factor, ltv, liq_threshold, liq_price)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        ON CONFLICT (user_address) DO UPDATE SET
-            block_number          = EXCLUDED.block_number,
-            scanned_at            = EXCLUDED.scanned_at,
-            total_collateral_usd  = EXCLUDED.total_collateral_usd,
-            total_debt_usd        = EXCLUDED.total_debt_usd,
-            available_borrows_usd = EXCLUDED.available_borrows_usd,
-            health_factor         = EXCLUDED.health_factor,
-            ltv                   = EXCLUDED.ltv,
-            liq_threshold         = EXCLUDED.liq_threshold,
-            liq_price             = EXCLUDED.liq_price;
-    """
+    is_borrow = tables.side == "borrow"
+
+    if is_borrow:
+        _SQL_UPSERT_POS = f"""
+            INSERT INTO loan."{pos_table}"
+                (user_address, block_number, scanned_at,
+                 total_collateral_usd, total_debt_usd, available_borrows_usd,
+                 health_factor, ltv, liq_threshold,
+                 liq_price, weth_debt_raw, weth_debt_usd, liq_price_rise)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            ON CONFLICT (user_address) DO UPDATE SET
+                block_number          = EXCLUDED.block_number,
+                scanned_at            = EXCLUDED.scanned_at,
+                total_collateral_usd  = EXCLUDED.total_collateral_usd,
+                total_debt_usd        = EXCLUDED.total_debt_usd,
+                available_borrows_usd = EXCLUDED.available_borrows_usd,
+                health_factor         = EXCLUDED.health_factor,
+                ltv                   = EXCLUDED.ltv,
+                liq_threshold         = EXCLUDED.liq_threshold,
+                liq_price             = EXCLUDED.liq_price,
+                weth_debt_raw         = EXCLUDED.weth_debt_raw,
+                weth_debt_usd         = EXCLUDED.weth_debt_usd,
+                liq_price_rise        = EXCLUDED.liq_price_rise;
+        """
+    else:
+        _SQL_UPSERT_POS = f"""
+            INSERT INTO loan."{pos_table}"
+                (user_address, block_number, scanned_at,
+                 total_collateral_usd, total_debt_usd, available_borrows_usd,
+                 health_factor, ltv, liq_threshold, liq_price)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (user_address) DO UPDATE SET
+                block_number          = EXCLUDED.block_number,
+                scanned_at            = EXCLUDED.scanned_at,
+                total_collateral_usd  = EXCLUDED.total_collateral_usd,
+                total_debt_usd        = EXCLUDED.total_debt_usd,
+                available_borrows_usd = EXCLUDED.available_borrows_usd,
+                health_factor         = EXCLUDED.health_factor,
+                ltv                   = EXCLUDED.ltv,
+                liq_threshold         = EXCLUDED.liq_threshold,
+                liq_price             = EXCLUDED.liq_price;
+        """
 
     # ── 1. 构建所有 summary 行 ──────────────────────────────────────────────
     summary_rows: list[tuple] = []
@@ -346,7 +564,7 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
         hf_raw = s.health_factor
         hf_decimal = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
         useraddr = pos.user_address.lower()
-        summary_rows.append((
+        base_row = (
             useraddr,
             pos.block_number,
             now,
@@ -357,7 +575,12 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
             _calc_liq_price(pos),
-        ))
+        )
+        if is_borrow:
+            weth_debt_raw, weth_debt_usd = _calc_weth_debt(pos)
+            summary_rows.append(base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos)))
+        else:
+            summary_rows.append(base_row)
 
     # ── 2. 构建所有明细行 ────────────────────────────────────────────────────
     all_user_addrs = [pos.user_address.lower() for pos in positions]

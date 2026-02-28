@@ -58,10 +58,12 @@ _PROTOCOL_CONTRACTS: dict[str, ProtocolContracts] = {"v3": CONTRACTS_V3, "v2": C
 
 
 def get_contracts(protocol: str = "v3") -> ProtocolContracts:
-    """根据协议版本字符串返回对应合约配置。"""
-    c = _PROTOCOL_CONTRACTS.get(protocol.lower())
+    """根据协议版本字符串返回对应合约配置。v3_borrow/v2_borrow 使用同一套合约。"""
+    # 取基础协议版本：v3_borrow → v3，v2_borrow → v2
+    base = protocol.lower().split("_")[0]
+    c = _PROTOCOL_CONTRACTS.get(base)
     if c is None:
-        raise ValueError(f"不支持的协议版本: {protocol!r}，可选: v2, v3")
+        raise ValueError(f"不支持的协议版本: {protocol!r}，可选: v2, v3, v2_borrow, v3_borrow")
     return c
 
 PUBLIC_RPCS = [

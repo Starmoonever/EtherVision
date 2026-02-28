@@ -46,8 +46,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ETH 系资产（与 db.py / service.py 保持一致）
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "CBETH", "WSTETH", "RETH"})
+# ETH 系资产（与 db.py / service.py 保持一致，统一大写用于 .upper() 比较）
+_ETH_SYMBOLS: frozenset[str] = frozenset({
+    "WETH", "ETH", "CBETH", "WSTETH", "RETH",
+    "WEETH", "EZETH", "RSETH", "OSETH", "ETHX",
+})
 _LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--protocol", "-p",
-        choices=["v2", "v3"],
+        choices=["v2", "v3", "v2_borrow", "v3_borrow"],
         default="v3",
         help="Aave 协议版本（默认 v3）",
     )

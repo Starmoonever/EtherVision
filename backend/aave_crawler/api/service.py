@@ -22,8 +22,11 @@ from .schemas import (HistoricalPositionResponse, HistoricalReserveDetail,
 
 logger = logging.getLogger(__name__)
 
-# ETH/WETH 识别关键词
-_ETH_SYMBOLS = {"WETH", "ETH", "cbETH", "wstETH", "rETH"}
+# ETH/WETH 识别关键词（ETH LST/LRT 均视为 ETH 系，需与 db._ETH_SYMBOLS 和 SQL IN 列表同步维护）
+_ETH_SYMBOLS = {"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"}
+
+# SQL 中使用的 IN 列表（与 _ETH_SYMBOLS 保持一致）
+_ETH_SYMBOLS_SQL = "'WETH', 'ETH', 'cbETH', 'wstETH', 'rETH', 'weETH', 'ezETH', 'rsETH', 'osETH', 'ETHx'"
 
 _MAX_UINT256 = (1 << 256) - 1
 
@@ -285,9 +288,11 @@ _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
 
 def _tables(protocol: str) -> tuple[str, str]:
     """(主仓位表, 资产明细表)"""
-    if protocol.lower() == "v2":
-        return "aave_v2_eth_positions", "aave_v2_eth_reserve_positions"
-    return "aave_v3_eth_positions", "aave_v3_eth_reserve_positions"
+    if protocol.lower() in ("v2", "v2_borrow"):
+        suffix = "_borrow" if "borrow" in protocol.lower() else "_collateral"
+        return f"aave_v2_eth_positions{suffix}", f"aave_v2_eth_reserve_positions{suffix}"
+    suffix = "_borrow" if "borrow" in protocol.lower() else "_collateral"
+    return f"aave_v3_eth_positions{suffix}", f"aave_v3_eth_reserve_positions{suffix}"
 
 
 async def get_sorted_positions(
@@ -317,7 +322,7 @@ WITH eth_col AS (
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd::numeric                                   AS eth_collateral_usd
     FROM loan.{res_table}
-    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
 )
@@ -390,7 +395,7 @@ WITH eth_col AS (
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd                                           AS eth_supply_usd_stored
     FROM loan.{res_table}
-    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
 )
@@ -504,7 +509,7 @@ WITH eth_col AS (
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd                                           AS eth_supply_usd_stored
     FROM loan.{res_table}
-    WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
+    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
 )
@@ -721,6 +726,7 @@ async def get_price_period(
         try:
             async with session.get(url) as resp:
                 if resp.status != 200:
+                    logger.error(f"DeFiLlama 返回 HTTP {resp.status} 查询 {asset} 在 {point_ts} 的价格")
                     return PricePeriodItem(
                         price_usd="0.00",
                         timestamp=_ts_to_utc_str(point_ts),

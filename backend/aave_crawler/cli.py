@@ -33,7 +33,7 @@ def cli() -> None:
 
 @cli.command("crawl")
 @click.option("--config", "-c", default=None, help="config.yaml 路径（默认自动查找）")
-@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3"]), show_default=True, help="目标协议版本（写入哪套表）")
+@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]), show_default=True, help="目标协议版本（写入哪套表）")
 @click.option(
     "--source", "-s", default=None, type=click.Choice(["v2", "v3"]),
     help="地址来源协议版本（从哪张 weth_collateral 表读取地址）；默认与 --protocol 相同",
@@ -63,6 +63,7 @@ def cmd_crawl(
       aave-crawler crawl -p v3 -s v2             # 从 v2 地址列表爬 v3 仓位
       aave-crawler crawl --incremental           # v3 增量（跳过已爬地址）
       aave-crawler crawl -p v2 --incremental     # v2 增量
+      aave-crawler crawl -p v3_borrow            # v3 借入方分析
     """
     _setup_logging(verbose)
     cfg = load_config(config)
@@ -86,7 +87,7 @@ def cmd_crawl(
 
 @cli.command("watch")
 @click.option("--config", "-c", default=None, help="config.yaml 路径")
-@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3"]), show_default=True, help="Aave 协议版本")
+@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]), show_default=True, help="Aave 协议版本")
 @click.option(
     "--interval", "-i", default=None, type=int,
     help="轮询间隔（秒），默认读取 config.yaml 中 watcher.interval",
