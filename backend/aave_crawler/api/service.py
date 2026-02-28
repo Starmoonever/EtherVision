@@ -16,6 +16,7 @@ from ..rpc import (
     fetch_user_position,
     get_all_reserve_tokens,
     get_assets_prices,
+    get_contracts,
     get_reserve_config,
 )
 from .schemas import (
@@ -54,13 +55,18 @@ def _raw_to_dec(raw: int, decimals: int) -> Decimal:
 _cache: dict = {}
 
 
-async def _get_common_data(w3: AsyncWeb3) -> tuple:
-    """缓存当次进程内的储备资产列表 / 配置（不缓存价格，价格每次实时获取）"""
-    if "reserve_tokens" not in _cache:
-        reserve_tokens = await get_all_reserve_tokens(w3)
+async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
+    """缓存当次进程内的储备资产列表 / 配置（按协议版本分别缓存，不缓存价格）"""
+    contracts = get_contracts(protocol)
+    cache_key_tokens = f"reserve_tokens_{protocol}"
+    cache_key_configs = f"reserve_configs_{protocol}"
+    cache_key_addresses = f"token_addresses_{protocol}"
+
+    if cache_key_tokens not in _cache:
+        reserve_tokens = await get_all_reserve_tokens(w3, contracts)
         token_addresses = [rt.token_address for rt in reserve_tokens]
         configs = await asyncio.gather(
-            *[get_reserve_config(w3, a) for a in token_addresses],
+            *[get_reserve_config(w3, a, contracts) for a in token_addresses],
             return_exceptions=True,
         )
         reserve_configs = {
@@ -68,16 +74,16 @@ async def _get_common_data(w3: AsyncWeb3) -> tuple:
             for a, c in zip(token_addresses, configs)
             if not isinstance(c, Exception)
         }
-        _cache["reserve_tokens"] = reserve_tokens
-        _cache["reserve_configs"] = reserve_configs
-        _cache["token_addresses"] = token_addresses
-        logger.info("公共数据已缓存，储备资产数量: %d", len(reserve_tokens))
+        _cache[cache_key_tokens] = reserve_tokens
+        _cache[cache_key_configs] = reserve_configs
+        _cache[cache_key_addresses] = token_addresses
+        logger.info("[%s] 公共数据已缓存，储备资产数量: %d", protocol, len(reserve_tokens))
 
     # 价格每次重新拉取
-    prices = await get_assets_prices(w3, _cache["token_addresses"])
-    asset_prices = dict(zip(_cache["token_addresses"], prices))
+    prices = await get_assets_prices(w3, _cache[cache_key_addresses], contracts)
+    asset_prices = dict(zip(_cache[cache_key_addresses], prices))
 
-    return _cache["reserve_tokens"], _cache["reserve_configs"], asset_prices
+    return _cache[cache_key_tokens], _cache[cache_key_configs], asset_prices
 
 
 def _format_position(pos: UserPosition) -> PositionResponse:
@@ -243,29 +249,31 @@ def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
 
 # ── 对外接口 ──────────────────────────────────────────────────────────────────
 
-async def get_user_position(w3: AsyncWeb3, address: str) -> PositionResponse:
-    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3)
+async def get_user_position(w3: AsyncWeb3, address: str, protocol: str = "v3") -> PositionResponse:
+    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3, protocol)
+    contracts = get_contracts(protocol)
     sem = asyncio.Semaphore(1)
     pos = await fetch_user_position(
-        w3, address, reserve_tokens, reserve_configs, asset_prices, sem
+        w3, address, reserve_tokens, reserve_configs, asset_prices, sem, contracts
     )
     from fastapi import HTTPException
     if pos is EMPTY_POSITION:
-        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave 无任何仓位（已平仓或从未使用）")
+        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave {protocol.upper()} 无任何仓位（已平仓或从未使用）")
     if pos is None:
         raise HTTPException(status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试")
     return _format_position(pos)
 
 
-async def get_liq_price(w3: AsyncWeb3, address: str) -> LiqPriceResponse:
-    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3)
+async def get_liq_price(w3: AsyncWeb3, address: str, protocol: str = "v3") -> LiqPriceResponse:
+    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3, protocol)
+    contracts = get_contracts(protocol)
     sem = asyncio.Semaphore(1)
     pos = await fetch_user_position(
-        w3, address, reserve_tokens, reserve_configs, asset_prices, sem
+        w3, address, reserve_tokens, reserve_configs, asset_prices, sem, contracts
     )
     from fastapi import HTTPException
     if pos is EMPTY_POSITION:
-        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave 无任何仓位（已平仓或从未使用）")
+        raise HTTPException(status_code=404, detail=f"地址 {address} 当前在 Aave {protocol.upper()} 无任何仓位（已平仓或从未使用）")
     if pos is None:
         raise HTTPException(status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试")
     return _calc_liquidation_line(pos)
@@ -601,15 +609,15 @@ async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None)
     def _ts_to_utc_str(ts: int) -> str:
         return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # 预热缓存，确保 reserve_tokens 已加载
-    await _get_common_data(w3)
+    # 预热缓存，确保 reserve_tokens 已加载（价格查询只需 v3 的 token 列表，两版本共用同一 Oracle）
+    await _get_common_data(w3, "v3")
 
     # "eth" 在 Aave 中以 WETH 表示
     target = asset.upper()
     if target == "ETH":
         target = "WETH"
 
-    reserve_tokens = _cache["reserve_tokens"]
+    reserve_tokens = _cache["reserve_tokens_v3"]
     matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
     if not matching:
         raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
@@ -691,11 +699,11 @@ async def get_price_period(
         raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
 
     # 解析 token_address（复用 _get_common_data 缓存）
-    await _get_common_data(w3)
+    await _get_common_data(w3, "v3")
     target = asset.upper()
     if target == "ETH":
         target = "WETH"
-    reserve_tokens = _cache["reserve_tokens"]
+    reserve_tokens = _cache["reserve_tokens_v3"]
     matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
     if not matching:
         raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")

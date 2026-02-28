@@ -81,14 +81,15 @@ async def user_position(
         None,
         description="历史时间点（UTC），如 2024-01-01；省略则查询实时链上数据",
     ),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> PositionResponse | HistoricalPositionResponse:
     if date is None:
-        return await get_user_position(_w3(request), address)
+        return await get_user_position(_w3(request), address, protocol=version)
     ts = _parse_utc_time(date)
     result = await get_user_position_history(_pool(request), address, ts)
     if result is None:
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
-        return await get_user_position(_w3(request), address)
+        return await get_user_position(_w3(request), address, protocol=version)
     return result
 
 
@@ -101,8 +102,9 @@ async def user_position(
 async def user_liq_price(
     request: Request,
     address: str = Query(..., description="以太坊钱包地址"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> LiqPriceResponse:
-    return await get_liq_price(_w3(request), address)
+    return await get_liq_price(_w3(request), address, protocol=version)
 
 
 @router.get(
@@ -131,11 +133,11 @@ async def positions(
         None,
         description="历史时间点（UTC），如 2024-01-01；省略则查询数据库实时快照",
     ),
-    protocol: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> list[PositionResponse] | list[HistoricalPositionResponse]:
     if date is None:
         return await get_sorted_positions(
-            _pool(request), orderby=orderby, order=order, limit=limit, protocol=protocol
+            _pool(request), orderby=orderby, order=order, limit=limit, protocol=version
         )
     ts = _parse_utc_time(date)
     return await get_positions_history(_pool(request), ts, limit=min(limit, 100))
@@ -211,12 +213,12 @@ async def liquidate_simulation(
         le=1.0,
         description="ETH 抵押品占比过滤阈値：仅当 eth_collateral_usd / total_collateral_usd >= 该値时才纳入计算，取値 [0, 1]，默认 " + str(ETH_COLLATERAL_RATIO_MIN),
     ),
-    protocol: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
     cap: float | None = Query(
         None,
         gt=0,
         description="liq_price 上限（USD）：仅返回 liq_price < cap 的地址；省略则返回全部",
     ),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> LiquidationSimResponse:
     from decimal import Decimal
     return await simulate_liquidation(
@@ -226,7 +228,7 @@ async def liquidate_simulation(
         order=order,
         limit=limit,
         eth_ratio=Decimal(str(eth_ratio)),
-        protocol=protocol,
+        protocol=version,
         cap=Decimal(str(cap)) if cap is not None else None,
     )
 
@@ -273,7 +275,7 @@ async def liquidate_period(
         le=1.0,
         description="ETH 抵押品占比过滤阈値，取値 [0, 1]，默认 " + str(ETH_COLLATERAL_RATIO_MIN),
     ),
-    protocol: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> list[LiquidationPeriodItem]:
     from decimal import Decimal
     return await simulate_liquidation_period(
@@ -282,5 +284,5 @@ async def liquidate_period(
         end_price=Decimal(str(end)),
         interval=Decimal(str(interval)),
         eth_ratio=Decimal(str(eth_ratio)),
-        protocol=protocol,
+        protocol=version,
     )
