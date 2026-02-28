@@ -186,3 +186,16 @@ class ShortLiqPeriodItem(BaseModel):
     total_weth_debt_amount: str = Field(description="可被清算的 ETH 系负债总量")
     total_weth_debt_usd: str = Field(description="可被清算的 ETH 系负债总 USD 估值（按模拟价格）")
     total_liquidation_usd: str = Field(description="清算人可获得的抵押品总 USD 价值（含 5% 清算奖励）")
+
+
+class BorrowUserPositionResponse(BaseModel):
+    """借贷端单用户仓位详情：仅返回借贷端专属字段，不与 /user/position 重叠。"""
+    address: str
+    scanned_at: str = Field(description="数据快照时间（UTC）")
+    weth_debt_amount: str = Field(description="ETH 系负债合计数量（换算 decimals 后）")
+    weth_debt_usd: str = Field(description="ETH 系负债 USD 估值（快照时刻价格）")
+    health_factor: str = Field(description="快照时局健康系数；无借贷时返回 'inf'")
+    liq_price_rise: str = Field(
+        description="ETH 涨至该价格时健康系数将触碰 1.0；0 表示无 ETH 上涨清算风险"
+    )
+    reserves: list[ReservePositionSchema] = Field(description="资产明细列表，按负债 USD 降序排列")

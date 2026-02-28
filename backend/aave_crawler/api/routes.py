@@ -5,16 +5,17 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (BorrowPositionResponse, HistoricalPositionResponse,
-                      LiqPriceResponse, LiquidationPeriodItem,
-                      LiquidationSimResponse, PositionResponse,
-                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
-                      ShortLiqSimResponse)
-from .service import (get_eth_price, get_liq_price, get_positions_history,
-                      get_price_period, get_sorted_borrow_positions,
-                      get_sorted_positions, get_user_position,
-                      get_user_position_history, simulate_liquidation,
-                      simulate_liquidation_period, simulate_short_liquidation,
+from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
+                      HistoricalPositionResponse, LiqPriceResponse,
+                      LiquidationPeriodItem, LiquidationSimResponse,
+                      PositionResponse, PricePeriodResponse, PriceResponse,
+                      ShortLiqPeriodItem, ShortLiqSimResponse)
+from .service import (get_borrow_user_position, get_eth_price, get_liq_price,
+                      get_positions_history, get_price_period,
+                      get_sorted_borrow_positions, get_sorted_positions,
+                      get_user_position, get_user_position_history,
+                      simulate_liquidation, simulate_liquidation_period,
+                      simulate_short_liquidation,
                       simulate_short_liquidation_period)
 
 router = APIRouter(prefix="/api")
@@ -319,6 +320,32 @@ async def borrow_positions(
         limit=limit,
         protocol=protocol,
     )
+
+
+@router.get(
+    "/borrow/user/position",
+    response_model=BorrowUserPositionResponse,
+    summary="查询单个地址的借贷端仓位详情",
+    description=(
+        "从数据库快照中读取指定地址的借贷端仓位（借入 WETH 场景）。\n\n"
+        "包含汇总信息（weth_debt、liq_price_rise、健康系数等）以及每个资产的 reserve 明细。\n\n"
+        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl -p v3_borrow`）。\n\n"
+        "地址不存在时返回 404。"
+    ),
+)
+async def borrow_user_position(
+    request: Request,
+    address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+) -> BorrowUserPositionResponse:
+    protocol = f"{version}_borrow"
+    result = await get_borrow_user_position(_pool(request), address, protocol=protocol)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"地址 {address} 在 {protocol} 数据库中不存在，请先运行爬虫或确认地址正确",
+        )
+    return result
 
 
 @router.get(

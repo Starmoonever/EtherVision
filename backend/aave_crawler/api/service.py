@@ -14,12 +14,13 @@ from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
 from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (BorrowPositionResponse, HistoricalPositionResponse,
-                      HistoricalReserveDetail, LiqPriceResponse,
-                      LiquidationPeriodItem, LiquidationSimItem,
-                      LiquidationSimResponse, PositionResponse,
-                      PricePeriodItem, PricePeriodResponse, PriceResponse,
-                      ShortLiqPeriodItem, ShortLiqSimItem, ShortLiqSimResponse)
+from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
+                      HistoricalPositionResponse, HistoricalReserveDetail,
+                      LiqPriceResponse, LiquidationPeriodItem,
+                      LiquidationSimItem, LiquidationSimResponse,
+                      PositionResponse, PricePeriodItem, PricePeriodResponse,
+                      PriceResponse, ReservePositionSchema, ShortLiqPeriodItem,
+                      ShortLiqSimItem, ShortLiqSimResponse)
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +653,81 @@ LIMIT $1
             )
         )
     return results
+
+
+async def get_borrow_user_position(
+    pool,
+    address: str,
+    protocol: str = "v3_borrow",
+) -> BorrowUserPositionResponse | None:
+    """查询单个地址的借贷端仓位详情（汇总 + reserve 明细）。
+
+    返回 None 表示地址不在数据库中（未爬取或无仓位）。
+    """
+    pos_table, res_table = _tables(protocol)
+    addr = address.lower()
+
+    async with pool.acquire() as conn:
+        pos = await conn.fetchrow(
+            f"""
+            SELECT user_address, scanned_at,
+                   weth_debt_raw, weth_debt_usd,
+                   total_collateral_usd, total_debt_usd, available_borrows_usd,
+                   health_factor, ltv, liq_threshold, liq_price, liq_price_rise
+            FROM loan.{pos_table}
+            WHERE user_address = $1
+            """,
+            addr,
+        )
+        if pos is None:
+            return None
+
+        reserve_rows = await conn.fetch(
+            f"""
+            SELECT symbol, token_address, decimals,
+                   price_usd, supply_raw, supply_usd,
+                   stable_debt_raw, variable_debt_raw, total_debt_usd,
+                   use_as_collateral
+            FROM loan.{res_table}
+            WHERE user_address = $1
+            ORDER BY total_debt_usd DESC, supply_usd DESC
+            """,
+            addr,
+        )
+
+    hf = Decimal(str(pos["health_factor"]))
+    hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
+
+    reserves = []
+    for r in reserve_rows:
+        dec = r["decimals"]
+        supply_dec = _raw_to_dec(int(r["supply_raw"]), dec)
+        stable_dec = _raw_to_dec(int(r["stable_debt_raw"]), dec)
+        variable_dec = _raw_to_dec(int(r["variable_debt_raw"]), dec)
+        reserves.append(
+            ReservePositionSchema(
+                symbol=r["symbol"],
+                token_address=r["token_address"],
+                price_usd=_fmt(Decimal(str(r["price_usd"]))),
+                supply_amount=_fmt(supply_dec, 6),
+                supply_usd=_fmt(Decimal(str(r["supply_usd"]))),
+                stable_debt_amount=_fmt(stable_dec, 6),
+                variable_debt_amount=_fmt(variable_dec, 6),
+                total_debt_amount=_fmt(stable_dec + variable_dec, 6),
+                total_debt_usd=_fmt(Decimal(str(r["total_debt_usd"]))),
+                use_as_collateral=r["use_as_collateral"],
+            )
+        )
+
+    return BorrowUserPositionResponse(
+        address=pos["user_address"],
+        scanned_at=pos["scanned_at"].isoformat().replace("+00:00", "Z"),
+        weth_debt_amount=_fmt(_raw_to_dec(int(pos["weth_debt_raw"]), 18), 6),
+        weth_debt_usd=_fmt(Decimal(str(pos["weth_debt_usd"]))),
+        health_factor=hf_str,
+        liq_price_rise=_fmt(Decimal(str(pos["liq_price_rise"]))),
+        reserves=reserves,
+    )
 
 
 async def simulate_short_liquidation(

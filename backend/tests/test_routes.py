@@ -20,8 +20,9 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from tests.conftest import (ADDR, MOCK_BORROW_POSITIONS_LIST,
-                            MOCK_HIST_POSITION, MOCK_HIST_POSITIONS_LIST,
-                            MOCK_LIQ, MOCK_LIQ_PERIOD, MOCK_POSITION,
+                            MOCK_BORROW_USER_POSITION, MOCK_HIST_POSITION,
+                            MOCK_HIST_POSITIONS_LIST, MOCK_LIQ,
+                            MOCK_LIQ_PERIOD, MOCK_POSITION,
                             MOCK_POSITIONS_LIST, MOCK_PRICE_HIST,
                             MOCK_PRICE_ONCHAIN, MOCK_PRICE_PERIOD,
                             MOCK_SHORT_LIQ_PERIOD, MOCK_SHORT_SIM_EMPTY,
@@ -1235,3 +1236,110 @@ class TestBorrowLiquidatePeriod:
             resp = client.get("/api/borrow/liquidate/period",
                               params={"start": 2000, "end": 3000, "interval": interval})
         assert resp.status_code == 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/borrow/user/position
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBorrowUserPosition:
+    """测试 GET /api/borrow/user/position。"""
+
+    _URL = "/api/borrow/user/position"
+
+    def test_ok_returns_200_with_all_fields(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION):
+            resp = client.get(self._URL, params={"address": ADDR})
+        assert resp.status_code == 200
+        data = resp.json()
+        # 仅包含 borrow 专属字段，不与 /user/position 重合
+        for field in (
+            "address", "scanned_at", "weth_debt_amount", "weth_debt_usd",
+            "health_factor", "liq_price_rise", "reserves",
+        ):
+            assert field in data, f"缺少字段: {field}"
+        # 确认不包含 /user/position 的重合字段
+        for field in ("total_collateral_usd", "total_debt_usd", "available_borrows_usd",
+                      "ltv", "liq_threshold", "liq_price"):
+            assert field not in data, f"不应包含重合字段: {field}"
+
+    def test_ok_reserves_is_list(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION):
+            resp = client.get(self._URL, params={"address": ADDR})
+        data = resp.json()
+        assert isinstance(data["reserves"], list)
+        assert len(data["reserves"]) == 2
+
+    def test_ok_reserve_fields(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION):
+            resp = client.get(self._URL, params={"address": ADDR})
+        reserve = resp.json()["reserves"][0]
+        for field in (
+            "symbol", "token_address", "price_usd",
+            "supply_amount", "supply_usd",
+            "stable_debt_amount", "variable_debt_amount",
+            "total_debt_amount", "total_debt_usd", "use_as_collateral",
+        ):
+            assert field in reserve, f"reserve 缺少字段: {field}"
+
+    def test_address_not_found_returns_404(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=None):
+            resp = client.get(self._URL, params={"address": ADDR})
+        assert resp.status_code == 404
+
+    def test_404_detail_contains_address(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=None):
+            resp = client.get(self._URL, params={"address": ADDR})
+        assert ADDR.lower() in resp.json()["detail"].lower() or ADDR in resp.json()["detail"]
+
+    def test_missing_address_returns_422(self, client: TestClient):
+        resp = client.get(self._URL)
+        assert resp.status_code == 422
+
+    def test_no_pool_returns_503(self, app_no_pool: "FastAPI"):
+        with TestClient(app_no_pool) as c:
+            resp = c.get(self._URL, params={"address": ADDR})
+        assert resp.status_code == 503
+
+    @pytest.mark.parametrize("version,expected_protocol", [
+        ("v3", "v3_borrow"),
+        ("v2", "v2_borrow"),
+    ])
+    def test_version_maps_to_borrow_protocol(
+        self, client: TestClient, version: str, expected_protocol: str
+    ):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION) as mock_svc:
+            client.get(self._URL, params={"address": ADDR, "version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected_protocol
+
+    def test_invalid_version_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"address": ADDR, "version": "v4"})
+        assert resp.status_code == 422
+
+    def test_address_passed_to_service(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION) as mock_svc:
+            client.get(self._URL, params={"address": ADDR})
+        # address 作为第 2 个位置参数传入（第 1 个是 pool）
+        args, _ = mock_svc.call_args
+        assert args[1] == ADDR
+
+    def test_values_match_mock(self, client: TestClient):
+        with patch(f"{_ROUTES}.get_borrow_user_position", new_callable=AsyncMock,
+                   return_value=MOCK_BORROW_USER_POSITION):
+            resp = client.get(self._URL, params={"address": ADDR})
+        data = resp.json()
+        assert data["address"] == ADDR
+        assert data["weth_debt_amount"] == "10.000000"
+        assert data["weth_debt_usd"] == "18740.00"
+        assert data["liq_price_rise"] == "2600.00"
+        assert data["health_factor"] == "1.1200"
+        assert data["scanned_at"] == "2026-02-28T08:00:00Z"
