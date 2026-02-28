@@ -376,7 +376,14 @@ _SIM_SORT_COLS = {
 }
 
 
-def _build_simulate_sql(order_col: str, order_dir: str, pos_table: str, res_table: str) -> str:
+def _build_simulate_sql(
+    order_col: str,
+    order_dir: str,
+    pos_table: str,
+    res_table: str,
+    use_cap: bool = False,
+) -> str:
+    cap_filter = "  AND p.liq_price < $2::numeric" if use_cap else ""
     return f"""
 WITH eth_col AS (
     SELECT
@@ -400,6 +407,7 @@ FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
   AND p.liq_price >= $1::numeric
+{cap_filter}
 ORDER BY {order_col} {order_dir}
 """
 
@@ -412,6 +420,7 @@ async def simulate_liquidation(
     limit: int = 100,
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
     protocol: str = "v3",
+    cap: Decimal | None = None,
 ) -> LiquidationSimResponse:
     """模拟当 ETH 价格为 eth_price 时，哪些仓位将被触发清算及汇总统计。
 
@@ -423,9 +432,12 @@ async def simulate_liquidation(
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
     pos_table, res_table = _tables(protocol)
-    sql = _build_simulate_sql(order_col, order_dir, pos_table, res_table)
+    sql = _build_simulate_sql(order_col, order_dir, pos_table, res_table, use_cap=cap is not None)
     # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
-    rows = await pool.fetch(sql, float(eth_price))
+    fetch_args: list = [float(eth_price)]
+    if cap is not None:
+        fetch_args.append(float(cap))
+    rows = await pool.fetch(sql, *fetch_args)
 
     total_eth_amount = Decimal("0")
     total_eth_usd = Decimal("0")
@@ -462,6 +474,7 @@ async def simulate_liquidation(
     total_count = len(all_items)
     items = all_items[:limit]
 
+    cap_note = f"；liq_price 上限过滤：< {cap}" if cap is not None else ""
     note = (
         f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发清算"
         f"（本次返回前 {len(items)} 条）；"
@@ -469,6 +482,7 @@ async def simulate_liquidation(
         f"total_liquidation_usd = Σ min(债务 × {_WETH_LIQ_BONUS}, ETH抵押品USD)，"
         f"统计基于全部 {total_count} 个仓位；"
         f"ETH 抵押品占比过滤：>= {eth_ratio}"
+        f"{cap_note}"
     )
 
     return LiquidationSimResponse(

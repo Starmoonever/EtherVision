@@ -212,6 +212,11 @@ async def liquidate_simulation(
         description="ETH 抵押品占比过滤阈値：仅当 eth_collateral_usd / total_collateral_usd >= 该値时才纳入计算，取値 [0, 1]，默认 " + str(ETH_COLLATERAL_RATIO_MIN),
     ),
     protocol: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+    cap: float | None = Query(
+        None,
+        gt=0,
+        description="liq_price 上限（USD）：仅返回 liq_price < cap 的地址；省略则返回全部",
+    ),
 ) -> LiquidationSimResponse:
     from decimal import Decimal
     return await simulate_liquidation(
@@ -222,6 +227,7 @@ async def liquidate_simulation(
         limit=limit,
         eth_ratio=Decimal(str(eth_ratio)),
         protocol=protocol,
+        cap=Decimal(str(cap)) if cap is not None else None,
     )
 
 
