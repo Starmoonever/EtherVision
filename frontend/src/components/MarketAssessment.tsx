@@ -4,9 +4,10 @@ import { EthPriceTrend } from './EthPriceTrend';
 
 interface MarketAssessmentProps {
   version: 'v2' | 'v3' | 'all';
+  side: 'collateral' | 'borrow';
 }
 
-export function MarketAssessment({ version }: MarketAssessmentProps) {
+export function MarketAssessment({ version, side }: MarketAssessmentProps) {
   const [ethPrice, setEthPrice] = useState<number | null>(null); // 初始化为 null，表示尚未获取到价格
   const [priceChange, setPriceChange] = useState<number>(-10); // Percentage change default to -10%
 
@@ -84,7 +85,7 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
               <input
                 type="range"
                 min="-100"
-                max="0"
+                max="+200"
                 value={priceChange}
                 onChange={(e) => setPriceChange(Number(e.target.value))}
                 style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
@@ -97,7 +98,7 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
                 ${simulatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
               <span className="check-detail" style={{ marginTop: '0.5rem' }}>
-                ETH价格下跌 {Math.abs(priceChange)}% 
+                ETH价格{priceChange >= 0 ? '上涨' : '下跌'} {Math.abs(priceChange)}% 
               </span>
             </div>
           </div>
@@ -106,7 +107,7 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
 
       {/* Module 4: Liquidation Chart */}
       <div style={{ marginTop: '1.5rem' }}>
-        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} />
+        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} side={side} />
       </div>
     </div>
   );
