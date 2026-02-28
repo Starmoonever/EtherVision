@@ -4,7 +4,7 @@ import { LiquidationChart } from './LiquidationChart';
 export function MarketAssessment() {
   const [ethPrice, setEthPrice] = useState<number>(3500); // Default fallback
   const [priceChange, setPriceChange] = useState<number>(0); // Percentage change
-  
+
   // Fetch real-time price from API
   useEffect(() => {
     const fetchPrice = async () => {
@@ -56,7 +56,7 @@ export function MarketAssessment() {
           <div className="card-header">
             <span className="card-title">价格波动下清算模拟</span>
           </div>
-          
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
@@ -65,11 +65,11 @@ export function MarketAssessment() {
                   {priceChange > 0 ? '+' : ''}{priceChange}%
                 </span>
               </div>
-              <input 
-                type="range" 
-                min="-100" 
-                max="0" 
-                value={priceChange} 
+              <input
+                type="range"
+                min="-100"
+                max="0"
+                value={priceChange}
                 onChange={(e) => setPriceChange(Number(e.target.value))}
                 style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
               />
@@ -87,7 +87,7 @@ export function MarketAssessment() {
           </div>
         </div>
       </div>
-      
+
       {/* Module 3: Liquidation Chart */}
       <div style={{ marginTop: '1.5rem' }}>
         <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} />

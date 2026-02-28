@@ -126,13 +126,8 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
     import json
     from dataclasses import asdict
 
-    from .rpc import (
-        build_web3,
-        fetch_user_position,
-        get_all_reserve_tokens,
-        get_assets_prices,
-        get_reserve_config,
-    )
+    from .rpc import (build_web3, fetch_user_position, get_all_reserve_tokens,
+                      get_assets_prices, get_reserve_config)
 
     _setup_logging(verbose)
     cfg = load_config(config)

@@ -22,16 +22,9 @@ from tqdm import tqdm
 from .config import AppConfig
 from .db import ensure_tables, get_tables, upsert_positions
 from .models import UserPosition
-from .rpc import (
-    EMPTY_POSITION,
-    ProtocolContracts,
-    build_web3,
-    fetch_user_position,
-    get_all_reserve_tokens,
-    get_assets_prices,
-    get_contracts,
-    get_reserve_config,
-)
+from .rpc import (EMPTY_POSITION, ProtocolContracts, build_web3,
+                  fetch_user_position, get_all_reserve_tokens,
+                  get_assets_prices, get_contracts, get_reserve_config)
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,7 @@ interface Props {
 function healthColor(hfStr: string): string {
   if (hfStr === '∞' || hfStr === 'Infinity') return '#22c55e';
   const hf = parseFloat(hfStr);
-  if (isNaN(hf)) return '#9ca3af'; 
+  if (isNaN(hf)) return '#9ca3af';
   if (hf >= 2) return '#22c55e';
   if (hf >= 1.2) return '#f59e0b';
   return '#ef4444';
@@ -42,7 +42,7 @@ export function SummaryCard({ address }: Props) {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
         const response = await fetch(`${baseUrl}/user/position?address=${address}`);
         if (!response.ok) throw new Error('获取账户概览失败');
-        
+
         const data = await response.json();
         // 假设后端返回的对象里包含这些字段，如果字段名是下划线风格请自行修改
         setSummary(data);

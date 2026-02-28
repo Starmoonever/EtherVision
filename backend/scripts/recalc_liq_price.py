@@ -34,14 +34,10 @@ import asyncpg
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from aave_crawler.config import load_config        # noqa: E402
-from aave_crawler.db import get_tables              # noqa: E402
-from aave_crawler.rpc import (                     # noqa: E402
-    build_web3,
-    get_all_reserve_tokens,
-    get_reserve_config,
-    get_contracts,
-)
+from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.db import get_tables  # noqa: E402
+from aave_crawler.rpc import (build_web3, get_all_reserve_tokens,  # noqa: E402
+                              get_contracts, get_reserve_config)
 
 logging.basicConfig(
     level=logging.INFO,

@@ -5,22 +5,16 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from aave_crawler.api.routes import router
+from aave_crawler.api.schemas import (HistoricalPositionResponse,
+                                      HistoricalReserveDetail,
+                                      LiqPriceResponse, LiquidationPeriodItem,
+                                      LiquidationSimItem,
+                                      LiquidationSimResponse, PositionResponse,
+                                      PricePeriodItem, PricePeriodResponse,
+                                      PriceResponse)
 from fastapi import FastAPI
 from starlette.testclient import TestClient
-
-from aave_crawler.api.routes import router
-from aave_crawler.api.schemas import (
-    HistoricalPositionResponse,
-    HistoricalReserveDetail,
-    LiqPriceResponse,
-    LiquidationPeriodItem,
-    LiquidationSimItem,
-    LiquidationSimResponse,
-    PositionResponse,
-    PriceResponse,
-    PricePeriodItem,
-    PricePeriodResponse,
-)
 
 # ── 测试用地址 ────────────────────────────────────────────────────────────────
 

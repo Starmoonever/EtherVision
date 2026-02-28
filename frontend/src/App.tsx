@@ -34,13 +34,13 @@ export default function App() {
 
       <main className="app-main">
         <div className="tabs-container">
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'personal' ? 'active' : ''}`}
             onClick={() => setActiveTab('personal')}
           >
             个人账户分析
           </button>
-          <button 
+          <button
             className={`tab-btn ${activeTab === 'market' ? 'active' : ''}`}
             onClick={() => setActiveTab('market')}
           >
@@ -70,7 +70,7 @@ export default function App() {
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 {/* 传递地址给子组件，子组件内部去 fetch */}
                 <SummaryCard address={queriedAddress} />
-                
+
                 <div style={{ marginTop: '2rem' }}>
                   <h3 className="section-title">资产负债情况</h3>
                   <PositionTable address={queriedAddress} />

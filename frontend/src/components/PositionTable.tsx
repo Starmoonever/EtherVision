@@ -46,7 +46,7 @@ export function PositionTable({ address }: PositionTableProps) {
         // 拼接具体的 endpoint 和参数
         const response = await fetch(`${baseUrl}/user/position?address=${address}`);
         if (!response.ok) throw new Error('无法从数据库获取仓位数据');
-        
+
         const data = await response.json();
         setPosition(data);
       } catch (err) {
@@ -60,7 +60,7 @@ export function PositionTable({ address }: PositionTableProps) {
   }, [address]);
 
   // 3. 逻辑处理：将扁平对象转换为表格所需的数组格式
-  
+
   if (loading) return <div className="loading">正在查询数据库...</div>;
   if (error) return <div className="error-text">错误: {error}</div>;
   if (!position) return <div className="empty-text">无数据</div>;

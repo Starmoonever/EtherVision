@@ -5,26 +5,13 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (
-    HistoricalPositionResponse,
-    LiqPriceResponse,
-    LiquidationPeriodItem,
-    LiquidationSimResponse,
-    PositionResponse,
-    PriceResponse,
-    PricePeriodResponse,
-)
-from .service import (
-    get_eth_price,
-    get_liq_price,
-    get_price_period,
-    get_sorted_positions,
-    get_user_position,
-    get_user_position_history,
-    get_positions_history,
-    simulate_liquidation,
-    simulate_liquidation_period,
-)
+from .schemas import (HistoricalPositionResponse, LiqPriceResponse,
+                      LiquidationPeriodItem, LiquidationSimResponse,
+                      PositionResponse, PricePeriodResponse, PriceResponse)
+from .service import (get_eth_price, get_liq_price, get_positions_history,
+                      get_price_period, get_sorted_positions,
+                      get_user_position, get_user_position_history,
+                      simulate_liquidation, simulate_liquidation_period)
 
 router = APIRouter(prefix="/api")
 
@@ -120,9 +107,15 @@ async def user_liq_price(
 )
 async def positions(
     request: Request,
-    orderby: Literal["liq_price", "health_factor"] = Query(
+    orderby: Literal[
         "liq_price",
-        description="排序字段（仅实时模式有效）：liq_price 或 health_factor",
+        "health_factor",
+        "eth_collateral_amount",
+        "eth_collateral_usd",
+        "total_debt_usd",
+    ] = Query(
+        "liq_price",
+        description="排序字段（仅实时模式有效）：liq_price / health_factor / eth_collateral_amount / eth_collateral_usd / total_debt_usd",
     ),
     order: Literal["asc", "desc"] = Query(
         "asc",

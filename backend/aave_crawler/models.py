@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # ── 合约原始返回  ─────────────────────────────────────────────────────────────
 
 @dataclass

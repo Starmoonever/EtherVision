@@ -19,22 +19,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
-
-from tests.conftest import (
-    ADDR,
-    MOCK_HIST_POSITION,
-    MOCK_HIST_POSITIONS_LIST,
-    MOCK_LIQ,
-    MOCK_LIQ_PERIOD,
-    MOCK_POSITION,
-    MOCK_POSITIONS_LIST,
-    MOCK_PRICE_HIST,
-    MOCK_PRICE_ONCHAIN,
-    MOCK_PRICE_PERIOD,
-    MOCK_SIM_EMPTY,
-    MOCK_SIM_RESPONSE,
-    _make_app,
-)
+from tests.conftest import (ADDR, MOCK_HIST_POSITION, MOCK_HIST_POSITIONS_LIST,
+                            MOCK_LIQ, MOCK_LIQ_PERIOD, MOCK_POSITION,
+                            MOCK_POSITIONS_LIST, MOCK_PRICE_HIST,
+                            MOCK_PRICE_ONCHAIN, MOCK_PRICE_PERIOD,
+                            MOCK_SIM_EMPTY, MOCK_SIM_RESPONSE, _make_app)
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
 _ROUTES = "aave_crawler.api.routes"
@@ -666,6 +655,7 @@ class TestLiquidateSimulation:
     def test_default_eth_ratio_is_constant(self, client: TestClient):
         """默认 eth_ratio 应为 ETH_COLLATERAL_RATIO_MIN。"""
         from decimal import Decimal
+
         from aave_crawler.api.constants import ETH_COLLATERAL_RATIO_MIN
         with patch(f"{_ROUTES}.simulate_liquidation", new_callable=AsyncMock,
                    return_value=MOCK_SIM_EMPTY) as mock_svc:
@@ -894,6 +884,7 @@ class TestLiquidatePeriod:
     def test_default_eth_ratio_is_constant(self, client: TestClient):
         """默认 eth_ratio 应为 ETH_COLLATERAL_RATIO_MIN。"""
         from decimal import Decimal
+
         from aave_crawler.api.constants import ETH_COLLATERAL_RATIO_MIN
         with patch(f"{_ROUTES}.simulate_liquidation_period", new_callable=AsyncMock,
                    return_value=MOCK_LIQ_PERIOD) as mock_svc:

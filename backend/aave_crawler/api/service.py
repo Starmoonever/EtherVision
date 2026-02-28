@@ -6,32 +6,19 @@
 
 import asyncio
 import logging
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from web3 import AsyncWeb3
 
 from ..models import ReservePosition, UserPosition
-from ..rpc import (
-    EMPTY_POSITION,
-    fetch_user_position,
-    get_all_reserve_tokens,
-    get_assets_prices,
-    get_contracts,
-    get_reserve_config,
-)
-from .schemas import (
-    LiqPriceResponse,
-    LiquidationPeriodItem,
-    LiquidationSimItem,
-    LiquidationSimResponse,
-    HistoricalPositionResponse,
-    HistoricalReserveDetail,
-    PositionResponse,
-    PriceResponse,
-    PricePeriodItem,
-    PricePeriodResponse,
-)
+from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
+                   get_assets_prices, get_contracts, get_reserve_config)
 from .constants import ETH_COLLATERAL_RATIO_MIN
+from .schemas import (HistoricalPositionResponse, HistoricalReserveDetail,
+                      LiqPriceResponse, LiquidationPeriodItem,
+                      LiquidationSimItem, LiquidationSimResponse,
+                      PositionResponse, PricePeriodItem, PricePeriodResponse,
+                      PriceResponse)
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +273,12 @@ _INF_HF_THRESHOLD = Decimal("1e15")
 
 # 合法的排序字段白名单（防止 SQL 注入）
 _SORT_COLS = {
-    "liquidation_price": "liq_price",
-    "health_factor": "health_factor",
+    "liquidation_price":      "liq_price",
+    "liq_price":              "liq_price",
+    "health_factor":          "health_factor",
+    "eth_collateral_amount":  "eth_collateral_amount",
+    "eth_collateral_usd":     "eth_collateral_usd",
+    "total_debt_usd":         "total_debt_usd",
 }
 _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
 
@@ -602,8 +593,9 @@ async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None)
         timestamp: Unix 时间戳（秒），None 表示查当前价格
     """
     import time as _time
-    import aiohttp
     from datetime import datetime, timezone
+
+    import aiohttp
     from fastapi import HTTPException
 
     def _ts_to_utc_str(ts: int) -> str:
@@ -686,8 +678,9 @@ async def get_price_period(
         end_ts:           结束 Unix 时间戳（秒，含）
         interval_minutes: 采样间隔（分钟，>= 1）
     """
-    import aiohttp
     from datetime import datetime, timezone
+
+    import aiohttp
     from fastapi import HTTPException
 
     def _ts_to_utc_str(ts: int) -> str:
@@ -895,8 +888,9 @@ async def _defillama_prices_bulk(
     返回 symbol → Decimal(price_usd)。
     稳定币直接返回 1，其余并发查询。
     """
-    import aiohttp
     from datetime import datetime, timezone
+
+    import aiohttp
 
     result: dict[str, Decimal] = {}
     to_fetch: list[tuple[str, str]] = []   # [(symbol, coin_key), ...]
@@ -1048,6 +1042,7 @@ async def get_positions_history(
     历史 USD 价格来自 DeFiLlama。
     """
     from datetime import datetime, timezone
+
     from fastapi import HTTPException
 
     def _ts_to_utc(ts: int) -> str:

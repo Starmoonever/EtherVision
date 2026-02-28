@@ -19,18 +19,12 @@ from tqdm import tqdm
 from web3 import AsyncWeb3
 
 from .config import AppConfig
-from .db import ensure_tables, fetch_user_addresses, get_tables, upsert_positions
+from .db import (ensure_tables, fetch_user_addresses, get_tables,
+                 upsert_positions)
 from .models import UserPosition
-from .rpc import (
-    EMPTY_POSITION,
-    ProtocolContracts,
-    build_web3,
-    fetch_user_position,
-    get_all_reserve_tokens,
-    get_assets_prices,
-    get_contracts,
-    get_reserve_config,
-)
+from .rpc import (EMPTY_POSITION, ProtocolContracts, build_web3,
+                  fetch_user_position, get_all_reserve_tokens,
+                  get_assets_prices, get_contracts, get_reserve_config)
 
 logger = logging.getLogger(__name__)
 
