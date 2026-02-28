@@ -51,7 +51,7 @@ FROM (
 """
 
 _SQL_NEW_WATERMARK = """
-SELECT MAX(created_at) FROM aave.aave_history
+SELECT MAX(created_at) AT TIME ZONE 'UTC' FROM aave.aave_history
  WHERE created_at > $1
    AND protocol_version = $2
 """
@@ -149,6 +149,8 @@ async def _process_round(
     # 4. 推进水位线
     row = await pool.fetchrow(_SQL_NEW_WATERMARK, watermark, protocol_version)
     new_wm = row[0] if row and row[0] else watermark
+    if isinstance(new_wm, datetime) and new_wm.tzinfo is None:
+        new_wm = new_wm.replace(tzinfo=timezone.utc)
     return new_wm
 
 

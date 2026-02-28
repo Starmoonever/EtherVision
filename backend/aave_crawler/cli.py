@@ -93,7 +93,7 @@ def cmd_crawl(
 )
 @click.option(
     "--lookback", "-l", default=None, type=int,
-    help="首次启动时回看多岑分钟内的历史事件（默认 10）",
+    help="首次启动时回看多少分钟内的历史事件（默认 10）",
 )
 @click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
 def cmd_watch(
