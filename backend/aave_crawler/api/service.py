@@ -13,17 +13,20 @@ from web3 import AsyncWeb3
 from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
-from .constants import ETH_COLLATERAL_RATIO_MIN
-from .schemas import (HistoricalPositionResponse, HistoricalReserveDetail,
+from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
+from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
+                      HistoricalPositionResponse, HistoricalReserveDetail,
                       LiqPriceResponse, LiquidationPeriodItem,
                       LiquidationSimItem, LiquidationSimResponse,
                       PositionResponse, PricePeriodItem, PricePeriodResponse,
-                      PriceResponse)
+                      PriceResponse, ReservePositionSchema, ShortLiqPeriodItem,
+                      ShortLiqSimItem, ShortLiqSimResponse)
 
 logger = logging.getLogger(__name__)
 
 # ETH/WETH 识别关键词（ETH LST/LRT 均视为 ETH 系，需与 db._ETH_SYMBOLS 和 SQL IN 列表同步维护）
-_ETH_SYMBOLS = {"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"}
+# 注意：比较时统一用 .upper()，所以这里存全大写
+_ETH_SYMBOLS = {"WETH", "ETH", "CBETH", "WSTETH", "RETH", "WEETH", "EZETH", "RSETH", "OSETH", "ETHX"}
 
 # SQL 中使用的 IN 列表（与 _ETH_SYMBOLS 保持一致）
 _ETH_SYMBOLS_SQL = "'WETH', 'ETH', 'cbETH', 'wstETH', 'rETH', 'weETH', 'ezETH', 'rsETH', 'osETH', 'ETHx'"
@@ -586,6 +589,318 @@ async def simulate_liquidation_period(
     return result
 
 
+# ── 借贷端（做空 ETH / borrow WETH）清算分析 ─────────────────────────────────
+
+# 借贷端排序字段白名单
+_BORROW_SORT_COLS = {
+    "liq_price_rise":   "liq_price_rise",
+    "weth_debt_usd":    "weth_debt_usd",
+    "total_debt_usd":   "total_debt_usd",
+    "health_factor":    "health_factor",
+}
+
+
+async def get_sorted_borrow_positions(
+    pool,
+    orderby: str = "liq_price_rise",
+    order: str = "asc",
+    limit: int = 10,
+    protocol: str = "v3_borrow",
+) -> list[BorrowPositionResponse]:
+    """从数据库读取借贷端仓位（借入 WETH），按指定字段排序后返回。
+
+    Args:
+        pool:    asyncpg 连接池
+        orderby: 排序字段，liq_price_rise / weth_debt_usd / total_debt_usd / health_factor
+        order:   方向，asc 或 desc
+        limit:   最多返回多少条
+        protocol: v3_borrow 或 v2_borrow
+    """
+    order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
+    order_dir = _SORT_DIRS.get(order, "ASC")
+    pos_table, _ = _tables(protocol)
+
+    # 仅返回有上涨清算风险的仓位（liq_price_rise > 0），weth_debt_amount 通过 raw/1e18 计算
+    sql = f"""
+SELECT
+    p.user_address                                                      AS address,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18))                 AS weth_debt_amount,
+    p.weth_debt_usd,
+    p.total_collateral_usd,
+    p.total_debt_usd,
+    p.health_factor,
+    p.liq_price_rise
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+ORDER BY {order_col} {order_dir}
+LIMIT $1
+"""
+    rows = await pool.fetch(sql, limit)
+
+    results: list[BorrowPositionResponse] = []
+    for row in rows:
+        hf = Decimal(str(row["health_factor"]))
+        hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
+        results.append(
+            BorrowPositionResponse(
+                address=row["address"],
+                weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
+                weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"]))),
+                total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"]))),
+                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                health_factor=hf_str,
+                liq_price_rise=_fmt(Decimal(str(row["liq_price_rise"]))),
+            )
+        )
+    return results
+
+
+async def get_borrow_user_position(
+    pool,
+    address: str,
+    protocol: str = "v3_borrow",
+) -> BorrowUserPositionResponse | None:
+    """查询单个地址的借贷端仓位详情（汇总 + reserve 明细）。
+
+    返回 None 表示地址不在数据库中（未爬取或无仓位）。
+    """
+    pos_table, res_table = _tables(protocol)
+    addr = address.lower()
+
+    async with pool.acquire() as conn:
+        pos = await conn.fetchrow(
+            f"""
+            SELECT user_address, scanned_at,
+                   weth_debt_raw, weth_debt_usd,
+                   total_collateral_usd, total_debt_usd, available_borrows_usd,
+                   health_factor, ltv, liq_threshold, liq_price, liq_price_rise
+            FROM loan.{pos_table}
+            WHERE user_address = $1
+            """,
+            addr,
+        )
+        if pos is None:
+            return None
+
+        reserve_rows = await conn.fetch(
+            f"""
+            SELECT symbol, token_address, decimals,
+                   price_usd, supply_raw, supply_usd,
+                   stable_debt_raw, variable_debt_raw, total_debt_usd,
+                   use_as_collateral
+            FROM loan.{res_table}
+            WHERE user_address = $1
+            ORDER BY total_debt_usd DESC, supply_usd DESC
+            """,
+            addr,
+        )
+
+    hf = Decimal(str(pos["health_factor"]))
+    hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
+
+    reserves = []
+    for r in reserve_rows:
+        dec = r["decimals"]
+        supply_dec = _raw_to_dec(int(r["supply_raw"]), dec)
+        stable_dec = _raw_to_dec(int(r["stable_debt_raw"]), dec)
+        variable_dec = _raw_to_dec(int(r["variable_debt_raw"]), dec)
+        reserves.append(
+            ReservePositionSchema(
+                symbol=r["symbol"],
+                token_address=r["token_address"],
+                price_usd=_fmt(Decimal(str(r["price_usd"]))),
+                supply_amount=_fmt(supply_dec, 6),
+                supply_usd=_fmt(Decimal(str(r["supply_usd"]))),
+                stable_debt_amount=_fmt(stable_dec, 6),
+                variable_debt_amount=_fmt(variable_dec, 6),
+                total_debt_amount=_fmt(stable_dec + variable_dec, 6),
+                total_debt_usd=_fmt(Decimal(str(r["total_debt_usd"]))),
+                use_as_collateral=r["use_as_collateral"],
+            )
+        )
+
+    return BorrowUserPositionResponse(
+        address=pos["user_address"],
+        scanned_at=pos["scanned_at"].isoformat().replace("+00:00", "Z"),
+        weth_debt_amount=_fmt(_raw_to_dec(int(pos["weth_debt_raw"]), 18), 6),
+        weth_debt_usd=_fmt(Decimal(str(pos["weth_debt_usd"]))),
+        health_factor=hf_str,
+        liq_price_rise=_fmt(Decimal(str(pos["liq_price_rise"]))),
+        reserves=reserves,
+    )
+
+
+async def simulate_short_liquidation(
+    pool,
+    eth_price: Decimal,
+    orderby: str = "liq_price_rise",
+    order: str = "asc",
+    limit: int = 100,
+    protocol: str = "v3_borrow",
+    cap: Decimal | None = None,
+    eth_ratio: Decimal = ETH_DEBT_RATIO_MIN,
+) -> ShortLiqSimResponse:
+    """模拟当 ETH 价格涨至 eth_price 时，哪些借贷仓位将被触发清算及汇总统计。
+
+    触发条件：liq_price_rise > 0 AND liq_price_rise <= eth_price
+    （即 ETH 实际价格已超过该仓位的做空清算触发线）
+
+    eth_ratio: weth_debt_usd / total_debt_usd 最小占比，过滤掉非 WETH 主导的债务仓位。
+    """
+    order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
+    order_dir = "DESC" if order.lower() == "desc" else "ASC"
+    pos_table, _ = _tables(protocol)
+
+    cap_filter = "  AND p.liq_price_rise < $2::numeric" if cap is not None else ""
+    sql = f"""
+SELECT
+    p.user_address                                                          AS address,
+    p.liq_price_rise,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18))                     AS weth_debt_amount,
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) * $1::numeric       AS weth_debt_usd_sim,
+    p.weth_debt_usd                                                         AS weth_debt_usd_stored,
+    p.total_collateral_usd,
+    p.total_debt_usd
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+  AND p.liq_price_rise <= $1::numeric
+{cap_filter}
+ORDER BY {order_col} {order_dir}
+"""
+    fetch_args: list = [float(eth_price)]
+    if cap is not None:
+        fetch_args.append(float(cap))
+    rows = await pool.fetch(sql, *fetch_args)
+
+    total_weth_amount = Decimal("0")
+    total_weth_usd = Decimal("0")
+    total_liq_usd = Decimal("0")
+    all_items: list[ShortLiqSimItem] = []
+
+    for row in rows:
+        weth_amt = Decimal(str(row["weth_debt_amount"]))
+        weth_usd_sim = Decimal(str(row["weth_debt_usd_sim"]))
+        weth_usd_stored = Decimal(str(row["weth_debt_usd_stored"]))
+        total_col_usd = Decimal(str(row["total_collateral_usd"]))
+        total_debt_usd = Decimal(str(row["total_debt_usd"]))
+        liq_r = Decimal(str(row["liq_price_rise"]))
+
+        # WETH 债务占比过滤：使用爬取时存储价值，避免模拟价格偏差失真
+        if total_debt_usd <= 0 or weth_usd_stored / total_debt_usd < eth_ratio:
+            continue
+
+        # 清算人偿还 WETH 债务并获取抵押品（不超过可用抵押品）
+        seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
+
+        total_weth_amount += weth_amt
+        total_weth_usd += weth_usd_sim
+        total_liq_usd += seized
+
+        all_items.append(ShortLiqSimItem(
+            address=row["address"],
+            liq_price_rise=_fmt(liq_r),
+            weth_debt_amount=_fmt(weth_amt, 6),
+            weth_debt_usd=_fmt(weth_usd_sim),
+            total_collateral_usd=_fmt(total_col_usd),
+        ))
+
+    total_count = len(all_items)
+    items = all_items[:limit]
+
+    cap_note = f"；liq_price_rise 上限过滤：< {cap}" if cap is not None else ""
+    note = (
+        f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发做空清算"
+        f"（本次返回前 {len(items)} 条）；"
+        f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
+        f"total_liquidation_usd = Σ min(WETH债务USD × {_WETH_LIQ_BONUS}, 总抵押USD)；"
+        f"统计基于全部 {total_count} 个仓位；"
+        f"WETH 债务占比过滤：>= {eth_ratio}"
+        f"{cap_note}"
+    )
+
+    return ShortLiqSimResponse(
+        simulated_eth_price=_fmt(eth_price),
+        positions=items,
+        positions_cnt=str(total_count),
+        total_weth_debt_amount=_fmt(total_weth_amount, 6),
+        total_weth_debt_usd=_fmt(total_weth_usd),
+        total_liquidation_usd=_fmt(total_liq_usd),
+        note=note,
+    )
+
+
+async def simulate_short_liquidation_period(
+    pool,
+    start_price: Decimal,
+    end_price: Decimal,
+    interval: Decimal,
+    protocol: str = "v3_borrow",
+    eth_ratio: Decimal = ETH_DEBT_RATIO_MIN,
+) -> list[ShortLiqPeriodItem]:
+    """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的做空清算汇总。
+
+    - 仅做一次数据库查询，在内存中对每个价格点分别统计，效率较高。
+    - 返回按价格升序排列的清算快照列表，可观察不同价格下清算量的变化趋势。
+    - eth_ratio: weth_debt_usd / total_debt_usd 最小占比过滤。
+    """
+    from fastapi import HTTPException
+
+    if start_price > end_price:
+        raise HTTPException(status_code=400, detail="start 必须 <= end")
+
+    pos_table, _ = _tables(protocol)
+    sql = f"""
+SELECT
+    (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) AS weth_debt_amount,
+    p.weth_debt_usd,
+    p.total_collateral_usd,
+    p.total_debt_usd,
+    p.liq_price_rise
+FROM loan.{pos_table} p
+WHERE p.liq_price_rise > 0
+"""
+    rows = await pool.fetch(sql)
+    # (weth_debt_amount, weth_debt_usd_stored, total_collateral_usd, total_debt_usd, liq_price_rise)
+    positions = [
+        (
+            Decimal(str(r["weth_debt_amount"])),
+            Decimal(str(r["weth_debt_usd"])),
+            Decimal(str(r["total_collateral_usd"])),
+            Decimal(str(r["total_debt_usd"])),
+            Decimal(str(r["liq_price_rise"])),
+        )
+        for r in rows
+    ]
+
+    result: list[ShortLiqPeriodItem] = []
+    price = start_price
+    while price <= end_price:
+        total_weth_amount = Decimal("0")
+        total_weth_usd = Decimal("0")
+        total_liq_usd = Decimal("0")
+        cnt = 0
+        for weth_amt, weth_usd_stored, total_col_usd, total_debt_usd, liq_r in positions:
+            if liq_r <= price:  # ETH 已涨超触发价
+                # WETH 债务占比过滤
+                if total_debt_usd <= 0 or weth_usd_stored / total_debt_usd < eth_ratio:
+                    continue
+                weth_usd_sim = weth_amt * price
+                seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
+                total_weth_amount += weth_amt
+                total_weth_usd += weth_usd_sim
+                total_liq_usd += seized
+                cnt += 1
+        result.append(ShortLiqPeriodItem(
+            simulated_eth_price=_fmt(price),
+            positions_cnt=str(cnt),
+            total_weth_debt_amount=_fmt(total_weth_amount, 6),
+            total_weth_debt_usd=_fmt(total_weth_usd),
+            total_liquidation_usd=_fmt(total_liq_usd),
+        ))
+        price += interval
+    return result
+
+
 async def get_eth_price(w3: AsyncWeb3, asset: str, timestamp: int | None = None) -> PriceResponse:
     """获取指定资产的 USD 价格。
 
@@ -676,6 +991,12 @@ async def get_price_period(
 ) -> PricePeriodResponse:
     """查询资产在指定时间段内按固定间隔的历史价格序列（来自 DeFiLlama）。
 
+    改进策略（避免大量并发请求触发 429）：
+    - interval_minutes >= 60：使用 ``GET /chart/{coins}?start=&span={n_points}&period={Xh}``
+      DeFiLlama 原生时间序列接口，整个时间范围只需 **1 次 HTTP 请求**。
+    - interval_minutes < 60：使用 ``POST /batchHistorical``，将所有时间戳打包进
+      单次请求，每批最多 ``_BATCH_MAX`` 个时间戳，大幅减少请求数量。
+
     Args:
         w3:               AsyncWeb3 实例（用于解析 token_address）
         asset:            资产符号，如 ``eth``、``wbtc``；大小写不敏感
@@ -687,6 +1008,9 @@ async def get_price_period(
 
     import aiohttp
     from fastapi import HTTPException
+
+    # 每批 batchHistorical 最多携带的时间戳数量
+    _BATCH_MAX = 500
 
     def _ts_to_utc_str(ts: int) -> str:
         return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -708,47 +1032,108 @@ async def get_price_period(
     token_address = matching[0].token_address
     coin_key = f"ethereum:{token_address.lower()}"
 
-    # 生成时间戳序列
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    # ── 策略一：小时级及以上间隔 → /chart/ 接口（1 次请求） ──────────────────
+    if interval_minutes >= 60:
+        span_hours = interval_minutes // 60
+        # DefiLlama /chart/ 不允许同时传 start 和 end；
+        # 正确用法：start + span（数据点数量）+ period（点间距字符串，如 "1h"、"24h"）
+        step = interval_minutes * 60
+        n_points = (end_ts - start_ts) // step + 1
+        period_str = f"{span_hours}h"   # 例：interval=60 → "1h"，interval=1440 → "24h"
+        url = (
+            f"https://coins.llama.fi/chart/{coin_key}"
+            f"?start={start_ts}&span={n_points}&period={period_str}"
+        )
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            try:
+                async with sess.get(url) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
+                        )
+                    data = await resp.json()
+            except aiohttp.ClientError as exc:
+                raise HTTPException(status_code=502, detail=f"请求 DeFiLlama 失败: {exc}") from exc
+
+        raw_prices: list[dict] = (
+            data.get("coins", {}).get(coin_key, {}).get("prices", [])
+        )
+        items: list[PricePeriodItem] = [
+            PricePeriodItem(
+                price_usd=_fmt(Decimal(str(p["price"])), 2),
+                timestamp=_ts_to_utc_str(int(p["timestamp"])),
+            )
+            for p in raw_prices
+            if "price" in p and "timestamp" in p
+        ]
+        if not items:
+            raise HTTPException(
+                status_code=404,
+                detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
+            )
+        return PricePeriodResponse(
+            asset=asset.upper(),
+            token_address=token_address,
+            source="defillama",
+            prices=items,
+        )
+
+    # ── 策略二：分钟级间隔 → batchHistorical（批量，最少请求数） ─────────────
     step = interval_minutes * 60
     timestamps: list[int] = []
     ts = start_ts
     while ts <= end_ts:
         timestamps.append(ts)
         ts += step
+
     if not timestamps:
-        raise HTTPException(status_code=400, detail="时间范围内未能生成任何采样点，请检查 start/end/interval 参数")
-
-    # 并发查询 DeFiLlama
-    async def _fetch_one(
-        session: aiohttp.ClientSession, point_ts: int
-    ) -> PricePeriodItem:
-        url = f"https://coins.llama.fi/prices/historical/{point_ts}/{coin_key}"
-        try:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    logger.error(f"DeFiLlama 返回 HTTP {resp.status} 查询 {asset} 在 {point_ts} 的价格")
-                    return PricePeriodItem(
-                        price_usd="0.00",
-                        timestamp=_ts_to_utc_str(point_ts),
-                    )
-                data = await resp.json()
-        except aiohttp.ClientError:
-            return PricePeriodItem(
-                price_usd="0.00",
-                timestamp=_ts_to_utc_str(point_ts),
-            )
-        entry = data.get("coins", {}).get(coin_key, {})
-        price = Decimal(str(entry["price"])) if "price" in entry else Decimal("0")
-        actual_ts = int(entry.get("timestamp", point_ts))
-        return PricePeriodItem(
-            price_usd=_fmt(price, 2),
-            timestamp=_ts_to_utc_str(actual_ts),
+        raise HTTPException(
+            status_code=400,
+            detail="时间范围内未能生成任何采样点，请检查 start/end/interval 参数",
         )
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
-        items: list[PricePeriodItem] = list(
-            await asyncio.gather(*[_fetch_one(sess, t) for t in timestamps])
+    # 将时间戳分批，每批 _BATCH_MAX 个
+    chunks = [timestamps[i : i + _BATCH_MAX] for i in range(0, len(timestamps), _BATCH_MAX)]
+    price_map: dict[int, Decimal] = {}
+
+    async with aiohttp.ClientSession(timeout=timeout) as sess:
+        for chunk in chunks:
+            payload = {"coins": {coin_key: chunk}}
+            try:
+                async with sess.post(
+                    "https://coins.llama.fi/batchHistorical",
+                    json=payload,
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error("DeFiLlama batchHistorical 返回 HTTP %s: %s", resp.status, body[:200])
+                        # 本批失败时以 0 填充，继续处理后续批次
+                        for t in chunk:
+                            price_map.setdefault(t, Decimal("0"))
+                        continue
+                    data = await resp.json()
+            except aiohttp.ClientError as exc:
+                logger.error("batchHistorical 请求异常: %s", exc)
+                for t in chunk:
+                    price_map.setdefault(t, Decimal("0"))
+                continue
+
+            for entry in data.get("coins", {}).get(coin_key, {}).get("prices", []):
+                if "timestamp" in entry and "price" in entry:
+                    price_map[int(entry["timestamp"])] = Decimal(str(entry["price"]))
+
+    # 按原始时间戳顺序组装结果（未命中的填 0）
+    items = [
+        PricePeriodItem(
+            price_usd=_fmt(price_map.get(t, Decimal("0")), 2),
+            timestamp=_ts_to_utc_str(t),
         )
+        for t in timestamps
+    ]
 
     return PricePeriodResponse(
         asset=asset.upper(),

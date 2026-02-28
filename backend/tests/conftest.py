@@ -6,13 +6,17 @@ from unittest.mock import MagicMock
 
 import pytest
 from aave_crawler.api.routes import router
-from aave_crawler.api.schemas import (HistoricalPositionResponse,
+from aave_crawler.api.schemas import (BorrowPositionResponse,
+                                      BorrowUserPositionResponse,
+                                      HistoricalPositionResponse,
                                       HistoricalReserveDetail,
                                       LiqPriceResponse, LiquidationPeriodItem,
                                       LiquidationSimItem,
                                       LiquidationSimResponse, PositionResponse,
                                       PricePeriodItem, PricePeriodResponse,
-                                      PriceResponse)
+                                      PriceResponse, ReservePositionSchema,
+                                      ShortLiqPeriodItem, ShortLiqSimItem,
+                                      ShortLiqSimResponse)
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
@@ -145,6 +149,108 @@ MOCK_LIQ_PERIOD = [
         total_liquidation_usd="2100.00",
     ),
 ]
+
+
+# ── 借贷端 Mock 数据 ─────────────────────────────────────────────────
+
+MOCK_BORROW_POSITION = BorrowPositionResponse(
+    address=ADDR,
+    weth_debt_amount="10.000000",
+    weth_debt_usd="18740.00",
+    total_collateral_usd="25000.00",
+    total_debt_usd="18740.00",
+    health_factor="1.1200",
+    liq_price_rise="2600.00",
+)
+
+MOCK_BORROW_POSITIONS_LIST = [MOCK_BORROW_POSITION]
+
+MOCK_SHORT_SIM_RESPONSE = ShortLiqSimResponse(
+    simulated_eth_price="2700.00",
+    positions=[
+        ShortLiqSimItem(
+            address=ADDR,
+            liq_price_rise="2600.00",
+            weth_debt_amount="10.000000",
+            weth_debt_usd="27000.00",
+            total_collateral_usd="25000.00",
+        )
+    ],
+    positions_cnt="1",
+    total_weth_debt_amount="10.000000",
+    total_weth_debt_usd="27000.00",
+    total_liquidation_usd="25000.00",
+    note="共 1 个仓位",
+)
+
+MOCK_SHORT_SIM_EMPTY = ShortLiqSimResponse(
+    simulated_eth_price="1000.00",
+    positions=[],
+    positions_cnt="0",
+    total_weth_debt_amount="0.000000",
+    total_weth_debt_usd="0.00",
+    total_liquidation_usd="0.00",
+    note="共 0 个仓位",
+)
+
+MOCK_SHORT_LIQ_PERIOD = [
+    ShortLiqPeriodItem(
+        simulated_eth_price="2200.00",
+        positions_cnt="2",
+        total_weth_debt_amount="15.000000",
+        total_weth_debt_usd="33000.00",
+        total_liquidation_usd="30000.00",
+    ),
+    ShortLiqPeriodItem(
+        simulated_eth_price="2500.00",
+        positions_cnt="5",
+        total_weth_debt_amount="40.000000",
+        total_weth_debt_usd="100000.00",
+        total_liquidation_usd="90000.00",
+    ),
+    ShortLiqPeriodItem(
+        simulated_eth_price="3000.00",
+        positions_cnt="8",
+        total_weth_debt_amount="65.000000",
+        total_weth_debt_usd="195000.00",
+        total_liquidation_usd="170000.00",
+    ),
+]
+
+MOCK_BORROW_USER_POSITION = BorrowUserPositionResponse(
+    address=ADDR,
+    scanned_at="2026-02-28T08:00:00Z",
+    weth_debt_amount="10.000000",
+    weth_debt_usd="18740.00",
+    health_factor="1.1200",
+    liq_price_rise="2600.00",
+    reserves=[
+        ReservePositionSchema(
+            symbol="WETH",
+            token_address=WETH_ADDR,
+            price_usd="1874.00",
+            supply_amount="0.000000",
+            supply_usd="0.00",
+            stable_debt_amount="0.000000",
+            variable_debt_amount="10.000000",
+            total_debt_amount="10.000000",
+            total_debt_usd="18740.00",
+            use_as_collateral=False,
+        ),
+        ReservePositionSchema(
+            symbol="USDC",
+            token_address="0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            price_usd="1.00",
+            supply_amount="25000.000000",
+            supply_usd="25000.00",
+            stable_debt_amount="0.000000",
+            variable_debt_amount="0.000000",
+            total_debt_amount="0.000000",
+            total_debt_usd="0.00",
+            use_as_collateral=True,
+        ),
+    ],
+)
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
