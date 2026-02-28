@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { LiquidationChart } from './LiquidationChart';
+import { EthPriceTrend } from './EthPriceTrend';
 
 interface MarketAssessmentProps {
-  version: 'v2' | 'v3';
+  version: 'v2' | 'v3' | 'all';
 }
 
 export function MarketAssessment({ version }: MarketAssessmentProps) {
   const [ethPrice, setEthPrice] = useState<number | null>(null); // 初始化为 null，表示尚未获取到价格
-  const [priceChange, setPriceChange] = useState<number>(0); // Percentage change
+  const [priceChange, setPriceChange] = useState<number>(-10); // Percentage change default to -10%
 
   // Fetch real-time price from API
   useEffect(() => {
@@ -46,7 +47,7 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
 
   return (
     <div className="market-assessment">
-      <div className="summary-grid">
+      <div className="summary-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         {/* Module 1: ETH Real-time Price */}
         <div className="card" style={{ gridColumn: 'span 1' }}>
           <div className="card-header">
@@ -63,8 +64,11 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
           </div>
         </div>
 
-        {/* Module 2: Price Volatility Simulation */}
-        <div className="card" style={{ gridColumn: 'span 2' }}>
+        {/* Module 2: ETH Price Trend */}
+        <EthPriceTrend />
+
+        {/* Module 3: Price Volatility Simulation */}
+        <div className="card" style={{ gridColumn: 'span 3' }}>
           <div className="card-header">
             <span className="card-title">价格波动下清算模拟</span>
           </div>
@@ -100,7 +104,7 @@ export function MarketAssessment({ version }: MarketAssessmentProps) {
         </div>
       </div>
 
-      {/* Module 3: Liquidation Chart */}
+      {/* Module 4: Liquidation Chart */}
       <div style={{ marginTop: '1.5rem' }}>
         <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} />
       </div>

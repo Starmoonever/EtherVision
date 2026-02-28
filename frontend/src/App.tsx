@@ -9,7 +9,7 @@ export default function App() {
   const [queriedAddress, setQueriedAddress] = useState('');
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
-  const [version, setVersion] = useState<'v2' | 'v3'>('v3');
+  const [version, setVersion] = useState<'v2' | 'v3' | 'all'>('all'); // 默认为 all
 
   const handleSearch = (address: string) => {
     if (!address.startsWith('0x') || address.length !== 42) {
@@ -63,6 +63,22 @@ export default function App() {
               >
                 V3
               </button>
+              <button
+                onClick={() => setVersion('all')}
+                style={{
+                  background: version === 'all' ? '#7c3aed' : 'transparent',
+                  color: version === 'all' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                ALL
+              </button>
             </div>
             <span className="network-badge">数据库版</span>
           </div>
@@ -89,7 +105,7 @@ export default function App() {
           <>
             <div className="hero">
               <h1 className="hero-title">个人账户分析</h1>
-              <p className="hero-sub">账户头寸与清算线</p>
+              <p className="hero-sub">账户头寸与清算</p>
             </div>
 
             {/* 搜索组件 */}

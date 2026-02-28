@@ -29,7 +29,7 @@ interface LiquidationData {
 interface LiquidationChartProps {
   currentEthPrice: number;
   priceChange: number;
-  version: 'v2' | 'v3';
+  version: 'v2' | 'v3' | 'all';
 }
 
 interface ChartDataPoint {
@@ -46,33 +46,66 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
   const [showModal, setShowModal] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalData, setModalData] = useState<LiquidationData | null>(null);
+  const [sortField, setSortField] = useState<'eth_collateral_amount' | 'eth_collateral_usd' | 'total_debt_usd'>('eth_collateral_usd');
   
   const selectedPrice = currentEthPrice * (1 + priceChange / 100);
 
   useEffect(() => {
     const fetchRangeData = async () => {
       if (currentEthPrice <= 0) return;
-
+      
       setLoading(true);
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
         const start = 0.01;
         const end = currentEthPrice;
-        // 使用新接口一次性获取所有数据点
-        // 注意：API 路径应为 /liquidate/period 且参数名为 interval 而非 intereval (通常拼写)
-        // 根据用户输入: "intereval=1"，这里按照用户要求拼写
-        const response = await fetch(`${baseUrl}/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${version}`);
         
-        if (!response.ok) {
-          console.error('Fetch liquidation period data failed');
-          return;
-        }
-
-        const dataList: {
+        let dataList: {
           simulated_eth_price: string;
           positions_cnt: string;
           total_liquidation_usd: string;
-        }[] = await response.json();
+        }[] = [];
+
+        // 获取数据函数
+        const fetchData = async (v: string) => {
+          const response = await fetch(`${baseUrl}/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`);
+          if (!response.ok) throw new Error(`Fetch ${v} failed`);
+          return await response.json();
+        };
+
+        if (version === 'all') {
+          const [v2Data, v3Data] = await Promise.all([fetchData('v2'), fetchData('v3')]);
+          
+          // 合并数据
+          // 假设数据按价格排序，或者我们需要按价格聚合并累加 total_liquidation_usd
+          const mergedMap = new Map<string, {
+            simulated_eth_price: string;
+            positions_cnt: number;
+            total_liquidation_usd: number;
+          }>();
+
+          [...v2Data, ...v3Data].forEach(item => {
+            const priceKey = parseFloat(item.simulated_eth_price).toFixed(2); // 统一精度作为 key
+            if (!mergedMap.has(priceKey)) {
+              mergedMap.set(priceKey, {
+                simulated_eth_price: item.simulated_eth_price,
+                positions_cnt: 0,
+                total_liquidation_usd: 0
+              });
+            }
+            const entry = mergedMap.get(priceKey)!;
+            entry.positions_cnt += parseInt(item.positions_cnt);
+            entry.total_liquidation_usd += parseFloat(item.total_liquidation_usd);
+          });
+
+          dataList = Array.from(mergedMap.values()).map(item => ({
+            simulated_eth_price: item.simulated_eth_price,
+            positions_cnt: item.positions_cnt.toString(),
+            total_liquidation_usd: item.total_liquidation_usd.toString()
+          }));
+        } else {
+          dataList = await fetchData(version);
+        }
 
         // 将返回的数组转换为 chartData
         // 需要映射到我们预设的 -100% 到 0% 的坐标系上
@@ -160,27 +193,58 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
       const cap = selectedPrice * 0.01;
-      const response = await fetch(`${baseUrl}/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${version}`);
       
-      // 如果后端返回 422，可能是因为 eth_price 为 0 或无效，尝试容错处理
-      if (response.status === 422) {
-        console.warn('API returned 422, possibly invalid eth_price:', selectedPrice);
-        setModalData({
-          simulated_eth_price: selectedPrice.toString(),
-          positions: [],
-          positions_cnt: "0",
-          total_liquidation_usd: "0"
-        });
-        return;
+      let positions: Position[] = [];
+      let totalLiqUsd = 0;
+      let posCnt = 0;
+
+      const fetchDetail = async (v: string) => {
+        const response = await fetch(`${baseUrl}/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`);
+        if (response.status === 422) return null;
+        if (!response.ok) throw new Error(`Fetch ${v} detail failed`);
+        return await response.json();
+      };
+
+      if (version === 'all') {
+        const [v2Res, v3Res] = await Promise.all([fetchDetail('v2'), fetchDetail('v3')]);
+        
+        const v2Positions = v2Res?.positions || [];
+        const v3Positions = v3Res?.positions || [];
+        
+        positions = [...v2Positions, ...v3Positions];
+        
+        // 重新计算总和
+        // 注意：这里简单相加，具体字段可能需要从 response 中获取并累加
+        // 由于 API 返回结构包含 positions_cnt 等统计字段，我们也应该累加它们
+        if (v2Res) {
+          totalLiqUsd += parseFloat(v2Res.total_liquidation_usd);
+          posCnt += parseInt(v2Res.positions_cnt);
+        }
+        if (v3Res) {
+          totalLiqUsd += parseFloat(v3Res.total_liquidation_usd);
+          posCnt += parseInt(v3Res.positions_cnt);
+        }
+
+      } else {
+        const res = await fetchDetail(version);
+        if (res) {
+          positions = res.positions || [];
+          totalLiqUsd = parseFloat(res.total_liquidation_usd);
+          posCnt = parseInt(res.positions_cnt);
+        }
       }
 
-      if (!response.ok) throw new Error('Failed to fetch details');
-      const result: LiquidationData = await response.json();
+      const result: LiquidationData = {
+        simulated_eth_price: selectedPrice.toString(),
+        positions: positions,
+        positions_cnt: posCnt.toString(),
+        total_liquidation_usd: totalLiqUsd.toString()
+      };
       
-      // 按 eth_collateral_usd 从大到小排序
+      // 初始排序，默认按 sortField
       if (result.positions) {
         result.positions.sort((a, b) => 
-          parseFloat(b.eth_collateral_usd) - parseFloat(a.eth_collateral_usd)
+          parseFloat(b[sortField]) - parseFloat(a[sortField])
         );
       }
       
@@ -194,6 +258,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
     }
   };
 
+  // 当 sortField 改变时，重新排序 modalData
+  useEffect(() => {
+    if (modalData?.positions) {
+      const sortedPositions = [...modalData.positions].sort((a, b) => 
+        parseFloat(b[sortField]) - parseFloat(a[sortField])
+      );
+      setModalData({
+        ...modalData,
+        positions: sortedPositions
+      });
+    }
+  }, [sortField]);
+
   if (loading && chartData.length === 0) {
     return (
       <div className="chart-container" style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -206,7 +283,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
   return (
     <div className="chart-container" style={{ width: '100%', minHeight: '400px' }}>
       <div className="chart-header" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}> ETH 清算量</span>
+        <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}> ETH 清算量 </span>
         <button 
           onClick={handleShowDetails}
           style={{
@@ -318,7 +395,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
             <div style={{ padding: '1.2rem', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <h3 style={{ margin: 0, color: '#e2e8f0' }}>
-                  ETH 清算价格为 <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: 'normal' }}> ${selectedPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>的账户
+                  ETH 清算价格在  <span style={{ fontSize: '1.0rem', color: '#94a3b8', fontWeight: 'normal' }}> ${selectedPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>浮动的账户
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
                   在 ${selectedPrice.toLocaleString(undefined, {maximumFractionDigits: 2})} 清算价格增减1%区间内，
@@ -334,7 +411,28 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
               </button>
             </div>
             
-            <div style={{ padding: '1.2rem', overflowY: 'auto' }}>
+            <div style={{ padding: '0 1.2rem 1.2rem 1.2rem', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '1rem', margin: '1rem 0', alignItems: 'center' }}>
+                <span style={{ color: '#94a3b8', fontSize: '0.9rem' }}>排序方式:</span>
+                <select 
+                  value={sortField} 
+                  onChange={(e) => setSortField(e.target.value as any)}
+                  style={{
+                    background: '#1e293b',
+                    color: '#e2e8f0',
+                    border: '1px solid #334155',
+                    padding: '0.4rem',
+                    borderRadius: '6px',
+                    fontSize: '0.9rem',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="eth_collateral_usd">抵押 ETH 价值 (USD)</option>
+                  <option value="eth_collateral_amount">抵押 ETH 数量</option>
+                  <option value="total_debt_usd">仓位总债务 (USD)</option>
+                </select>
+              </div>
+
               {modalLoading ? (
                 <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>加载中...</div>
               ) : modalData?.positions && modalData.positions.length > 0 ? (
@@ -343,9 +441,9 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
                     <tr style={{ borderBottom: '1px solid #334155' }}>
                       <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>地址</th>
                       <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>清算价格</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押ETH</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押价值 (USD)</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>总债务 (USD)</th>
+                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 数量</th>
+                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 价值</th>
+                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总债务 </th>
                     </tr>
                   </thead>
                   <tbody>
