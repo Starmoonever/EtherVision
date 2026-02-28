@@ -15,7 +15,7 @@ interface AccountSummary {
 
 interface Props {
   address: string; // 只需要传入地址
-  version: 'v2' | 'v3';
+  version: 'v2' | 'v3' | 'all';
 }
 
 // 健康因子颜色逻辑保持不变
