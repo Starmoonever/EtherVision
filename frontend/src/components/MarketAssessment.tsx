@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react';
 import { LiquidationChart } from './LiquidationChart';
 
-export function MarketAssessment() {
-  const [ethPrice, setEthPrice] = useState<number>(3500); // Default fallback
+interface MarketAssessmentProps {
+  version: 'v2' | 'v3';
+}
+
+export function MarketAssessment({ version }: MarketAssessmentProps) {
+  const [ethPrice, setEthPrice] = useState<number | null>(null); // 初始化为 null，表示尚未获取到价格
   const [priceChange, setPriceChange] = useState<number>(0); // Percentage change
 
   // Fetch real-time price from API
@@ -26,9 +30,17 @@ export function MarketAssessment() {
     };
 
     fetchPrice(); // Initial fetch
-    const interval = setInterval(fetchPrice, 5000); // Poll every 5 seconds
+    const interval = setInterval(fetchPrice, 600000); // Poll every 10 minutes
     return () => clearInterval(interval);
   }, []);
+
+  if (ethPrice === null) {
+    return (
+      <div className="market-assessment" style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
+        <div className="spinner"></div>
+      </div>
+    );
+  }
 
   const simulatedPrice = ethPrice * (1 + priceChange / 100);
 
@@ -81,7 +93,7 @@ export function MarketAssessment() {
                 ${simulatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
               <span className="check-detail" style={{ marginTop: '0.5rem' }}>
-                当市场发生 {Math.abs(priceChange)}% {priceChange >= 0 ? '上涨' : '下跌'} 时
+                ETH价格下跌 {Math.abs(priceChange)}% 
               </span>
             </div>
           </div>
@@ -90,7 +102,7 @@ export function MarketAssessment() {
 
       {/* Module 3: Liquidation Chart */}
       <div style={{ marginTop: '1.5rem' }}>
-        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} />
+        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} />
       </div>
     </div>
   );
