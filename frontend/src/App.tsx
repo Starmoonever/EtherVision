@@ -9,6 +9,7 @@ export default function App() {
   const [queriedAddress, setQueriedAddress] = useState('');
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
+  const [version, setVersion] = useState<'v2' | 'v3'>('v3');
 
   const handleSearch = (address: string) => {
     if (!address.startsWith('0x') || address.length !== 42) {
@@ -26,9 +27,45 @@ export default function App() {
         <div className="header-inner">
           <div className="logo">
             <span className="logo-icon">⚡</span>
-            <span className="logo-text">Aave V3 抵押ETH清算风险监测</span>
+            <span className="logo-text">Aave 抵押ETH清算风险监测</span>
           </div>
-          <span className="network-badge">数据库版</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <button
+                onClick={() => setVersion('v2')}
+                style={{
+                  background: version === 'v2' ? '#7c3aed' : 'transparent',
+                  color: version === 'v2' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                V2
+              </button>
+              <button
+                onClick={() => setVersion('v3')}
+                style={{
+                  background: version === 'v3' ? '#7c3aed' : 'transparent',
+                  color: version === 'v3' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                V3
+              </button>
+            </div>
+            <span className="network-badge">数据库版</span>
+          </div>
         </div>
       </header>
 
@@ -69,7 +106,7 @@ export default function App() {
             {queriedAddress && (
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 {/* 传递地址给子组件，子组件内部去 fetch */}
-                <SummaryCard address={queriedAddress} />
+                <SummaryCard address={queriedAddress} version={version} />
                 
                 <div style={{ marginTop: '2rem' }}>
                   <h3 className="section-title">资产负债情况</h3>
@@ -84,7 +121,7 @@ export default function App() {
               <h1 className="hero-title">宏观市场评估</h1>
               <p className="hero-sub">ETH实时价格与清算模拟</p>
             </div>
-            <MarketAssessment />
+            <MarketAssessment version={version} />
           </>
         )}
       </main>

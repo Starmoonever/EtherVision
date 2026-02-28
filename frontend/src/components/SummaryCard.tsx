@@ -15,6 +15,7 @@ interface AccountSummary {
 
 interface Props {
   address: string; // 只需要传入地址
+  version: 'v2' | 'v3';
 }
 
 // 健康因子颜色逻辑保持不变
@@ -27,7 +28,7 @@ function healthColor(hfStr: string): string {
   return '#ef4444';
 }
 
-export function SummaryCard({ address }: Props) {
+export function SummaryCard({ address, version }: Props) {
   const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -40,7 +41,7 @@ export function SummaryCard({ address }: Props) {
       try {
         // 这里调用的地址通常是后端查询单个用户的接口
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const response = await fetch(`${baseUrl}/user/position?address=${address}`);
+        const response = await fetch(`${baseUrl}/user/position?address=${address}&version=${version}`);
         if (!response.ok) throw new Error('获取账户概览失败');
         
         const data = await response.json();
@@ -54,7 +55,7 @@ export function SummaryCard({ address }: Props) {
     };
 
     fetchSummary();
-  }, [address]);
+  }, [address, version]);
 
   if (loading) return <div className="card shadow-sm p-4">加载账户数据中...</div>;
   if (!summary) return null;
