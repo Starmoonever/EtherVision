@@ -13,7 +13,7 @@ from web3 import AsyncWeb3
 from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
-from .constants import ETH_COLLATERAL_RATIO_MIN
+from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
                       LiqPriceResponse, LiquidationPeriodItem,
@@ -738,11 +738,14 @@ async def simulate_short_liquidation(
     limit: int = 100,
     protocol: str = "v3_borrow",
     cap: Decimal | None = None,
+    eth_ratio: Decimal = ETH_DEBT_RATIO_MIN,
 ) -> ShortLiqSimResponse:
     """模拟当 ETH 价格涨至 eth_price 时，哪些借贷仓位将被触发清算及汇总统计。
 
     触发条件：liq_price_rise > 0 AND liq_price_rise <= eth_price
     （即 ETH 实际价格已超过该仓位的做空清算触发线）
+
+    eth_ratio: weth_debt_usd / total_debt_usd 最小占比，过滤掉非 WETH 主导的债务仓位。
     """
     order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
@@ -777,8 +780,14 @@ ORDER BY {order_col} {order_dir}
     for row in rows:
         weth_amt = Decimal(str(row["weth_debt_amount"]))
         weth_usd_sim = Decimal(str(row["weth_debt_usd_sim"]))
+        weth_usd_stored = Decimal(str(row["weth_debt_usd_stored"]))
         total_col_usd = Decimal(str(row["total_collateral_usd"]))
+        total_debt_usd = Decimal(str(row["total_debt_usd"]))
         liq_r = Decimal(str(row["liq_price_rise"]))
+
+        # WETH 债务占比过滤：使用爬取时存储价值，避免模拟价格偏差失真
+        if total_debt_usd <= 0 or weth_usd_stored / total_debt_usd < eth_ratio:
+            continue
 
         # 清算人偿还 WETH 债务并获取抵押品（不超过可用抵押品）
         seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
@@ -804,7 +813,8 @@ ORDER BY {order_col} {order_dir}
         f"（本次返回前 {len(items)} 条）；"
         f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
         f"total_liquidation_usd = Σ min(WETH债务USD × {_WETH_LIQ_BONUS}, 总抵押USD)；"
-        f"统计基于全部 {total_count} 个仓位"
+        f"统计基于全部 {total_count} 个仓位；"
+        f"WETH 债务占比过滤：>= {eth_ratio}"
         f"{cap_note}"
     )
 
@@ -825,11 +835,13 @@ async def simulate_short_liquidation_period(
     end_price: Decimal,
     interval: Decimal,
     protocol: str = "v3_borrow",
+    eth_ratio: Decimal = ETH_DEBT_RATIO_MIN,
 ) -> list[ShortLiqPeriodItem]:
     """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的做空清算汇总。
 
     - 仅做一次数据库查询，在内存中对每个价格点分别统计，效率较高。
     - 返回按价格升序排列的清算快照列表，可观察不同价格下清算量的变化趋势。
+    - eth_ratio: weth_debt_usd / total_debt_usd 最小占比过滤。
     """
     from fastapi import HTTPException
 
@@ -840,17 +852,21 @@ async def simulate_short_liquidation_period(
     sql = f"""
 SELECT
     (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) AS weth_debt_amount,
+    p.weth_debt_usd,
     p.total_collateral_usd,
+    p.total_debt_usd,
     p.liq_price_rise
 FROM loan.{pos_table} p
 WHERE p.liq_price_rise > 0
 """
     rows = await pool.fetch(sql)
-    # (weth_debt_amount, total_collateral_usd, liq_price_rise)
+    # (weth_debt_amount, weth_debt_usd_stored, total_collateral_usd, total_debt_usd, liq_price_rise)
     positions = [
         (
             Decimal(str(r["weth_debt_amount"])),
+            Decimal(str(r["weth_debt_usd"])),
             Decimal(str(r["total_collateral_usd"])),
+            Decimal(str(r["total_debt_usd"])),
             Decimal(str(r["liq_price_rise"])),
         )
         for r in rows
@@ -863,8 +879,11 @@ WHERE p.liq_price_rise > 0
         total_weth_usd = Decimal("0")
         total_liq_usd = Decimal("0")
         cnt = 0
-        for weth_amt, total_col_usd, liq_r in positions:
+        for weth_amt, weth_usd_stored, total_col_usd, total_debt_usd, liq_r in positions:
             if liq_r <= price:  # ETH 已涨超触发价
+                # WETH 债务占比过滤
+                if total_debt_usd <= 0 or weth_usd_stored / total_debt_usd < eth_ratio:
+                    continue
                 weth_usd_sim = weth_amt * price
                 seized = min(weth_usd_sim * _WETH_LIQ_BONUS, total_col_usd)
                 total_weth_amount += weth_amt

@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .constants import ETH_COLLATERAL_RATIO_MIN
+from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, LiqPriceResponse,
                       LiquidationPeriodItem, LiquidationSimResponse,
@@ -375,6 +375,12 @@ async def borrow_liquidate_simulation(
         gt=0,
         description="liq_price_rise 上限（USD）：仅返回 liq_price_rise < cap 的地址；省略则返回全部",
     ),
+    eth_ratio: float = Query(
+        float(ETH_DEBT_RATIO_MIN),
+        ge=0,
+        le=1,
+        description="WETH 债务占总债务的最小比例（0~1），过滤掉非 WETH 主导的仓位，默认 " + str(ETH_DEBT_RATIO_MIN),
+    ),
     version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> ShortLiqSimResponse:
     from decimal import Decimal
@@ -387,6 +393,7 @@ async def borrow_liquidate_simulation(
         limit=limit,
         protocol=protocol,
         cap=Decimal(str(cap)) if cap is not None else None,
+        eth_ratio=Decimal(str(eth_ratio)),
     )
 
 
@@ -405,6 +412,12 @@ async def borrow_liquidate_period(
     start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
     end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
     interval: float = Query(..., gt=0, description="价格步长（USD），必须大于 0"),
+    eth_ratio: float = Query(
+        float(ETH_DEBT_RATIO_MIN),
+        ge=0,
+        le=1,
+        description="WETH 债务占总债务的最小比例（0~1），过滤掉非 WETH 主导的仓位，默认 " + str(ETH_DEBT_RATIO_MIN),
+    ),
     version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
 ) -> list[ShortLiqPeriodItem]:
     from decimal import Decimal
@@ -415,4 +428,5 @@ async def borrow_liquidate_period(
         end_price=Decimal(str(end)),
         interval=Decimal(str(interval)),
         protocol=protocol,
+        eth_ratio=Decimal(str(eth_ratio)),
     )

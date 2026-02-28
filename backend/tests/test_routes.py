@@ -1130,9 +1130,41 @@ class TestBorrowLiquidate:
         _, kwargs = mock_svc.call_args
         assert kwargs["protocol"] == expected_protocol
 
+    def test_default_eth_ratio_is_0_45(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.45")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET /api/borrow/liquidate/period
+    def test_custom_eth_ratio_passed_to_service(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate",
+                       params={"eth_price": 2700, "eth_ratio": 0.8})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.8")
+
+    def test_eth_ratio_zero_passes_to_service(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_SIM_RESPONSE) as mock_svc:
+            client.get("/api/borrow/liquidate",
+                       params={"eth_price": 2700, "eth_ratio": 0})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0")
+
+    def test_eth_ratio_greater_than_1_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate",
+                          params={"eth_price": 2700, "eth_ratio": 1.1})
+        assert resp.status_code == 422
+
+    def test_eth_ratio_negative_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate",
+                          params={"eth_price": 2700, "eth_ratio": -0.1})
+        assert resp.status_code == 422
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1237,9 +1269,41 @@ class TestBorrowLiquidatePeriod:
                               params={"start": 2000, "end": 3000, "interval": interval})
         assert resp.status_code == 200
 
+    def test_default_eth_ratio_is_0_45(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD) as mock_svc:
+            client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.45")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET /api/borrow/user/position
+    def test_custom_eth_ratio_passed_to_service(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD) as mock_svc:
+            client.get("/api/borrow/liquidate/period",
+                       params={**self._BASE_PARAMS, "eth_ratio": 0.7})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0.7")
+
+    def test_eth_ratio_zero_passes_to_service(self, client: TestClient):
+        from decimal import Decimal
+        with patch(f"{_ROUTES}.simulate_short_liquidation_period", new_callable=AsyncMock,
+                   return_value=MOCK_SHORT_LIQ_PERIOD) as mock_svc:
+            client.get("/api/borrow/liquidate/period",
+                       params={**self._BASE_PARAMS, "eth_ratio": 0})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["eth_ratio"] == Decimal("0")
+
+    def test_eth_ratio_greater_than_1_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={**self._BASE_PARAMS, "eth_ratio": 1.5})
+        assert resp.status_code == 422
+
+    def test_eth_ratio_negative_returns_422(self, client: TestClient):
+        resp = client.get("/api/borrow/liquidate/period",
+                          params={**self._BASE_PARAMS, "eth_ratio": -0.1})
+        assert resp.status_code == 422
 # ─────────────────────────────────────────────────────────────────────────────
 
 
