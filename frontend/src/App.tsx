@@ -106,13 +106,8 @@ export default function App() {
             {queriedAddress && (
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 {/* 传递地址给子组件，子组件内部去 fetch */}
-<<<<<<< HEAD
-                <SummaryCard address={queriedAddress} />
-
-=======
                 <SummaryCard address={queriedAddress} version={version} />
                 
->>>>>>> feat/charts
                 <div style={{ marginTop: '2rem' }}>
                   <h3 className="section-title">资产负债情况</h3>
                   <PositionTable address={queriedAddress} />
