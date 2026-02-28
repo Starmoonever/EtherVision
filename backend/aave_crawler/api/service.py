@@ -284,22 +284,32 @@ _SORT_COLS = {
 _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
 
 
+def _tables(protocol: str) -> tuple[str, str]:
+    """(主仓位表, 资产明细表)"""
+    if protocol.lower() == "v2":
+        return "aave_v2_eth_positions", "aave_v2_eth_reserve_positions"
+    return "aave_v3_eth_positions", "aave_v3_eth_reserve_positions"
+
+
 async def get_sorted_positions(
     pool,
     orderby: str = "liq_price",
     order: str = "asc",
     limit: int = 10,
+    protocol: str = "v3",
 ) -> list[PositionResponse]:
-    """从数据库读取已爬取的仓位，按指定字段排序后返回。
+    """\u4ece\u6570\u636e\u5e93\u8bfb\u53d6\u5df2\u722c\u53d6\u7684\u4ed3\u4f4d\uff0c\u6309\u6307\u5b9a\u5b57\u6bb5\u6392\u5e8f\u540e\u8fd4\u56de\u3002
 
     Args:
         pool: asyncpg 连接池
         orderby: 排序字段，``liquidation_price`` 或 ``health_factor``
         order: 方向，``asc`` 或 ``desc``
         limit: 最多返回多少条（上限 200）
+        protocol: aave 协议版本 v2/v3
     """
     order_col = _SORT_COLS.get(orderby, "liq_price")
     order_dir = _SORT_DIRS.get(order, "ASC")
+    pos_table, res_table = _tables(protocol)
 
     sql = f"""
 WITH eth_col AS (
@@ -307,7 +317,7 @@ WITH eth_col AS (
         user_address,
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd::numeric                                   AS eth_collateral_usd
-    FROM loan.aave_v3_eth_reserve_positions
+    FROM loan.{res_table}
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
@@ -323,7 +333,7 @@ SELECT
     p.ltv,
     p.liq_threshold,
     p.liq_price
-FROM loan.aave_v3_eth_positions p
+FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 ORDER BY {order_col} {order_dir}
 LIMIT $1
@@ -366,14 +376,14 @@ _SIM_SORT_COLS = {
 }
 
 
-def _build_simulate_sql(order_col: str, order_dir: str) -> str:
+def _build_simulate_sql(order_col: str, order_dir: str, pos_table: str, res_table: str) -> str:
     return f"""
 WITH eth_col AS (
     SELECT
         user_address,
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd                                           AS eth_supply_usd_stored
-    FROM loan.aave_v3_eth_reserve_positions
+    FROM loan.{res_table}
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
@@ -386,7 +396,7 @@ SELECT
     p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
-FROM loan.aave_v3_eth_positions p
+FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
   AND p.liq_price >= $1::numeric
@@ -401,6 +411,7 @@ async def simulate_liquidation(
     order: str = "desc",
     limit: int = 100,
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
+    protocol: str = "v3",
 ) -> LiquidationSimResponse:
     """模拟当 ETH 价格为 eth_price 时，哪些仓位将被触发清算及汇总统计。
 
@@ -411,7 +422,8 @@ async def simulate_liquidation(
     """
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
-    sql = _build_simulate_sql(order_col, order_dir)
+    pos_table, res_table = _tables(protocol)
+    sql = _build_simulate_sql(order_col, order_dir, pos_table, res_table)
     # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
     rows = await pool.fetch(sql, float(eth_price))
 
@@ -471,13 +483,14 @@ async def simulate_liquidation(
 
 
 # 全量拉取所有有清算价的仓位（用于区间模拟，避免每个价格点单独查询）
-_SQL_ALL_LIQ_POSITIONS = """
+def _sql_all_liq_positions(pos_table: str, res_table: str) -> str:
+    return f"""
 WITH eth_col AS (
     SELECT
         user_address,
         (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
         supply_usd                                           AS eth_supply_usd_stored
-    FROM loan.aave_v3_eth_reserve_positions
+    FROM loan.{res_table}
     WHERE symbol IN ('WETH', 'ETH', 'cbETH', 'wstETH', 'rETH')
       AND use_as_collateral = true
       AND supply_raw > 0
@@ -488,7 +501,7 @@ SELECT
     p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
-FROM loan.aave_v3_eth_positions p
+FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
 """
@@ -500,6 +513,7 @@ async def simulate_liquidation_period(
     end_price: Decimal,
     interval: Decimal,
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
+    protocol: str = "v3",
 ) -> list[LiquidationPeriodItem]:
     """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的清算汇总。
 
@@ -512,7 +526,8 @@ async def simulate_liquidation_period(
         raise HTTPException(status_code=400, detail="start 必须 <= end")
 
     # 一次拉取所有有清算价的仓位
-    rows = await pool.fetch(_SQL_ALL_LIQ_POSITIONS)
+    pos_table, res_table = _tables(protocol)
+    rows = await pool.fetch(_sql_all_liq_positions(pos_table, res_table))
     positions = [
         (
             Decimal(str(r["eth_collateral_amount"])),

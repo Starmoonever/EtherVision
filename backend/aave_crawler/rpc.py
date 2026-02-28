@@ -1,5 +1,5 @@
 """
-Aave V3 Ethereum Mainnet 合约调用层。
+Aave V2 / V3 Ethereum Mainnet 合约调用层。
 
 使用 web3.py AsyncWeb3 + AsyncHTTPProvider，支持多公共节点后备。
 所有返回值保持链上原始整数，不做精度转换。
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from web3 import AsyncWeb3
@@ -33,6 +34,41 @@ DATA_PROVIDER_ADDRESS = AsyncWeb3.to_checksum_address("0x7B4EB56E7CD4b454BA8ff71
 ORACLE_ADDRESS = AsyncWeb3.to_checksum_address("0x54586bE62E3c3580375aE3723C145253060Ca0C2")
 
 ETH_CHAIN_ID = 1
+
+
+# ── 协议合约配置 ──────────────────────────────────────────────────────────────
+
+@dataclass
+class ProtocolContracts:
+    """一套 Aave 协议的三个核心合约地址，支持 V2 / V3。"""
+    pool: str           # LendingPool (V2) 或 Pool (V3)
+    data_provider: str  # ProtocolDataProvider
+    oracle: str         # AaveOracle
+
+
+# Aave V3 Ethereum Mainnet
+CONTRACTS_V3 = ProtocolContracts(
+    pool=POOL_ADDRESS,
+    data_provider=DATA_PROVIDER_ADDRESS,
+    oracle=ORACLE_ADDRESS,
+)
+
+# Aave V2 Ethereum Mainnet
+CONTRACTS_V2 = ProtocolContracts(
+    pool=AsyncWeb3.to_checksum_address("0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9"),
+    data_provider=AsyncWeb3.to_checksum_address("0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d"),
+    oracle=AsyncWeb3.to_checksum_address("0xA50ba011c48153De246E5192C8f9258A2ba79Ca9"),
+)
+
+_PROTOCOL_CONTRACTS: dict[str, ProtocolContracts] = {"v3": CONTRACTS_V3, "v2": CONTRACTS_V2}
+
+
+def get_contracts(protocol: str = "v3") -> ProtocolContracts:
+    """根据协议版本字符串返回对应合约配置。"""
+    c = _PROTOCOL_CONTRACTS.get(protocol.lower())
+    if c is None:
+        raise ValueError(f"不支持的协议版本: {protocol!r}，可选: v2, v3")
+    return c
 
 PUBLIC_RPCS = [
     "https://eth.llamarpc.com",
@@ -169,8 +205,8 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
 
 # ── 合约调用封装 ──────────────────────────────────────────────────────────────
 
-async def get_user_account_data(w3: AsyncWeb3, user_address: str) -> AccountSummary:
-    contract = w3.eth.contract(address=POOL_ADDRESS, abi=POOL_ABI)
+async def get_user_account_data(w3: AsyncWeb3, user_address: str, contracts: ProtocolContracts = CONTRACTS_V3) -> AccountSummary:
+    contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
     result = await contract.functions.getUserAccountData(
         AsyncWeb3.to_checksum_address(user_address)
     ).call()
@@ -184,16 +220,16 @@ async def get_user_account_data(w3: AsyncWeb3, user_address: str) -> AccountSumm
     )
 
 
-async def get_all_reserve_tokens(w3: AsyncWeb3) -> list[ReserveToken]:
-    contract = w3.eth.contract(address=DATA_PROVIDER_ADDRESS, abi=DATA_PROVIDER_ABI)
+async def get_all_reserve_tokens(w3: AsyncWeb3, contracts: ProtocolContracts = CONTRACTS_V3) -> list[ReserveToken]:
+    contract = w3.eth.contract(address=contracts.data_provider, abi=DATA_PROVIDER_ABI)
     result = await contract.functions.getAllReservesTokens().call()
     return [ReserveToken(symbol=r[0], token_address=r[1]) for r in result]
 
 
 async def get_user_reserve_data(
-    w3: AsyncWeb3, asset: str, user: str
+    w3: AsyncWeb3, asset: str, user: str, contracts: ProtocolContracts = CONTRACTS_V3
 ) -> UserReserveData:
-    contract = w3.eth.contract(address=DATA_PROVIDER_ADDRESS, abi=DATA_PROVIDER_ABI)
+    contract = w3.eth.contract(address=contracts.data_provider, abi=DATA_PROVIDER_ABI)
     r = await contract.functions.getUserReserveData(
         AsyncWeb3.to_checksum_address(asset),
         AsyncWeb3.to_checksum_address(user),
@@ -211,8 +247,8 @@ async def get_user_reserve_data(
     )
 
 
-async def get_reserve_config(w3: AsyncWeb3, asset: str) -> ReserveConfig:
-    contract = w3.eth.contract(address=DATA_PROVIDER_ADDRESS, abi=DATA_PROVIDER_ABI)
+async def get_reserve_config(w3: AsyncWeb3, asset: str, contracts: ProtocolContracts = CONTRACTS_V3) -> ReserveConfig:
+    contract = w3.eth.contract(address=contracts.data_provider, abi=DATA_PROVIDER_ABI)
     r = await contract.functions.getReserveConfigurationData(
         AsyncWeb3.to_checksum_address(asset)
     ).call()
@@ -224,8 +260,8 @@ async def get_reserve_config(w3: AsyncWeb3, asset: str) -> ReserveConfig:
     )
 
 
-async def get_assets_prices(w3: AsyncWeb3, assets: list[str]) -> list[int]:
-    contract = w3.eth.contract(address=ORACLE_ADDRESS, abi=ORACLE_ABI)
+async def get_assets_prices(w3: AsyncWeb3, assets: list[str], contracts: ProtocolContracts = CONTRACTS_V3) -> list[int]:
+    contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
     checksum_assets = [AsyncWeb3.to_checksum_address(a) for a in assets]
     return list(await contract.functions.getAssetsPrices(checksum_assets).call())
 
@@ -244,6 +280,7 @@ async def fetch_user_position(
     reserve_configs: dict[str, ReserveConfig],
     asset_prices: dict[str, int],
     semaphore: asyncio.Semaphore,
+    contracts: ProtocolContracts = CONTRACTS_V3,
 ) -> "UserPosition | object | None":
     """
     查询单个用户的全部 Aave 仓位。
@@ -255,7 +292,7 @@ async def fetch_user_position(
     """
     async with semaphore:
         try:
-            summary = await get_user_account_data(w3, user_address)
+            summary = await get_user_account_data(w3, user_address, contracts)
 
             # 快速跳过：既没有抵押品也没有借贷，返回哨兵（≠ 报错）
             if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
@@ -265,7 +302,7 @@ async def fetch_user_position(
 
             # 并发查询该用户在所有资产的仓位
             tasks = [
-                get_user_reserve_data(w3, rt.token_address, user_address)
+                get_user_reserve_data(w3, rt.token_address, user_address, contracts)
                 for rt in reserve_tokens
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -42,6 +42,7 @@ class WatcherConfig:
 @dataclass
 class AppConfig:
     rpc_url: str = ""
+    protocol: str = "v3"   # aave 协议版本: v2 或 v3
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)
     watcher: WatcherConfig = field(default_factory=WatcherConfig)

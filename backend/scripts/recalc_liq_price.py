@@ -35,10 +35,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config        # noqa: E402
+from aave_crawler.db import get_tables              # noqa: E402
 from aave_crawler.rpc import (                     # noqa: E402
     build_web3,
     get_all_reserve_tokens,
     get_reserve_config,
+    get_contracts,
 )
 
 logging.basicConfig(
@@ -121,21 +123,26 @@ def _recalc(
 # 主流程
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def main(config_path: str | None, dry_run: bool) -> None:
+async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> None:
     cfg = load_config(config_path)
+    contracts = get_contracts(protocol)
+    tables = get_tables(protocol)
+    pos_table = tables.positions
+    res_table = tables.reserve_positions
+    logger.info("Protocol: %s  |  positions: %s  |  reserve_positions: %s", protocol, pos_table, res_table)
 
     # ── 1. 从链上取 reserve configs（仅此一次 RPC，约 15 次调用）──────────────
     logger.info("连接 RPC：%s", cfg.rpc_url)
     w3 = await build_web3(cfg)
 
     logger.info("获取储备资产列表 ...")
-    reserve_tokens = await get_all_reserve_tokens(w3)
+    reserve_tokens = await get_all_reserve_tokens(w3, contracts=contracts)
     logger.info("储备资产数量: %d", len(reserve_tokens))
 
     logger.info("批量获取 reserve configs（每资产 liq_threshold）...")
     token_addresses = [rt.token_address for rt in reserve_tokens]
     configs_list = await asyncio.gather(
-        *[get_reserve_config(w3, addr) for addr in token_addresses],
+        *[get_reserve_config(w3, addr, contracts=contracts) for addr in token_addresses],
         return_exceptions=True,
     )
 
@@ -156,16 +163,16 @@ async def main(config_path: str | None, dry_run: bool) -> None:
     async with pool.acquire() as conn:
         # 读主仓位表（total_debt_usd）
         positions_rows = await conn.fetch(
-            "SELECT user_address, total_debt_usd FROM loan.aave_v3_eth_positions"
+            f"SELECT user_address, total_debt_usd FROM loan.{pos_table}"
         )
         logger.info("读取仓位数量: %d", len(positions_rows))
 
         # 读 reserve positions（逐资产明细）
         reserve_rows = await conn.fetch(
-            """
+            f"""
             SELECT user_address, token_address, symbol,
                    supply_raw, supply_usd, decimals, use_as_collateral
-            FROM loan.aave_v3_eth_reserve_positions
+            FROM loan.{res_table}
             """
         )
         logger.info("读取 reserve 明细行数: %d", len(reserve_rows))
@@ -210,7 +217,7 @@ async def main(config_path: str | None, dry_run: bool) -> None:
         for i in range(0, len(updates), BATCH):
             batch = updates[i : i + BATCH]
             await conn.executemany(
-                "UPDATE loan.aave_v3_eth_positions SET liq_price = $1 WHERE user_address = $2",
+                f"UPDATE loan.{pos_table} SET liq_price = $1 WHERE user_address = $2",
                 batch,
             )
             total_updated += len(batch)
@@ -237,9 +244,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="只计算不写入，打印前 10 条结果预览",
     )
+    p.add_argument(
+        "--protocol", "-p",
+        choices=["v2", "v3"],
+        default="v3",
+        help="Aave 协议版本（默认 v3）",
+    )
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    asyncio.run(main(args.config, args.dry_run))
+    asyncio.run(main(args.config, args.dry_run, protocol=args.protocol))

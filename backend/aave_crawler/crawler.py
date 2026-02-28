@@ -19,21 +19,23 @@ from tqdm import tqdm
 from web3 import AsyncWeb3
 
 from .config import AppConfig
-from .db import ensure_tables, fetch_user_addresses, upsert_positions
+from .db import ensure_tables, fetch_user_addresses, get_tables, upsert_positions
 from .models import UserPosition
 from .rpc import (
     EMPTY_POSITION,
+    ProtocolContracts,
     build_web3,
     fetch_user_position,
     get_all_reserve_tokens,
     get_assets_prices,
+    get_contracts,
     get_reserve_config,
 )
 
 logger = logging.getLogger(__name__)
 
 
-async def prefetch_common_data(w3: AsyncWeb3) -> tuple:
+async def prefetch_common_data(w3: AsyncWeb3, contracts: ProtocolContracts) -> tuple:
     """
     预获取不依赖用户地址的公共数据：
     - 所有储备资产列表
@@ -42,13 +44,13 @@ async def prefetch_common_data(w3: AsyncWeb3) -> tuple:
     返回 (reserve_tokens, reserve_configs, asset_prices)
     """
     logger.info("预获取公共数据（资产列表 / 配置 / 价格）...")
-    reserve_tokens = await get_all_reserve_tokens(w3)
+    reserve_tokens = await get_all_reserve_tokens(w3, contracts)
     logger.info("储备资产数量: %d", len(reserve_tokens))
 
     addresses = [rt.token_address for rt in reserve_tokens]
 
     # 并发获取配置和价格
-    config_tasks = [get_reserve_config(w3, addr) for addr in addresses]
+    config_tasks = [get_reserve_config(w3, addr, contracts) for addr in addresses]
     configs_list = await asyncio.gather(*config_tasks, return_exceptions=True)
     reserve_configs = {
         addr: cfg
@@ -56,7 +58,7 @@ async def prefetch_common_data(w3: AsyncWeb3) -> tuple:
         if not isinstance(cfg, Exception)
     }
 
-    prices_list = await get_assets_prices(w3, addresses)
+    prices_list = await get_assets_prices(w3, addresses, contracts)
     asset_prices = dict(zip(addresses, prices_list))
 
     logger.info("公共数据预获取完毕")
@@ -69,25 +71,43 @@ async def run_crawler(
     *,
     limit: int | None = None,
     dry_run: bool = False,
+    source_protocol: str | None = None,
+    incremental: bool = False,
 ) -> None:
     """
     主爬取入口。
 
-    :param cfg:     应用配置
-    :param pool:    asyncpg 连接池
-    :param limit:   仅处理前 N 个用户（调试用）
-    :param dry_run: 只查询不写入 DB
+    :param cfg:             应用配置
+    :param pool:            asyncpg 连接池
+    :param limit:           仅处理前 N 个用户（调试用）
+    :param dry_run:         只查询不写入 DB
+    :param source_protocol: 地址来源表协议版本（v2/v3）；默认与 cfg.protocol 相同
+    :param incremental:     True 时跳过目标表已存在的地址（增量模式）
     """
     w3 = await build_web3(cfg)
 
+    # 将 protocol 字符串转换为合约地址和表名配置
+    contracts = get_contracts(cfg.protocol)
+    tables = get_tables(cfg.protocol)
+    logger.info("协议版本: %s", cfg.protocol.upper())
+
+    # 地址来源表（可与目标协议不同）
+    src_proto = source_protocol if source_protocol is not None else cfg.protocol
+    src_tables = get_tables(src_proto)
+    if src_proto != cfg.protocol:
+        logger.info("地址来源：%s（目标协议：%s）", src_proto.upper(), cfg.protocol.upper())
+
     # 确保目标表已存在
-    await ensure_tables(pool)
+    await ensure_tables(pool, tables)
 
     # 预取公共数据（所有用户共享）
-    reserve_tokens, reserve_configs, asset_prices = await prefetch_common_data(w3)
+    reserve_tokens, reserve_configs, asset_prices = await prefetch_common_data(w3, contracts)
 
     # 读取待处理用户
-    users = await fetch_user_addresses(pool, limit=limit)
+    users = await fetch_user_addresses(
+        pool, src_tables, limit=limit,
+        incremental=incremental, target_tables=tables,
+    )
     if not users:
         logger.warning("用户列表为空，退出")
         return
@@ -132,7 +152,7 @@ async def run_crawler(
                     await db_write_task
                 if not dry_run:
                     db_write_task = asyncio.ensure_future(
-                        upsert_positions(pool, list(pending_batch))
+                        upsert_positions(pool, list(pending_batch), tables)
                     )
                 pending_batch.clear()
 
@@ -140,6 +160,6 @@ async def run_crawler(
     if db_write_task is not None:
         await db_write_task
     if pending_batch and not dry_run:
-        await upsert_positions(pool, pending_batch)
+        await upsert_positions(pool, pending_batch, tables)
 
     logger.info("爬取完成：有仓位 %d，无仓位跳过 %d，RPC 报错 %d", total_ok, total_skip, total_fail)
