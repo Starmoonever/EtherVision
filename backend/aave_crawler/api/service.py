@@ -285,9 +285,11 @@ _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
 
 def _tables(protocol: str) -> tuple[str, str]:
     """(主仓位表, 资产明细表)"""
-    if protocol.lower() == "v2":
-        return "aave_v2_eth_positions", "aave_v2_eth_reserve_positions"
-    return "aave_v3_eth_positions", "aave_v3_eth_reserve_positions"
+    if protocol.lower() in ("v2", "v2_borrow"):
+        suffix = "_borrow" if "borrow" in protocol.lower() else "_collateral"
+        return f"aave_v2_eth_positions{suffix}", f"aave_v2_eth_reserve_positions{suffix}"
+    suffix = "_borrow" if "borrow" in protocol.lower() else "_collateral"
+    return f"aave_v3_eth_positions{suffix}", f"aave_v3_eth_reserve_positions{suffix}"
 
 
 async def get_sorted_positions(

@@ -242,7 +242,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--protocol", "-p",
-        choices=["v2", "v3"],
+        choices=["v2", "v3", "v2_borrow", "v3_borrow"],
         default="v3",
         help="Aave 协议版本（默认 v3）",
     )

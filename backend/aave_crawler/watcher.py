@@ -175,8 +175,10 @@ async def run_watcher(
     contracts = get_contracts(cfg.protocol)
     tables = get_tables(cfg.protocol)
     await ensure_tables(pool, tables)
-    # cfg.protocol 为 'v2'/'v3'，aave_history.protocol_version 字段值为 '2'/'3'
-    protocol_version = cfg.protocol.lstrip("v")
+    # cfg.protocol 为 'v2'/'v3'/'v2_borrow'/'v3_borrow'
+    # aave_history.protocol_version 字段值为 '2'或'3'，取主版本号
+    _proto_base = cfg.protocol.lstrip("v").split("_")[0]
+    protocol_version = _proto_base  # '2' 或 '3'
     logger.info("协议版本: %s", cfg.protocol.upper())
     common_cache: dict = {}
 
