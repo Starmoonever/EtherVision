@@ -278,8 +278,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 # ── 辅助：liq_price 计算 ─────────────────────────────────────────────────────
 
 # ETH 系资产符号（与 service.py simulate SQL 保持一致）
-# 注意：每当 Aave 新增 ETH LST/LRT 时需同步维护此集合以及 service.py 中的 SQL IN 列表
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"})
+# 注意：比较时统一用 r.symbol.upper()，所以这里存全大写；每当新增 ETH LST/LRT 时需同步维护
+_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "CBETH", "WSTETH", "RETH", "WEETH", "EZETH", "RSETH", "OSETH", "ETHX"})
 
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:
@@ -427,6 +427,13 @@ def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
     # 纯做空用户：numerator = 非ETH债务 - 非ETH抵押品安全垫 < 0，denom < 0 → P_rise > 0 ✓
     liq_price_rise = eth_price_now * numerator_usd / denom
     if liq_price_rise <= 0:
+        return Decimal("0")
+
+    # 安全检查：E-Mode 用户使用更高的 liq_threshold（链上值），而 r.liquidation_threshold 来自
+    # getReserveConfigurationData（普通配置，不含 E-Mode）。当 E-Mode 使阈值更高时，真实
+    # denom 可能 >= 0，但我们误算为 < 0，导致 P_rise < P_now（已低于当前价格）。
+    # 此类结果与 HF > 1 矛盾，应视为无上涨清算风险，返回 0。
+    if liq_price_rise < eth_price_now:
         return Decimal("0")
 
     return min(liq_price_rise, _LIQ_PRICE_CAP)

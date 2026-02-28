@@ -24,7 +24,8 @@ from .schemas import (BorrowPositionResponse, HistoricalPositionResponse,
 logger = logging.getLogger(__name__)
 
 # ETH/WETH 识别关键词（ETH LST/LRT 均视为 ETH 系，需与 db._ETH_SYMBOLS 和 SQL IN 列表同步维护）
-_ETH_SYMBOLS = {"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"}
+# 注意：比较时统一用 .upper()，所以这里存全大写
+_ETH_SYMBOLS = {"WETH", "ETH", "CBETH", "WSTETH", "RETH", "WEETH", "EZETH", "RSETH", "OSETH", "ETHX"}
 
 # SQL 中使用的 IN 列表（与 _ETH_SYMBOLS 保持一致）
 _ETH_SYMBOLS_SQL = "'WETH', 'ETH', 'cbETH', 'wstETH', 'rETH', 'weETH', 'ezETH', 'rsETH', 'osETH', 'ETHx'"
