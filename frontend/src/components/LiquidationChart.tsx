@@ -13,10 +13,14 @@ import {
 
 interface Position {
   address: string;
-  liq_price: string;
-  eth_collateral_amount: string;
-  eth_collateral_usd: string;
-  total_debt_usd: string;
+  liq_price: string; // 用于抵押端
+  liq_price_rise?: string; // 用于借贷端
+  eth_collateral_amount?: string;
+  eth_collateral_usd?: string;
+  total_debt_usd?: string;
+  weth_debt_amount?: string;
+  weth_debt_usd?: string;
+  total_collateral_usd?: string;
 }
 
 interface LiquidationData {
@@ -24,12 +28,15 @@ interface LiquidationData {
   positions: Position[];
   positions_cnt: string;
   total_liquidation_usd: string;
+  total_weth_debt_amount?: string;
+  total_weth_debt_usd?: string;
 }
 
 interface LiquidationChartProps {
   currentEthPrice: number;
   priceChange: number;
   version: 'v2' | 'v3' | 'all';
+  side: 'collateral' | 'borrow';
 }
 
 interface ChartDataPoint {
@@ -40,13 +47,13 @@ interface ChartDataPoint {
   isCurrent: boolean;
 }
 
-export function LiquidationChart({ currentEthPrice, priceChange, version }: LiquidationChartProps) {
+export function LiquidationChart({ currentEthPrice, priceChange, version, side }: LiquidationChartProps) {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalData, setModalData] = useState<LiquidationData | null>(null);
-  const [sortField, setSortField] = useState<'eth_collateral_amount' | 'eth_collateral_usd' | 'total_debt_usd'>('eth_collateral_usd');
+  const [sortField, setSortField] = useState<'eth_collateral_amount' | 'eth_collateral_usd' | 'total_debt_usd' | 'weth_debt_amount' | 'weth_debt_usd' | 'total_collateral_usd'>('eth_collateral_usd');
   
   const selectedPrice = currentEthPrice * (1 + priceChange / 100);
 
@@ -57,18 +64,31 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
       setLoading(true);
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const start = 0.01;
-        const end = currentEthPrice;
+        // 如果是 collateral，范围是 0.01 ~ currentEthPrice (下跌 -100% ~ 0%)
+        // 如果是 borrow，范围可能是 currentEthPrice ~ currentEthPrice * 2 (上涨 0% ~ +100%)
+        // 既然横轴要从 -100% 到 +100%，我们需要获取更宽范围的数据
+        
+        const start = side === 'borrow' ? currentEthPrice : 0.01;
+        const end = side === 'borrow' ? currentEthPrice * 2 : currentEthPrice;
         
         let dataList: {
           simulated_eth_price: string;
           positions_cnt: string;
           total_liquidation_usd: string;
+          total_weth_debt_amount?: string;
+          total_weth_debt_usd?: string;
         }[] = [];
 
         // 获取数据函数
         const fetchData = async (v: string) => {
-          const response = await fetch(`${baseUrl}/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`);
+          let url = '';
+          if (side === 'borrow') {
+            url = `${baseUrl}/borrow/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`;
+          } else {
+            url = `${baseUrl}/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`;
+          }
+          
+          const response = await fetch(url);
           if (!response.ok) throw new Error(`Fetch ${v} failed`);
           return await response.json();
         };
@@ -126,8 +146,16 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
         // 简化方案：直接使用 rangeSteps，对于每个 step 计算出的 simPrice，在 dataList 中找最接近的
         
         const rangeSteps = [];
-        for (let i = -100; i <= 0; i += 0.5) {
-          rangeSteps.push(i);
+        if (side === 'borrow') {
+          // 借贷端：0% 到 +100%
+          for (let i = 0; i <= 100; i += 1) {
+            rangeSteps.push(i);
+          }
+        } else {
+          // 抵押端：-100% 到 0%
+          for (let i = -100; i <= 0; i += 0.5) {
+            rangeSteps.push(i);
+          }
         }
 
         const chartPoints: ChartDataPoint[] = rangeSteps.map(step => {
@@ -180,7 +208,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
     };
     
     fetchRangeData();
-  }, [currentEthPrice, version]);
+  }, [currentEthPrice, version, side]);
 
   const highlightedData = chartData.map(d => ({
     ...d,
@@ -194,12 +222,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
       const cap = selectedPrice * 0.01;
       
-      let positions: Position[] = [];
+      let positions: any[] = [];
       let totalLiqUsd = 0;
       let posCnt = 0;
 
       const fetchDetail = async (v: string) => {
-        const response = await fetch(`${baseUrl}/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`);
+        let url = '';
+        if (side === 'borrow') {
+          url = `${baseUrl}/borrow/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`;
+        } else {
+          url = `${baseUrl}/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`;
+        }
+        
+        const response = await fetch(url);
         if (response.status === 422) return null;
         if (!response.ok) throw new Error(`Fetch ${v} detail failed`);
         return await response.json();
@@ -214,8 +249,6 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
         positions = [...v2Positions, ...v3Positions];
         
         // 重新计算总和
-        // 注意：这里简单相加，具体字段可能需要从 response 中获取并累加
-        // 由于 API 返回结构包含 positions_cnt 等统计字段，我们也应该累加它们
         if (v2Res) {
           totalLiqUsd += parseFloat(v2Res.total_liquidation_usd);
           posCnt += parseInt(v2Res.positions_cnt);
@@ -241,10 +274,14 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
         total_liquidation_usd: totalLiqUsd.toString()
       };
       
-      // 初始排序，默认按 sortField
+      // 初始排序，默认按 sortField (如果是 borrow 模式，可能默认排序字段不同)
+      // 如果是借贷端，默认按 total_collateral_usd 排序，或者是 weth_debt_usd
+      const initialSortField = side === 'borrow' ? 'weth_debt_usd' : 'eth_collateral_usd';
+      setSortField(initialSortField as any);
+
       if (result.positions) {
-        result.positions.sort((a, b) => 
-          parseFloat(b[sortField]) - parseFloat(a[sortField])
+        result.positions.sort((a: any, b: any) => 
+          parseFloat(b[initialSortField]) - parseFloat(a[initialSortField])
         );
       }
       
@@ -261,9 +298,11 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
   // 当 sortField 改变时，重新排序 modalData
   useEffect(() => {
     if (modalData?.positions) {
-      const sortedPositions = [...modalData.positions].sort((a, b) => 
-        parseFloat(b[sortField]) - parseFloat(a[sortField])
-      );
+      const sortedPositions = [...modalData.positions].sort((a, b) => {
+        const valA = parseFloat(a[sortField] || '0');
+        const valB = parseFloat(b[sortField] || '0');
+        return valB - valA;
+      });
       setModalData({
         ...modalData,
         positions: sortedPositions
@@ -308,7 +347,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
             <XAxis 
               dataKey="priceLabel" 
               stroke="#64748b" 
-              label={{ value: '价格下降幅度', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 12 }}
+              label={{ value: side === 'borrow' ? '价格上涨幅度' : '价格下降幅度', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 12 }}
             />
             {/* 左轴：清算价值 (USD) */}
             <YAxis 
@@ -427,9 +466,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
                     outline: 'none'
                   }}
                 >
-                  <option value="eth_collateral_usd">抵押 ETH 价值 (USD)</option>
-                  <option value="eth_collateral_amount">抵押 ETH 数量</option>
-                  <option value="total_debt_usd">仓位总债务 (USD)</option>
+                  {side === 'borrow' ? (
+                    <>
+                      <option value="weth_debt_usd">借出 ETH 价值 (USD)</option>
+                      <option value="weth_debt_amount">借出 ETH 数量</option>
+                      <option value="total_collateral_usd">仓位总抵押 (USD)</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="eth_collateral_usd">抵押 ETH 价值 (USD)</option>
+                      <option value="eth_collateral_amount">抵押 ETH 数量</option>
+                      <option value="total_debt_usd">仓位总债务 (USD)</option>
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -441,9 +490,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
                     <tr style={{ borderBottom: '1px solid #334155' }}>
                       <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>地址</th>
                       <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>清算价格</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 数量</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 价值</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总债务 </th>
+                      {side === 'borrow' ? (
+                        <>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>借出 ETH 数量</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>借出 ETH 价值</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总抵押</th>
+                        </>
+                      ) : (
+                        <>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 数量</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 价值</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总债务</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -453,17 +512,33 @@ export function LiquidationChart({ currentEthPrice, priceChange, version }: Liqu
                           {pos.address.slice(0, 6)}...{pos.address.slice(-4)}
                         </td>
                         <td style={{ textAlign: 'right', padding: '0.8rem', color: '#f87171' }}>
-                          ${parseFloat(pos.liq_price).toLocaleString(undefined, {maximumFractionDigits: 2})}
+                          ${parseFloat(side === 'borrow' ? (pos.liq_price_rise || '0') : pos.liq_price).toLocaleString(undefined, {maximumFractionDigits: 2})}
                         </td>
-                        <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                          {parseFloat(pos.eth_collateral_amount).toLocaleString(undefined, {maximumFractionDigits: 4})}
-                        </td>
-                        <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                          ${parseFloat(pos.eth_collateral_usd).toLocaleString(undefined, {maximumFractionDigits: 2})}
-                        </td>
-                        <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
-                          ${parseFloat(pos.total_debt_usd).toLocaleString(undefined, {maximumFractionDigits: 2})}
-                        </td>
+                        {side === 'borrow' ? (
+                          <>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
+                              {parseFloat(pos.weth_debt_amount || '0').toLocaleString(undefined, {maximumFractionDigits: 4})}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
+                              ${parseFloat(pos.weth_debt_usd || '0').toLocaleString(undefined, {maximumFractionDigits: 2})}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
+                              ${parseFloat(pos.total_collateral_usd || '0').toLocaleString(undefined, {maximumFractionDigits: 2})}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
+                              {parseFloat(pos.eth_collateral_amount || '0').toLocaleString(undefined, {maximumFractionDigits: 4})}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
+                              ${parseFloat(pos.eth_collateral_usd || '0').toLocaleString(undefined, {maximumFractionDigits: 2})}
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
+                              ${parseFloat(pos.total_debt_usd || '0').toLocaleString(undefined, {maximumFractionDigits: 2})}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>

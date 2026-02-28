@@ -10,6 +10,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
   const [version, setVersion] = useState<'v2' | 'v3' | 'all'>('all'); // 默认为 all
+  const [side, setSide] = useState<'collateral' | 'borrow'>('collateral'); // 默认为抵押端
 
   const handleSearch = (address: string) => {
     if (!address.startsWith('0x') || address.length !== 42) {
@@ -27,9 +28,43 @@ export default function App() {
         <div className="header-inner">
           <div className="logo">
             <span className="logo-icon">⚡</span>
-            <span className="logo-text">Aave 抵押ETH清算风险监测</span>
+            <span className="logo-text">Aave ETH 市场清算风险监测</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="side-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <button
+                onClick={() => setSide('collateral')}
+                style={{
+                  background: side === 'collateral' ? '#3b82f6' : 'transparent',
+                  color: side === 'collateral' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                抵押端
+              </button>
+              <button
+                onClick={() => setSide('borrow')}
+                style={{
+                  background: side === 'borrow' ? '#3b82f6' : 'transparent',
+                  color: side === 'borrow' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s'
+                }}
+              >
+                借贷端
+              </button>
+            </div>
             <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
               <button
                 onClick={() => setVersion('v2')}
@@ -122,7 +157,7 @@ export default function App() {
             {queriedAddress && (
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 {/* 传递地址给子组件，子组件内部去 fetch */}
-                <SummaryCard address={queriedAddress} version={version} />
+                <SummaryCard address={queriedAddress} version={version} side={side} />
                 
                 <div style={{ marginTop: '2rem' }}>
                   <h3 className="section-title">资产负债情况</h3>
@@ -137,7 +172,7 @@ export default function App() {
               <h1 className="hero-title">宏观市场评估</h1>
               <p className="hero-sub">ETH实时价格与清算模拟</p>
             </div>
-            <MarketAssessment version={version} />
+            <MarketAssessment version={version} side={side} />
           </>
         )}
       </main>
