@@ -278,7 +278,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 # ── 辅助：liq_price 计算 ─────────────────────────────────────────────────────
 
 # ETH 系资产符号（与 service.py simulate SQL 保持一致）
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH"})
+# 注意：每当 Aave 新增 ETH LST/LRT 时需同步维护此集合以及 service.py 中的 SQL IN 列表
+_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "cbETH", "wstETH", "rETH", "weETH", "ezETH", "rsETH", "osETH", "ETHx"})
 
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:

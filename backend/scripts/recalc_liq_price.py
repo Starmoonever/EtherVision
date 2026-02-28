@@ -46,8 +46,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ETH 系资产（与 db.py / service.py 保持一致）
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "CBETH", "WSTETH", "RETH"})
+# ETH 系资产（与 db.py / service.py 保持一致，统一大写用于 .upper() 比较）
+_ETH_SYMBOLS: frozenset[str] = frozenset({
+    "WETH", "ETH", "CBETH", "WSTETH", "RETH",
+    "WEETH", "EZETH", "RSETH", "OSETH", "ETHX",
+})
 _LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 # ─────────────────────────────────────────────────────────────────────────────
