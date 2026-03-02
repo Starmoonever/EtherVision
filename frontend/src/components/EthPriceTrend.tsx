@@ -16,6 +16,11 @@ interface PricePoint {
   price: number;
 }
 
+// 模块级内存缓存：key = 时间段，value = { fetchedAt, points }
+// 页面刷新后自动清空，无持久化坏数据风险
+const _cache = new Map<string, { fetchedAt: number; points: PricePoint[] }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
+
 export function EthPriceTrend() {
   const [timeRange, setTimeRange] = useState<'24h' | '7D' | '3M'>('24h');
   const [data, setData] = useState<PricePoint[]>([]);
@@ -23,23 +28,11 @@ export function EthPriceTrend() {
 
   useEffect(() => {
     const fetchData = async () => {
-      // 1. Try to load from localStorage first
-      const cacheKey = `eth_price_trend_${timeRange}`;
-      const cachedData = localStorage.getItem(cacheKey);
-
-      if (cachedData) {
-        try {
-          const { timestamp, points } = JSON.parse(cachedData);
-          // Check if cache is valid (e.g., less than 5 minutes old)
-          const now = Date.now();
-          if (now - timestamp < 5 * 60 * 1000) {
-            setData(points);
-            return;
-          }
-        } catch (e) {
-          console.warn('Invalid cache data', e);
-          localStorage.removeItem(cacheKey);
-        }
+      // 命中内存缓存且未过期则直接使用，跳过网络请求
+      const cached = _cache.get(timeRange);
+      if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+        setData(cached.points);
+        return;
       }
 
       setLoading(true);
@@ -63,13 +56,8 @@ export function EthPriceTrend() {
             break;
         }
 
-        // Format dates as YYYY-MM-DD HH:MM:SS (UTC)
-        // Adjusting to API requirement if needed, assuming API handles standard ISO or specific format
-        // Based on user prompt: "2024-01-01"
-
-        const formatDate = (date: Date) => {
-             return date.toISOString().slice(0, 19).replace('T', ' ');
-        };
+        const formatDate = (date: Date) =>
+          date.toISOString().slice(0, 19).replace('T', ' ');
 
         const startStr = formatDate(startTime);
         const endStr = formatDate(now);
@@ -78,21 +66,19 @@ export function EthPriceTrend() {
 
         const formattedData = items.map((item: PricePeriodItem) => ({
           time: new Date(item.timestamp).toLocaleString(undefined, {
-              month: 'numeric',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
           }),
-          price: parseFloat(item.price_usd)
+          price: parseFloat(item.price_usd),
         }));
 
         setData(formattedData);
-
-        // 2. Save to localStorage
-        localStorage.setItem(cacheKey, JSON.stringify({
-          timestamp: Date.now(),
-          points: formattedData
-        }));
+        // 写入内存缓存（仅当有数据时）
+        if (formattedData.length > 0) {
+          _cache.set(timeRange, { fetchedAt: Date.now(), points: formattedData });
+        }
       } catch (err) {
         console.error('Fetch price trend error:', err);
       } finally {

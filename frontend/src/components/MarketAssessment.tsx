@@ -9,6 +9,11 @@ export function MarketAssessment() {
   const [version, setVersion] = useState<'v2' | 'v3' | 'all'>('all');
   const [side, setSide] = useState<'collateral' | 'borrow'>('collateral');
 
+  // Reset priceChange to sensible default when side switches
+  useEffect(() => {
+    setPriceChange(side === 'collateral' ? -10 : 10);
+  }, [side]);
+
   // Fetch real-time price from API
   useEffect(() => {
     const fetchPrice = async () => {
@@ -105,8 +110,8 @@ export function MarketAssessment() {
             </div>
             <input
               type="range"
-              min="-100"
-              max="+200"
+              min={side === 'collateral' ? -100 : 0}
+              max={side === 'collateral' ? 0 : 100}
               value={priceChange}
               onChange={(e) => setPriceChange(Number(e.target.value))}
               style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}

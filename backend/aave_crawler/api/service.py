@@ -1034,107 +1034,50 @@ async def get_price_period(
 
     timeout = aiohttp.ClientTimeout(total=30)
 
-    # ── 策略一：小时级及以上间隔 → /chart/ 接口（1 次请求） ──────────────────
-    if interval_minutes >= 60:
-        span_hours = interval_minutes // 60
-        # DefiLlama /chart/ 不允许同时传 start 和 end；
-        # 正确用法：start + span（数据点数量）+ period（点间距字符串，如 "1h"、"24h"）
-        step = interval_minutes * 60
-        n_points = (end_ts - start_ts) // step + 1
-        period_str = f"{span_hours}h"   # 例：interval=60 → "1h"，interval=1440 → "24h"
-        url = (
-            f"https://coins.llama.fi/chart/{coin_key}"
-            f"?start={start_ts}&span={n_points}&period={period_str}"
-        )
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            try:
-                async with sess.get(url) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
-                        )
-                    data = await resp.json()
-            except aiohttp.ClientError as exc:
-                raise HTTPException(status_code=502, detail=f"请求 DeFiLlama 失败: {exc}") from exc
-
-        raw_prices: list[dict] = (
-            data.get("coins", {}).get(coin_key, {}).get("prices", [])
-        )
-        items: list[PricePeriodItem] = [
-            PricePeriodItem(
-                price_usd=_fmt(Decimal(str(p["price"])), 2),
-                timestamp=_ts_to_utc_str(int(p["timestamp"])),
-            )
-            for p in raw_prices
-            if "price" in p and "timestamp" in p
-        ]
-        if not items:
-            raise HTTPException(
-                status_code=404,
-                detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
-            )
-        return PricePeriodResponse(
-            asset=asset.upper(),
-            token_address=token_address,
-            source="defillama",
-            prices=items,
-        )
-
-    # ── 策略二：分钟级间隔 → batchHistorical（批量，最少请求数） ─────────────
+    # ── /chart/ 接口：支持任意间隔（1m、15m、1h、24h 等），单次请求 ─────────
+    # batchHistorical 已废弃，统一改用 /chart/
     step = interval_minutes * 60
-    timestamps: list[int] = []
-    ts = start_ts
-    while ts <= end_ts:
-        timestamps.append(ts)
-        ts += step
+    n_points = (end_ts - start_ts) // step + 1
 
-    if not timestamps:
-        raise HTTPException(
-            status_code=400,
-            detail="时间范围内未能生成任何采样点，请检查 start/end/interval 参数",
-        )
+    if interval_minutes < 60:
+        period_str = f"{interval_minutes}m"
+    else:
+        period_str = f"{interval_minutes // 60}h"
 
-    # 将时间戳分批，每批 _BATCH_MAX 个
-    chunks = [timestamps[i : i + _BATCH_MAX] for i in range(0, len(timestamps), _BATCH_MAX)]
-    price_map: dict[int, Decimal] = {}
+    url = (
+        f"https://coins.llama.fi/chart/{coin_key}"
+        f"?start={start_ts}&span={n_points}&period={period_str}"
+    )
 
     async with aiohttp.ClientSession(timeout=timeout) as sess:
-        for chunk in chunks:
-            payload = {"coins": {coin_key: chunk}}
-            try:
-                async with sess.post(
-                    "https://coins.llama.fi/batchHistorical",
-                    json=payload,
-                ) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        logger.error("DeFiLlama batchHistorical 返回 HTTP %s: %s", resp.status, body[:200])
-                        # 本批失败时以 0 填充，继续处理后续批次
-                        for t in chunk:
-                            price_map.setdefault(t, Decimal("0"))
-                        continue
-                    data = await resp.json()
-            except aiohttp.ClientError as exc:
-                logger.error("batchHistorical 请求异常: %s", exc)
-                for t in chunk:
-                    price_map.setdefault(t, Decimal("0"))
-                continue
+        try:
+            async with sess.get(url) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
+                    )
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            raise HTTPException(status_code=502, detail=f"请求 DeFiLlama 失败: {exc}") from exc
 
-            for entry in data.get("coins", {}).get(coin_key, {}).get("prices", []):
-                if "timestamp" in entry and "price" in entry:
-                    price_map[int(entry["timestamp"])] = Decimal(str(entry["price"]))
-
-    # 按原始时间戳顺序组装结果（未命中的填 0）
-    items = [
+    raw_prices: list[dict] = (
+        data.get("coins", {}).get(coin_key, {}).get("prices", [])
+    )
+    items: list[PricePeriodItem] = [
         PricePeriodItem(
-            price_usd=_fmt(price_map.get(t, Decimal("0")), 2),
-            timestamp=_ts_to_utc_str(t),
+            price_usd=_fmt(Decimal(str(p["price"])), 2),
+            timestamp=_ts_to_utc_str(int(p["timestamp"])),
         )
-        for t in timestamps
+        for p in raw_prices
+        if "price" in p and "timestamp" in p
     ]
-
+    if not items:
+        raise HTTPException(
+            status_code=404,
+            detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
+        )
     return PricePeriodResponse(
         asset=asset.upper(),
         token_address=token_address,
