@@ -16,9 +16,9 @@
   z-index: 10;
 }
 .header-inner {
-  max-width: 900px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 0.85rem 1.5rem;
+  padding: 0.85rem 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -48,10 +48,10 @@
 /* ── Main ────────────────────────────────────────────────────────────── */
 .app-main {
   flex: 1;
-  max-width: 900px;
+  max-width: 1600px;
   width: 100%;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 2rem 2rem;
 }
 
 /* ── Hero ────────────────────────────────────────────────────────────── */
@@ -63,6 +63,7 @@
   font-size: 2rem;
   font-weight: 800;
   background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  background-clip: border-box;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 0 0 0.4rem;

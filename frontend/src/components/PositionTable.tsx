@@ -11,43 +11,80 @@ interface PositionRow {
   valueUSD: number;
 }
 
-// 定义 Props 接口，要求传入 address
 interface PositionTableProps {
   address: string;
+  version: 'v2' | 'v3';
 }
 
-// 2. 在函数组件定义中接收 address
-export function PositionTable({ address }: PositionTableProps) {
+export function PositionTable({ address, version }: PositionTableProps) {
   const [position, setPosition] = useState<PositionData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const versionLabel = version.toUpperCase();
+
   useEffect(() => {
-    // 如果地址为空，不执行请求
     if (!address) return;
+    setPosition(null);
+    setNotFound(false);
+    setError(null);
 
     const loadPositions = async () => {
+      setLoading(true);
       try {
-        setLoading(true);
-        setError(null); // 清空之前的错误
-        // 从环境变量读取基础路径
-        const data = await fetchUserPosition(address);
+        const data = await fetchUserPosition(address, version);
         setPosition(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '连接后端失败');
+        if (err instanceof Error && err.message.includes('404')) {
+          setNotFound(true);
+        } else {
+          setError(err instanceof Error ? err.message : '连接后端失败');
+        }
       } finally {
         setLoading(false);
       }
     };
 
     loadPositions();
-  }, [address]);
+  }, [address, version]);
 
-  // 3. 逻辑处理：将扁平对象转换为表格所需的数组格式
+  const headerBadge = (
+    <span className="badge" style={{ background: '#1e293b', color: '#a78bfa', border: '1px solid #4c1d95', fontWeight: 700 }}>
+      {versionLabel}
+    </span>
+  );
 
-  if (loading) return <div className="loading">正在查询数据库...</div>;
-  if (error) return <div className="error-text">错误: {error}</div>;
-  if (!position) return <div className="empty-text">无数据</div>;
+  if (loading) return (
+    <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px', gap: '0.75rem' }}>
+      {headerBadge}
+      <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}></div>
+    </div>
+  );
+
+  if (notFound) return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: '200px' }}>
+      <div className="card-header">
+        <span className="card-title">资产负债情况</span>
+        {headerBadge}
+      </div>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p className="empty-text" style={{ margin: 0 }}>该地址在 Aave {versionLabel} 暂无仓位记录</p>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div className="card-header">
+        <span className="card-title">资产负债情况</span>
+        {headerBadge}
+      </div>
+      <p style={{ color: '#f87171', fontSize: '0.9rem', margin: 0 }}>错误: {error}</p>
+    </div>
+  );
+
+  if (!position) return null;
 
   // 解析数值
   const ethAmount = parseFloat(position.eth_collateral_amount || '0');
@@ -72,7 +109,7 @@ export function PositionTable({ address }: PositionTableProps) {
     borrows.push({
       tokenAddress: 'TOTAL_DEBT',
       symbol: 'Total Debt',
-      priceUSD: 1, // 债务以 USD 计价，单价视为 1
+      priceUSD: 1,
       balance: position.total_debt_usd,
       valueUSD: debtValue
     });
@@ -80,10 +117,13 @@ export function PositionTable({ address }: PositionTableProps) {
 
   return (
     <div className="positions-wrap">
-      {/* ── 供给仓位 (数据来自数据库) ── */}
+      {/* ── 供给仓位 ── */}
       <div className="card">
         <div className="card-header">
-          <span className="card-title">资产 (Supplied)</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="card-title">资产 (Supplied)</span>
+            {headerBadge}
+          </div>
           <span className="badge green-badge">{supplies.length} 项</span>
         </div>
 
@@ -108,9 +148,7 @@ export function PositionTable({ address }: PositionTableProps) {
                     <td className="right mono">${r.priceUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                     <td className="right mono">{parseFloat(r.balance).toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
                     <td className="right mono bold">${r.valueUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                    <td className="center">
-                      <span className="pill green-pill">是</span>
-                    </td>
+                    <td className="center"><span className="pill green-pill">是</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -119,11 +157,12 @@ export function PositionTable({ address }: PositionTableProps) {
         )}
       </div>
 
-      {/* ── 借贷仓位 (数据来自数据库) ── */}
+      {/* ── 借贷仓位 ── */}
       <div className="card">
         <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className="card-title">负债 (Borrowed)</span>
+            {headerBadge}
             {Number(position.available_borrows_usd) > 0 && (
               <span className="badge" style={{ backgroundColor: '#1e293b', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 'normal', border: '1px solid #334155' }}>
                 可借额度: ${parseFloat(position.available_borrows_usd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}

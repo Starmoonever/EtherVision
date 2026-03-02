@@ -3,14 +3,11 @@ import { fetchEthPrice } from '../api';
 import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
 
-interface MarketAssessmentProps {
-  version: 'v2' | 'v3' | 'all';
-  side: 'collateral' | 'borrow';
-}
-
-export function MarketAssessment({ version, side }: MarketAssessmentProps) {
-  const [ethPrice, setEthPrice] = useState<number | null>(null); // 初始化为 null，表示尚未获取到价格
-  const [priceChange, setPriceChange] = useState<number>(-10); // Percentage change default to -10%
+export function MarketAssessment() {
+  const [ethPrice, setEthPrice] = useState<number | null>(null);
+  const [priceChange, setPriceChange] = useState<number>(-10);
+  const [version, setVersion] = useState<'v2' | 'v3' | 'all'>('all');
+  const [side, setSide] = useState<'collateral' | 'borrow'>('collateral');
 
   // Fetch real-time price from API
   useEffect(() => {
@@ -40,66 +37,93 @@ export function MarketAssessment({ version, side }: MarketAssessmentProps) {
 
   return (
     <div className="market-assessment">
-      <div className="summary-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        {/* Module 1: ETH Real-time Price */}
-        <div className="card" style={{ gridColumn: 'span 1' }}>
-          <div className="card-header">
-            <span className="card-title">ETH 实时价格</span>
-            <span className="badge green-badge">Live</span>
-          </div>
-          <div className="metric-box" style={{ border: 'none', padding: 0, background: 'transparent' }}>
-            <span className="metric-value" style={{ fontSize: '2rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: '1.5rem', alignItems: 'start' }}>
+
+        {/* ── 左侧：价格 Panel（1/4 宽） ── */}
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {/* ETH 实时价格：居中 */}
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <span className="card-title">ETH 实时价格</span>
+              <span className="badge green-badge">Live</span>
+            </div>
+            <div className="metric-value" style={{ fontSize: '2.2rem' }}>
               ${ethPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-            <span className="metric-label" style={{ marginTop: '0.5rem' }}>
+            </div>
+            <div className="metric-label" style={{ marginTop: '0.4rem' }}>
               Base Mainnet Oracle
-            </span>
+            </div>
           </div>
+
+          {/* 分割线 */}
+          <hr style={{ border: 'none', borderTop: '1px solid #1e293b', margin: 0 }} />
+
+          {/* ETH 历史趋势图 */}
+          <EthPriceTrend />
         </div>
 
-        {/* Module 2: ETH Price Trend */}
-        <EthPriceTrend />
-
-        {/* Module 3: Price Volatility Simulation */}
-        <div className="card" style={{ gridColumn: 'span 3' }}>
-          <div className="card-header">
-            <span className="card-title">价格波动下清算模拟</span>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <span className="check-label">价格变动幅度</span>
-                <span className={`mono bold ${priceChange < 0 ? 'red-text' : 'green-text'}`}>
-                  {priceChange > 0 ? '+' : ''}{priceChange}%
-                </span>
+        {/* ── 右侧：清算模拟 + 图表 Panel（3/4 宽，合并为一个 board） ── */}
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+          {/* 标题 + 控制器 + 滑块 */}
+          <div style={{ padding: '0 0 1.25rem 0' }}>
+            <div className="card-header" style={{ marginBottom: '1rem' }}>
+              <span className="card-title">价格波动下清算模拟</span>
+              {/* side / version 切换器 */}
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', background: '#0f172a', borderRadius: '6px', padding: '2px' }}>
+                  {(['collateral', 'borrow'] as const).map((s) => (
+                    <button key={s} onClick={() => setSide(s)} style={{
+                      background: side === s ? '#3b82f6' : 'transparent',
+                      color: side === s ? '#fff' : '#94a3b8',
+                      border: 'none', padding: '3px 10px', borderRadius: '4px',
+                      cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, transition: 'all 0.2s'
+                    }}>{s === 'collateral' ? '抵押端' : '借贷端'}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', background: '#0f172a', borderRadius: '6px', padding: '2px' }}>
+                  {(['v2', 'v3', 'all'] as const).map((v) => (
+                    <button key={v} onClick={() => setVersion(v)} style={{
+                      background: version === v ? '#7c3aed' : 'transparent',
+                      color: version === v ? '#fff' : '#94a3b8',
+                      border: 'none', padding: '3px 10px', borderRadius: '4px',
+                      cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, transition: 'all 0.2s'
+                    }}>{v.toUpperCase()}</button>
+                  ))}
+                </div>
               </div>
-              <input
-                type="range"
-                min="-100"
-                max="+200"
-                value={priceChange}
-                onChange={(e) => setPriceChange(Number(e.target.value))}
-                style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
-              />
             </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.5rem' }}>
+              <span className="check-label">
+                模拟ETH价格：
+                <span className={`mono bold ${priceChange < 0 ? 'red-text' : 'green-text'}`}>
+                  ${simulatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </span>
+              <span className={`mono bold ${priceChange < 0 ? 'red-text' : 'green-text'}`} style={{ fontSize: '0.9rem' }}>
+                {priceChange > 0 ? '+' : ''}{priceChange}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="+200"
+              value={priceChange}
+              onChange={(e) => setPriceChange(Number(e.target.value))}
+              style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
+            />
+          </div>
 
-            <div className="metric-box">
-              <span className="metric-label">模拟 ETH 价格</span>
-              <span className={`metric-value ${priceChange < 0 ? 'red' : priceChange > 0 ? 'green' : ''}`}>
-                ${simulatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-              <span className="check-detail" style={{ marginTop: '0.5rem' }}>
-                ETH价格{priceChange >= 0 ? '上涨' : '下跌'} {Math.abs(priceChange)}%
-              </span>
-            </div>
+          {/* 图表区：深色背景突出可见性 */}
+          <div style={{
+            background: '#0a0f1a',
+            borderRadius: '10px',
+            padding: '1rem',
+            border: '1px solid #1e293b',
+          }}>
+            <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} side={side} />
           </div>
         </div>
-      </div>
 
-      {/* Module 4: Liquidation Chart */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} side={side} />
       </div>
     </div>
   );

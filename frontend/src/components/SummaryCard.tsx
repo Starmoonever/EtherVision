@@ -3,9 +3,8 @@ import { fetchUserPosition } from '../api';
 import type { UserPosition } from '../api';
 
 interface Props {
-  address: string; // 只需要传入地址
-  version: 'v2' | 'v3' | 'all';
-  side: 'collateral' | 'borrow';
+  address: string;
+  version: 'v2' | 'v3';
 }
 
 // 健康因子颜色逻辑保持不变
@@ -18,31 +17,53 @@ function healthColor(hfStr: string): string {
   return '#ef4444';
 }
 
-export function SummaryCard({ address, version, side }: Props) {
+export function SummaryCard({ address, version }: Props) {
   const [summary, setSummary] = useState<UserPosition | null>(null);
   const [loading, setLoading] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
-  // 2. 当地址改变时，去数据库抓取该地址的概览数据
   useEffect(() => {
     if (!address) return;
+    setNotFound(false);
+    setSummary(null);
 
     const fetchSummary = async () => {
       setLoading(true);
       try {
-        // 这里调用的地址是后端查询单个用户的接口
         const data = await fetchUserPosition(address, version);
         setSummary(data);
       } catch (err) {
-        console.error(err);
+        if (err instanceof Error && err.message.includes('404')) {
+          setNotFound(true);
+        } else {
+          console.error(err);
+        }
       } finally {
         setLoading(false);
       }
     };
 
     fetchSummary();
-  }, [address, version, side]);
+  }, [address, version]);
 
-  if (loading) return <div className="card shadow-sm p-4">加载账户数据中...</div>;
+  const versionLabel = version.toUpperCase();
+
+  if (loading) return (
+    <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px' }}>
+      <div className="spinner"></div>
+    </div>
+  );
+
+  if (notFound) return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '120px', gap: '0.5rem' }}>
+      <div className="card-header" style={{ width: '100%' }}>
+        <span className="card-title">账户概览</span>
+        <span className="badge" style={{ background: '#1e293b', color: '#64748b', border: '1px solid #334155' }}>{versionLabel}</span>
+      </div>
+      <span style={{ color: '#475569', fontSize: '0.9rem', marginTop: '0.5rem' }}>该地址在 Aave {versionLabel} 暂无仓位记录</span>
+    </div>
+  );
+
   if (!summary) return null;
 
   const hfColor = healthColor(summary.health_factor);
@@ -52,9 +73,12 @@ export function SummaryCard({ address, version, side }: Props) {
 
       <div className="card-header">
         <span className="card-title">账户概览</span>
-        <span className="address-badge" title={address}>
-          {address.slice(0, 6)}…{address.slice(-4)}
-        </span>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span className="badge" style={{ background: '#1e293b', color: '#a78bfa', border: '1px solid #4c1d95', fontWeight: 700 }}>{versionLabel}</span>
+          <span className="address-badge" title={address}>
+            {address.slice(0, 6)}…{address.slice(-4)}
+          </span>
+        </div>
       </div>
 
      <div className="summary-grid">
