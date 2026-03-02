@@ -281,6 +281,30 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 # 注意：比较时统一用 r.symbol.upper()，所以这里存全大写；每当新增 ETH LST/LRT 时需同步维护
 _ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "CBETH", "WSTETH", "RETH", "WEETH", "EZETH", "RSETH", "OSETH", "ETHX"})
 
+# aave_history 中的 ETH 系 token_symbol（大小写与链上一致，查询时做 UPPER 比较）
+_ETH_HISTORY_SYMBOLS: frozenset[str] = frozenset({
+    "WETH", "wstETH", "cbETH", "rETH", "weETH", "ezETH",
+    "rsETH", "osETH", "ETHx", "stETH", "tETH",
+})
+
+# ── 来源表 DDL（由 aave_history 派生） ─────────────────────────────────────────
+
+_DDL_SOURCE_COLLATERAL = """
+CREATE TABLE IF NOT EXISTS loan."{table}" (
+    "walletAddress"  TEXT           NOT NULL PRIMARY KEY,
+    "wethAmount_ETH" NUMERIC(30, 8) NOT NULL DEFAULT 0,
+    synced_at        TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+"""
+
+_DDL_SOURCE_BORROW = """
+CREATE TABLE IF NOT EXISTS loan."{table}" (
+    "walletAddress"    TEXT           NOT NULL PRIMARY KEY,
+    "borrowedWeth_ETH" NUMERIC(30, 8) NOT NULL DEFAULT 0,
+    synced_at          TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+"""
+
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:
     """计算 ETH 清算触发价。
@@ -642,3 +666,103 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
                 )
 
     logger.debug("UPSERT 完成：%d 个用户，%d 条明细", len(positions), len(all_reserve_rows))
+
+
+# ── 来源表同步（从 aave_history 派生用户地址） ─────────────────────────────────
+
+async def ensure_source_table(pool: asyncpg.Pool, tables: ProtocolTables) -> None:
+    """若来源表不存在则自动建表（幂等）。
+    已由 subgraph 创建的表不受影响（DDL 使用 IF NOT EXISTS）。
+    """
+    async with pool.acquire() as conn:
+        if tables.side == "borrow":
+            await conn.execute(_DDL_SOURCE_BORROW.format(table=tables.source_table))
+        else:
+            await conn.execute(_DDL_SOURCE_COLLATERAL.format(table=tables.source_table))
+    logger.info("来源表已就绪：loan.%s", tables.source_table)
+
+
+async def sync_addresses_from_history(
+    pool: asyncpg.Pool,
+    tables: ProtocolTables,
+    *,
+    dry_run: bool = False,
+) -> int:
+    """从 aave.aave_history 派生用户地址并写入来源表（UPSERT）。
+
+    - 按 protocol_version 和 operation_type 精确区分 v2/v3、借/存。
+    - amount_column 中写入用户在该方向的历史累计 ETH 量（原始事件求和）。
+    - 已还清/已提取的用户也会写入（累计量 > 0），由后续 RPC 过滤无效仓位。
+    - dry_run=True 时只查询并打印统计，不写任何数据。
+
+    返回派生出的用户数。
+    """
+    from datetime import timezone
+
+    # 根据 ProtocolTables 反推 protocol_version 和 operation_type
+    pv = "2" if "v2" in tables.source_table else "3"
+    op = "borrow" if tables.side == "borrow" else "deposit"
+
+    syms_upper = [s.upper() for s in _ETH_HISTORY_SYMBOLS]
+    n = len(syms_upper)
+    ph = ", ".join(f"${i + 1}" for i in range(n))
+    pv_ph = f"${n + 1}"
+    op_ph = f"${n + 2}"
+
+    # 查询：按用户聚合历史累计 ETH 量，仅统计 ETH 系 token
+    # amount / 10^decimals 给出人类可读的 ETH 单位
+    sql_query = f"""
+    SELECT
+        lower(convert_from(user_address, 'UTF8'))     AS wallet_address,
+        SUM(amount / POWER(10, NULLIF(decimals, 0)))  AS eth_amount
+    FROM aave.aave_history
+    WHERE upper(token_symbol) = ANY(ARRAY[{ph}]::text[])
+      AND protocol_version::text = {pv_ph}
+      AND operation_type::text   = {op_ph}
+    GROUP BY 1
+    HAVING SUM(amount / POWER(10, NULLIF(decimals, 0))) >= 0.000001
+    ORDER BY eth_amount DESC
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql_query, *syms_upper, pv, op)
+
+    total = len(rows)
+    logger.info(
+        "[sync-addresses] protocol=v%s  side=%-8s  派生用户: %d 个",
+        pv, op, total,
+    )
+
+    if dry_run:
+        logger.info("[dry-run] 不写入数据库，前 10 条预览：")
+        for r in rows[:10]:
+            logger.info("  %s  eth_amount=%.6f", r["wallet_address"], float(r["eth_amount"] or 0))
+        return total
+
+    # 确保来源表存在
+    await ensure_source_table(pool, tables)
+
+    # UPSERT 进来源表
+    amount_col = tables.amount_column  # "wethAmount_ETH" or "borrowedWeth_ETH"
+    table_full = f'loan."{tables.source_table}"'
+    upsert_sql = f"""
+    INSERT INTO {table_full} ("walletAddress", "{amount_col}", synced_at)
+    VALUES ($1, $2, $3)
+    ON CONFLICT ("walletAddress") DO UPDATE
+        SET "{amount_col}" = EXCLUDED."{amount_col}",
+            synced_at      = EXCLUDED.synced_at
+    """
+    now = datetime.now(tz=timezone.utc)
+    records = [
+        (r["wallet_address"], r["eth_amount"] or 0, now)
+        for r in rows
+    ]
+
+    async with pool.acquire() as conn:
+        await conn.executemany(upsert_sql, records)
+
+    logger.info(
+        "[sync-addresses] UPSERT 完成 → loan.%s（%d 行）",
+        tables.source_table, total,
+    )
+    return total

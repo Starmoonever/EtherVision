@@ -9,7 +9,7 @@ import click
 
 from .config import load_config
 from .crawler import run_crawler
-from .db import create_pool
+from .db import create_pool, get_tables, sync_addresses_from_history
 from .watcher import run_watcher
 
 
@@ -112,6 +112,57 @@ def cmd_watch(
         pool = await create_pool(cfg.postgres)
         try:
             await run_watcher(cfg, pool, interval=_interval, lookback_minutes=_lookback)
+        finally:
+            await pool.close()
+
+    asyncio.run(_run())
+
+
+@cli.command("sync-addresses")
+@click.option("--config", "-c", default=None, help="config.yaml 路径")
+@click.option(
+    "--protocol", "-p",
+    default=None,
+    type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]),
+    help="同步哪套来源表；省略时同步全部 4 张表",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="只查询并预览，不写入数据库")
+@click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
+def cmd_sync_addresses(
+    config: str | None,
+    protocol: str | None,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """从 aave.aave_history 派生用户地址并写入各来源表。
+
+    \b
+    来源表（loan schema）：
+      aave_v2_eth_weth_collateral   aave_v3_eth_weth_collateral
+      aave_v2_eth_weth_borrow       aave_v3_eth_weth_borrow
+
+    \b
+    示例：
+      aave-crawler sync-addresses               # 同步全部 4 张表
+      aave-crawler sync-addresses -p v3_borrow  # 仅同步 v3 借款地址
+      aave-crawler sync-addresses --dry-run     # 预览，不写入
+    """
+    _setup_logging(verbose)
+    cfg = load_config(config)
+
+    # 确定要同步哪些协议
+    protocols = [protocol] if protocol else ["v2", "v3", "v2_borrow", "v3_borrow"]
+
+    async def _run() -> None:
+        pool = await create_pool(cfg.postgres)
+        try:
+            total_written = 0
+            for prot in protocols:
+                tables = get_tables(prot)
+                count = await sync_addresses_from_history(pool, tables, dry_run=dry_run)
+                total_written += count
+            verb = "预览" if dry_run else "写入"
+            click.echo(f"sync-addresses 完成：{verb} {total_written} 条（共 {len(protocols)} 张表）")
         finally:
             await pool.close()
 
