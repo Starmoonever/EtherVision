@@ -8,15 +8,12 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
+import { fetchEthPricePeriod } from '../api';
+import type { PricePeriodItem } from '../api';
 
 interface PricePoint {
   time: string;
   price: number;
-}
-
-interface PriceApiItem {
-  timestamp: string;
-  price_usd: string;
 }
 
 export function EthPriceTrend() {
@@ -77,18 +74,9 @@ export function EthPriceTrend() {
         const startStr = formatDate(startTime);
         const endStr = formatDate(now);
 
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const response = await fetch(`${baseUrl}/price/period?asset=eth&start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}&interval=${interval}`);
+        const items = await fetchEthPricePeriod(startStr, endStr, interval);
 
-        if (!response.ok) throw new Error('Failed to fetch price trend');
-
-        const result = await response.json();
-
-        if (!result.prices || !Array.isArray(result.prices)) {
-          throw new Error('Invalid data format');
-        }
-
-        const formattedData = result.prices.map((item: PriceApiItem) => ({
+        const formattedData = items.map((item: PricePeriodItem) => ({
           time: new Date(item.timestamp).toLocaleString(undefined, {
               month: 'numeric',
               day: 'numeric',

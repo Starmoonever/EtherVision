@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fetchEthPrice } from '../api';
 import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
 
@@ -15,17 +16,8 @@ export function MarketAssessment({ version, side }: MarketAssessmentProps) {
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const response = await fetch(`${baseUrl}/price?asset=eth&time=now`);
-        if (!response.ok) {
-          throw new Error('无法获取 ETH 价格');
-        }
-        const data = await response.json();
-        // API 返回格式: { asset, price_usd, token_address, timestamp, source }
-        const price = parseFloat(data.price_usd);
-        if (!isNaN(price)) {
-          setEthPrice(price);
-        }
+        const price = await fetchEthPrice();
+        setEthPrice(price);
       } catch (err) {
         console.error('Fetch price error:', err);
       }
@@ -98,7 +90,7 @@ export function MarketAssessment({ version, side }: MarketAssessmentProps) {
                 ${simulatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
               <span className="check-detail" style={{ marginTop: '0.5rem' }}>
-                ETH价格{priceChange >= 0 ? '上涨' : '下跌'} {Math.abs(priceChange)}% 
+                ETH价格{priceChange >= 0 ? '上涨' : '下跌'} {Math.abs(priceChange)}%
               </span>
             </div>
           </div>

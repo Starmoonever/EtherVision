@@ -1,0 +1,71 @@
+import { apiFetch, apiFetchRaw } from './client';
+
+// ---------- 类型定义 ----------
+
+export interface LiqPeriodItem {
+  simulated_eth_price: string;
+  positions_cnt: string;
+  total_liquidation_usd: string;
+  total_weth_debt_amount?: string;
+  total_weth_debt_usd?: string;
+}
+
+export interface LiquidationPosition {
+  address: string;
+  liq_price: string;
+  liq_price_rise?: string;
+  eth_collateral_amount?: string;
+  eth_collateral_usd?: string;
+  total_debt_usd?: string;
+  weth_debt_amount?: string;
+  weth_debt_usd?: string;
+  total_collateral_usd?: string;
+}
+
+export interface LiquidationDetailResponse {
+  simulated_eth_price: string;
+  positions: LiquidationPosition[];
+  positions_cnt: string;
+  total_liquidation_usd: string;
+  total_weth_debt_amount?: string;
+  total_weth_debt_usd?: string;
+}
+
+// ---------- API 函数 ----------
+
+/**
+ * 获取某价格区间内各价格点的清算汇总数据。
+ */
+export async function fetchLiquidationPeriod(
+  side: 'collateral' | 'borrow',
+  version: string,
+  start: number,
+  end: number,
+): Promise<LiqPeriodItem[]> {
+  const path =
+    side === 'borrow'
+      ? `/borrow/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${version}`
+      : `/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${version}`;
+  return apiFetch<LiqPeriodItem[]>(path);
+}
+
+/**
+ * 获取某 ETH 价格点（±1%区间）的清算明细。
+ * 当该价格点无数据时（HTTP 422）返回 null，而不是抛出错误。
+ */
+export async function fetchLiquidationDetail(
+  side: 'collateral' | 'borrow',
+  version: string,
+  ethPrice: number,
+): Promise<LiquidationDetailResponse | null> {
+  const cap = ethPrice * 0.01;
+  const path =
+    side === 'borrow'
+      ? `/borrow/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`
+      : `/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`;
+
+  const response = await apiFetchRaw(path);
+  if (response.status === 422) return null;
+  if (!response.ok) throw new Error(`API error ${response.status}: ${path}`);
+  return response.json() as Promise<LiquidationDetailResponse>;
+}

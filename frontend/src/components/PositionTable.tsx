@@ -1,18 +1,7 @@
 import { useState, useEffect } from 'react';
+import { fetchUserPosition } from '../api';
+import type { UserPosition as PositionData } from '../api';
 
-// 1. 根据新的后端 API 返回结构定义接口
-interface PositionData {
-  address: string;
-  eth_collateral_amount: string;
-  eth_collateral_usd: string;
-  total_collateral_usd: string;
-  available_borrows_usd: string;
-  total_debt_usd: string;
-  health_factor: string;
-  ltv: string;
-  liq_threshold: string;
-  liq_price: string;
-}
 // 定义用于渲染表格行的接口
 interface PositionRow {
   tokenAddress: string;
@@ -42,12 +31,7 @@ export function PositionTable({ address }: PositionTableProps) {
         setLoading(true);
         setError(null); // 清空之前的错误
         // 从环境变量读取基础路径
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        // 拼接具体的 endpoint 和参数
-        const response = await fetch(`${baseUrl}/user/position?address=${address}`);
-        if (!response.ok) throw new Error('无法从数据库获取仓位数据');
-
-        const data = await response.json();
+        const data = await fetchUserPosition(address);
         setPosition(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : '连接后端失败');

@@ -1,17 +1,6 @@
 import { useState, useEffect } from 'react';
-
-// 1. 根据你的数据库/API返回字段定义接口
-interface AccountSummary {
-    eth_collateral_amount: string,
-    eth_collateral_usd: string,
-    total_collateral_usd: string,
-    available_borrows_usd: string,
-    total_debt_usd: string,
-    health_factor: string,
-    ltv: string,
-    liq_threshold: string,
-    liq_price: string
-}
+import { fetchUserPosition } from '../api';
+import type { UserPosition } from '../api';
 
 interface Props {
   address: string; // 只需要传入地址
@@ -30,7 +19,7 @@ function healthColor(hfStr: string): string {
 }
 
 export function SummaryCard({ address, version, side }: Props) {
-  const [summary, setSummary] = useState<AccountSummary | null>(null);
+  const [summary, setSummary] = useState<UserPosition | null>(null);
   const [loading, setLoading] = useState(false);
 
   // 2. 当地址改变时，去数据库抓取该地址的概览数据
@@ -41,17 +30,7 @@ export function SummaryCard({ address, version, side }: Props) {
       setLoading(true);
       try {
         // 这里调用的地址是后端查询单个用户的接口
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        // 如果侧重 borrow，可能需要不同的 API？或者目前 SummaryCard 不受 side 影响？
-        // 假设 SummaryCard 暂时只展示抵押相关或者统一展示，暂时维持原状，或者您可以指示是否需要改动
-        // 暂时只加了 side 参数但未改变逻辑，因为 prompt 中说 "如果用户选择'抵押端'则数据获取、展示方法不变"
-        // 且未明确说明 "借贷端" 下 SummaryCard 的变化。
-        // 但既然传递了 side，最好放在 dependency 里
-        const response = await fetch(`${baseUrl}/user/position?address=${address}&version=${version}`);
-        if (!response.ok) throw new Error('获取账户概览失败');
-
-        const data = await response.json();
-        // 假设后端返回的对象里包含这些字段，如果字段名是下划线风格请自行修改
+        const data = await fetchUserPosition(address, version);
         setSummary(data);
       } catch (err) {
         console.error(err);

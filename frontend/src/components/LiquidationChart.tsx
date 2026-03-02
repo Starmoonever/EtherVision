@@ -9,27 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
-
-interface Position {
-  address: string;
-  liq_price: string; // 用于抵押端
-  liq_price_rise?: string; // 用于借贷端
-  eth_collateral_amount?: string;
-  eth_collateral_usd?: string;
-  total_debt_usd?: string;
-  weth_debt_amount?: string;
-  weth_debt_usd?: string;
-  total_collateral_usd?: string;
-}
-
-interface LiquidationData {
-  simulated_eth_price: string;
-  positions: Position[];
-  positions_cnt: string;
-  total_liquidation_usd: string;
-  total_weth_debt_amount?: string;
-  total_weth_debt_usd?: string;
-}
+import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
+import type { LiquidationPosition as Position, LiquidationDetailResponse as LiquidationData } from '../api';
 
 type SortField = 'eth_collateral_amount' | 'eth_collateral_usd' | 'total_debt_usd' | 'weth_debt_amount' | 'weth_debt_usd' | 'total_collateral_usd';
 
@@ -64,7 +45,6 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
 
       setLoading(true);
       try {
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
         // 如果是 collateral，范围是 0.01 ~ currentEthPrice (下跌 -100% ~ 0%)
         // 如果是 borrow，范围可能是 currentEthPrice ~ currentEthPrice * 2 (上涨 0% ~ +100%)
         // 既然横轴要从 -100% 到 +100%，我们需要获取更宽范围的数据
@@ -81,18 +61,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
         }[] = [];
 
         // 获取数据函数
-        const fetchData = async (v: string) => {
-          let url = '';
-          if (side === 'borrow') {
-            url = `${baseUrl}/borrow/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`;
-          } else {
-            url = `${baseUrl}/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${v}`;
-          }
-
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`Fetch ${v} failed`);
-          return await response.json();
-        };
+        const fetchData = (v: string) => fetchLiquidationPeriod(side, v, start, end);
 
         if (version === 'all') {
           const [v2Data, v3Data] = await Promise.all([fetchData('v2'), fetchData('v3')]);
@@ -220,26 +189,11 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
     setModalLoading(true);
     setShowModal(true);
     try {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL;
-      const cap = selectedPrice * 0.01;
-
       let positions: Position[] = [];
       let totalLiqUsd = 0;
       let posCnt = 0;
 
-      const fetchDetail = async (v: string) => {
-        let url = '';
-        if (side === 'borrow') {
-          url = `${baseUrl}/borrow/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`;
-        } else {
-          url = `${baseUrl}/liquidate?eth_price=${selectedPrice - cap}&limit=1000&cap=${selectedPrice + cap}&version=${v}`;
-        }
-
-        const response = await fetch(url);
-        if (response.status === 422) return null;
-        if (!response.ok) throw new Error(`Fetch ${v} detail failed`);
-        return await response.json();
-      };
+      const fetchDetail = (v: string) => fetchLiquidationDetail(side, v, selectedPrice);
 
       if (version === 'all') {
         const [v2Res, v3Res] = await Promise.all([fetchDetail('v2'), fetchDetail('v3')]);

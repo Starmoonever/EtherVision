@@ -158,7 +158,7 @@ export default function App() {
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 {/* 传递地址给子组件，子组件内部去 fetch */}
                 <SummaryCard address={queriedAddress} version={version} side={side} />
-                
+
                 <div style={{ marginTop: '2rem' }}>
                   <h3 className="section-title">资产负债情况</h3>
                   <PositionTable address={queriedAddress} />
@@ -178,7 +178,7 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        数据来源：内网 API (10.1.5.183) | Base Mainnet
+        数据来源：内网 API | Ethereum Mainnet
       </footer>
     </div>
   );
