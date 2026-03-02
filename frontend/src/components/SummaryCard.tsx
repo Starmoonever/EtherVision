@@ -133,12 +133,12 @@ export function SummaryCard({ address, version }: Props) {
 
         <div className="metric-box">
           <span className="metric-label">当前 LTV</span>
-          <span className="metric-value">{summary.ltv}%</span>
+          <span className="metric-value">{summary.ltv}</span>
         </div>
 
         <div className="metric-box">
           <span className="metric-label">清算阈值</span>
-          <span className="metric-value">{summary.liq_threshold}%</span>
+          <span className="metric-value">{summary.liq_threshold}</span>
         </div>
       </div>
     </div>

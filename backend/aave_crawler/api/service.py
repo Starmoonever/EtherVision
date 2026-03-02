@@ -342,6 +342,7 @@ SELECT
     p.liq_price
 FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
+WHERE p.liq_price > 0
 ORDER BY {order_col} {order_dir}
 LIMIT $1
 """
