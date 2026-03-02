@@ -56,7 +56,7 @@ export function MarketAssessment() {
               ${ethPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="metric-label" style={{ marginTop: '0.4rem' }}>
-              Base Mainnet Oracle
+              Ethereum Mainnet Oracle
             </div>
           </div>
 

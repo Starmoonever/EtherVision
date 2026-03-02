@@ -22,9 +22,10 @@ from .config import AppConfig
 from .db import (ensure_tables, fetch_user_addresses, get_tables,
                  upsert_positions)
 from .models import UserPosition
-from .rpc import (EMPTY_POSITION, ProtocolContracts, build_web3,
-                  fetch_user_position, get_all_reserve_tokens,
-                  get_assets_prices, get_contracts, get_reserve_config)
+from .rpc import (CONTRACTS_V3, EMPTY_POSITION, WETH_ADDRESS,
+                  ProtocolContracts, build_web3, fetch_user_position,
+                  get_all_reserve_tokens, get_assets_prices, get_contracts,
+                  get_reserve_config)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,23 @@ async def prefetch_common_data(w3: AsyncWeb3, contracts: ProtocolContracts) -> t
 
     prices_list = await get_assets_prices(w3, addresses, contracts)
     asset_prices = dict(zip(addresses, prices_list))
+
+    # V2 oracle 返回 ETH 计价（18 位精度），需转换为 USD（8 位精度）以兼容下游计算
+    # 转换公式：price_usd_8dec = price_eth_18dec * eth_usd_8dec // 10^18
+    if contracts.oracle_price_in_eth:
+        eth_usd_prices = await get_assets_prices(w3, [WETH_ADDRESS], CONTRACTS_V3)
+        eth_usd_raw = eth_usd_prices[0]  # V3 oracle 的 WETH 价格，8 位精度 USD
+        if eth_usd_raw > 0:
+            asset_prices = {
+                addr: (price * eth_usd_raw) // (10 ** 18)
+                for addr, price in asset_prices.items()
+            }
+            logger.info(
+                "V2 oracle 价格已从 ETH（18位）转换为 USD（8位），ETH/USD=%.2f",
+                eth_usd_raw / 10 ** 8,
+            )
+        else:
+            logger.warning("无法从 V3 oracle 获取 ETH/USD 价格，V2 oracle 价格归一化跳过")
 
     logger.info("公共数据预获取完毕")
     return reserve_tokens, reserve_configs, asset_prices

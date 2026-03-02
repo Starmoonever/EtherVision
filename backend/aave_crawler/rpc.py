@@ -32,12 +32,22 @@ ETH_CHAIN_ID = 1
 
 # ── 协议合约配置 ──────────────────────────────────────────────────────────────
 
+# WETH 地址（Ethereum Mainnet），用于从 V3 oracle 获取 ETH/USD 价格
+WETH_ADDRESS = AsyncWeb3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+
+
 @dataclass
 class ProtocolContracts:
-    """一套 Aave 协议的三个核心合约地址，支持 V2 / V3。"""
-    pool: str           # LendingPool (V2) 或 Pool (V3)
-    data_provider: str  # ProtocolDataProvider
-    oracle: str         # AaveOracle
+    """一套 Aave 协议的三个核心合约地址，支持 V2 / V3。
+
+    oracle_price_in_eth: True 表示该协议的 oracle 返回 ETH 计价（18 位精度），
+    需要在使用前乘以 ETH/USD 把价格归一化为 8 位 USD。
+    Aave V2 Ethereum Mainnet 的 oracle 返回 ETH 价格；V3 返回 USD 价格。
+    """
+    pool: str                       # LendingPool (V2) 或 Pool (V3)
+    data_provider: str              # ProtocolDataProvider
+    oracle: str                     # AaveOracle
+    oracle_price_in_eth: bool = False   # V2=True (ETH/18-dec), V3=False (USD/8-dec)
 
 
 # Aave V3 Ethereum Mainnet
@@ -45,13 +55,16 @@ CONTRACTS_V3 = ProtocolContracts(
     pool=POOL_ADDRESS,
     data_provider=DATA_PROVIDER_ADDRESS,
     oracle=ORACLE_ADDRESS,
+    oracle_price_in_eth=False,
 )
 
 # Aave V2 Ethereum Mainnet
+# V2 oracle (0xA50ba011c48153De246E5192C8f9258A2ba79Ca9) 返回 ETH 计价（18 位精度）
 CONTRACTS_V2 = ProtocolContracts(
     pool=AsyncWeb3.to_checksum_address("0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9"),
     data_provider=AsyncWeb3.to_checksum_address("0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d"),
     oracle=AsyncWeb3.to_checksum_address("0xA50ba011c48153De246E5192C8f9258A2ba79Ca9"),
+    oracle_price_in_eth=True,
 )
 
 _PROTOCOL_CONTRACTS: dict[str, ProtocolContracts] = {"v3": CONTRACTS_V3, "v2": CONTRACTS_V2}

@@ -22,9 +22,10 @@ from tqdm import tqdm
 from .config import AppConfig
 from .db import ensure_tables, get_tables, upsert_positions
 from .models import UserPosition
-from .rpc import (EMPTY_POSITION, ProtocolContracts, build_web3,
-                  fetch_user_position, get_all_reserve_tokens,
-                  get_assets_prices, get_contracts, get_reserve_config)
+from .rpc import (CONTRACTS_V3, EMPTY_POSITION, WETH_ADDRESS,
+                  ProtocolContracts, build_web3, fetch_user_position,
+                  get_all_reserve_tokens, get_assets_prices, get_contracts,
+                  get_reserve_config)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,22 @@ async def _load_common_data(w3, contracts: ProtocolContracts, cache: dict) -> tu
 
     prices = await get_assets_prices(w3, cache["token_addresses"], contracts)
     asset_prices = dict(zip(cache["token_addresses"], prices))
+
+    # V2 oracle 返回 ETH 计价（18 位 精度），需要乘以 ETH/USD 并除以 10^18 转换为 USD（8 位）
+    if contracts.oracle_price_in_eth:
+        eth_usd_prices = await get_assets_prices(w3, [WETH_ADDRESS], CONTRACTS_V3)
+        eth_usd_raw = eth_usd_prices[0]
+        if eth_usd_raw > 0:
+            asset_prices = {
+                addr: (price * eth_usd_raw) // (10 ** 18)
+                for addr, price in asset_prices.items()
+            }
+            logger.debug(
+                "V2 oracle 价格已归一化，ETH/USD=%.2f", eth_usd_raw / 10 ** 8
+            )
+        else:
+            logger.warning("无法获取 ETH/USD 价格，V2 oracle 价格归一化跳过")
+
     return cache["reserve_tokens"], cache["reserve_configs"], asset_prices
 
 
