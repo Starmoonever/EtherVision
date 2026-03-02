@@ -38,16 +38,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # ETH 系底层资产 symbol（与 db.py 中 _ETH_SYMBOLS 一致，加 stETH/ETHx 等）
-ETH_UNDERLYING_SYMBOLS: frozenset[str] = frozenset({
-    "WETH", "wstETH", "cbETH", "rETH", "weETH", "ezETH",
-    "rsETH", "osETH", "ETHx", "stETH", "cbBTC",  # cbBTC 不是 ETH 但在 _ETH_SYMBOLS 中？不加
-    "tETH",  # tETH
-})
+ETH_UNDERLYING_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "wstETH",
+        "cbETH",
+        "rETH",
+        "weETH",
+        "ezETH",
+        "rsETH",
+        "osETH",
+        "ETHx",
+        "stETH",
+        "cbBTC",  # cbBTC 不是 ETH 但在 _ETH_SYMBOLS 中？不加
+        "tETH",  # tETH
+    }
+)
 # 只保留 ETH 系（不含 BTC 系）
-ETH_ONLY_SYMBOLS: frozenset[str] = frozenset({
-    "WETH", "wstETH", "cbETH", "rETH", "weETH", "ezETH",
-    "rsETH", "osETH", "ETHx", "stETH", "tETH",
-})
+ETH_ONLY_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "wstETH",
+        "cbETH",
+        "rETH",
+        "weETH",
+        "ezETH",
+        "rsETH",
+        "osETH",
+        "ETHx",
+        "stETH",
+        "tETH",
+    }
+)
 
 
 def load_dsn() -> str:
@@ -106,7 +128,7 @@ async def fetch_eth_token_addresses(conn: asyncpg.Connection) -> dict[str, list[
 
 async def fetch_borrow_candidates(
     conn: asyncpg.Connection,
-    eth_addrs: list[str],   # 已是 lower text（如 '0xc02aaa...'）
+    eth_addrs: list[str],  # 已是 lower text（如 '0xc02aaa...'）
     *,
     min_net_amount: int = 0,
 ) -> list[dict[str, Any]]:
@@ -118,9 +140,9 @@ async def fetch_borrow_candidates(
     if not eth_addrs:
         return []
 
-    n  = len(eth_addrs)
-    ph = ", ".join(f"${i+1}" for i in range(n))   # $1,...,$N（可在 SQL 内重复引用）
-    th = f"${n + 1}"                               # $N+1 = 阈值
+    n = len(eth_addrs)
+    ph = ", ".join(f"${i+1}" for i in range(n))  # $1,...,$N（可在 SQL 内重复引用）
+    th = f"${n + 1}"  # $N+1 = 阈值
 
     sql = f"""
     WITH borrow_by_token AS (
@@ -183,7 +205,7 @@ async def fetch_borrow_candidates(
 
 async def fetch_collateral_candidates(
     conn: asyncpg.Connection,
-    eth_addrs: list[str],   # 已是 lower text
+    eth_addrs: list[str],  # 已是 lower text
     *,
     min_net_amount: int = 0,
 ) -> list[dict[str, Any]]:
@@ -194,7 +216,7 @@ async def fetch_collateral_candidates(
     if not eth_addrs:
         return []
 
-    n  = len(eth_addrs)
+    n = len(eth_addrs)
     ph = ", ".join(f"${i+1}" for i in range(n))
     th = f"${n + 1}"
 
@@ -254,7 +276,7 @@ async def fetch_all_borrowers_liberal(
     """
     if not eth_addr_list:
         return []
-    n  = len(eth_addr_list)
+    n = len(eth_addr_list)
     ph = ", ".join(f"${i+1}" for i in range(n))
     sql = f"""
     SELECT
@@ -282,7 +304,7 @@ async def fetch_history_users_by_pv(
     注意：此方法是"所有历史用户"，包含已还清，用作候选供 RPC 验证。
     """
     sym_list = list(eth_symbols)
-    n  = len(sym_list) + 1  # +1 for operation, +1 for pv = +2 extra params
+    n = len(sym_list) + 1  # +1 for operation, +1 for pv = +2 extra params
     ph = ", ".join(f"${i+1}" for i in range(len(sym_list)))
     op_ph = f"${len(sym_list)+1}"
     pv_ph = f"${len(sym_list)+2}"
@@ -303,9 +325,7 @@ async def fetch_history_users_by_pv(
 async def fetch_existing_loan_users(conn: asyncpg.Connection, table: str) -> set[str]:
     """读取现有 loan.xxx 来源表中的地址（通过 subgraph 获得的）。"""
     try:
-        rows = await conn.fetch(
-            f'SELECT "walletAddress" FROM loan."{table}"'
-        )
+        rows = await conn.fetch(f'SELECT "walletAddress" FROM loan."{table}"')
         return {r["walletAddress"].lower() for r in rows}
     except Exception as e:
         logger.warning("读取 %s 失败: %s", table, e)
@@ -334,22 +354,32 @@ async def compare_with_existing(
     _existing: set[str] | None = None,
 ) -> None:
     """将推导出的地址与现有 subgraph 来源表做覆盖率分析。"""
-    existing = _existing if _existing is not None else await fetch_existing_loan_users(conn, table)
+    existing = (
+        _existing
+        if _existing is not None
+        else await fetch_existing_loan_users(conn, table)
+    )
     if not existing:
         logger.warning("  [%s] 来源表 %s 为空或不存在", label, table)
         return
 
-    in_both      = derived_addrs & existing
+    in_both = derived_addrs & existing
     only_derived = derived_addrs - existing
-    only_existing= existing - derived_addrs
-    recall       = len(in_both) / len(existing) * 100 if existing else 0.0
-    extra_rate   = len(only_derived) / len(derived_addrs) * 100 if derived_addrs else 0.0
+    only_existing = existing - derived_addrs
+    recall = len(in_both) / len(existing) * 100 if existing else 0.0
+    extra_rate = len(only_derived) / len(derived_addrs) * 100 if derived_addrs else 0.0
 
     logger.info(
         "  [%s] 推导:%5d | subgraph:%5d | 共同:%5d | "
         "新增:%4d | 未覆盖:%4d | 召回率:%.1f%% | 额外率:%.1f%%",
-        label, len(derived_addrs), len(existing), len(in_both),
-        len(only_derived), len(only_existing), recall, extra_rate,
+        label,
+        len(derived_addrs),
+        len(existing),
+        len(in_both),
+        len(only_derived),
+        len(only_existing),
+        recall,
+        extra_rate,
     )
     if only_existing:
         logger.info("    ⚠  subgraph独有(前5): %s", list(only_existing)[:5])
@@ -379,7 +409,9 @@ async def main(output_dir: Path) -> None:
         return
 
     # ── Step 2A: 严格模式借款候选（per-token net_borrow > 0）────────────────
-    logger.info("\n=== Step 2A: 严格模式 ETH 借款候选（net > 0，利息可能导致假阴性）===")
+    logger.info(
+        "\n=== Step 2A: 严格模式 ETH 借款候选（net > 0，利息可能导致假阴性）==="
+    )
     borrow_strict = await fetch_borrow_candidates(conn, all_eth_addrs)
     logger.info("  → 严格候选借款人: %d", len(borrow_strict))
 
@@ -390,8 +422,12 @@ async def main(output_dir: Path) -> None:
 
     # ── Step 2C: aave_history 精确区分 v2/v3 ─────────────────────────────────
     logger.info("\n=== Step 2C: 基于 aave_history 的 v2/v3 借款人（精确协议区分）===")
-    history_borrow_v2 = await fetch_history_users_by_pv(conn, ETH_ONLY_SYMBOLS, "borrow", "2")
-    history_borrow_v3 = await fetch_history_users_by_pv(conn, ETH_ONLY_SYMBOLS, "borrow", "3")
+    history_borrow_v2 = await fetch_history_users_by_pv(
+        conn, ETH_ONLY_SYMBOLS, "borrow", "2"
+    )
+    history_borrow_v3 = await fetch_history_users_by_pv(
+        conn, ETH_ONLY_SYMBOLS, "borrow", "3"
+    )
     logger.info("  aave_history v2 借款人: %d", len(history_borrow_v2))
     logger.info("  aave_history v3 借款人: %d", len(history_borrow_v3))
 
@@ -400,8 +436,12 @@ async def main(output_dir: Path) -> None:
     coll_strict = await fetch_collateral_candidates(conn, all_eth_addrs)
     logger.info("  → 严格抵押候选（net > 0）: %d", len(coll_strict))
 
-    history_deposit_v2 = await fetch_history_users_by_pv(conn, ETH_ONLY_SYMBOLS, "deposit", "2")
-    history_deposit_v3 = await fetch_history_users_by_pv(conn, ETH_ONLY_SYMBOLS, "deposit", "3")
+    history_deposit_v2 = await fetch_history_users_by_pv(
+        conn, ETH_ONLY_SYMBOLS, "deposit", "2"
+    )
+    history_deposit_v3 = await fetch_history_users_by_pv(
+        conn, ETH_ONLY_SYMBOLS, "deposit", "3"
+    )
     logger.info("  aave_history v2 存款人: %d", len(history_deposit_v2))
     logger.info("  aave_history v3 存款人: %d", len(history_deposit_v3))
 
@@ -410,38 +450,72 @@ async def main(output_dir: Path) -> None:
 
     cfg = [
         # label, table, derived_set
-        ("borrow_v2 [严格]",  "aave_v2_eth_weth_borrow",     {r["user_address"] for r in borrow_strict}),
-        ("borrow_v2 [宽松]",  "aave_v2_eth_weth_borrow",     {r["user_address"] for r in borrow_liberal}),
-        ("borrow_v2 [hist]",  "aave_v2_eth_weth_borrow",     set(history_borrow_v2)),
-        ("borrow_v3 [严格]",  "aave_v3_eth_weth_borrow",     {r["user_address"] for r in borrow_strict}),
-        ("borrow_v3 [宽松]",  "aave_v3_eth_weth_borrow",     {r["user_address"] for r in borrow_liberal}),
-        ("borrow_v3 [hist]",  "aave_v3_eth_weth_borrow",     set(history_borrow_v3)),
-        ("collat_v2 [严格]",  "aave_v2_eth_weth_collateral", {r["user_address"] for r in coll_strict}),
-        ("collat_v2 [hist]",  "aave_v2_eth_weth_collateral", set(history_deposit_v2)),
-        ("collat_v3 [严格]",  "aave_v3_eth_weth_collateral", {r["user_address"] for r in coll_strict}),
-        ("collat_v3 [hist]",  "aave_v3_eth_weth_collateral", set(history_deposit_v3)),
+        (
+            "borrow_v2 [严格]",
+            "aave_v2_eth_weth_borrow",
+            {r["user_address"] for r in borrow_strict},
+        ),
+        (
+            "borrow_v2 [宽松]",
+            "aave_v2_eth_weth_borrow",
+            {r["user_address"] for r in borrow_liberal},
+        ),
+        ("borrow_v2 [hist]", "aave_v2_eth_weth_borrow", set(history_borrow_v2)),
+        (
+            "borrow_v3 [严格]",
+            "aave_v3_eth_weth_borrow",
+            {r["user_address"] for r in borrow_strict},
+        ),
+        (
+            "borrow_v3 [宽松]",
+            "aave_v3_eth_weth_borrow",
+            {r["user_address"] for r in borrow_liberal},
+        ),
+        ("borrow_v3 [hist]", "aave_v3_eth_weth_borrow", set(history_borrow_v3)),
+        (
+            "collat_v2 [严格]",
+            "aave_v2_eth_weth_collateral",
+            {r["user_address"] for r in coll_strict},
+        ),
+        ("collat_v2 [hist]", "aave_v2_eth_weth_collateral", set(history_deposit_v2)),
+        (
+            "collat_v3 [严格]",
+            "aave_v3_eth_weth_collateral",
+            {r["user_address"] for r in coll_strict},
+        ),
+        ("collat_v3 [hist]", "aave_v3_eth_weth_collateral", set(history_deposit_v3)),
     ]
     cached_existing: dict[str, set[str]] = {}
     for label, table, derived in cfg:
         if table not in cached_existing:
             cached_existing[table] = await fetch_existing_loan_users(conn, table)
-        await compare_with_existing(conn, derived, table, label, _existing=cached_existing[table])
+        await compare_with_existing(
+            conn, derived, table, label, _existing=cached_existing[table]
+        )
 
     # ── Step 5: 写出 CSV ──────────────────────────────────────────────────────
     logger.info("\n=== Step 5: 写出 CSV ===")
-    write_csv(output_dir / "borrow_strict.csv",     borrow_strict)
-    write_csv(output_dir / "borrow_liberal.csv",    borrow_liberal)
+    write_csv(output_dir / "borrow_strict.csv", borrow_strict)
+    write_csv(output_dir / "borrow_liberal.csv", borrow_liberal)
     write_csv(output_dir / "collateral_strict.csv", coll_strict)
 
     # history-based 分 v2/v3 写出
-    write_csv(output_dir / "history_borrow_v2.csv",
-              [{"user_address": a} for a in history_borrow_v2])
-    write_csv(output_dir / "history_borrow_v3.csv",
-              [{"user_address": a} for a in history_borrow_v3])
-    write_csv(output_dir / "history_deposit_v2.csv",
-              [{"user_address": a} for a in history_deposit_v2])
-    write_csv(output_dir / "history_deposit_v3.csv",
-              [{"user_address": a} for a in history_deposit_v3])
+    write_csv(
+        output_dir / "history_borrow_v2.csv",
+        [{"user_address": a} for a in history_borrow_v2],
+    )
+    write_csv(
+        output_dir / "history_borrow_v3.csv",
+        [{"user_address": a} for a in history_borrow_v3],
+    )
+    write_csv(
+        output_dir / "history_deposit_v2.csv",
+        [{"user_address": a} for a in history_deposit_v2],
+    )
+    write_csv(
+        output_dir / "history_deposit_v3.csv",
+        [{"user_address": a} for a in history_deposit_v3],
+    )
 
     # ── Step 6: v3-only 统计 ─────────────────────────────────────────────────
     v3_only = [a for a in eth_by_pv.get("3", []) if a not in eth_by_pv.get("2", [])]
@@ -464,9 +538,12 @@ async def main(output_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path(__file__).parent.parent / "derived_users",
         help="CSV 输出目录（默认: backend/derived_users/）",

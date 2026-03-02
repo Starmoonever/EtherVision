@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 # ── 合约原始返回  ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class ReserveToken:
     symbol: str
@@ -15,17 +16,19 @@ class ReserveToken:
 @dataclass
 class AccountSummary:
     """对应 Pool.getUserAccountData 返回值，均为链上原始整数"""
-    total_collateral_base: int   # 8 位精度 USD
-    total_debt_base: int         # 8 位精度 USD
+
+    total_collateral_base: int  # 8 位精度 USD
+    total_debt_base: int  # 8 位精度 USD
     available_borrows_base: int  # 8 位精度 USD
     current_liquidation_threshold: int  # basis points / 10000
-    ltv: int                     # basis points / 10000
-    health_factor: int           # 18 位精度；max uint256 表示 ∞
+    ltv: int  # basis points / 10000
+    health_factor: int  # 18 位精度；max uint256 表示 ∞
 
 
 @dataclass
 class UserReserveData:
     """对应 DataProvider.getUserReserveData 返回值"""
+
     current_atoken_balance: int
     current_stable_debt: int
     current_variable_debt: int
@@ -40,6 +43,7 @@ class UserReserveData:
 @dataclass
 class ReserveConfig:
     """对应 DataProvider.getReserveConfigurationData 返回值"""
+
     decimals: int
     ltv: int
     liquidation_threshold: int
@@ -54,9 +58,11 @@ class ReserveConfig:
 
 # ── 聚合模型（业务层使用） ────────────────────────────────────────────────────
 
+
 @dataclass
 class ReservePosition:
     """单个资产的仓位，原始整数值，上层再做精度转换"""
+
     symbol: str
     token_address: str
     decimals: int

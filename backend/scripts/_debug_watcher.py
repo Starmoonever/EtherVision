@@ -26,10 +26,13 @@ FROM (
 ) sub
 """
 
+
 async def main():
     pool = await asyncpg.create_pool(
-        host=cfg.postgres.host, port=cfg.postgres.port,
-        user=cfg.postgres.user, password=cfg.postgres.password,
+        host=cfg.postgres.host,
+        port=cfg.postgres.port,
+        user=cfg.postgres.user,
+        password=cfg.postgres.password,
         database=cfg.postgres.database,
     )
     for minutes, pv in [(60, "3"), (10, "3"), (1, "3"), (60, "2"), (10, "2")]:
@@ -40,5 +43,6 @@ async def main():
         except Exception as e:
             print(f"protocol_version={pv!r}, last {minutes}min -> ERROR: {e}")
     await pool.close()
+
 
 asyncio.run(main())

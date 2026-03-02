@@ -53,10 +53,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ETH 系资产（全大写，用 .upper() 比较）
-_ETH_SYMBOLS: frozenset[str] = frozenset({
-    "WETH", "ETH", "CBETH", "WSTETH", "RETH",
-    "WEETH", "EZETH", "RSETH", "OSETH", "ETHX",
-})
+_ETH_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "ETH",
+        "CBETH",
+        "WSTETH",
+        "RETH",
+        "WEETH",
+        "EZETH",
+        "RSETH",
+        "OSETH",
+        "ETHX",
+    }
+)
 _LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 
@@ -64,9 +74,10 @@ _LIQ_PRICE_CAP = Decimal("9999999.99999999")
 # 核心计算（完全基于 DB 存储数据）
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _recalc_rise(
     reserves: list[dict],
-    liq_thresholds: dict[str, Decimal],   # token_address（小写）→ threshold (0~1)
+    liq_thresholds: dict[str, Decimal],  # token_address（小写）→ threshold (0~1)
 ) -> Decimal:
     """
     用 DB 数据重算 liq_price_rise。
@@ -133,17 +144,27 @@ def _recalc_rise(
 # 主流程
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
     cfg = load_config(config_path)
     tables = get_tables(protocol)
 
     if tables.side != "borrow":
-        logger.error("协议 %s 不是借贷端（side=%s），请使用 v3_borrow 或 v2_borrow", protocol, tables.side)
+        logger.error(
+            "协议 %s 不是借贷端（side=%s），请使用 v3_borrow 或 v2_borrow",
+            protocol,
+            tables.side,
+        )
         return
 
     pos_table = tables.positions
     res_table = tables.reserve_positions
-    logger.info("协议: %s  |  positions: %s  |  reserve_positions: %s", protocol, pos_table, res_table)
+    logger.info(
+        "协议: %s  |  positions: %s  |  reserve_positions: %s",
+        protocol,
+        pos_table,
+        res_table,
+    )
 
     # ── 1. 从链上取 reserve configs（约 N_assets 次 RPC）────────────────────
     # 去掉 "_borrow" 后缀获取基础协议版本（v3/v2）的合约
@@ -159,7 +180,10 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
     logger.info("批量获取 liq_threshold（每资产 1 次 RPC）...")
     token_addresses = [rt.token_address for rt in reserve_tokens]
     configs_list = await asyncio.gather(
-        *[get_reserve_config(w3, addr, contracts=contracts) for addr in token_addresses],
+        *[
+            get_reserve_config(w3, addr, contracts=contracts)
+            for addr in token_addresses
+        ],
         return_exceptions=True,
     )
     liq_thresholds: dict[str, Decimal] = {}
@@ -167,7 +191,9 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
         if isinstance(cfg_or_err, Exception):
             logger.warning("get_reserve_config 失败 %s: %s", addr, cfg_or_err)
             continue
-        liq_thresholds[addr.lower()] = Decimal(cfg_or_err.liquidation_threshold) / Decimal(10000)
+        liq_thresholds[addr.lower()] = Decimal(
+            cfg_or_err.liquidation_threshold
+        ) / Decimal(10000)
     logger.info("成功获取 %d 个资产的 liq_threshold", len(liq_thresholds))
     await w3.provider.disconnect()
 
@@ -186,7 +212,9 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
             """
         )
         pos_count = await conn.fetchval(f"SELECT COUNT(*) FROM loan.{pos_table}")
-    logger.info("读取 reserve 明细行数: %d（涉及仓位: %d）", len(reserve_rows), pos_count)
+    logger.info(
+        "读取 reserve 明细行数: %d（涉及仓位: %d）", len(reserve_rows), pos_count
+    )
 
     # ── 3. 按 user_address 分组 ───────────────────────────────────────────────
     reserves_by_user: dict[str, list[dict]] = {}
@@ -209,7 +237,9 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
 
     logger.info(
         "计算完成：共 %d 条 | liq_price_rise > 0: %d | = 0: %d",
-        len(updates), cnt_risk, cnt_zero,
+        len(updates),
+        cnt_risk,
+        cnt_zero,
     )
 
     if dry_run:
@@ -241,16 +271,29 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="重算借贷端仓位的 liq_price_rise（无需重爬）")
-    p.add_argument("--config", default=None, metavar="PATH",
-                   help="config.yaml 路径（默认自动查找）")
-    p.add_argument("--dry-run", action="store_true",
-                   help="只计算不写入，打印前 10 条 liq_price_rise > 0 的结果")
-    p.add_argument("--protocol", "-p",
-                   choices=["v3_borrow", "v2_borrow"],
-                   default="v3_borrow",
-                   help="借贷端协议版本（默认 v3_borrow）")
+    p = argparse.ArgumentParser(
+        description="重算借贷端仓位的 liq_price_rise（无需重爬）"
+    )
+    p.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="config.yaml 路径（默认自动查找）",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只计算不写入，打印前 10 条 liq_price_rise > 0 的结果",
+    )
+    p.add_argument(
+        "--protocol",
+        "-p",
+        choices=["v3_borrow", "v2_borrow"],
+        default="v3_borrow",
+        help="借贷端协议版本（默认 v3_borrow）",
+    )
     return p.parse_args()
 
 

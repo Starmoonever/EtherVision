@@ -36,8 +36,8 @@ sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.db import get_tables  # noqa: E402
-from aave_crawler.rpc import (build_web3, get_all_reserve_tokens,  # noqa: E402
-                              get_contracts, get_reserve_config)
+from aave_crawler.rpc import get_all_reserve_tokens  # noqa: E402
+from aave_crawler.rpc import build_web3, get_contracts, get_reserve_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,20 +47,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ETH 系资产（与 db.py / service.py 保持一致，统一大写用于 .upper() 比较）
-_ETH_SYMBOLS: frozenset[str] = frozenset({
-    "WETH", "ETH", "CBETH", "WSTETH", "RETH",
-    "WEETH", "EZETH", "RSETH", "OSETH", "ETHX",
-})
+_ETH_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "ETH",
+        "CBETH",
+        "WSTETH",
+        "RETH",
+        "WEETH",
+        "EZETH",
+        "RSETH",
+        "OSETH",
+        "ETHX",
+    }
+)
 _LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 核心计算
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _recalc(
     total_debt_usd: Decimal,
     reserves: list[dict],
-    liq_thresholds: dict[str, Decimal],   # token_address → threshold (0~1)
+    liq_thresholds: dict[str, Decimal],  # token_address → threshold (0~1)
 ) -> Decimal:
     """
     使用逐资产 liq_threshold 重算 ETH 清算价。
@@ -93,7 +104,10 @@ def _recalc(
         return Decimal("0")
 
     # eth_amount = supply_raw / 10^decimals
-    eth_amount = Decimal(str(int(eth_reserve["supply_raw"]))) / Decimal(10) ** eth_reserve["decimals"]
+    eth_amount = (
+        Decimal(str(int(eth_reserve["supply_raw"])))
+        / Decimal(10) ** eth_reserve["decimals"]
+    )
     if eth_amount == 0:
         return Decimal("0")
 
@@ -122,13 +136,19 @@ def _recalc(
 # 主流程
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> None:
     cfg = load_config(config_path)
     contracts = get_contracts(protocol)
     tables = get_tables(protocol)
     pos_table = tables.positions
     res_table = tables.reserve_positions
-    logger.info("Protocol: %s  |  positions: %s  |  reserve_positions: %s", protocol, pos_table, res_table)
+    logger.info(
+        "Protocol: %s  |  positions: %s  |  reserve_positions: %s",
+        protocol,
+        pos_table,
+        res_table,
+    )
 
     # ── 1. 从链上取 reserve configs（仅此一次 RPC，约 15 次调用）──────────────
     logger.info("连接 RPC：%s", cfg.rpc_url)
@@ -141,7 +161,10 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
     logger.info("批量获取 reserve configs（每资产 liq_threshold）...")
     token_addresses = [rt.token_address for rt in reserve_tokens]
     configs_list = await asyncio.gather(
-        *[get_reserve_config(w3, addr, contracts=contracts) for addr in token_addresses],
+        *[
+            get_reserve_config(w3, addr, contracts=contracts)
+            for addr in token_addresses
+        ],
         return_exceptions=True,
     )
 
@@ -151,7 +174,9 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
         if isinstance(cfg_or_err, Exception):
             logger.warning("get_reserve_config 失败 %s: %s", addr, cfg_or_err)
             continue
-        liq_thresholds[addr.lower()] = Decimal(cfg_or_err.liquidation_threshold) / Decimal(10000)
+        liq_thresholds[addr.lower()] = Decimal(
+            cfg_or_err.liquidation_threshold
+        ) / Decimal(10000)
 
     logger.info("成功获取 %d 个资产的 liq_threshold", len(liq_thresholds))
 
@@ -185,7 +210,7 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
         reserves_by_user.setdefault(key, []).append(dict(row))
 
     # ── 4. 逐用户重算 liq_price ───────────────────────────────────────────────
-    updates: list[tuple[Decimal, str]] = []   # (new_liq_price, user_address)
+    updates: list[tuple[Decimal, str]] = []  # (new_liq_price, user_address)
     skipped = 0
 
     for row in positions_rows:
@@ -230,6 +255,7 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
 # CLI 入口
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="重算 DB 中所有仓位的 liq_price")
     p.add_argument(
@@ -244,7 +270,8 @@ def parse_args() -> argparse.Namespace:
         help="只计算不写入，打印前 10 条结果预览",
     )
     p.add_argument(
-        "--protocol", "-p",
+        "--protocol",
+        "-p",
         choices=["v2", "v3", "v2_borrow", "v3_borrow"],
         default="v3",
         help="Aave 协议版本（默认 v3）",

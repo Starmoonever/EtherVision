@@ -34,15 +34,15 @@ class CrawlerConfig:
 
 @dataclass
 class WatcherConfig:
-    interval: int = 60           # 轮询间隔（秒）
-    lookback_minutes: int = 10   # 首次启动时水位线回退多少分钟
-    history_schema: str = "aave" # aave_history 所在 schema
+    interval: int = 60  # 轮询间隔（秒）
+    lookback_minutes: int = 10  # 首次启动时水位线回退多少分钟
+    history_schema: str = "aave"  # aave_history 所在 schema
 
 
 @dataclass
 class AppConfig:
     rpc_url: str = ""
-    protocol: str = "v3"   # aave 协议版本: v2 或 v3
+    protocol: str = "v3"  # aave 协议版本: v2 或 v3
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
@@ -70,11 +70,27 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             wt_raw = raw.get("watcher", {})
             return AppConfig(
                 rpc_url=raw.get("rpc_url", ""),
-                postgres=PostgresConfig(**{k: v for k, v in pg_raw.items() if k in PostgresConfig.__dataclass_fields__}),
-                crawler=CrawlerConfig(**{k: v for k, v in cr_raw.items() if k in CrawlerConfig.__dataclass_fields__}),
-                watcher=WatcherConfig(**{k: v for k, v in wt_raw.items() if k in WatcherConfig.__dataclass_fields__}),
+                postgres=PostgresConfig(
+                    **{
+                        k: v
+                        for k, v in pg_raw.items()
+                        if k in PostgresConfig.__dataclass_fields__
+                    }
+                ),
+                crawler=CrawlerConfig(
+                    **{
+                        k: v
+                        for k, v in cr_raw.items()
+                        if k in CrawlerConfig.__dataclass_fields__
+                    }
+                ),
+                watcher=WatcherConfig(
+                    **{
+                        k: v
+                        for k, v in wt_raw.items()
+                        if k in WatcherConfig.__dataclass_fields__
+                    }
+                ),
             )
 
-    raise FileNotFoundError(
-        "找不到 config.yaml，请参照 config.yaml.example 创建。"
-    )
+    raise FileNotFoundError("找不到 config.yaml，请参照 config.yaml.example 创建。")

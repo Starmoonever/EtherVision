@@ -60,6 +60,7 @@ SELECT MAX(created_at) AT TIME ZONE 'UTC' FROM aave.aave_history
 
 # ── 公共数据缓存（在同一进程内复用，每次 refresh 价格） ────────────────────────
 
+
 async def _load_common_data(w3, contracts: ProtocolContracts, cache: dict) -> tuple:
     """倒版 列表和配置只在首次加载，价格每轮实时获取。"""
     if "reserve_tokens" not in cache:
@@ -85,12 +86,10 @@ async def _load_common_data(w3, contracts: ProtocolContracts, cache: dict) -> tu
         eth_usd_raw = eth_usd_prices[0]
         if eth_usd_raw > 0:
             asset_prices = {
-                addr: (price * eth_usd_raw) // (10 ** 18)
+                addr: (price * eth_usd_raw) // (10**18)
                 for addr, price in asset_prices.items()
             }
-            logger.debug(
-                "V2 oracle 价格已归一化，ETH/USD=%.2f", eth_usd_raw / 10 ** 8
-            )
+            logger.debug("V2 oracle 价格已归一化，ETH/USD=%.2f", eth_usd_raw / 10**8)
         else:
             logger.warning("无法获取 ETH/USD 价格，V2 oracle 价格归一化跳过")
 
@@ -98,6 +97,7 @@ async def _load_common_data(w3, contracts: ProtocolContracts, cache: dict) -> tu
 
 
 # ── 单轮处理 ──────────────────────────────────────────────────────────────────
+
 
 async def _process_round(
     w3,
@@ -125,13 +125,23 @@ async def _process_round(
     logger.info("本轮发现 %d 个有活动的地址，开始重查链上仓位...", len(addresses))
 
     # 2. 预取公共链上数据（token 列表/配置缓存，价格实时拉取）
-    reserve_tokens, reserve_configs, asset_prices = await _load_common_data(w3, contracts, common_cache)
+    reserve_tokens, reserve_configs, asset_prices = await _load_common_data(
+        w3, contracts, common_cache
+    )
 
     # 3. 并发查询这批地址
     semaphore = asyncio.Semaphore(concurrency)
     all_tasks = [
         asyncio.ensure_future(
-            fetch_user_position(w3, addr, reserve_tokens, reserve_configs, asset_prices, semaphore, contracts)
+            fetch_user_position(
+                w3,
+                addr,
+                reserve_tokens,
+                reserve_configs,
+                asset_prices,
+                semaphore,
+                contracts,
+            )
         )
         for addr in addresses
     ]
@@ -154,14 +164,18 @@ async def _process_round(
             if len(pending) >= batch_size:
                 if db_task is not None:
                     await db_task
-                db_task = asyncio.ensure_future(upsert_positions(pool, list(pending), tables))
+                db_task = asyncio.ensure_future(
+                    upsert_positions(pool, list(pending), tables)
+                )
                 pending.clear()
         if db_task is not None:
             await db_task
         if pending:
             await upsert_positions(pool, pending, tables)
 
-    logger.info("本轮完成：更新 %d 人，已平仓跳过 %d 人，RPC 报错 %d 人", ok, skip, fail)
+    logger.info(
+        "本轮完成：更新 %d 人，已平仓跳过 %d 人，RPC 报错 %d 人", ok, skip, fail
+    )
 
     # 4. 推进水位线
     row = await pool.fetchrow(_SQL_NEW_WATERMARK, watermark, protocol_version)
@@ -172,6 +186,7 @@ async def _process_round(
 
 
 # ── 主循环 ────────────────────────────────────────────────────────────────────
+
 
 async def run_watcher(
     cfg: AppConfig,
@@ -210,7 +225,9 @@ async def run_watcher(
     while True:
         try:
             watermark = await _process_round(
-                w3, pool, watermark,
+                w3,
+                pool,
+                watermark,
                 concurrency=cfg.crawler.concurrency,
                 batch_size=cfg.crawler.batch_size,
                 common_cache=common_cache,

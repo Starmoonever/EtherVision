@@ -26,13 +26,16 @@ from dataclasses import dataclass
 @dataclass
 class ProtocolTables:
     """一套 Aave 协议对应的数据库表名配置。"""
-    positions: str           # 主仓位汇总表
-    reserve_positions: str   # 资产明细表
-    source_table: str        # 用户地址来源表
+
+    positions: str  # 主仓位汇总表
+    reserve_positions: str  # 资产明细表
+    source_table: str  # 用户地址来源表
     source_schema: str = "loan"
     address_column: str = "walletAddress"
     amount_column: str = "wethAmount_ETH"
-    side: str = "collateral"  # "collateral"（ETH 抵押被清算）或 "borrow"（ETH 借入被清算）
+    side: str = (
+        "collateral"  # "collateral"（ETH 抵押被清算）或 "borrow"（ETH 借入被清算）
+    )
 
 
 # ── 抵押方向（ETH 下跌风险）────────────────────────────────────────────────────
@@ -78,8 +81,11 @@ _PROTOCOL_TABLES: dict[str, ProtocolTables] = {
 def get_tables(protocol: str = "v3") -> ProtocolTables:
     t = _PROTOCOL_TABLES.get(protocol.lower())
     if t is None:
-        raise ValueError(f"不支持的协议: {protocol!r}，可选: v2, v3, v3_borrow, v2_borrow")
+        raise ValueError(
+            f"不支持的协议: {protocol!r}，可选: v2, v3, v3_borrow, v2_borrow"
+        )
     return t
+
 
 # ── DDL ──────────────────────────────────────────────────────────────────────
 
@@ -137,6 +143,7 @@ CREATE TABLE IF NOT EXISTS loan.{reserve_positions} (
 
 # ── 连接池 ────────────────────────────────────────────────────────────────────
 
+
 async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
     pool = await asyncpg.create_pool(dsn=pg.dsn, min_size=2, max_size=10)
     logger.info("PostgreSQL 连接池已创建：%s:%d/%s", pg.host, pg.port, pg.database)
@@ -154,7 +161,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
             old_pos = pos.replace("_collateral", "")
             old_res = res.replace("_collateral", "")
             if old_pos != pos:
-                await conn.execute(f"""
+                await conn.execute(
+                    f"""
                     DO $$
                     BEGIN
                         IF EXISTS (
@@ -167,9 +175,11 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ALTER TABLE loan."{old_pos}" RENAME TO "{pos}";
                         END IF;
                     END$$;
-                """)
+                """
+                )
             if old_res != res:
-                await conn.execute(f"""
+                await conn.execute(
+                    f"""
                     DO $$
                     BEGIN
                         IF EXISTS (
@@ -182,7 +192,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ALTER TABLE loan."{old_res}" RENAME TO "{res}";
                         END IF;
                     END$$;
-                """)
+                """
+                )
         # ── 建表（如不存在）─────────────────────────────────────────────────────
         if tables.side == "borrow":
             await conn.execute(_DDL_BORROW_POSITIONS.format(positions=pos))
@@ -192,7 +203,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
         # ── 以下迁移步骤仅适用于 collateral 表（borrow 表是全新建的）────────────
         if tables.side == "collateral":
             # 修复旧表 health_factor 列精度不足（NUMERIC(30,18) → NUMERIC(40,18)）
-            await conn.execute(f"""
+            await conn.execute(
+                f"""
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -206,9 +218,11 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ALTER COLUMN health_factor TYPE NUMERIC(40, 18);
                     END IF;
                 END$$;
-            """)
+            """
+            )
             # 为旧表添加 liq_price 列
-            await conn.execute(f"""
+            await conn.execute(
+                f"""
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -221,9 +235,11 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
                     END IF;
                 END$$;
-            """)
+            """
+            )
             # 将 liq_price 精度从NUMERIC(20,8)升级为NUMERIC(30,8)
-            await conn.execute(f"""
+            await conn.execute(
+                f"""
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -237,10 +253,16 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
                     END IF;
                 END$$;
-            """)
+            """
+            )
             # 将 positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
-            for _col in ("total_collateral_usd", "total_debt_usd", "available_borrows_usd"):
-                await conn.execute(f"""
+            for _col in (
+                "total_collateral_usd",
+                "total_debt_usd",
+                "available_borrows_usd",
+            ):
+                await conn.execute(
+                    f"""
                     DO $$
                     BEGIN
                         IF EXISTS (
@@ -254,10 +276,12 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                                 ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
                         END IF;
                     END$$;
-                """)
+                """
+                )
         # reserve_positions 精度迁移对两种 side 均执行
         for _col in ("price_usd", "supply_usd", "total_debt_usd"):
-            await conn.execute(f"""
+            await conn.execute(
+                f"""
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -271,7 +295,8 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
                     END IF;
                 END$$;
-            """)
+            """
+            )
     logger.info("目标表已就绪：%s, %s", pos, res)
 
 
@@ -279,13 +304,37 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 
 # ETH 系资产符号（与 service.py simulate SQL 保持一致）
 # 注意：比较时统一用 r.symbol.upper()，所以这里存全大写；每当新增 ETH LST/LRT 时需同步维护
-_ETH_SYMBOLS: frozenset[str] = frozenset({"WETH", "ETH", "CBETH", "WSTETH", "RETH", "WEETH", "EZETH", "RSETH", "OSETH", "ETHX"})
+_ETH_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "ETH",
+        "CBETH",
+        "WSTETH",
+        "RETH",
+        "WEETH",
+        "EZETH",
+        "RSETH",
+        "OSETH",
+        "ETHX",
+    }
+)
 
 # aave_history 中的 ETH 系 token_symbol（大小写与链上一致，查询时做 UPPER 比较）
-_ETH_HISTORY_SYMBOLS: frozenset[str] = frozenset({
-    "WETH", "wstETH", "cbETH", "rETH", "weETH", "ezETH",
-    "rsETH", "osETH", "ETHx", "stETH", "tETH",
-})
+_ETH_HISTORY_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "WETH",
+        "wstETH",
+        "cbETH",
+        "rETH",
+        "weETH",
+        "ezETH",
+        "rsETH",
+        "osETH",
+        "ETHx",
+        "stETH",
+        "tETH",
+    }
+)
 
 # ── 来源表 DDL（由 aave_history 派生） ─────────────────────────────────────────
 
@@ -328,7 +377,11 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
     # 找第一个 ETH 系抵押品，取其独立 liq_threshold
     eth_reserve = None
     for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS and r.usage_as_collateral_enabled and r.supply_raw > 0:
+        if (
+            r.symbol.upper() in _ETH_SYMBOLS
+            and r.usage_as_collateral_enabled
+            and r.supply_raw > 0
+        ):
             eth_reserve = r
             break
 
@@ -402,10 +455,10 @@ def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
         return Decimal("0")
 
     # 分类汇总各项
-    eth_debt_usd_sum = Decimal("0")      # ETH 系负债 USD（按当前价格）
-    eth_col_theta_usd_sum = Decimal("0") # ETH 系抵押品 USD × liq_threshold
-    d_fixed = Decimal("0")              # 非 ETH 负债 USD
-    c_fixed = Decimal("0")              # 非 ETH 抵押品 USD × liq_threshold
+    eth_debt_usd_sum = Decimal("0")  # ETH 系负债 USD（按当前价格）
+    eth_col_theta_usd_sum = Decimal("0")  # ETH 系抵押品 USD × liq_threshold
+    d_fixed = Decimal("0")  # 非 ETH 负债 USD
+    c_fixed = Decimal("0")  # 非 ETH 抵押品 USD × liq_threshold
 
     for r in pos.reserves:
         price = _raw_to_decimal(r.price_raw, 8)
@@ -482,6 +535,7 @@ def _calc_weth_debt(pos: UserPosition) -> tuple[Decimal, Decimal]:
 
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────
 
+
 async def fetch_user_addresses(
     pool: asyncpg.Pool,
     tables: ProtocolTables = TABLES_V3,
@@ -513,15 +567,21 @@ async def fetch_user_addresses(
     rows = await pool.fetch(q)
     addresses = [str(row[address_column]) for row in rows]
     mode_desc = "增量" if incremental else "全量"
-    logger.info("读取到 %d 个用户地址（%s模式，已过滤 %s = 0 的行）", len(addresses), mode_desc, amount_column)
+    logger.info(
+        "读取到 %d 个用户地址（%s模式，已过滤 %s = 0 的行）",
+        len(addresses),
+        mode_desc,
+        amount_column,
+    )
     return addresses
 
 
 # ── 写入（UPSERT 覆盖策略） ───────────────────────────────────────────────────
 
+
 def _raw_to_decimal(raw: int, decimals: int) -> Decimal:
     """链上原始整数 → Decimal，用于 NUMERIC 列"""
-    return Decimal(raw) / Decimal(10 ** decimals)
+    return Decimal(raw) / Decimal(10**decimals)
 
 
 def _price_decimal(price_raw: int) -> Decimal:
@@ -529,7 +589,11 @@ def _price_decimal(price_raw: int) -> Decimal:
     return _raw_to_decimal(price_raw, 8)
 
 
-async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], tables: ProtocolTables = TABLES_V3) -> None:
+async def upsert_positions(
+    pool: asyncpg.Pool,
+    positions: list[UserPosition],
+    tables: ProtocolTables = TABLES_V3,
+) -> None:
     """
     批量 UPSERT 仓位数据（高性能版）。
 
@@ -609,7 +673,9 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
         )
         if is_borrow:
             weth_debt_raw, weth_debt_usd = _calc_weth_debt(pos)
-            summary_rows.append(base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos)))
+            summary_rows.append(
+                base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos))
+            )
         else:
             summary_rows.append(base_row)
 
@@ -623,21 +689,23 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
             supply_dec = _raw_to_decimal(r.supply_raw, r.decimals)
             stable_dec = _raw_to_decimal(r.stable_debt_raw, r.decimals)
             variable_dec = _raw_to_decimal(r.variable_debt_raw, r.decimals)
-            all_reserve_rows.append((
-                useraddr,
-                r.token_address.lower(),
-                r.symbol,
-                pos.block_number,
-                now,
-                r.decimals,
-                price,
-                Decimal(r.supply_raw),
-                supply_dec * price,
-                Decimal(r.stable_debt_raw),
-                Decimal(r.variable_debt_raw),
-                (stable_dec + variable_dec) * price,
-                r.usage_as_collateral_enabled,
-            ))
+            all_reserve_rows.append(
+                (
+                    useraddr,
+                    r.token_address.lower(),
+                    r.symbol,
+                    pos.block_number,
+                    now,
+                    r.decimals,
+                    price,
+                    Decimal(r.supply_raw),
+                    supply_dec * price,
+                    Decimal(r.stable_debt_raw),
+                    Decimal(r.variable_debt_raw),
+                    (stable_dec + variable_dec) * price,
+                    r.usage_as_collateral_enabled,
+                )
+            )
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -657,18 +725,29 @@ async def upsert_positions(pool: asyncpg.Pool, positions: list[UserPosition], ta
                     schema_name="loan",
                     records=all_reserve_rows,
                     columns=[
-                        "user_address", "token_address", "symbol",
-                        "block_number", "scanned_at", "decimals",
-                        "price_usd", "supply_raw", "supply_usd",
-                        "stable_debt_raw", "variable_debt_raw", "total_debt_usd",
+                        "user_address",
+                        "token_address",
+                        "symbol",
+                        "block_number",
+                        "scanned_at",
+                        "decimals",
+                        "price_usd",
+                        "supply_raw",
+                        "supply_usd",
+                        "stable_debt_raw",
+                        "variable_debt_raw",
+                        "total_debt_usd",
                         "use_as_collateral",
                     ],
                 )
 
-    logger.debug("UPSERT 完成：%d 个用户，%d 条明细", len(positions), len(all_reserve_rows))
+    logger.debug(
+        "UPSERT 完成：%d 个用户，%d 条明细", len(positions), len(all_reserve_rows)
+    )
 
 
 # ── 来源表同步（从 aave_history 派生用户地址） ─────────────────────────────────
+
 
 async def ensure_source_table(pool: asyncpg.Pool, tables: ProtocolTables) -> None:
     """若来源表不存在则自动建表（幂等）。
@@ -730,13 +809,19 @@ async def sync_addresses_from_history(
     total = len(rows)
     logger.info(
         "[sync-addresses] protocol=v%s  side=%-8s  派生用户: %d 个",
-        pv, op, total,
+        pv,
+        op,
+        total,
     )
 
     if dry_run:
         logger.info("[dry-run] 不写入数据库，前 10 条预览：")
         for r in rows[:10]:
-            logger.info("  %s  eth_amount=%.6f", r["wallet_address"], float(r["eth_amount"] or 0))
+            logger.info(
+                "  %s  eth_amount=%.6f",
+                r["wallet_address"],
+                float(r["eth_amount"] or 0),
+            )
         return total
 
     # 确保来源表存在
@@ -753,16 +838,14 @@ async def sync_addresses_from_history(
             synced_at      = EXCLUDED.synced_at
     """
     now = datetime.now(tz=timezone.utc)
-    records = [
-        (r["wallet_address"], r["eth_amount"] or 0, now)
-        for r in rows
-    ]
+    records = [(r["wallet_address"], r["eth_amount"] or 0, now) for r in rows]
 
     async with pool.acquire() as conn:
         await conn.executemany(upsert_sql, records)
 
     logger.info(
         "[sync-addresses] UPSERT 完成 → loan.%s（%d 行）",
-        tables.source_table, total,
+        tables.source_table,
+        total,
     )
     return total

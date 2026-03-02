@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
-import { fetchUserPosition } from '../api';
 import type { UserPosition } from '../api';
 
 interface Props {
   address: string;
+  data: UserPosition | null;
+  loading: boolean;
+  notFound: boolean;
   version: 'v2' | 'v3';
 }
 
@@ -17,34 +18,7 @@ function healthColor(hfStr: string): string {
   return '#ef4444';
 }
 
-export function SummaryCard({ address, version }: Props) {
-  const [summary, setSummary] = useState<UserPosition | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [notFound, setNotFound] = useState(false);
-
-  useEffect(() => {
-    if (!address) return;
-    setNotFound(false);
-    setSummary(null);
-
-    const fetchSummary = async () => {
-      setLoading(true);
-      try {
-        const data = await fetchUserPosition(address, version);
-        setSummary(data);
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('404')) {
-          setNotFound(true);
-        } else {
-          console.error(err);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchSummary();
-  }, [address, version]);
+export function SummaryCard({ address, data: summary, loading, notFound, version }: Props) {
 
   const versionLabel = version.toUpperCase();
 
@@ -60,7 +34,7 @@ export function SummaryCard({ address, version }: Props) {
         <span className="card-title">账户概览</span>
         <span className="badge" style={{ background: '#1e293b', color: '#64748b', border: '1px solid #334155' }}>{versionLabel}</span>
       </div>
-      <span style={{ color: '#475569', fontSize: '0.9rem', marginTop: '0.5rem' }}>该地址在 Aave {versionLabel} 暂无仓位记录</span>
+      <span style={{ color: '#475569', fontSize: '0.9rem', marginTop: '0.5rem'}}>该地址在 Aave {versionLabel} 暂无仓位记录</span>
     </div>
   );
 
@@ -85,7 +59,7 @@ export function SummaryCard({ address, version }: Props) {
         <div className="metric-box">
           <span className="metric-label">抵押ETH数量</span>
           <span className="metric-value yellow">
-            {parseFloat(summary.eth_collateral_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {parseFloat(summary.eth_collateral_amount).toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 6 })}
           </span>
         </div>
 

@@ -1,5 +1,3 @@
-import { useState, useEffect } from 'react';
-import { fetchUserPosition } from '../api';
 import type { UserPosition as PositionData } from '../api';
 
 // 定义用于渲染表格行的接口
@@ -12,52 +10,29 @@ interface PositionRow {
 }
 
 interface PositionTableProps {
-  address: string;
+  data: PositionData | null;
+  loading: boolean;
+  notFound: boolean;
   version: 'v2' | 'v3';
 }
 
-export function PositionTable({ address, version }: PositionTableProps) {
-  const [position, setPosition] = useState<PositionData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+export function PositionTable({ data: position, loading, notFound, version }: PositionTableProps) {
   const versionLabel = version.toUpperCase();
 
-  useEffect(() => {
-    if (!address) return;
-    setPosition(null);
-    setNotFound(false);
-    setError(null);
-
-    const loadPositions = async () => {
-      setLoading(true);
-      try {
-        const data = await fetchUserPosition(address, version);
-        setPosition(data);
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('404')) {
-          setNotFound(true);
-        } else {
-          setError(err instanceof Error ? err.message : '连接后端失败');
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadPositions();
-  }, [address, version]);
-
-  const headerBadge = (
+  const headerBadge_found = (
     <span className="badge" style={{ background: '#1e293b', color: '#a78bfa', border: '1px solid #4c1d95', fontWeight: 700 }}>
+      {versionLabel}
+    </span>
+  );
+
+  const headerBadge_empty = (
+    <span className="badge" style={{ background: '#1e293b', color: '#64748b', border: '1px solid #334155' }}>
       {versionLabel}
     </span>
   );
 
   if (loading) return (
     <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px', gap: '0.75rem' }}>
-      {headerBadge}
       <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}></div>
     </div>
   );
@@ -66,21 +41,11 @@ export function PositionTable({ address, version }: PositionTableProps) {
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: '200px' }}>
       <div className="card-header">
         <span className="card-title">资产负债情况</span>
-        {headerBadge}
+        {notFound? headerBadge_empty : headerBadge_found}
       </div>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <p className="empty-text" style={{ margin: 0 }}>该地址在 Aave {versionLabel} 暂无仓位记录</p>
       </div>
-    </div>
-  );
-
-  if (error) return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <div className="card-header">
-        <span className="card-title">资产负债情况</span>
-        {headerBadge}
-      </div>
-      <p style={{ color: '#f87171', fontSize: '0.9rem', margin: 0 }}>错误: {error}</p>
     </div>
   );
 
@@ -122,7 +87,7 @@ export function PositionTable({ address, version }: PositionTableProps) {
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className="card-title">资产 (Supplied)</span>
-            {headerBadge}
+            {headerBadge_found}
           </div>
           <span className="badge green-badge">{supplies.length} 项</span>
         </div>
@@ -145,9 +110,9 @@ export function PositionTable({ address, version }: PositionTableProps) {
                 {supplies.map((r) => (
                   <tr key={r.tokenAddress}>
                     <td><span className="token-symbol">{r.symbol}</span></td>
-                    <td className="right mono">${r.priceUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                    <td className="right mono">{parseFloat(r.balance).toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
-                    <td className="right mono bold">${r.valueUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td className="right mono">${r.priceUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="right mono">{parseFloat(r.balance).toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 })}</td>
+                    <td className="right mono bold">${r.valueUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td className="center"><span className="pill green-pill">是</span></td>
                   </tr>
                 ))}
@@ -162,10 +127,10 @@ export function PositionTable({ address, version }: PositionTableProps) {
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className="card-title">负债 (Borrowed)</span>
-            {headerBadge}
+            {headerBadge_found}
             {Number(position.available_borrows_usd) > 0 && (
               <span className="badge" style={{ backgroundColor: '#1e293b', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 'normal', border: '1px solid #334155' }}>
-                可借额度: ${parseFloat(position.available_borrows_usd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                可借额度: ${parseFloat(position.available_borrows_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             )}
           </div>
@@ -190,8 +155,8 @@ export function PositionTable({ address, version }: PositionTableProps) {
                   <tr key={r.tokenAddress}>
                     <td><span className="token-symbol">{r.symbol}</span></td>
                     <td className="right mono">-</td>
-                    <td className="right mono bold">{parseFloat(r.balance).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                    <td className="right mono bold red-text">${r.valueUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td className="right mono bold">{parseFloat(r.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="right mono bold red-text">${r.valueUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   </tr>
                 ))}
               </tbody>

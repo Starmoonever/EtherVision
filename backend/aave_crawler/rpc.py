@@ -23,9 +23,15 @@ logger = logging.getLogger(__name__)
 
 # ── 合约地址（Ethereum Mainnet Aave V3） ─────────────────────────────────────────────────
 # 与 rpc_example.py 中使用的地址一致
-POOL_ADDRESS = AsyncWeb3.to_checksum_address("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
-DATA_PROVIDER_ADDRESS = AsyncWeb3.to_checksum_address("0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3")
-ORACLE_ADDRESS = AsyncWeb3.to_checksum_address("0x54586bE62E3c3580375aE3723C145253060Ca0C2")
+POOL_ADDRESS = AsyncWeb3.to_checksum_address(
+    "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
+)
+DATA_PROVIDER_ADDRESS = AsyncWeb3.to_checksum_address(
+    "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3"
+)
+ORACLE_ADDRESS = AsyncWeb3.to_checksum_address(
+    "0x54586bE62E3c3580375aE3723C145253060Ca0C2"
+)
 
 ETH_CHAIN_ID = 1
 
@@ -33,7 +39,9 @@ ETH_CHAIN_ID = 1
 # ── 协议合约配置 ──────────────────────────────────────────────────────────────
 
 # WETH 地址（Ethereum Mainnet），用于从 V3 oracle 获取 ETH/USD 价格
-WETH_ADDRESS = AsyncWeb3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+WETH_ADDRESS = AsyncWeb3.to_checksum_address(
+    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+)
 
 
 @dataclass
@@ -44,10 +52,11 @@ class ProtocolContracts:
     需要在使用前乘以 ETH/USD 把价格归一化为 8 位 USD。
     Aave V2 Ethereum Mainnet 的 oracle 返回 ETH 价格；V3 返回 USD 价格。
     """
-    pool: str                       # LendingPool (V2) 或 Pool (V3)
-    data_provider: str              # ProtocolDataProvider
-    oracle: str                     # AaveOracle
-    oracle_price_in_eth: bool = False   # V2=True (ETH/18-dec), V3=False (USD/8-dec)
+
+    pool: str  # LendingPool (V2) 或 Pool (V3)
+    data_provider: str  # ProtocolDataProvider
+    oracle: str  # AaveOracle
+    oracle_price_in_eth: bool = False  # V2=True (ETH/18-dec), V3=False (USD/8-dec)
 
 
 # Aave V3 Ethereum Mainnet
@@ -62,12 +71,17 @@ CONTRACTS_V3 = ProtocolContracts(
 # V2 oracle (0xA50ba011c48153De246E5192C8f9258A2ba79Ca9) 返回 ETH 计价（18 位精度）
 CONTRACTS_V2 = ProtocolContracts(
     pool=AsyncWeb3.to_checksum_address("0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9"),
-    data_provider=AsyncWeb3.to_checksum_address("0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d"),
+    data_provider=AsyncWeb3.to_checksum_address(
+        "0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d"
+    ),
     oracle=AsyncWeb3.to_checksum_address("0xA50ba011c48153De246E5192C8f9258A2ba79Ca9"),
     oracle_price_in_eth=True,
 )
 
-_PROTOCOL_CONTRACTS: dict[str, ProtocolContracts] = {"v3": CONTRACTS_V3, "v2": CONTRACTS_V2}
+_PROTOCOL_CONTRACTS: dict[str, ProtocolContracts] = {
+    "v3": CONTRACTS_V3,
+    "v2": CONTRACTS_V2,
+}
 
 
 def get_contracts(protocol: str = "v3") -> ProtocolContracts:
@@ -76,8 +90,11 @@ def get_contracts(protocol: str = "v3") -> ProtocolContracts:
     base = protocol.lower().split("_")[0]
     c = _PROTOCOL_CONTRACTS.get(base)
     if c is None:
-        raise ValueError(f"不支持的协议版本: {protocol!r}，可选: v2, v3, v2_borrow, v3_borrow")
+        raise ValueError(
+            f"不支持的协议版本: {protocol!r}，可选: v2, v3, v2_borrow, v3_borrow"
+        )
     return c
+
 
 PUBLIC_RPCS = [
     "https://eth.llamarpc.com",
@@ -174,6 +191,7 @@ ORACLE_ABI: list[dict[str, Any]] = [
 
 # ── 客户端工厂 ────────────────────────────────────────────────────────────────
 
+
 async def build_web3(cfg: AppConfig) -> AsyncWeb3:
     """
     构建 AsyncWeb3 实例。
@@ -187,7 +205,12 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
         try:
             chain_id = await w3.eth.chain_id
             if chain_id != ETH_CHAIN_ID:
-                logger.warning("RPC %s chain_id=%d，不是以太主网（%d），跳过", url, chain_id, ETH_CHAIN_ID)
+                logger.warning(
+                    "RPC %s chain_id=%d，不是以太主网（%d），跳过",
+                    url,
+                    chain_id,
+                    ETH_CHAIN_ID,
+                )
                 return None
             logger.info("使用 RPC: %s (chain_id=1)", url)
             return w3
@@ -214,7 +237,10 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
 
 # ── 合约调用封装 ──────────────────────────────────────────────────────────────
 
-async def get_user_account_data(w3: AsyncWeb3, user_address: str, contracts: ProtocolContracts = CONTRACTS_V3) -> AccountSummary:
+
+async def get_user_account_data(
+    w3: AsyncWeb3, user_address: str, contracts: ProtocolContracts = CONTRACTS_V3
+) -> AccountSummary:
     contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
     result = await contract.functions.getUserAccountData(
         AsyncWeb3.to_checksum_address(user_address)
@@ -229,7 +255,9 @@ async def get_user_account_data(w3: AsyncWeb3, user_address: str, contracts: Pro
     )
 
 
-async def get_all_reserve_tokens(w3: AsyncWeb3, contracts: ProtocolContracts = CONTRACTS_V3) -> list[ReserveToken]:
+async def get_all_reserve_tokens(
+    w3: AsyncWeb3, contracts: ProtocolContracts = CONTRACTS_V3
+) -> list[ReserveToken]:
     contract = w3.eth.contract(address=contracts.data_provider, abi=DATA_PROVIDER_ABI)
     result = await contract.functions.getAllReservesTokens().call()
     return [ReserveToken(symbol=r[0], token_address=r[1]) for r in result]
@@ -256,20 +284,30 @@ async def get_user_reserve_data(
     )
 
 
-async def get_reserve_config(w3: AsyncWeb3, asset: str, contracts: ProtocolContracts = CONTRACTS_V3) -> ReserveConfig:
+async def get_reserve_config(
+    w3: AsyncWeb3, asset: str, contracts: ProtocolContracts = CONTRACTS_V3
+) -> ReserveConfig:
     contract = w3.eth.contract(address=contracts.data_provider, abi=DATA_PROVIDER_ABI)
     r = await contract.functions.getReserveConfigurationData(
         AsyncWeb3.to_checksum_address(asset)
     ).call()
     return ReserveConfig(
-        decimals=r[0], ltv=r[1], liquidation_threshold=r[2],
-        liquidation_bonus=r[3], reserve_factor=r[4],
-        usage_as_collateral_enabled=r[5], borrowing_enabled=r[6],
-        stable_borrow_rate_enabled=r[7], is_active=r[8], is_frozen=r[9],
+        decimals=r[0],
+        ltv=r[1],
+        liquidation_threshold=r[2],
+        liquidation_bonus=r[3],
+        reserve_factor=r[4],
+        usage_as_collateral_enabled=r[5],
+        borrowing_enabled=r[6],
+        stable_borrow_rate_enabled=r[7],
+        is_active=r[8],
+        is_frozen=r[9],
     )
 
 
-async def get_assets_prices(w3: AsyncWeb3, assets: list[str], contracts: ProtocolContracts = CONTRACTS_V3) -> list[int]:
+async def get_assets_prices(
+    w3: AsyncWeb3, assets: list[str], contracts: ProtocolContracts = CONTRACTS_V3
+) -> list[int]:
     contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
     checksum_assets = [AsyncWeb3.to_checksum_address(a) for a in assets]
     return list(await contract.functions.getAssetsPrices(checksum_assets).call())
@@ -319,10 +357,19 @@ async def fetch_user_position(
             reserves: list[ReservePosition] = []
             for rt, res in zip(reserve_tokens, results):
                 if isinstance(res, Exception):
-                    logger.debug("getUserReserveData 失败 asset=%s user=%s: %s", rt.token_address, user_address, res)
+                    logger.debug(
+                        "getUserReserveData 失败 asset=%s user=%s: %s",
+                        rt.token_address,
+                        user_address,
+                        res,
+                    )
                     continue
                 # 跳过未持有该资产的仓位（供给和借贷均为 0）
-                if res.current_atoken_balance == 0 and res.current_stable_debt == 0 and res.current_variable_debt == 0:
+                if (
+                    res.current_atoken_balance == 0
+                    and res.current_stable_debt == 0
+                    and res.current_variable_debt == 0
+                ):
                     continue
                 cfg = reserve_configs.get(rt.token_address)
                 reserves.append(

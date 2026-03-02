@@ -63,15 +63,17 @@ async def prefetch_common_data(w3: AsyncWeb3, contracts: ProtocolContracts) -> t
         eth_usd_raw = eth_usd_prices[0]  # V3 oracle 的 WETH 价格，8 位精度 USD
         if eth_usd_raw > 0:
             asset_prices = {
-                addr: (price * eth_usd_raw) // (10 ** 18)
+                addr: (price * eth_usd_raw) // (10**18)
                 for addr, price in asset_prices.items()
             }
             logger.info(
                 "V2 oracle 价格已从 ETH（18位）转换为 USD（8位），ETH/USD=%.2f",
-                eth_usd_raw / 10 ** 8,
+                eth_usd_raw / 10**8,
             )
         else:
-            logger.warning("无法从 V3 oracle 获取 ETH/USD 价格，V2 oracle 价格归一化跳过")
+            logger.warning(
+                "无法从 V3 oracle 获取 ETH/USD 价格，V2 oracle 价格归一化跳过"
+            )
 
     logger.info("公共数据预获取完毕")
     return reserve_tokens, reserve_configs, asset_prices
@@ -107,18 +109,25 @@ async def run_crawler(
     src_proto = source_protocol if source_protocol is not None else cfg.protocol
     src_tables = get_tables(src_proto)
     if src_proto != cfg.protocol:
-        logger.info("地址来源：%s（目标协议：%s）", src_proto.upper(), cfg.protocol.upper())
+        logger.info(
+            "地址来源：%s（目标协议：%s）", src_proto.upper(), cfg.protocol.upper()
+        )
 
     # 确保目标表已存在
     await ensure_tables(pool, tables)
 
     # 预取公共数据（所有用户共享）
-    reserve_tokens, reserve_configs, asset_prices = await prefetch_common_data(w3, contracts)
+    reserve_tokens, reserve_configs, asset_prices = await prefetch_common_data(
+        w3, contracts
+    )
 
     # 读取待处理用户
     users = await fetch_user_addresses(
-        pool, src_tables, limit=limit,
-        incremental=incremental, target_tables=tables,
+        pool,
+        src_tables,
+        limit=limit,
+        incremental=incremental,
+        target_tables=tables,
     )
     if not users:
         logger.warning("用户列表为空，退出")
@@ -174,4 +183,9 @@ async def run_crawler(
     if pending_batch and not dry_run:
         await upsert_positions(pool, pending_batch, tables)
 
-    logger.info("爬取完成：有仓位 %d，无仓位跳过 %d，RPC 报错 %d", total_ok, total_skip, total_fail)
+    logger.info(
+        "爬取完成：有仓位 %d，无仓位跳过 %d，RPC 报错 %d",
+        total_ok,
+        total_skip,
+        total_fail,
+    )

@@ -81,7 +81,13 @@ def main() -> None:
     @click.option("--host", default="0.0.0.0", show_default=True, help="监听地址")
     @click.option("--port", default=8000, show_default=True, type=int, help="端口")
     @click.option("--reload", is_flag=True, default=False, help="开发模式热重载")
-    @click.option("--workers", default=1, show_default=True, type=int, help="工作进程数（reload 时固定为 1）")
+    @click.option(
+        "--workers",
+        default=1,
+        show_default=True,
+        type=int,
+        help="工作进程数（reload 时固定为 1）",
+    )
     @click.option("--log-level", default="info", show_default=True, help="日志级别")
     def _cmd(host: str, port: int, reload: bool, workers: int, log_level: str) -> None:
         """启动 Aave 仓位查询 API 服务"""

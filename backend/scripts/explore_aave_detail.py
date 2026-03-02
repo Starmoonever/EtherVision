@@ -4,6 +4,7 @@
 - borrow/deposit 事件样本（解码地址）
 - 与 loan.aave_v* 来源表的数量对比
 """
+
 import asyncio
 from pathlib import Path
 
@@ -12,7 +13,9 @@ import yaml
 
 
 async def main():
-    raw = yaml.safe_load(Path(__file__).parent.parent.joinpath("config.yaml").read_text())
+    raw = yaml.safe_load(
+        Path(__file__).parent.parent.joinpath("config.yaml").read_text()
+    )
     pg = raw["postgres"]
     dsn = (
         f"postgresql://{pg['user']}:{pg['password']}"
@@ -42,7 +45,8 @@ async def main():
 
     # ── borrow 样本（解码） ───────────────────────────────────────────────────
     print("\n=== aave_borrows 5 rows decoded ===")
-    rows = await conn.fetch("""
+    rows = await conn.fetch(
+        """
         SELECT
             encode(b.tx_hash, 'hex')          AS tx_hash,
             encode(b.token_address, 'hex')    AS token_addr,
@@ -55,13 +59,15 @@ async def main():
         LEFT JOIN aave.aave_tokens t
                ON t.address = b.token_address AND t.type = 'Underlying'
         LIMIT 5
-    """)
+    """
+    )
     for r in rows:
         print(dict(r))
 
     # ── deposit 样本（解码） ──────────────────────────────────────────────────
     print("\n=== aave_deposits 5 rows decoded ===")
-    rows = await conn.fetch("""
+    rows = await conn.fetch(
+        """
         SELECT
             encode(d.token_address, 'hex')  AS token_addr,
             t.symbol,
@@ -73,7 +79,8 @@ async def main():
         LEFT JOIN aave.aave_tokens t
                ON t.address = d.token_address AND t.type = 'Underlying'
         LIMIT 5
-    """)
+    """
+    )
     for r in rows:
         print(dict(r))
 

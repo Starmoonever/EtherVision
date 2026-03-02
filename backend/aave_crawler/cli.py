@@ -33,15 +33,30 @@ def cli() -> None:
 
 @cli.command("crawl")
 @click.option("--config", "-c", default=None, help="config.yaml 路径（默认自动查找）")
-@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]), show_default=True, help="目标协议版本（写入哪套表）")
 @click.option(
-    "--source", "-s", default=None, type=click.Choice(["v2", "v3"]),
+    "--protocol",
+    "-p",
+    default="v3",
+    type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]),
+    show_default=True,
+    help="目标协议版本（写入哪套表）",
+)
+@click.option(
+    "--source",
+    "-s",
+    default=None,
+    type=click.Choice(["v2", "v3"]),
     help="地址来源协议版本（从哪张 weth_collateral 表读取地址）；默认与 --protocol 相同",
 )
-@click.option("--limit", "-n", default=None, type=int, help="仅处理前 N 个用户（调试用）")
+@click.option(
+    "--limit", "-n", default=None, type=int, help="仅处理前 N 个用户（调试用）"
+)
 @click.option("--dry-run", is_flag=True, default=False, help="只查询，不写入数据库")
 @click.option(
-    "--incremental", "-i", is_flag=True, default=False,
+    "--incremental",
+    "-i",
+    is_flag=True,
+    default=False,
     help="增量模式：跳过目标仓位表中已存在的地址，仅处理新增地址",
 )
 @click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
@@ -73,7 +88,8 @@ def cmd_crawl(
         pool = await create_pool(cfg.postgres)
         try:
             await run_crawler(
-                cfg, pool,
+                cfg,
+                pool,
                 limit=limit,
                 dry_run=dry_run,
                 source_protocol=source,
@@ -87,18 +103,35 @@ def cmd_crawl(
 
 @cli.command("watch")
 @click.option("--config", "-c", default=None, help="config.yaml 路径")
-@click.option("--protocol", "-p", default="v3", type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]), show_default=True, help="Aave 协议版本")
 @click.option(
-    "--interval", "-i", default=None, type=int,
+    "--protocol",
+    "-p",
+    default="v3",
+    type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]),
+    show_default=True,
+    help="Aave 协议版本",
+)
+@click.option(
+    "--interval",
+    "-i",
+    default=None,
+    type=int,
     help="轮询间隔（秒），默认读取 config.yaml 中 watcher.interval",
 )
 @click.option(
-    "--lookback", "-l", default=None, type=int,
+    "--lookback",
+    "-l",
+    default=None,
+    type=int,
     help="首次启动时回看多少分钟内的历史事件（默认 10）",
 )
 @click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
 def cmd_watch(
-    config: str | None, protocol: str, interval: int | None, lookback: int | None, verbose: bool
+    config: str | None,
+    protocol: str,
+    interval: int | None,
+    lookback: int | None,
+    verbose: bool,
 ) -> None:
     """增量监听模式：轮询 aave.aave_history，只重爬有操作的用户（持续运行）"""
     _setup_logging(verbose)
@@ -121,12 +154,15 @@ def cmd_watch(
 @cli.command("sync-addresses")
 @click.option("--config", "-c", default=None, help="config.yaml 路径")
 @click.option(
-    "--protocol", "-p",
+    "--protocol",
+    "-p",
     default=None,
     type=click.Choice(["v2", "v3", "v2_borrow", "v3_borrow"]),
     help="同步哪套来源表；省略时同步全部 4 张表",
 )
-@click.option("--dry-run", is_flag=True, default=False, help="只查询并预览，不写入数据库")
+@click.option(
+    "--dry-run", is_flag=True, default=False, help="只查询并预览，不写入数据库"
+)
 @click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
 def cmd_sync_addresses(
     config: str | None,
@@ -162,7 +198,9 @@ def cmd_sync_addresses(
                 count = await sync_addresses_from_history(pool, tables, dry_run=dry_run)
                 total_written += count
             verb = "预览" if dry_run else "写入"
-            click.echo(f"sync-addresses 完成：{verb} {total_written} 条（共 {len(protocols)} 张表）")
+            click.echo(
+                f"sync-addresses 完成：{verb} {total_written} 条（共 {len(protocols)} 张表）"
+            )
         finally:
             await pool.close()
 
@@ -190,13 +228,22 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
         w3 = await build_web3(cfg)
         reserve_tokens = await get_all_reserve_tokens(w3)
         token_addresses = [rt.token_address for rt in reserve_tokens]
-        configs_list = await asyncio.gather(*[get_reserve_config(w3, a) for a in token_addresses], return_exceptions=True)
-        reserve_configs = {a: c for a, c in zip(token_addresses, configs_list) if not isinstance(c, Exception)}
+        configs_list = await asyncio.gather(
+            *[get_reserve_config(w3, a) for a in token_addresses],
+            return_exceptions=True,
+        )
+        reserve_configs = {
+            a: c
+            for a, c in zip(token_addresses, configs_list)
+            if not isinstance(c, Exception)
+        }
         prices = await get_assets_prices(w3, token_addresses)
         asset_prices = dict(zip(token_addresses, prices))
 
         sem = asyncio.Semaphore(1)
-        pos = await fetch_user_position(w3, address, reserve_tokens, reserve_configs, asset_prices, sem)
+        pos = await fetch_user_position(
+            w3, address, reserve_tokens, reserve_configs, asset_prices, sem
+        )
         if pos:
             click.echo(json.dumps(asdict(pos), indent=2, default=str))
         else:
