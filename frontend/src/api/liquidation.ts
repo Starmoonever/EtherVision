@@ -33,6 +33,11 @@ export interface LiquidationDetailResponse {
 
 // ---------- API 函数 ----------
 
+// 模块级内存缓存，页面刷新后自动清空
+const _periodCache = new Map<string, { fetchedAt: number; data: LiqPeriodItem[] }>();
+const _detailCache = new Map<string, { fetchedAt: number; data: LiquidationDetailResponse | null }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
+
 /**
  * 获取某价格区间内各价格点的清算汇总数据。
  */
@@ -41,12 +46,21 @@ export async function fetchLiquidationPeriod(
   version: string,
   start: number,
   end: number,
+  interval: number = 1,
 ): Promise<LiqPeriodItem[]> {
+  const key = `${side}|${version}|${Math.round(start)}|${Math.round(end)}`;
+  const cached = _periodCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
   const path =
     side === 'borrow'
-      ? `/borrow/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${version}`
-      : `/liquidate/period?start=${start}&end=${end}&interval=1&eth_ratio=0.4&version=${version}`;
-  return apiFetch<LiqPeriodItem[]>(path);
+      ? `/borrow/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`
+      : `/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`;
+  const data = await apiFetch<LiqPeriodItem[]>(path);
+  _periodCache.set(key, { fetchedAt: Date.now(), data });
+  return data;
 }
 
 /**
@@ -58,6 +72,12 @@ export async function fetchLiquidationDetail(
   version: string,
   ethPrice: number,
 ): Promise<LiquidationDetailResponse | null> {
+  const key = `${side}|${version}|${Math.round(ethPrice)}`;
+  const cached = _detailCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
   const cap = ethPrice * 0.01;
   const path =
     side === 'borrow'
@@ -65,7 +85,12 @@ export async function fetchLiquidationDetail(
       : `/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`;
 
   const response = await apiFetchRaw(path);
-  if (response.status === 422) return null;
+  if (response.status === 422) {
+    _detailCache.set(key, { fetchedAt: Date.now(), data: null });
+    return null;
+  }
   if (!response.ok) throw new Error(`API error ${response.status}: ${path}`);
-  return response.json() as Promise<LiquidationDetailResponse>;
+  const data = await response.json() as LiquidationDetailResponse;
+  _detailCache.set(key, { fetchedAt: Date.now(), data });
+  return data;
 }

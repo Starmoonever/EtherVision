@@ -61,26 +61,26 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
         }[] = [];
 
         // 获取数据函数
-        const fetchData = (v: string) => fetchLiquidationPeriod(side, v, start, end);
+        const fetchData = (v: string) => fetchLiquidationPeriod(side, v, start, end, 5);
 
         if (version === 'all') {
           const [v2Data, v3Data] = await Promise.all([fetchData('v2'), fetchData('v3')]);
 
-          // 合并数据
-          // 假设数据按价格排序，或者我们需要按价格聚合并累加 total_liquidation_usd
-          const mergedMap = new Map<string, {
+          // 以 $1 整数价格为 key 对 v2/v3 数据对齐求和
+          // interval=1 代表后端每 $1 出一个数据点，用 Math.round 消除浮点偏差
+          const mergedMap = new Map<number, {
             simulated_eth_price: string;
             positions_cnt: number;
             total_liquidation_usd: number;
           }>();
 
           [...v2Data, ...v3Data].forEach(item => {
-            const priceKey = parseFloat(item.simulated_eth_price).toFixed(2); // 统一精度作为 key
+            const priceKey = Math.round(parseFloat(item.simulated_eth_price));
             if (!mergedMap.has(priceKey)) {
               mergedMap.set(priceKey, {
-                simulated_eth_price: item.simulated_eth_price,
+                simulated_eth_price: priceKey.toString(),
                 positions_cnt: 0,
-                total_liquidation_usd: 0
+                total_liquidation_usd: 0,
               });
             }
             const entry = mergedMap.get(priceKey)!;
@@ -91,7 +91,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
           dataList = Array.from(mergedMap.values()).map(item => ({
             simulated_eth_price: item.simulated_eth_price,
             positions_cnt: item.positions_cnt.toString(),
-            total_liquidation_usd: item.total_liquidation_usd.toString()
+            total_liquidation_usd: item.total_liquidation_usd.toString(),
           }));
         } else {
           dataList = await fetchData(version);
