@@ -125,7 +125,7 @@ export function MarketAssessment() {
             padding: '1rem',
             border: '1px solid #1e293b',
           }}>
-            <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} side={side} />
+            <LiquidationChart currentEthPrice={ethPrice} priceChange={priceChange} version={version} side={side} onPriceChange={setPriceChange} />
           </div>
         </div>
 

@@ -19,6 +19,7 @@ interface LiquidationChartProps {
   priceChange: number;
   version: 'v2' | 'v3' | 'all';
   side: 'collateral' | 'borrow';
+  onPriceChange?: (value: number) => void;
 }
 
 interface ChartDataPoint {
@@ -29,7 +30,7 @@ interface ChartDataPoint {
   isCurrent: boolean;
 }
 
-export function LiquidationChart({ currentEthPrice, priceChange, version, side }: LiquidationChartProps) {
+export function LiquidationChart({ currentEthPrice, priceChange, version, side, onPriceChange }: LiquidationChartProps) {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -277,16 +278,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
       <div className="chart-header" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}> ETH 清算量 </span>
         <button
-          onClick={handleShowDetails}
+          onClick={version === 'all' ? undefined : handleShowDetails}
+          disabled={version === 'all'}
+          title={version === 'all' ? '合并模式下不支持查询明细' : undefined}
           style={{
             background: '#1e293b',
-            color: '#94a3b8',
+            color: version === 'all' ? '#475569' : '#94a3b8',
             border: '1px solid #334155',
             padding: '0.3rem 0.8rem',
             borderRadius: '6px',
             fontSize: '0.8rem',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
+            cursor: version === 'all' ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s',
+            opacity: version === 'all' ? 0.5 : 1,
           }}
         >
           查询明细
@@ -295,7 +299,10 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
 
       <div style={{ minWidth: 0 }}>
         <ResponsiveContainer width="100%" height={300}>
-          <ComposedChart data={highlightedData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+          <ComposedChart
+            data={highlightedData}
+            margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
             <XAxis
               dataKey="priceLabel"
@@ -337,6 +344,15 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side }
               radius={[4, 4, 0, 0]}
               fill="#334155"
               activeBar={{ fill: '#4a6080' }}
+              style={{ cursor: onPriceChange ? 'pointer' : undefined }}
+              onClick={(barData) => {
+                if (!onPriceChange) return;
+                const clickedPrice: number = (barData as unknown as { price: number }).price;
+                const rawPct = Math.round((clickedPrice / currentEthPrice - 1) * 100);
+                const min = side === 'collateral' ? -100 : 0;
+                const max = side === 'collateral' ? 0 : 100;
+                onPriceChange(Math.max(min, Math.min(max, rawPct)));
+              }}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               shape={(props: any) => {
                 const { x, y, width, height, index } = props;
