@@ -1,6 +1,6 @@
 # aave-liquidation（前端）
 
-交互式查询 Aave V3 Base Mainnet 上单个钱包的仓位数据，展示抵押物、借贷明细及 USD 估值。
+Aave V2 / V3 ETH 市场清算风险监测看板（数据库版）。通过内部后端 API 查询链上爬取的仓位数据，提供个人账户分析与宏观市场评估两大功能模块。
 
 ## 依赖
 
@@ -16,22 +16,21 @@ cd frontend
 pnpm install
 ```
 
-### 2. 配置
+### 2. 配置后端 API 地址
 
-```bash
-cp config.yaml.example config.yaml
+前端通过环境变量 `VITE_API_BASE_URL` 连接后端 API。默认值（`.env`）：
+
+```dotenv
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-编辑 `config.yaml`：
+如需修改，在 `frontend/` 目录下创建 `.env.local` 并覆盖该变量：
 
-```yaml
-# Base 网络 RPC 端点
-# 留空则自动轮换公共节点（可能触发限流，建议配置私有节点）
-rpc_url: "http://your-rpc-node:port/"
+```dotenv
+VITE_API_BASE_URL=http://10.1.5.183:8000/api
 ```
 
-> `config.yaml` 已加入 `.gitignore`，不会提交到版本控制。
-> Vite 在启动/构建时读取此文件，修改后需重启开发服务器。
+> `.env.local` 已加入 `.gitignore`，不会提交到版本控制。
 
 ### 3. 启动开发服务器
 
@@ -78,41 +77,59 @@ server {
 }
 ```
 
-**注意**：RPC 端点在构建时注入，如需更换节点，修改 `config.yaml` 后须重新执行 `pnpm build`。
+**注意**：`VITE_API_BASE_URL` 在构建时注入，如需更换后端地址，修改环境变量后须重新执行 `pnpm build`。
 
 ## 使用说明
 
+### 全局筛选
+
+页面顶部提供两组切换按钮，作用于所有功能模块：
+
+- **抵押端 / 借贷端**：切换关注维度（抵押 ETH 下跌风险 vs 借贷 WETH 上涨风险）
+- **V2 / V3 / ALL**：筛选 Aave 协议版本
+
+### 个人账户分析
+
 1. 在输入框中粘贴钱包地址（支持 EIP-55 校验和地址和小写地址）
-2. 点击**查询**，等待链上数据加载
+2. 点击**查询仓位**
 3. 页面展示：
-   - 账户汇总（总抵押物、总借贷、健康系数、LTV）
-   - 供给明细（资产、单价、余额、USD 估值）
-   - 借贷明细（稳定借贷、浮动借贷、合计 USD）
+   - **账户概览**：ETH 抵押数量与 USD 价值、总抵押、可借额度、总债务、清算价格、健康因子、当前 LTV、清算阈值
+   - **资产负债**：已供给资产（Supplied）与已借出负债（Borrowed）明细表
+
+### 宏观市场评估
+
+- **ETH 实时价格**：每 10 分钟轮询后端 Oracle 数据
+- **ETH 价格走势**：支持 24h / 7D / 3M 时间范围，历史价格折线图，带 5 分钟本地缓存
+- **价格波动清算模拟**：通过滑块设置 -100% ~ +200% 价格变动幅度，预览模拟价格
+- **清算分布柱状图**：展示各价格区间内待清算 USD 总量，点击柱子可查看该价格下触发清算的仓位列表
+
+## 后端 API 说明
+
+前端依赖以下 API 端点（均以 `VITE_API_BASE_URL` 为基础路径）：
+
+| 端点                                                                         | 用途                   |
+| ---------------------------------------------------------------------------- | ---------------------- |
+| `GET /user/position?address=&version=`                                       | 查询单个用户仓位概览   |
+| `GET /price?asset=eth&time=now`                                              | 获取 ETH 实时价格      |
+| `GET /price/period?asset=eth&start=&end=&interval=`                          | 获取 ETH 历史价格序列  |
+| `GET /liquidate/period?start=&end=&interval=1&eth_ratio=0.4&version=`        | 抵押端各价格区间清算量 |
+| `GET /borrow/liquidate/period?start=&end=&interval=1&eth_ratio=0.4&version=` | 借贷端各价格区间清算量 |
 
 ## 项目结构
 
 ```
 frontend/
-├── config.yaml.example
-├── config.yaml              # 本地配置（gitignored）
-├── vite.config.ts           # 读取 config.yaml，注入 RPC 地址
+├── .env                     # 默认环境变量（VITE_API_BASE_URL）
+├── config.yaml              # 本地配置（RPC 地址，由 vite.config.ts 注入为 VITE_RPC_URL）
+├── vite.config.ts           # 读取 config.yaml，注入构建时变量
 ├── index.html
 └── src/
-    ├── App.tsx
-    ├── lib/
-    │   └── aave.ts          # 合约调用逻辑（viem）
+    ├── App.tsx              # 根组件：标签页、版本/侧边切换、路由渲染
     └── components/
-        ├── AddressInput.tsx
-        ├── SummaryCard.tsx
-        └── PositionTable.tsx
+        ├── AddressInput.tsx     # 地址输入框，viem isAddress 校验
+        ├── SummaryCard.tsx      # 账户概览卡片
+        ├── PositionTable.tsx    # 供给 / 借贷明细表
+        ├── MarketAssessment.tsx # 宏观市场评估容器
+        ├── LiquidationChart.tsx # 清算分布柱状图 + 仓位明细弹窗
+        └── EthPriceTrend.tsx    # ETH 价格走势折线图
 ```
-
-## 公共 RPC 节点（内置后备）
-
-未配置 `rpc_url` 或自定义节点不可用时，自动按序尝试：
-
-1. `https://base.llamarpc.com`
-2. `https://base-rpc.publicnode.com`
-3. `https://1rpc.io/base`
-4. `https://base.drpc.org`
-5. `https://mainnet.base.org`
