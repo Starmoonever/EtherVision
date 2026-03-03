@@ -19,5 +19,6 @@ dist/
 .pytest_cache/
 
 *.log
+watchers.pid
 
 derived_users/
