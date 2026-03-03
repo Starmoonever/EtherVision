@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Generator
 from unittest.mock import MagicMock
 
 import pytest
@@ -272,7 +273,7 @@ def app() -> FastAPI:
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
+def client(app: FastAPI) -> Generator[TestClient, None, None]:
     with TestClient(app) as c:
         yield c
 

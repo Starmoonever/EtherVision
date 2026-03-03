@@ -17,7 +17,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from starlette.testclient import TestClient
 from tests.conftest import (ADDR, MOCK_BORROW_POSITIONS_LIST,
                             MOCK_BORROW_USER_POSITION, MOCK_HIST_POSITION,
