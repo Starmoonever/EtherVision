@@ -216,8 +216,9 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
     import json
     from dataclasses import asdict
 
-    from .rpc import (build_web3, fetch_user_position, get_all_reserve_tokens,
-                      get_assets_prices, get_reserve_config)
+    from .rpc import (EMPTY_POSITION, build_web3, fetch_user_position,
+                      get_all_reserve_tokens, get_assets_prices,
+                      get_reserve_config)
 
     _setup_logging(verbose)
     cfg = load_config(config)
@@ -244,9 +245,11 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
         pos = await fetch_user_position(
             w3, address, reserve_tokens, reserve_configs, asset_prices, sem
         )
-        if pos:
-            click.echo(json.dumps(asdict(pos), indent=2, default=str))
+        if pos is None:
+            click.echo(f"RPC 调用失败，无法查询仓位: {address}")
+        elif pos is EMPTY_POSITION:
+            click.echo(f"该地址在 Aave 无任何抵押/借贷仓位: {address}")
         else:
-            click.echo(f"查询失败或该地址无 Aave 仓位: {address}")
+            click.echo(json.dumps(asdict(pos), indent=2, default=str))
 
     asyncio.run(_run())
