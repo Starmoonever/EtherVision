@@ -65,7 +65,15 @@ export default function App() {
           </div>
 
           {/* 导航 Tab */}
-          <div style={{ display: 'flex', justifyContent: 'center', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              background: '#1e293b',
+              borderRadius: '8px',
+              padding: '2px',
+            }}
+          >
             <button
               onClick={() => setActiveTab('personal')}
               style={{
@@ -125,12 +133,32 @@ export default function App() {
               <div className="results-container" style={{ marginTop: '2rem' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                   {/* V2 版块 */}
-                  <div style={{ border: '1px solid #334155', borderRadius: '14px', padding: '1.25rem', background: '#0d1117', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div
+                    style={{
+                      border: '1px solid #334155',
+                      borderRadius: '14px',
+                      padding: '1.25rem',
+                      background: '#0d1117',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                    }}
+                  >
                     <SummaryCard address={queriedAddress} version="v2" {...v2State} />
                     <PositionTable version="v2" {...v2State} />
                   </div>
                   {/* V3 版块 */}
-                  <div style={{ border: '1px solid #334155', borderRadius: '14px', padding: '1.25rem', background: '#0d1117', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div
+                    style={{
+                      border: '1px solid #334155',
+                      borderRadius: '14px',
+                      padding: '1.25rem',
+                      background: '#0d1117',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                    }}
+                  >
                     <SummaryCard address={queriedAddress} version="v3" {...v3State} />
                     <PositionTable version="v3" {...v3State} />
                   </div>
@@ -149,9 +177,7 @@ export default function App() {
         )}
       </main>
 
-      <footer className="app-footer">
-        数据来源：内网 API | Ethereum Mainnet
-      </footer>
+      <footer className="app-footer">数据来源：内网 API | Ethereum Mainnet</footer>
     </div>
   );
 }

@@ -7,12 +7,21 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer
+  ResponsiveContainer,
 } from 'recharts';
 import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
-import type { LiquidationPosition as Position, LiquidationDetailResponse as LiquidationData } from '../api';
+import type {
+  LiquidationPosition as Position,
+  LiquidationDetailResponse as LiquidationData,
+} from '../api';
 
-type SortField = 'eth_collateral_amount' | 'eth_collateral_usd' | 'total_debt_usd' | 'weth_debt_amount' | 'weth_debt_usd' | 'total_collateral_usd';
+type SortField =
+  | 'eth_collateral_amount'
+  | 'eth_collateral_usd'
+  | 'total_debt_usd'
+  | 'weth_debt_amount'
+  | 'weth_debt_usd'
+  | 'total_collateral_usd';
 
 interface LiquidationChartProps {
   currentEthPrice: number;
@@ -30,7 +39,13 @@ interface ChartDataPoint {
   isCurrent: boolean;
 }
 
-export function LiquidationChart({ currentEthPrice, priceChange, version, side, onPriceChange }: LiquidationChartProps) {
+export function LiquidationChart({
+  currentEthPrice,
+  priceChange,
+  version,
+  side,
+  onPriceChange,
+}: LiquidationChartProps) {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -69,13 +84,16 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
 
           // 以 $1 整数价格为 key 对 v2/v3 数据对齐求和
           // interval=1 代表后端每 $1 出一个数据点，用 Math.round 消除浮点偏差
-          const mergedMap = new Map<number, {
-            simulated_eth_price: string;
-            positions_cnt: number;
-            total_liquidation_usd: number;
-          }>();
+          const mergedMap = new Map<
+            number,
+            {
+              simulated_eth_price: string;
+              positions_cnt: number;
+              total_liquidation_usd: number;
+            }
+          >();
 
-          [...v2Data, ...v3Data].forEach(item => {
+          [...v2Data, ...v3Data].forEach((item) => {
             const priceKey = Math.round(parseFloat(item.simulated_eth_price));
             if (!mergedMap.has(priceKey)) {
               mergedMap.set(priceKey, {
@@ -89,7 +107,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
             entry.total_liquidation_usd += parseFloat(item.total_liquidation_usd);
           });
 
-          dataList = Array.from(mergedMap.values()).map(item => ({
+          dataList = Array.from(mergedMap.values()).map((item) => ({
             simulated_eth_price: item.simulated_eth_price,
             positions_cnt: item.positions_cnt.toString(),
             total_liquidation_usd: item.total_liquidation_usd.toString(),
@@ -129,7 +147,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
           }
         }
 
-        const chartPoints: ChartDataPoint[] = rangeSteps.map(step => {
+        const chartPoints: ChartDataPoint[] = rangeSteps.map((step) => {
           const simPrice = currentEthPrice * (1 + step / 100);
 
           // 在 dataList 中寻找最接近 simPrice 的点
@@ -150,14 +168,15 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
 
           // 如果找不到接近的（比如差异太大），则认为无数据
           // 这里设定一个阈值，比如 5 USD
-          if (!closest || minDiff > 100) { // 阈值可调整
+          if (!closest || minDiff > 100) {
+            // 阈值可调整
             // 如果找不到匹配点，value 设为 0
             return {
               price: simPrice,
               priceLabel: `${step > 0 ? '+' : ''}${step}%`,
               liquidationValue: 0,
               liquidationAmount: 0,
-              isCurrent: false
+              isCurrent: false,
             };
           }
 
@@ -165,8 +184,8 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
             price: simPrice,
             priceLabel: `${step > 0 ? '+' : ''}${step}%`,
             liquidationValue: parseFloat(closest.total_liquidation_usd) / 1.05,
-            liquidationAmount: (parseFloat(closest.total_liquidation_usd) / 1.05) / simPrice,
-            isCurrent: false
+            liquidationAmount: parseFloat(closest.total_liquidation_usd) / 1.05 / simPrice,
+            isCurrent: false,
           };
         });
 
@@ -181,9 +200,9 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
     fetchRangeData();
   }, [currentEthPrice, version, side]);
 
-  const highlightedData = chartData.map(d => ({
+  const highlightedData = chartData.map((d) => ({
     ...d,
-    isCurrent: Math.abs(d.price - selectedPrice) < (currentEthPrice * 0.0025)
+    isCurrent: Math.abs(d.price - selectedPrice) < currentEthPrice * 0.0025,
   }));
 
   const handleShowDetails = async () => {
@@ -213,7 +232,6 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
           totalLiqUsd += parseFloat(v3Res.total_liquidation_usd);
           posCnt += parseInt(v3Res.positions_cnt);
         }
-
       } else {
         const res = await fetchDetail(version);
         if (res) {
@@ -227,17 +245,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
         simulated_eth_price: selectedPrice.toString(),
         positions: positions,
         positions_cnt: posCnt.toString(),
-        total_liquidation_usd: totalLiqUsd.toString()
+        total_liquidation_usd: totalLiqUsd.toString(),
       };
 
       // 初始排序，默认按 sortField (如果是 borrow 模式，可能默认排序字段不同)
       // 如果是借贷端，默认按 total_collateral_usd 排序，或者是 weth_debt_usd
-      const initialSortField: SortField = side === 'borrow' ? 'weth_debt_usd' : 'eth_collateral_usd';
+      const initialSortField: SortField =
+        side === 'borrow' ? 'weth_debt_usd' : 'eth_collateral_usd';
       setSortField(initialSortField);
 
       if (result.positions) {
-        result.positions.sort((a: Position, b: Position) =>
-          parseFloat(b[initialSortField] || '0') - parseFloat(a[initialSortField] || '0')
+        result.positions.sort(
+          (a: Position, b: Position) =>
+            parseFloat(b[initialSortField] || '0') - parseFloat(a[initialSortField] || '0'),
         );
       }
 
@@ -253,7 +273,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
 
   // 当 sortField 改变时，重新排序 modalData
   useEffect(() => {
-    setModalData(prev => {
+    setModalData((prev) => {
       if (!prev?.positions) return prev;
       const sortedPositions = [...prev.positions].sort((a, b) => {
         const valA = parseFloat(a[sortField] || '0');
@@ -266,7 +286,10 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
 
   if (loading && chartData.length === 0) {
     return (
-      <div className="chart-container" style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div
+        className="chart-container"
+        style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
         <div className="spinner"></div>
       </div>
     );
@@ -275,8 +298,19 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
   // 修复图表宽度问题，确保ResponsiveContainer有确定的父容器大小
   return (
     <div className="chart-container" style={{ width: '100%', minHeight: '400px' }}>
-      <div className="chart-header" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}> ETH 清算量 </span>
+      <div
+        className="chart-header"
+        style={{
+          marginBottom: '1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}>
+          {' '}
+          ETH 清算量{' '}
+        </span>
         <button
           onClick={version === 'all' ? undefined : handleShowDetails}
           disabled={version === 'all'}
@@ -307,7 +341,13 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
             <XAxis
               dataKey="priceLabel"
               stroke="#64748b"
-              label={{ value: side === 'borrow' ? '价格上涨幅度' : '价格下降幅度', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 12 }}
+              label={{
+                value: side === 'borrow' ? '价格上涨幅度' : '价格下降幅度',
+                position: 'insideBottom',
+                offset: -5,
+                fill: '#64748b',
+                fontSize: 12,
+              }}
             />
             {/* 左轴：清算价值 (USD) */}
             <YAxis
@@ -320,14 +360,27 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
               yAxisId="right"
               orientation="right"
               stroke="#a78bfa"
-              tickFormatter={(value) => `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+              tickFormatter={(value) =>
+                `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+              }
             />
             <Tooltip
               cursor={{ fill: '#1e293b', opacity: 0.4 }}
-              contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#e2e8f0' }}
+              contentStyle={{
+                backgroundColor: '#0f172a',
+                borderColor: '#1e293b',
+                color: '#e2e8f0',
+              }}
               itemStyle={{ color: '#f87171' }}
-              formatter={(value: number | string | (number | string)[] | undefined, name: string | undefined) => {
-                if (name === 'liquidationAmount') return [`${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ETH`, '清算数量'];
+              formatter={(
+                value: number | string | (number | string)[] | undefined,
+                name: string | undefined,
+              ) => {
+                if (name === 'liquidationAmount')
+                  return [
+                    `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ETH`,
+                    '清算数量',
+                  ];
                 return [`$${Number(value).toLocaleString()}`, '清算价值'];
               }}
               labelFormatter={(label, payload) => {
@@ -358,7 +411,9 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
                 const { x, y, width, height, index } = props;
                 const entry = highlightedData[index as number];
                 const color = entry?.isCurrent ? '#ef4444' : '#334155';
-                return <rect x={x} y={y} width={width} height={height} fill={color} rx={4} ry={4} />;
+                return (
+                  <rect x={x} y={y} width={width} height={height} fill={color} rx={4} ry={4} />
+                );
               }}
             />
             <Line
@@ -374,55 +429,95 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
         </ResponsiveContainer>
       </div>
 
-      <div className="chart-footer" style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}>
-        模拟ETH价格: <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-        ({priceChange > 0 ? '+' : ''}{priceChange}%)
+      <div
+        className="chart-footer"
+        style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}
+      >
+        模拟ETH价格:{' '}
+        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>
+          ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </span>
+        ({priceChange > 0 ? '+' : ''}
+        {priceChange}%)
       </div>
-      <div className="chart-footer" style={{ textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}>
+      <div
+        className="chart-footer"
+        style={{ textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}
+      >
         该清算价格增减1%区间内，
-        <span style={{ color: '#f87171', fontWeight: 'bold' }}>{modalData?.positions?.length || 0}</span> 个仓位面临清算
+        <span style={{ color: '#f87171', fontWeight: 'bold' }}>
+          {modalData?.positions?.length || 0}
+        </span>{' '}
+        个仓位面临清算
       </div>
 
       {/* Modal Overlay */}
       {showModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.7)',
-          zIndex: 100,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          backdropFilter: 'blur(4px)'
-        }}>
-          <div style={{
-            background: '#0f172a',
-            border: '1px solid #334155',
-            borderRadius: '12px',
-            width: '90%',
-            maxWidth: '800px',
-            maxHeight: '80vh',
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.7)',
+            zIndex: 100,
             display: 'flex',
-            flexDirection: 'column',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
-          }}>
-            <div style={{ padding: '1.2rem', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            justifyContent: 'center',
+            alignItems: 'center',
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              borderRadius: '12px',
+              width: '90%',
+              maxWidth: '800px',
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <div
+              style={{
+                padding: '1.2rem',
+                borderBottom: '1px solid #1e293b',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <h3 style={{ margin: 0, color: '#e2e8f0' }}>
-                  ETH 清算价格在  <span style={{ fontSize: '1.0rem', color: '#94a3b8', fontWeight: 'normal' }}> ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>浮动的账户
+                  ETH 清算价格在{' '}
+                  <span style={{ fontSize: '1.0rem', color: '#94a3b8', fontWeight: 'normal' }}>
+                    {' '}
+                    ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                  浮动的账户
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                  在 ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} 清算价格增减1%区间内，
-                  <span style={{ color: '#f87171', fontWeight: 'bold' }}> {modalData?.positions?.length || 0} </span>
+                  在 ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}{' '}
+                  清算价格增减1%区间内，
+                  <span style={{ color: '#f87171', fontWeight: 'bold' }}>
+                    {' '}
+                    {modalData?.positions?.length || 0}{' '}
+                  </span>
                   个仓位面临清算
                 </span>
               </div>
               <button
                 onClick={() => setShowModal(false)}
-                style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '1.5rem', cursor: 'pointer' }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#64748b',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                }}
               >
                 ×
               </button>
@@ -441,7 +536,7 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
                     padding: '0.4rem',
                     borderRadius: '6px',
                     fontSize: '0.9rem',
-                    outline: 'none'
+                    outline: 'none',
                   }}
                 >
                   {side === 'borrow' ? (
@@ -461,24 +556,42 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
               </div>
 
               {modalLoading ? (
-                <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>加载中...</div>
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                  加载中...
+                </div>
               ) : modalData?.positions && modalData.positions.length > 0 ? (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid #334155' }}>
-                      <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>地址</th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>清算价格</th>
+                      <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>
+                        地址
+                      </th>
+                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                        清算价格
+                      </th>
                       {side === 'borrow' ? (
                         <>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>借出 ETH 数量</th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>借出 ETH 价值</th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总抵押</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            借出 ETH 数量
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            借出 ETH 价值
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            仓位总抵押
+                          </th>
                         </>
                       ) : (
                         <>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 数量</th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>抵押 ETH 价值</th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>仓位总债务</th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            抵押 ETH 数量
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            抵押 ETH 价值
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            仓位总债务
+                          </th>
                         </>
                       )}
                     </tr>
@@ -486,34 +599,57 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
                   <tbody>
                     {modalData.positions.map((pos, idx) => (
                       <tr key={idx} style={{ borderBottom: '1px solid #1e293b' }}>
-                        <td style={{ padding: '0.8rem', color: '#cbd5e1', fontFamily: 'monospace' }}>
+                        <td
+                          style={{ padding: '0.8rem', color: '#cbd5e1', fontFamily: 'monospace' }}
+                        >
                           {pos.address.slice(0, 6)}...{pos.address.slice(-4)}
                         </td>
                         <td style={{ textAlign: 'right', padding: '0.8rem', color: '#f87171' }}>
-                          ${parseFloat(side === 'borrow' ? (pos.liq_price_rise || '0') : pos.liq_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          $
+                          {parseFloat(
+                            side === 'borrow' ? pos.liq_price_rise || '0' : pos.liq_price,
+                          ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </td>
                         {side === 'borrow' ? (
                           <>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              {parseFloat(pos.weth_debt_amount || '0').toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                              {parseFloat(pos.weth_debt_amount || '0').toLocaleString(undefined, {
+                                maximumFractionDigits: 4,
+                              })}
                             </td>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              ${parseFloat(pos.weth_debt_usd || '0').toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              $
+                              {parseFloat(pos.weth_debt_usd || '0').toLocaleString(undefined, {
+                                maximumFractionDigits: 2,
+                              })}
                             </td>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
-                              ${parseFloat(pos.total_collateral_usd || '0').toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              $
+                              {parseFloat(pos.total_collateral_usd || '0').toLocaleString(
+                                undefined,
+                                { maximumFractionDigits: 2 },
+                              )}
                             </td>
                           </>
                         ) : (
                           <>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              {parseFloat(pos.eth_collateral_amount || '0').toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                              {parseFloat(pos.eth_collateral_amount || '0').toLocaleString(
+                                undefined,
+                                { maximumFractionDigits: 4 },
+                              )}
                             </td>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              ${parseFloat(pos.eth_collateral_usd || '0').toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              $
+                              {parseFloat(pos.eth_collateral_usd || '0').toLocaleString(undefined, {
+                                maximumFractionDigits: 2,
+                              })}
                             </td>
                             <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
-                              ${parseFloat(pos.total_debt_usd || '0').toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              $
+                              {parseFloat(pos.total_debt_usd || '0').toLocaleString(undefined, {
+                                maximumFractionDigits: 2,
+                              })}
                             </td>
                           </>
                         )}
@@ -522,7 +658,9 @@ export function LiquidationChart({ currentEthPrice, priceChange, version, side, 
                   </tbody>
                 </table>
               ) : (
-                <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>该价格点无清算数据</div>
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
+                  该价格点无清算数据
+                </div>
               )}
             </div>
           </div>

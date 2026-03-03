@@ -22,12 +22,7 @@ export interface UserPosition {
  * @param address  以太坊地址
  * @param version  协议版本（v2 / v3），不传则由后端使用默认值
  */
-export async function fetchUserPosition(
-  address: string,
-  version?: string,
-): Promise<UserPosition> {
-  const query = version
-    ? `address=${address}&version=${version}`
-    : `address=${address}`;
+export async function fetchUserPosition(address: string, version?: string): Promise<UserPosition> {
+  const query = version ? `address=${address}&version=${version}` : `address=${address}`;
   return apiFetch<UserPosition>(`/user/position?${query}`);
 }

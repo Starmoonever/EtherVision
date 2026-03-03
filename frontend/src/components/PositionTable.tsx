@@ -20,34 +20,64 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
   const versionLabel = version.toUpperCase();
 
   const headerBadge_found = (
-    <span className="badge" style={{ background: '#1e293b', color: '#a78bfa', border: '1px solid #4c1d95', fontWeight: 700 }}>
+    <span
+      className="badge"
+      style={{
+        background: '#1e293b',
+        color: '#a78bfa',
+        border: '1px solid #4c1d95',
+        fontWeight: 700,
+      }}
+    >
       {versionLabel}
     </span>
   );
 
   const headerBadge_empty = (
-    <span className="badge" style={{ background: '#1e293b', color: '#64748b', border: '1px solid #334155' }}>
+    <span
+      className="badge"
+      style={{ background: '#1e293b', color: '#64748b', border: '1px solid #334155' }}
+    >
       {versionLabel}
     </span>
   );
 
-  if (loading) return (
-    <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px', gap: '0.75rem' }}>
-      <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}></div>
-    </div>
-  );
+  if (loading)
+    return (
+      <div
+        className="card"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '120px',
+          gap: '0.75rem',
+        }}
+      >
+        <div
+          className="spinner"
+          style={{ width: '20px', height: '20px', borderWidth: '2px' }}
+        ></div>
+      </div>
+    );
 
-  if (notFound) return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: '200px' }}>
-      <div className="card-header">
-        <span className="card-title">资产负债情况</span>
-        {notFound? headerBadge_empty : headerBadge_found}
+  if (notFound)
+    return (
+      <div
+        className="card"
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minHeight: '200px' }}
+      >
+        <div className="card-header">
+          <span className="card-title">资产负债情况</span>
+          {notFound ? headerBadge_empty : headerBadge_found}
+        </div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <p className="empty-text" style={{ margin: 0 }}>
+            该地址在 Aave {versionLabel} 暂无仓位记录
+          </p>
+        </div>
       </div>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p className="empty-text" style={{ margin: 0 }}>该地址在 Aave {versionLabel} 暂无仓位记录</p>
-      </div>
-    </div>
-  );
+    );
 
   if (!position) return null;
 
@@ -64,7 +94,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
       symbol: 'ETH',
       priceUSD: ethAmount > 0 ? ethValue / ethAmount : 0,
       balance: position.eth_collateral_amount,
-      valueUSD: ethValue
+      valueUSD: ethValue,
     });
   }
 
@@ -76,7 +106,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
       symbol: 'Total Debt',
       priceUSD: 1,
       balance: position.total_debt_usd,
-      valueUSD: debtValue
+      valueUSD: debtValue,
     });
   }
 
@@ -109,11 +139,32 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
               <tbody>
                 {supplies.map((r) => (
                   <tr key={r.tokenAddress}>
-                    <td><span className="token-symbol">{r.symbol}</span></td>
-                    <td className="right mono">${r.priceUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="right mono">{parseFloat(r.balance).toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 })}</td>
-                    <td className="right mono bold">${r.valueUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="center"><span className="pill green-pill">是</span></td>
+                    <td>
+                      <span className="token-symbol">{r.symbol}</span>
+                    </td>
+                    <td className="right mono">
+                      $
+                      {r.priceUSD.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    <td className="right mono">
+                      {parseFloat(r.balance).toLocaleString(undefined, {
+                        minimumFractionDigits: 6,
+                        maximumFractionDigits: 6,
+                      })}
+                    </td>
+                    <td className="right mono bold">
+                      $
+                      {r.valueUSD.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    <td className="center">
+                      <span className="pill green-pill">是</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -129,8 +180,21 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
             <span className="card-title">负债 (Borrowed)</span>
             {headerBadge_found}
             {Number(position.available_borrows_usd) > 0 && (
-              <span className="badge" style={{ backgroundColor: '#1e293b', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 'normal', border: '1px solid #334155' }}>
-                可借额度: ${parseFloat(position.available_borrows_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <span
+                className="badge"
+                style={{
+                  backgroundColor: '#1e293b',
+                  color: '#94a3b8',
+                  fontSize: '0.75rem',
+                  fontWeight: 'normal',
+                  border: '1px solid #334155',
+                }}
+              >
+                可借额度: $
+                {parseFloat(position.available_borrows_usd).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
               </span>
             )}
           </div>
@@ -153,10 +217,23 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
               <tbody>
                 {borrows.map((r) => (
                   <tr key={r.tokenAddress}>
-                    <td><span className="token-symbol">{r.symbol}</span></td>
+                    <td>
+                      <span className="token-symbol">{r.symbol}</span>
+                    </td>
                     <td className="right mono">-</td>
-                    <td className="right mono bold">{parseFloat(r.balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="right mono bold red-text">${r.valueUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="right mono bold">
+                      {parseFloat(r.balance).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    <td className="right mono bold red-text">
+                      $
+                      {r.valueUSD.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </td>
                   </tr>
                 ))}
               </tbody>

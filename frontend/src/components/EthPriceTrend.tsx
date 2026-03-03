@@ -6,7 +6,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer
+  ResponsiveContainer,
 } from 'recharts';
 import { fetchEthPricePeriod } from '../api';
 import type { PricePeriodItem } from '../api';
@@ -56,8 +56,7 @@ export function EthPriceTrend() {
             break;
         }
 
-        const formatDate = (date: Date) =>
-          date.toISOString().slice(0, 19).replace('T', ' ');
+        const formatDate = (date: Date) => date.toISOString().slice(0, 19).replace('T', ' ');
 
         const startStr = formatDate(startTime);
         const endStr = formatDate(now);
@@ -91,9 +90,24 @@ export function EthPriceTrend() {
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.75rem',
+        }}
+      >
         <span className="card-title">历史趋势</span>
-        <div style={{ display: 'flex', gap: '0.5rem', background: '#1e293b', padding: '0.2rem', borderRadius: '0.5rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.5rem',
+            background: '#1e293b',
+            padding: '0.2rem',
+            borderRadius: '0.5rem',
+          }}
+        >
           {(['24h', '7D', '3M'] as const).map((range) => (
             <button
               key={range}
@@ -107,7 +121,7 @@ export function EthPriceTrend() {
                 cursor: 'pointer',
                 fontSize: '0.85rem',
                 fontWeight: 500,
-                transition: 'all 0.2s'
+                transition: 'all 0.2s',
               }}
             >
               {range}
@@ -118,19 +132,16 @@ export function EthPriceTrend() {
 
       <div style={{ minWidth: 0 }}>
         {loading ? (
-           <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-             <div className="spinner"></div>
-           </div>
+          <div
+            style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <div className="spinner"></div>
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis
-                dataKey="time"
-                stroke="#64748b"
-                tick={{ fontSize: 11 }}
-                minTickGap={40}
-              />
+              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} minTickGap={40} />
               <YAxis
                 stroke="#64748b"
                 domain={['auto', 'auto']}
@@ -138,9 +149,16 @@ export function EthPriceTrend() {
                 width={65}
               />
               <Tooltip
-                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#e2e8f0' }}
+                contentStyle={{
+                  backgroundColor: '#0f172a',
+                  borderColor: '#1e293b',
+                  color: '#e2e8f0',
+                }}
                 itemStyle={{ color: '#3b82f6' }}
-                formatter={(value: number | string | undefined) => [`$${Number(value).toLocaleString(undefined, {minimumFractionDigits: 2})}`, 'Price']}
+                formatter={(value: number | string | undefined) => [
+                  `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                  'Price',
+                ]}
               />
               <Line
                 type="monotone"

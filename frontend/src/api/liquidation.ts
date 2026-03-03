@@ -35,7 +35,10 @@ export interface LiquidationDetailResponse {
 
 // 模块级内存缓存，页面刷新后自动清空
 const _periodCache = new Map<string, { fetchedAt: number; data: LiqPeriodItem[] }>();
-const _detailCache = new Map<string, { fetchedAt: number; data: LiquidationDetailResponse | null }>();
+const _detailCache = new Map<
+  string,
+  { fetchedAt: number; data: LiquidationDetailResponse | null }
+>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
 
 /**
@@ -90,7 +93,7 @@ export async function fetchLiquidationDetail(
     return null;
   }
   if (!response.ok) throw new Error(`API error ${response.status}: ${path}`);
-  const data = await response.json() as LiquidationDetailResponse;
+  const data = (await response.json()) as LiquidationDetailResponse;
   _detailCache.set(key, { fetchedAt: Date.now(), data });
   return data;
 }
