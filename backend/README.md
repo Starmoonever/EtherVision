@@ -1,18 +1,21 @@
 # aave-crawler（后端）
 
-以太主网 **Aave V3** 后端，提供三项功能：
+以太主网 **Aave V2 / V3** 后端，提供四项功能：
 
-1. **批量快照**（`crawl`）：从 PostgreSQL 读取所有用户地址，并发拉取链上仓位数据，持久化为可查询快照
-2. **增量监听**（`watch`）：持续轮询链上历史事件，仅重爬有操作的用户，保持快照实时性
-3. **REST API**：7 个 HTTP 端点，支持实时链上查询、历史仓位重建、价格区间查询与清算模拟
+1. **地址同步**（`sync-addresses`）：从本地链上历史事件表（`aave.aave_history`）派生用户地址，写入来源表，替代 subgraph 外部依赖
+2. **批量快照**（`crawl`）：从来源表读取所有用户地址，并发拉取链上仓位数据，持久化为可查询快照
+3. **增量监听**（`watch`）：持续轮询链上历史事件，仅重爬有操作的用户，保持快照实时性
+4. **REST API**：支持实时链上查询、历史仓位重建、价格区间查询与清算模拟，覆盖多头（抵押 ETH）和空头（借入 WETH）两个方向
+
+---
 
 ## 依赖
 
-| 组件                             | 版本要求 | 说明                                                                                                                 |
-| -------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| Python                           | 3.12+    |                                                                                                                      |
-| [uv](https://docs.astral.sh/uv/) | 最新     | 包管理器                                                                                                             |
-| PostgreSQL                       | 14+      | 需有 `loan.all_aave_eth_users` 表（含 `walletaddress` 列）及 `aave.aave_history` 历史表（来自 chain-data-collector） |
+| 组件                             | 版本要求 | 说明                                                            |
+| -------------------------------- | -------- | --------------------------------------------------------------- |
+| Python                           | 3.12+    |                                                                 |
+| [uv](https://docs.astral.sh/uv/) | 最新     | 包管理器                                                        |
+| PostgreSQL                       | 14+      | 需有 `aave.aave_history` 历史表（由 chain-data-collector 维护） |
 
 ---
 
@@ -60,54 +63,99 @@ watcher:
 
 ## CLI 命令
 
-### `aave-crawler crawl` — 批量全量快照
+### `aave-crawler sync-addresses` — 从历史事件派生用户地址
 
-首次运行会自动建表（`CREATE TABLE IF NOT EXISTS`），无需手动 DDL。
+从 `aave.aave_history` 按协议版本（v2/v3）和操作类型（deposit/borrow）查询所有历史用户，写入 `loan` schema 的来源表。这是正式爬取前的必要步骤，也是替代 subgraph 的核心操作。
+
+**数据特点**：包含历史上所有操作过 ETH 系资产的用户，含已还清仓位；RPC 爬取时会自动过滤无效仓位（`liq_price = 0` 或 `liq_price_rise = 0`）。
 
 ```bash
-# 正式批量爬取（UPSERT 覆盖）
+# 同步全部 4 张来源表（推荐首次使用）
+uv run aave-crawler sync-addresses
+
+# 仅同步 v3 借款地址
+uv run aave-crawler sync-addresses -p v3_borrow
+
+# 预览，不写入数据库
+uv run aave-crawler sync-addresses --dry-run
+
+# 使用 DEBUG 日志查看前 10 条预览
+uv run aave-crawler sync-addresses --dry-run --verbose
+```
+
+**来源表**（自动建表，已存在则 UPSERT）：
+
+| 来源表（`loan` schema）       | 内容                     |
+| ----------------------------- | ------------------------ |
+| `aave_v2_eth_weth_collateral` | v2 存入 ETH 系资产的用户 |
+| `aave_v3_eth_weth_collateral` | v3 存入 ETH 系资产的用户 |
+| `aave_v2_eth_weth_borrow`     | v2 借出 ETH 系资产的用户 |
+| `aave_v3_eth_weth_borrow`     | v3 借出 ETH 系资产的用户 |
+
+| 选项              | 说明                                                                     |
+| ----------------- | ------------------------------------------------------------------------ |
+| `--config / -c`   | 配置文件路径                                                             |
+| `--protocol / -p` | 指定单张表：`v2` / `v3` / `v2_borrow` / `v3_borrow`；省略则同步全部 4 张 |
+| `--dry-run`       | 只查询并预览，不写入数据库                                               |
+| `--verbose / -v`  | 输出 DEBUG 日志                                                          |
+
+---
+
+### `aave-crawler crawl` — 批量全量快照
+
+从来源表读取用户地址，并发调用链上 RPC，将仓位数据 UPSERT 到目标快照表。首次运行会自动建表（`CREATE TABLE IF NOT EXISTS`），无需手动 DDL。
+
+```bash
+# v3 抵押端全量覆写
 uv run aave-crawler crawl
+
+# v2 抵押端全量覆写
+uv run aave-crawler crawl -p v2
+
+# v3 借贷端（借入 WETH）全量覆写
+uv run aave-crawler crawl -p v3_borrow
+
+# v2 借贷端增量（跳过已爬地址）
+uv run aave-crawler crawl -p v2_borrow --incremental
 
 # 仅处理前 10 个用户，不写入数据库（调试用）
 uv run aave-crawler crawl --limit 10 --dry-run
-
-# 指定配置文件
-uv run aave-crawler crawl --config /path/to/config.yaml
-
-# 输出 DEBUG 日志
-uv run aave-crawler crawl --verbose
 ```
 
-| 选项             | 说明                        |
-| ---------------- | --------------------------- |
-| `--config / -c`  | 配置文件路径，默认自动查找  |
-| `--limit / -n`   | 仅处理前 N 个用户（调试用） |
-| `--dry-run`      | 只查询，不写入数据库        |
-| `--verbose / -v` | 输出 DEBUG 日志             |
+| 选项                 | 说明                                               |
+| -------------------- | -------------------------------------------------- |
+| `--config / -c`      | 配置文件路径，默认自动查找                         |
+| `--protocol / -p`    | `v2` / `v3`（默认） / `v2_borrow` / `v3_borrow`    |
+| `--source / -s`      | 地址来源协议版本（如从 v2 地址列表爬 v3 仓位）     |
+| `--limit / -n`       | 仅处理前 N 个用户（调试用）                        |
+| `--dry-run`          | 只查询，不写入数据库                               |
+| `--incremental / -i` | 增量模式：跳过目标表中已存在的地址，仅处理新增地址 |
+| `--verbose / -v`     | 输出 DEBUG 日志                                    |
 
 ---
 
 ### `aave-crawler watch` — 增量监听（持续运行）
 
-轮询 `aave.aave_history`，当检测到某用户有新的链上操作时，重新爬取该用户的仓位并更新快照。适合放在后台常驻运行。
+轮询 `aave.aave_history`，检测到用户有新链上操作时重爬并更新快照。适合放在后台常驻运行。
 
 ```bash
-# 使用 config.yaml 中的默认参数
+# v3 抵押端监听（使用 config.yaml 默认参数）
 uv run aave-crawler watch
 
-# 每 30 秒轮询一次，首次回看 20 分钟内的事件
-uv run aave-crawler watch --interval 30 --lookback 20
+# v3 借贷端监听，30 秒轮询，首次回看 60 分钟
+uv run aave-crawler watch -p v3_borrow --interval 30 --lookback 60
 
-# 指定配置文件
-uv run aave-crawler watch --config /path/to/config.yaml --verbose
+# 后台运行并写入日志
+nohup uv run aave-crawler watch -p v3_borrow -l 60 > nohup_v3_borrow.log 2>&1 &
 ```
 
-| 选项              | 说明                                    |
-| ----------------- | --------------------------------------- |
-| `--config / -c`   | 配置文件路径                            |
-| `--interval / -i` | 轮询间隔（秒），覆盖 config.yaml 中的值 |
-| `--lookback / -l` | 首次启动时回看多少分钟的历史事件        |
-| `--verbose / -v`  | 输出 DEBUG 日志                         |
+| 选项              | 说明                                            |
+| ----------------- | ----------------------------------------------- |
+| `--config / -c`   | 配置文件路径                                    |
+| `--protocol / -p` | `v2` / `v3`（默认） / `v2_borrow` / `v3_borrow` |
+| `--interval / -i` | 轮询间隔（秒），覆盖 config.yaml 中的值         |
+| `--lookback / -l` | 首次启动时回看多少分钟的历史事件                |
+| `--verbose / -v`  | 输出 DEBUG 日志                                 |
 
 ---
 
@@ -116,6 +164,28 @@ uv run aave-crawler watch --config /path/to/config.yaml --verbose
 ```bash
 uv run aave-crawler check 0xYourAddress
 uv run aave-crawler check 0xYourAddress --verbose
+```
+
+---
+
+### 典型工作流
+
+```bash
+# 1. 首次：从历史事件派生所有用户地址
+uv run aave-crawler sync-addresses
+
+# 2. 全量爬取四个维度的仓位快照
+uv run aave-crawler crawl -p v2
+uv run aave-crawler crawl -p v3
+uv run aave-crawler crawl -p v2_borrow
+uv run aave-crawler crawl -p v3_borrow
+
+# 3. 后台启动增量监听（保持实时性）
+nohup uv run aave-crawler watch -p v3        > nohup_v3.log 2>&1 &
+nohup uv run aave-crawler watch -p v3_borrow > nohup_v3_borrow.log 2>&1 &
+
+# 4. 启动 API
+uv run aave-api
 ```
 
 ---
@@ -144,27 +214,44 @@ uv run aave-api --workers 4
 
 ### 端点概览
 
-| 方法 | 路径                    | 说明                                        |
-| ---- | ----------------------- | ------------------------------------------- |
-| GET  | `/api/user/position`    | 查询单用户实时或历史仓位                    |
-| GET  | `/api/user/liq_price`   | 计算单用户 ETH 清算触发价                   |
-| GET  | `/api/positions`        | 批量仓位排行（实时快照或历史重建）          |
-| GET  | `/api/price`            | 查询资产价格（实时链上或 DeFiLlama 历史）   |
-| GET  | `/api/price/period`     | 查询资产在时间段内按分钟间隔的历史价格序列  |
-| GET  | `/api/liquidate`        | 模拟指定 ETH 价格下的全网清算情况           |
-| GET  | `/api/liquidate/period` | 模拟 ETH 价格在区间内波动时清算量的变化趋势 |
-| GET  | `/health`               | 服务健康检查                                |
+#### 抵押端（ETH 下跌风险 / `collateral`）
+
+| 方法 | 路径                    | 说明                                                                |
+| ---- | ----------------------- | ------------------------------------------------------------------- |
+| GET  | `/api/user/position`    | 查询单用户实时或历史仓位                                            |
+| GET  | `/api/user/liq_price`   | 计算单用户 ETH 下跌清算触发价                                       |
+| GET  | `/api/positions`        | 批量仓位排行（实时快照或历史重建）；仅含 `liq_price > 0` 的有效仓位 |
+| GET  | `/api/price`            | 查询资产价格（实时链上或 DeFiLlama 历史）                           |
+| GET  | `/api/price/period`     | 查询资产在时间段内按分钟间隔的历史价格序列                          |
+| GET  | `/api/liquidate`        | 模拟 ETH 价格下跌时的全网清算情况                                   |
+| GET  | `/api/liquidate/period` | 模拟 ETH 价格在区间内波动时清算量的变化趋势                         |
+
+#### 借贷端（ETH 上涨风险 / `borrow`）
+
+| 方法 | 路径                           | 说明                                                           |
+| ---- | ------------------------------ | -------------------------------------------------------------- |
+| GET  | `/api/borrow/positions`        | 查询借入 WETH 的仓位排行；仅含 `liq_price_rise > 0` 的有效仓位 |
+| GET  | `/api/borrow/user/position`    | 查询单地址借贷端仓位详情                                       |
+| GET  | `/api/borrow/liquidate`        | 模拟 ETH 价格上涨时的做空清算情况                              |
+| GET  | `/api/borrow/liquidate/period` | 模拟 ETH 价格在区间内上涨时空头清算量的变化趋势                |
+
+#### 通用
+
+| 方法 | 路径      | 说明         |
+| ---- | --------- | ------------ |
+| GET  | `/health` | 服务健康检查 |
 
 ---
 
 ### `GET /api/user/position`
 
-查询指定用户的 Aave V3 完整仓位。
+查询指定用户的 Aave 完整仓位。
 
 | 参数      | 类型   | 必填 | 说明                                                                               |
 | --------- | ------ | ---- | ---------------------------------------------------------------------------------- |
 | `address` | string | ✅   | 以太坊钱包地址（支持校验和或小写）                                                 |
 | `date`    | string | ❌   | 历史时间点（UTC），如 `2024-11-14T12:00:00Z`、`2024-11-14`；省略则查询实时链上数据 |
+| `version` | string | ❌   | `v2` 或 `v3`（默认）                                                               |
 
 **省略 `date`（实时）**，返回 `PositionResponse`：
 
@@ -220,9 +307,10 @@ curl "http://localhost:8000/api/user/position?address=0xYourAddress&date=2024-11
 
 计算当 ETH 价格跌至多少时，该用户的健康系数将触碰 1.0。
 
-| 参数      | 类型   | 必填 | 说明           |
-| --------- | ------ | ---- | -------------- |
-| `address` | string | ✅   | 以太坊钱包地址 |
+| 参数      | 类型   | 必填 | 说明                 |
+| --------- | ------ | ---- | -------------------- |
+| `address` | string | ✅   | 以太坊钱包地址       |
+| `version` | string | ❌   | `v2` 或 `v3`（默认） |
 
 ```bash
 curl "http://localhost:8000/api/user/liq_price?address=0xYourAddress"
@@ -245,114 +333,38 @@ curl "http://localhost:8000/api/user/liq_price?address=0xYourAddress"
 
 ### `GET /api/positions`
 
-批量查询仓位排行。
+批量查询抵押端仓位排行。**仅返回 `liq_price > 0` 的有效仓位**（有债务且有 ETH 系抵押品）。
 
-| 参数      | 类型                           | 默认值      | 说明                                 |
-| --------- | ------------------------------ | ----------- | ------------------------------------ |
-| `orderby` | `liq_price` \| `health_factor` | `liq_price` | 排序字段（仅实时模式有效）           |
-| `order`   | `asc` \| `desc`                | `asc`       | 排序方向（仅实时模式有效）           |
-| `limit`   | int (1~200)                    | `10`        | 返回记录数（历史模式最多 100）       |
-| `date`    | string                         | —           | 历史时间点；省略则查询数据库实时快照 |
-
-**实时模式**（省略 `date`）：从数据库爬取快照中读取，返回 `list[PositionResponse]`。
+| 参数      | 类型                                                                                                  | 默认值      | 说明                                 |
+| --------- | ----------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------ |
+| `orderby` | `liq_price` \| `health_factor` \| `eth_collateral_amount` \| `eth_collateral_usd` \| `total_debt_usd` | `liq_price` | 排序字段（仅实时模式有效）           |
+| `order`   | `asc` \| `desc`                                                                                       | `asc`       | 排序方向                             |
+| `limit`   | int (1~200)                                                                                           | `10`        | 返回记录数（历史模式最多 100）       |
+| `date`    | string                                                                                                | —           | 历史时间点；省略则查询数据库实时快照 |
+| `version` | string                                                                                                | `v3`        | `v2` 或 `v3`                         |
 
 ```bash
 # 清算价最高的 20 个账户（最危险）
 curl "http://localhost:8000/api/positions?orderby=liq_price&order=desc&limit=20"
 ```
 
-**历史模式**（指定 `date`）：从 `aave.aave_history` 重建，按 ETH 抵押量降序，返回 `list[HistoricalPositionResponse]`。
-
-```bash
-curl "http://localhost:8000/api/positions?date=2024-11-14&limit=50"
-```
-
----
-
-### `GET /api/price`
-
-查询资产 USD 价格。
-
-| 参数    | 类型   | 默认值 | 说明                                                      |
-| ------- | ------ | ------ | --------------------------------------------------------- |
-| `asset` | string | `eth`  | 资产名称，如 `eth`、`wbtc`、`usdc`                        |
-| `time`  | string | `now`  | `now` = 实时链上价格；UTC 时间字符串 = DeFiLlama 历史价格 |
-
-```bash
-# 实时 ETH 价格
-curl "http://localhost:8000/api/price?asset=eth"
-
-# 历史 ETH 价格
-curl "http://localhost:8000/api/price?asset=eth&time=2024-11-14T12:00:00Z"
-```
-
-```json
-{
-  "asset": "ETH",
-  "price_usd": "2500.00",
-  "token_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-  "timestamp": "2024-11-14T12:00:00Z",
-  "source": "on-chain"
-}
-```
-
-`source` 字段：`on-chain`（链上 Aave Oracle）或 `defillama`（DeFiLlama 历史接口）。
-
----
-
-### `GET /api/price/period`
-
-从 DeFiLlama 批量查询资产在指定时间段内，按固定分钟间隔的历史价格序列。仅发起一次 HTTP 请求后在内存中生成序列（并发逐点查询 DeFiLlama）。
-
-| 参数       | 类型    | 默认值   | 说明                                                   |
-| ---------- | ------- | -------- | ------------------------------------------------------ |
-| `asset`    | string  | `eth`    | 资产名称，如 `eth`、`wbtc`、`usdc`                     |
-| `start`    | string  | （必填） | 起始 UTC 时间，如 `2025-01-01T00:00:00Z`、`2025-01-01` |
-| `end`      | string  | （必填） | 结束 UTC 时间（含），格式同上                          |
-| `interval` | int ≥ 1 | `60`     | 采样间隔（分钟）                                       |
-
-支持时间格式：`2025-01-01T12:00:00Z` / `2025-01-01T12:00:00` / `2025-01-01 12:00:00` / `2025-01-01`
-
-```bash
-# 查询 ETH 在 2025-02-01 内每小时的价格
-curl "http://localhost:8000/api/price/period?asset=eth&start=2025-02-01&end=2025-02-02&interval=60"
-
-# USDT 每 30 分钟一个采样点
-curl "http://localhost:8000/api/price/period?asset=usdt&start=2025-02-01&end=2025-02-01T06:00:00Z&interval=30"
-```
-
-```json
-{
-  "asset": "ETH",
-  "token_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-  "source": "defillama",
-  "prices": [
-    { "price_usd": "2800.00", "timestamp": "2025-02-01T00:00:00Z" },
-    { "price_usd": "2815.30", "timestamp": "2025-02-01T01:00:00Z" },
-    { "price_usd": "2790.45", "timestamp": "2025-02-01T02:00:00Z" }
-  ]
-}
-```
-
-> 若 DeFiLlama 查询某采样点失败，该点 `price_usd` 设为 `"0.00"` 而非中断整个请求。
-
 ---
 
 ### `GET /api/liquidate`
 
-模拟当 ETH 价格跌至指定值时，哪些账户将被触发清算，以及可供清算人获取的抵押品总额。
+模拟当 ETH 价格跌至指定值时，有哪些账户将被触发清算，以及可供清算人获取的抵押品总额。
 
-数据来源：数据库实时快照（需先运行 `aave-crawler crawl` 或 `watch`）。
-
-| 参数        | 类型                                                                               | 默认值      | 说明                                                           |
-| ----------- | ---------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------- |
-| `eth_price` | float > 0                                                                          | （必填）    | 模拟的 ETH 价格（USD）                                         |
-| `limit`     | int (1~1000)                                                                       | `100`       | 返回的仓位数量上限；**不影响汇总统计**（统计基于全量触发仓位） |
-| `orderby`   | `liq_price` \| `eth_collateral_amount` \| `eth_collateral_usd` \| `total_debt_usd` | `liq_price` | 排序字段                                                       |
-| `order`     | `desc` \| `asc`                                                                    | `desc`      | 排序方向                                                       |
+| 参数        | 类型                                                                               | 默认值      | 说明                                               |
+| ----------- | ---------------------------------------------------------------------------------- | ----------- | -------------------------------------------------- |
+| `eth_price` | float > 0                                                                          | （必填）    | 模拟的 ETH 价格（USD）                             |
+| `limit`     | int (1~1000)                                                                       | `100`       | 返回仓位数；**不影响汇总统计**（统计基于全量触发） |
+| `orderby`   | `liq_price` \| `eth_collateral_amount` \| `eth_collateral_usd` \| `total_debt_usd` | `liq_price` | 排序字段                                           |
+| `order`     | `desc` \| `asc`                                                                    | `desc`      | 排序方向                                           |
+| `eth_ratio` | float [0,1]                                                                        | 配置默认值  | ETH 抵押品占比最小阈值                             |
+| `cap`       | float > 0                                                                          | —           | `liq_price` 上限（仅返回低于此价格的仓位）         |
+| `version`   | string                                                                             | `v3`        | `v2` 或 `v3`                                       |
 
 ```bash
-# 模拟 ETH 跌至 $2000，按抵押品 USD 降序，取前 10 条
 curl "http://localhost:8000/api/liquidate?eth_price=2000&orderby=eth_collateral_usd&order=desc&limit=10"
 ```
 
@@ -368,89 +380,161 @@ curl "http://localhost:8000/api/liquidate?eth_price=2000&orderby=eth_collateral_
       "total_debt_usd": "18000.00"
     }
   ],
+  "positions_cnt": "87",
   "total_eth_collateral_amount": "354.123456",
   "total_eth_collateral_usd": "708246.91",
   "total_liquidation_usd": "650000.00",
-  "note": "共 87 个仓位将在 ETH=$2000 时触发清算（本次返回前 10 条）；..."
+  "note": "..."
 }
 ```
 
-**清算折价说明**：Aave V3 WETH 清算奖励系数为 1.05，即：
+**清算折价说明**（Aave V3 WETH 清算奖励系数 1.05）：
 
 $$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \text{eth\_collateral\_usd}\right)$$
-
-> `total_eth_collateral_usd` 及 `total_liquidation_usd` 始终基于**全部**触发仓位，不受 `limit` 影响。
 
 ---
 
 ### `GET /api/liquidate/period`
 
-分析 ETH 价格在指定区间内以固定步长变化时，各价格点对应的清算量汇总。仅进行**一次**数据库查询，之后在内存中对每个价格点做过滤统计，效率较高。
+分析 ETH 价格在指定区间内以固定步长变化时，各价格点对应的清算量汇总。一次数据库查询，内存过滤，效率较高。
 
-| 参数       | 类型      | 默认值   | 说明                                |
-| ---------- | --------- | -------- | ----------------------------------- |
-| `start`    | float > 0 | （必填） | 起始 ETH 价格（USD）                |
-| `end`      | float > 0 | （必填） | 结束 ETH 价格（USD），须 >= `start` |
-| `interval` | float > 0 | （必填） | 价格步长（USD）                     |
+| 参数        | 类型      | 默认值   | 说明                                |
+| ----------- | --------- | -------- | ----------------------------------- |
+| `start`     | float > 0 | （必填） | 起始 ETH 价格（USD）                |
+| `end`       | float > 0 | （必填） | 结束 ETH 价格（USD），须 >= `start` |
+| `interval`  | float > 0 | （必填） | 价格步长（USD）                     |
+| `eth_ratio` | float     |          | ETH 抵押品占比过滤                  |
+| `version`   | string    | `v3`     | `v2` 或 `v3`                        |
 
 ```bash
-# 分析 ETH 从 $500 跌至 $2000，每 $100 一个价格点的清算情况
 curl "http://localhost:8000/api/liquidate/period?start=500&end=2000&interval=100" | jq .
 ```
 
-```json
-[
-  {
-    "simulated_eth_price": "500.00",
-    "positions_cnt": "312",
-    "total_eth_collateral_amount": "1840.230000",
-    "total_eth_collateral_usd": "920115.00",
-    "total_liquidation_usd": "880000.00"
-  },
-  {
-    "simulated_eth_price": "600.00",
-    "positions_cnt": "287",
-    "total_eth_collateral_amount": "1650.100000",
-    "total_eth_collateral_usd": "990060.00",
-    "total_liquidation_usd": "850000.00"
-  }
-]
-```
-
-返回列表按价格**升序**排列（从 `start` 到 `end`），可直接用于绘制清算量随价格变化的折线图。
-
-**清算折价说明**（同 `/api/liquidate`）：
-
-$$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \text{eth\_collateral\_usd}\right)$$
+返回按价格升序排列，可直接用于绘制清算量随价格变化的折线图。
 
 ---
 
-### `GET /health`
+### `GET /api/price`
+
+| 参数    | 类型   | 默认值 | 说明                                                      |
+| ------- | ------ | ------ | --------------------------------------------------------- |
+| `asset` | string | `eth`  | 资产名称，如 `eth`、`wbtc`、`usdc`                        |
+| `time`  | string | `now`  | `now` = 实时链上价格；UTC 时间字符串 = DeFiLlama 历史价格 |
 
 ```bash
-curl "http://localhost:8000/health"
-# {"status": "ok"}
+curl "http://localhost:8000/api/price?asset=eth"
+curl "http://localhost:8000/api/price?asset=eth&time=2024-11-14T12:00:00Z"
 ```
+
+---
+
+### `GET /api/price/period`
+
+从 DeFiLlama 批量查询资产历史价格序列。
+
+| 参数       | 类型    | 默认值   | 说明                           |
+| ---------- | ------- | -------- | ------------------------------ |
+| `asset`    | string  | `eth`    | 资产名称                       |
+| `start`    | string  | （必填） | 起始 UTC 时间，如 `2025-01-01` |
+| `end`      | string  | （必填） | 结束 UTC 时间（含）            |
+| `interval` | int ≥ 1 | `60`     | 采样间隔（分钟）               |
+
+```bash
+curl "http://localhost:8000/api/price/period?asset=eth&start=2025-02-01&end=2025-02-02&interval=60"
+```
+
+---
+
+### `GET /api/borrow/positions`
+
+查询借入 WETH 的仓位排行。**仅返回 `liq_price_rise > 0` 的有效仓位**（面临 ETH 上涨清算风险）。
+
+| 参数      | 类型                                                                       | 默认值           | 说明         |
+| --------- | -------------------------------------------------------------------------- | ---------------- | ------------ |
+| `orderby` | `liq_price_rise` \| `weth_debt_usd` \| `total_debt_usd` \| `health_factor` | `liq_price_rise` | 排序字段     |
+| `order`   | `asc` \| `desc`                                                            | `asc`            | 排序方向     |
+| `limit`   | int (1~200)                                                                | `10`             | 返回数量     |
+| `version` | string                                                                     | `v3`             | `v2` 或 `v3` |
+
+```bash
+curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=asc&limit=20"
+```
+
+---
+
+### `GET /api/borrow/user/position`
+
+从数据库快照中读取单地址借贷端仓位（借入 WETH 场景），含汇总信息及每个资产的 reserve 明细。
+
+| 参数      | 类型   | 必填 | 说明           |
+| --------- | ------ | ---- | -------------- |
+| `address` | string | ✅   | 以太坊钱包地址 |
+| `version` | string | ❌   | `v2` 或 `v3`   |
+
+地址不存在时返回 404。
+
+---
+
+### `GET /api/borrow/liquidate`
+
+模拟当 ETH 价格涨至指定值时，有哪些借入 WETH 的账户会被清算。
+
+| 参数        | 类型                                                    | 默认值           | 说明                      |
+| ----------- | ------------------------------------------------------- | ---------------- | ------------------------- |
+| `eth_price` | float > 0                                               | （必填）         | 模拟的 ETH 价格（USD）    |
+| `limit`     | int (1~1000)                                            | `100`            | 返回仓位数                |
+| `orderby`   | `liq_price_rise` \| `weth_debt_usd` \| `total_debt_usd` | `liq_price_rise` | 排序字段                  |
+| `order`     | `asc` \| `desc`                                         | `asc`            | 排序方向                  |
+| `cap`       | float > 0                                               | —                | `liq_price_rise` 上限     |
+| `eth_ratio` | float [0,1]                                             | 配置默认值       | WETH 债务占总债务最小比例 |
+| `version`   | string                                                  | `v3`             | `v2` 或 `v3`              |
+
+**清算折价说明**：`total_liquidation_usd = Σ min(WETH债务USD × 1.05, 总抵押USD)`
+
+---
+
+### `GET /api/borrow/liquidate/period`
+
+分析 ETH 价格在指定区间内上涨时，空头仓位清算量的变化趋势。
+
+| 参数        | 类型      | 默认值   | 说明              |
+| ----------- | --------- | -------- | ----------------- |
+| `start`     | float > 0 | （必填） | 起始价格（USD）   |
+| `end`       | float > 0 | （必填） | 结束价格（USD）   |
+| `interval`  | float > 0 | （必填） | 步长（USD）       |
+| `eth_ratio` | float     |          | WETH 债务占比过滤 |
+| `version`   | string    | `v3`     | `v2` 或 `v3`      |
 
 ---
 
 ## 数据库表结构
 
-### `loan.aave_v3_eth_positions`（账户汇总快照）
+### 抵押端仓位表（`loan.aave_{v2|v3}_eth_positions_collateral`）
 
-| 列                      | 类型           | 说明                    |
-| ----------------------- | -------------- | ----------------------- |
-| `user_address`          | TEXT PK        | 小写钱包地址            |
-| `block_number`          | BIGINT         | 查询时区块号            |
-| `scanned_at`            | TIMESTAMPTZ    | 查询时间（UTC）         |
-| `total_collateral_usd`  | NUMERIC(20,8)  | 总抵押物 USD            |
-| `total_debt_usd`        | NUMERIC(20,8)  | 总借贷 USD              |
-| `available_borrows_usd` | NUMERIC(20,8)  | 可借额度 USD            |
-| `health_factor`         | NUMERIC(30,18) | 健康系数，∞ 时存 `1e18` |
-| `ltv`                   | NUMERIC(8,4)   | 贷款价值比（0~1）       |
-| `liq_threshold`         | NUMERIC(8,4)   | 清算阈值（0~1）         |
+| 列                      | 类型           | 说明                                  |
+| ----------------------- | -------------- | ------------------------------------- |
+| `user_address`          | TEXT PK        | 小写钱包地址                          |
+| `block_number`          | BIGINT         | 查询时区块号                          |
+| `scanned_at`            | TIMESTAMPTZ    | 查询时间（UTC）                       |
+| `total_collateral_usd`  | NUMERIC(30,8)  | 总抵押物 USD                          |
+| `total_debt_usd`        | NUMERIC(30,8)  | 总借贷 USD                            |
+| `available_borrows_usd` | NUMERIC(30,8)  | 可借额度 USD                          |
+| `health_factor`         | NUMERIC(40,18) | 健康系数，∞ 时存 `1e18`               |
+| `ltv`                   | NUMERIC(8,4)   | 贷款价值比（0~1）                     |
+| `liq_threshold`         | NUMERIC(8,4)   | 清算阈值（0~1）                       |
+| `liq_price`             | NUMERIC(30,8)  | ETH 下跌清算触发价（USD）；0 = 无风险 |
 
-### `loan.aave_v3_eth_reserve_positions`（逐资产明细快照）
+### 借贷端仓位表（`loan.aave_{v2|v3}_eth_positions_borrow`）
+
+在抵押端字段基础上额外包含：
+
+| 列               | 类型          | 说明                                      |
+| ---------------- | ------------- | ----------------------------------------- |
+| `weth_debt_raw`  | NUMERIC(40,0) | ETH 系负债合计（原始 wei）                |
+| `weth_debt_usd`  | NUMERIC(30,8) | ETH 系负债合计 USD（扫描时刻价格）        |
+| `liq_price_rise` | NUMERIC(30,8) | ETH 上涨清算触发价（USD）；0 = 无上涨风险 |
+
+### 资产明细表（`loan.aave_{v2|v3}_eth_reserve_positions_{collateral|borrow}`）
 
 | 列                                      | 类型          | 说明                |
 | --------------------------------------- | ------------- | ------------------- |
@@ -458,18 +542,38 @@ curl "http://localhost:8000/health"
 | `symbol`                                | TEXT          | 资产符号（如 WETH） |
 | `block_number` / `scanned_at`           | —             | 同汇总表            |
 | `decimals`                              | INTEGER       | 代币精度            |
-| `price_usd`                             | NUMERIC(20,8) | Oracle 价格         |
+| `price_usd`                             | NUMERIC(30,8) | Oracle 价格         |
 | `supply_raw`                            | NUMERIC(40,0) | 链上原始供给整数    |
-| `supply_usd`                            | NUMERIC(20,8) | 供给 USD 估值       |
+| `supply_usd`                            | NUMERIC(30,8) | 供给 USD 估值       |
 | `stable_debt_raw` / `variable_debt_raw` | NUMERIC(40,0) | 链上原始借贷整数    |
-| `total_debt_usd`                        | NUMERIC(20,8) | 借贷 USD 估值       |
+| `total_debt_usd`                        | NUMERIC(30,8) | 借贷 USD 估值       |
 | `use_as_collateral`                     | BOOLEAN       | 是否用作抵押品      |
 
 写入策略：**全量 UPSERT**，每次爬取覆盖最新快照。
 
+### 来源表（`loan.aave_{v2|v3}_eth_weth_{collateral|borrow}`）
+
+由 `sync-addresses` 命令写入，也可由 subgraph 外部维护（两者均支持）。
+
+| 列                                     | 类型          | 说明                                             |
+| -------------------------------------- | ------------- | ------------------------------------------------ |
+| `walletAddress`                        | TEXT PK       | 用户地址                                         |
+| `wethAmount_ETH` 或 `borrowedWeth_ETH` | NUMERIC(30,8) | 历史累计 ETH 量（供 `> 0` 过滤用）               |
+| `synced_at`                            | TIMESTAMPTZ   | 最近同步时间（仅 `sync-addresses` 写入时有此列） |
+
 ### `aave.aave_history`（链上历史事件，由 chain-data-collector 维护）
 
-用于历史仓位重建，`address` / `token` 等字段以 bytea 存储 ASCII 文本，查询时使用 `convert_from(col, 'UTF8')`。
+用于历史仓位重建与用户地址派生。关键字段：
+
+| 字段               | 说明                                  |
+| ------------------ | ------------------------------------- |
+| `user_address`     | bytea（存 ASCII `0x...` 字符串）      |
+| `token_symbol`     | TEXT，如 `WETH`、`wstETH`             |
+| `operation_type`   | TEXT，如 `deposit`、`borrow`、`repay` |
+| `protocol_version` | TEXT，`2` 或 `3`                      |
+| `amount`           | NUMERIC，原始整数                     |
+| `decimals`         | INTEGER                               |
+| `created_at`       | TIMESTAMPTZ                           |
 
 ---
 
@@ -480,22 +584,28 @@ backend/
 ├── pyproject.toml
 ├── config.yaml.example
 ├── config.yaml              # 本地配置（gitignored）
+├── scripts/                 # 研究/一次性脚本
+│   ├── derive_users_from_events.py   # 从链上事件派生用户地址（对比分析）
+│   ├── check_data_range.py           # ULID 时间戳范围检查
+│   └── recalc_liq_price*.py          # 重新计算大批量清算价
+├── derived_users/           # derive 脚本的 CSV 输出（gitignored）
 ├── tests/
 │   ├── conftest.py          # pytest fixtures & mock 数据
-│   └── test_routes.py       # 138 个路由单元测试（全 mock，无需真实 DB/RPC）
+│   └── test_routes.py       # 路由单元测试（全 mock，无需真实 DB/RPC）
 └── aave_crawler/
     ├── cli.py               # Click CLI 入口（aave-crawler 命令）
     ├── server.py            # FastAPI app 工厂 + uvicorn 入口（aave-api 命令）
     ├── config.py            # 配置加载
     ├── models.py            # 数据模型（dataclass）
     ├── rpc.py               # 合约调用（web3.py AsyncWeb3）
-    ├── db.py                # asyncpg：DDL + UPSERT
+    ├── db.py                # asyncpg：DDL、UPSERT、sync_addresses_from_history
     ├── crawler.py           # 并发批量爬取主流程
     ├── watcher.py           # 增量监听主流程
     └── api/
+        ├── constants.py     # ETH 系资产符号、过滤阈值常量
         ├── schemas.py       # Pydantic 响应模型
         ├── service.py       # 业务逻辑（仓位查询、清算价计算、模拟清算、价格序列）
-        └── routes.py        # FastAPI 路由（7 个端点）
+        └── routes.py        # FastAPI 路由
 ```
 
 ---
@@ -511,20 +621,18 @@ uv run pytest tests/ -q
 ### 常用 uv 命令
 
 ```bash
-# 添加运行时依赖
-uv add some-package
-
-# 添加开发依赖
-uv add --dev some-package
-
-# 在项目虚拟环境中运行任意脚本
-uv run python your_script.py
+uv add some-package           # 添加运行时依赖
+uv add --dev some-package     # 添加开发依赖
+uv run python your_script.py  # 在项目虚拟环境中运行脚本
 ```
 
 ### 合约地址（以太主网）
 
-| 合约             | 地址                                         |
-| ---------------- | -------------------------------------------- |
-| Aave V3 Pool     | `0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2` |
-| PoolDataProvider | `0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3` |
-| Aave Oracle      | `0x54586bE62E3c3580375aE3723C145253060Ca0C2` |
+| 合约                | 地址                                         |
+| ------------------- | -------------------------------------------- |
+| Aave V3 Pool        | `0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2` |
+| V3 PoolDataProvider | `0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3` |
+| V3 Aave Oracle      | `0x54586bE62E3c3580375aE3723C145253060Ca0C2` |
+| Aave V2 Pool        | `0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9` |
+| V2 PoolDataProvider | `0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d` |
+| V2 Aave Oracle      | `0xA50ba011c48153De246E5192C8f9258A2ba79Ca9` |
