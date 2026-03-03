@@ -89,7 +89,37 @@ def main() -> None:
         help="工作进程数（reload 时固定为 1）",
     )
     @click.option("--log-level", default="info", show_default=True, help="日志级别")
-    def _cmd(host: str, port: int, reload: bool, workers: int, log_level: str) -> None:
+    @click.option(
+        "--reload-dir",
+        "reload_dirs",
+        multiple=True,
+        default=None,
+        help="热重载监听目录（可多次指定）；默认监听所有 Python 路径",
+    )
+    @click.option(
+        "--reload-include",
+        "reload_includes",
+        multiple=True,
+        default=None,
+        help="额外监听的 glob 模式，如 '*.yaml'（可多次指定）",
+    )
+    @click.option(
+        "--reload-exclude",
+        "reload_excludes",
+        multiple=True,
+        default=None,
+        help="排除的 glob 模式，如 '__pycache__'（可多次指定）",
+    )
+    def _cmd(
+        host: str,
+        port: int,
+        reload: bool,
+        workers: int,
+        log_level: str,
+        reload_dirs: tuple[str, ...],
+        reload_includes: tuple[str, ...],
+        reload_excludes: tuple[str, ...],
+    ) -> None:
         """启动 Aave 仓位查询 API 服务"""
         logging.basicConfig(
             level=log_level.upper(),
@@ -102,6 +132,9 @@ def main() -> None:
             reload=reload,
             workers=1 if reload else workers,
             log_level=log_level,
+            reload_dirs=list(reload_dirs) or None,
+            reload_includes=list(reload_includes) or None,
+            reload_excludes=list(reload_excludes) or None,
         )
 
     _cmd()
