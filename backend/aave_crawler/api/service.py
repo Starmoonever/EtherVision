@@ -372,12 +372,13 @@ async def get_sorted_positions(
 WITH eth_col AS (
     SELECT
         user_address,
-        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        supply_usd::numeric                                   AS eth_collateral_usd
+        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        SUM(supply_usd::numeric)                               AS eth_collateral_usd
     FROM loan.{res_table}
     WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
+    GROUP BY user_address
 )
 SELECT
     p.user_address                                            AS address,
@@ -393,6 +394,7 @@ SELECT
 FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
+  AND p.liq_price < 9999999.99
 ORDER BY {order_col} {order_dir}
 LIMIT $1
 """
@@ -442,18 +444,26 @@ def _build_simulate_sql(
     pos_table: str,
     res_table: str,
     use_cap: bool = False,
+    use_current_eth_price: bool = False,
 ) -> str:
-    cap_filter = "  AND p.liq_price < $2::numeric" if use_cap else ""
+    # 参数顺序：$1=模拟ETH价格, [$2=当前ETH价格], [$2/$3=cap上限]
+    next_param = 2
+    current_price_filter = ""
+    if use_current_eth_price:
+        current_price_filter = f"  AND p.liq_price <= ${next_param}::numeric"
+        next_param += 1
+    cap_filter = f"  AND p.liq_price < ${next_param}::numeric" if use_cap else ""
     return f"""
 WITH eth_col AS (
     SELECT
         user_address,
-        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        supply_usd                                           AS eth_supply_usd_stored
+        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        SUM(supply_usd::numeric)                               AS eth_supply_usd_stored
     FROM loan.{res_table}
     WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
+    GROUP BY user_address
 )
 SELECT
     p.user_address                                                AS address,
@@ -466,7 +476,9 @@ SELECT
 FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
+  AND p.liq_price < 9999999.99
   AND p.liq_price >= $1::numeric
+{current_price_filter}
 {cap_filter}
 ORDER BY {order_col} {order_dir}
 """
@@ -481,6 +493,7 @@ async def simulate_liquidation(
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
     protocol: str = "v3",
     cap: Decimal | None = None,
+    current_eth_price: Decimal | None = None,
 ) -> LiquidationSimResponse:
     """模拟当 ETH 价格为 eth_price 时，哪些仓位将被触发清算及汇总统计。
 
@@ -488,15 +501,24 @@ async def simulate_liquidation(
         Aave V3 WETH 清算奖励系数为 1.05（5%），即清算人偿还 1 USD 债务
         可从协议获得价值 1.05 USD 的 ETH 抵押品。
         因此 ``total_liquidation_usd`` = sum( min(debt × 1.05, eth_collateral_usd) )。
+
+    Args:
+        current_eth_price: 实时 ETH 价格（用于过滤掉 liq_price > 当前价格的仓位，
+            即那些只有在 ETH 上涨时才会被清算的做空仓位）。传入后只有
+            liq_price <= current_eth_price 的仓位才会被纳入跌价清算模拟。
     """
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
     pos_table, res_table = _tables(protocol)
     sql = _build_simulate_sql(
-        order_col, order_dir, pos_table, res_table, use_cap=cap is not None
+        order_col, order_dir, pos_table, res_table,
+        use_cap=cap is not None,
+        use_current_eth_price=current_eth_price is not None,
     )
     # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
     fetch_args: list = [float(eth_price)]
+    if current_eth_price is not None:
+        fetch_args.append(float(current_eth_price))
     if cap is not None:
         fetch_args.append(float(cap))
     rows = await pool.fetch(sql, *fetch_args)
@@ -539,6 +561,7 @@ async def simulate_liquidation(
     items = all_items[:limit]
 
     cap_note = f"；liq_price 上限过滤：< {cap}" if cap is not None else ""
+    cur_price_note = f"；当前 ETH 实时价格：${current_eth_price}（仅含跌价清算风险仓位）" if current_eth_price is not None else ""
     note = (
         f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发清算"
         f"（本次返回前 {len(items)} 条）；"
@@ -546,7 +569,7 @@ async def simulate_liquidation(
         f"total_liquidation_usd = Σ min(债务 × {_WETH_LIQ_BONUS}, ETH抵押品USD)，"
         f"统计基于全部 {total_count} 个仓位；"
         f"ETH 抵押品占比过滤：>= {eth_ratio}"
-        f"{cap_note}"
+        f"{cap_note}{cur_price_note}"
     )
 
     return LiquidationSimResponse(
@@ -566,12 +589,13 @@ def _sql_all_liq_positions(pos_table: str, res_table: str) -> str:
 WITH eth_col AS (
     SELECT
         user_address,
-        (supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        supply_usd                                           AS eth_supply_usd_stored
+        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
+        SUM(supply_usd::numeric)                               AS eth_supply_usd_stored
     FROM loan.{res_table}
     WHERE symbol IN ({_ETH_SYMBOLS_SQL})
       AND use_as_collateral = true
       AND supply_raw > 0
+    GROUP BY user_address
 )
 SELECT
     COALESCE(e.eth_amount, 0::numeric)           AS eth_collateral_amount,
@@ -582,6 +606,7 @@ SELECT
 FROM loan.{pos_table} p
 LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
+  AND p.liq_price < 9999999.99
 """
 
 
@@ -592,11 +617,13 @@ async def simulate_liquidation_period(
     interval: Decimal,
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
     protocol: str = "v3",
+    current_eth_price: Decimal | None = None,
 ) -> list[LiquidationPeriodItem]:
     """模拟 ETH 价格在 [start_price, end_price] 区间内每隔 interval 步长时的清算汇总。
 
     - 仅做一次数据库查询，在内存中对每个价格点分别统计，效率较高。
     - 返回按价格升序排列的清算快照列表，可观察不同价格下清算量的变化趋势。
+    - current_eth_price: 传入后只统计 liq_price <= current_eth_price 的仓位（跌价清算）。
     """
     from fastapi import HTTPException
 
@@ -615,6 +642,8 @@ async def simulate_liquidation_period(
             Decimal(str(r["liq_price"])),
         )
         for r in rows
+        # 仅保留跌价清算仓位：liq_price 必须 <= 当前 ETH 价格
+        if current_eth_price is None or Decimal(str(r["liq_price"])) <= current_eth_price
     ]
 
     result: list[LiquidationPeriodItem] = []
@@ -691,6 +720,7 @@ SELECT
     p.liq_price_rise
 FROM loan.{pos_table} p
 WHERE p.liq_price_rise > 0
+  AND p.liq_price_rise < 9999999.99
 ORDER BY {order_col} {order_dir}
 LIMIT $1
 """

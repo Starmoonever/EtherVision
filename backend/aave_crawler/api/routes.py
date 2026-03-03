@@ -236,6 +236,15 @@ async def liquidate_simulation(
 ) -> LiquidationSimResponse:
     from decimal import Decimal
 
+    # 自动获取当前 ETH 实时价格，用于过滤掉上涨清算仓位（liq_price > 当前价格）
+    current_eth_price: Decimal | None = None
+    try:
+        w3 = _w3(request)
+        price_resp = await get_eth_price(w3, "eth")
+        current_eth_price = Decimal(str(price_resp.price_usd))
+    except Exception:
+        pass  # RPC 不可用时降级处理：不过滤，结果可能包含上涨清算仓位
+
     return await simulate_liquidation(
         _pool(request),
         Decimal(str(eth_price)),
@@ -245,6 +254,7 @@ async def liquidate_simulation(
         eth_ratio=Decimal(str(eth_ratio)),
         protocol=version,
         cap=Decimal(str(cap)) if cap is not None else None,
+        current_eth_price=current_eth_price,
     )
 
 
@@ -299,6 +309,15 @@ async def liquidate_period(
 ) -> list[LiquidationPeriodItem]:
     from decimal import Decimal
 
+    # 自动获取当前 ETH 实时价格，用于过滤掉上涨清算仓位位
+    current_eth_price: Decimal | None = None
+    try:
+        w3 = _w3(request)
+        price_resp = await get_eth_price(w3, "eth")
+        current_eth_price = Decimal(str(price_resp.price_usd))
+    except Exception:
+        pass
+
     return await simulate_liquidation_period(
         _pool(request),
         start_price=Decimal(str(start)),
@@ -306,6 +325,7 @@ async def liquidate_period(
         interval=Decimal(str(interval)),
         eth_ratio=Decimal(str(eth_ratio)),
         protocol=version,
+        current_eth_price=current_eth_price,
     )
 
 
