@@ -879,6 +879,13 @@ CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
     ltv                   NUMERIC(8, 4)    NOT NULL,
     liq_threshold         NUMERIC(8, 4)    NOT NULL,
     liq_price             NUMERIC(30, 8)   NOT NULL DEFAULT 0,
+    liq_price_rise        NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 上涨触发清算价（USD）；0 = 无风险
+    -- ETH 系抵押品汇总
+    eth_collateral_amount NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系抵押品合计数量
+    eth_collateral_usd    NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系抵押品合计 USD
+    -- ETH 系负债汇总
+    weth_debt_amount      NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系负债合计数量
+    weth_debt_usd         NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系负债合计 USD
     -- 同 block 链上 Oracle ETH/USD 价格（8 位精度，来自 Aave Oracle）
     eth_price_usd         NUMERIC(30, 8)   NOT NULL,
     -- 资产明细快照（JSONB 数组，结构见 _snapshot_reserve_to_dict）
@@ -925,7 +932,10 @@ SELECT
     id, user_address, protocol, block_number, tx_hash,
     block_timestamp, total_collateral_usd, total_debt_usd,
     available_borrows_usd, health_factor, ltv, liq_threshold,
-    liq_price, eth_price_usd, reserves_json, cached_at
+    liq_price, liq_price_rise,
+    eth_collateral_amount, eth_collateral_usd,
+    weth_debt_amount, weth_debt_usd,
+    eth_price_usd, reserves_json, cached_at
 FROM loan.position_snapshot_cache
 WHERE user_address = lower($1)
   AND protocol     = $2
@@ -938,8 +948,11 @@ _SQL_UPSERT_SNAPSHOT = """
 INSERT INTO loan.position_snapshot_cache
     (user_address, protocol, block_number, tx_hash, block_timestamp,
      total_collateral_usd, total_debt_usd, available_borrows_usd,
-     health_factor, ltv, liq_threshold, liq_price, eth_price_usd, reserves_json)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     health_factor, ltv, liq_threshold, liq_price, liq_price_rise,
+     eth_collateral_amount, eth_collateral_usd,
+     weth_debt_amount, weth_debt_usd,
+     eth_price_usd, reserves_json)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     block_number          = EXCLUDED.block_number,
     block_timestamp       = EXCLUDED.block_timestamp,
@@ -950,10 +963,31 @@ ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     ltv                   = EXCLUDED.ltv,
     liq_threshold         = EXCLUDED.liq_threshold,
     liq_price             = EXCLUDED.liq_price,
+    liq_price_rise        = EXCLUDED.liq_price_rise,
+    eth_collateral_amount = EXCLUDED.eth_collateral_amount,
+    eth_collateral_usd    = EXCLUDED.eth_collateral_usd,
+    weth_debt_amount      = EXCLUDED.weth_debt_amount,
+    weth_debt_usd         = EXCLUDED.weth_debt_usd,
     eth_price_usd         = EXCLUDED.eth_price_usd,
     reserves_json         = EXCLUDED.reserves_json,
     cached_at             = NOW()
 """
+
+
+def _calc_eth_collateral(pos: "UserPosition") -> tuple[Decimal, Decimal]:
+    """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
+    total_amount = Decimal("0")
+    total_usd = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() not in _ETH_SYMBOLS:
+            continue
+        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
+            continue
+        amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        price = _raw_to_decimal(r.price_raw, 8)
+        total_amount += amount
+        total_usd += amount * price
+    return total_amount, total_usd
 
 
 def _snapshot_reserve_to_dict(r: "ReservePosition") -> dict:
@@ -977,11 +1011,30 @@ def _snapshot_reserve_to_dict(r: "ReservePosition") -> dict:
     }
 
 
+_DDL_SNAPSHOT_CACHE_MIGRATE = """
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+          AND column_name='liq_price_rise'
+    ) THEN
+        ALTER TABLE loan.position_snapshot_cache
+            ADD COLUMN liq_price_rise        NUMERIC(30,8) NOT NULL DEFAULT 0,
+            ADD COLUMN eth_collateral_amount NUMERIC(30,8) NOT NULL DEFAULT 0,
+            ADD COLUMN eth_collateral_usd    NUMERIC(30,8) NOT NULL DEFAULT 0,
+            ADD COLUMN weth_debt_amount      NUMERIC(30,8) NOT NULL DEFAULT 0,
+            ADD COLUMN weth_debt_usd         NUMERIC(30,8) NOT NULL DEFAULT 0;
+    END IF;
+END $$;
+"""
+
+
 async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
     """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
     async with pool.acquire() as conn:
         await conn.execute(_DDL_SNAPSHOT_CACHE)
         await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
+        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
     logger.info("快照缓存表已就绪：loan.position_snapshot_cache")
 
 
@@ -1061,6 +1114,10 @@ async def upsert_snapshot_cache(
         hf_dec = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
 
         reserves_list = [_snapshot_reserve_to_dict(r) for r in pos.reserves]
+        eth_col_amount, eth_col_usd = _calc_eth_collateral(pos)
+        weth_debt_raw_dec, weth_debt_usd_dec = _calc_weth_debt(pos)
+        # weth_debt_amount: 换算为 ETH 数量（18 位 decimals，WETH 系均为 18 位）
+        weth_debt_amount = weth_debt_raw_dec / Decimal(10**18)
 
         rows.append((
             pos.user_address.lower(),
@@ -1075,6 +1132,11 @@ async def upsert_snapshot_cache(
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
             _calc_liq_price(pos),
+            _calc_liq_price_rise(pos),
+            eth_col_amount,
+            eth_col_usd,
+            weth_debt_amount,
+            weth_debt_usd_dec,
             meta["eth_price_usd"],
             json.dumps(reserves_list),
         ))

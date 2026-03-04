@@ -1660,6 +1660,11 @@ def _format_snapshot_point(
         health_factor=hf_str,
         liq_threshold=_fmt(Decimal(str(row["liq_threshold"])), 4),
         liq_price=_fmt(Decimal(str(row["liq_price"])), 2),
+        liq_price_rise=_fmt(Decimal(str(row["liq_price_rise"])), 2),
+        eth_collateral_amount=_fmt(Decimal(str(row["eth_collateral_amount"])), 6),
+        eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"])), 2),
+        weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
+        weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"])), 2),
         reserves=reserves,
     )
 
