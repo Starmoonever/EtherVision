@@ -297,7 +297,7 @@ export function LiquidationChart({
 
   // 修复图表宽度问题，确保ResponsiveContainer有确定的父容器大小
   return (
-    <div className="chart-container" style={{ width: '100%', minHeight: '400px' }}>
+    <div className="chart-container" style={{ width: '100%', minHeight: '350px' }}>
       <div
         className="chart-header"
         style={{
@@ -427,28 +427,6 @@ export function LiquidationChart({
             />
           </ComposedChart>
         </ResponsiveContainer>
-      </div>
-
-      <div
-        className="chart-footer"
-        style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}
-      >
-        模拟ETH价格:{' '}
-        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>
-          ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-        </span>
-        ({priceChange > 0 ? '+' : ''}
-        {priceChange}%)
-      </div>
-      <div
-        className="chart-footer"
-        style={{ textAlign: 'center', fontSize: '0.9rem', color: '#94a3b8' }}
-      >
-        该清算价格增减1%区间内，
-        <span style={{ color: '#f87171', fontWeight: 'bold' }}>
-          {modalData?.positions?.length || 0}
-        </span>{' '}
-        个仓位面临清算
       </div>
 
       {/* Modal Overlay */}
