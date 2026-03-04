@@ -295,30 +295,6 @@ async def get_user_position(
         )
     return _format_position(pos)
 
-
-async def get_liq_price(
-    w3: AsyncWeb3, address: str, protocol: str = "v3"
-) -> LiqPriceResponse:
-    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3, protocol)
-    contracts = get_contracts(protocol)
-    sem = asyncio.Semaphore(1)
-    pos = await fetch_user_position(
-        w3, address, reserve_tokens, reserve_configs, asset_prices, sem, contracts
-    )
-    from fastapi import HTTPException
-
-    if pos is EMPTY_POSITION:
-        raise HTTPException(
-            status_code=404,
-            detail=f"地址 {address} 当前在 Aave {protocol.upper()} 无任何仓位（已平仓或从未使用）",
-        )
-    if pos is None:
-        raise HTTPException(
-            status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
-        )
-    return _calc_liquidation_line(pos)
-
-
 # ── DB 批量查询（预爬取数据） ──────────────────────────────────────────────────
 
 # 健康系数阈值：DB 中 ∞ 存为 Decimal("1e18")，大于该阈值视为 inf

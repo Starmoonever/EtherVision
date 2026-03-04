@@ -6,11 +6,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
-                      HistoricalPositionResponse, LiqPriceResponse,
-                      LiquidationPeriodItem, LiquidationSimResponse,
-                      PositionResponse, PricePeriodResponse, PriceResponse,
-                      ShortLiqPeriodItem, ShortLiqSimResponse)
-from .service import (get_borrow_user_position, get_eth_price, get_liq_price,
+                      HistoricalPositionResponse, LiquidationPeriodItem,
+                      LiquidationSimResponse, PositionResponse,
+                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
+                      ShortLiqSimResponse)
+from .service import (get_borrow_user_position, get_eth_price,
                       get_positions_history, get_price_period,
                       get_sorted_borrow_positions, get_sorted_positions,
                       get_user_position, get_user_position_history,
@@ -61,7 +61,7 @@ def _parse_utc_time(time_str: str) -> int:
 
 
 @router.get(
-    "/user/position",
+    "/position",
     response_model=PositionResponse | HistoricalPositionResponse,
     summary="查询用户 Aave 仓位",
     description=(
@@ -90,22 +90,6 @@ async def user_position(
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
         return await get_user_position(_w3(request), address, protocol=version)
     return result
-
-
-@router.get(
-    "/user/liq_price",
-    response_model=LiqPriceResponse,
-    summary="查询 ETH liq_price",
-    description="计算当 ETH 价格跌至多少时，该用户的 Aave 健康系数将触碰 1.0",
-)
-async def user_liq_price(
-    request: Request,
-    address: str = Query(..., description="以太坊钱包地址"),
-    version: Literal["v2", "v3"] = Query(
-        "v3", description="Aave 协议版本：v2 或 v3（默认）"
-    ),
-) -> LiqPriceResponse:
-    return await get_liq_price(_w3(request), address, protocol=version)
 
 
 @router.get(
@@ -371,7 +355,7 @@ async def borrow_positions(
 
 
 @router.get(
-    "/borrow/user/position",
+    "/borrow/position",
     response_model=BorrowUserPositionResponse,
     summary="查询单个地址的借贷端仓位详情",
     description=(
