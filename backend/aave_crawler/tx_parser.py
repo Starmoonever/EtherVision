@@ -343,3 +343,22 @@ async def parse_tx_briefs(
         return brief
 
     return list(await asyncio.gather(*(_get(h) for h in tx_hashes)))
+
+
+async def parse_briefs_from_metas(metas: list[dict]) -> list[str]:
+    """从 meta 列表中批量解析 brief，自动读取每条 meta 的 tx_hash 和 protocol。
+
+    meta dict 需包含:
+      - ``tx_hash``:  str
+      - ``protocol``: str ('v2' | 'v3')
+
+    :returns: 与 metas 等长的 brief 列表，失败项返回空字符串
+
+    相比手动拆分 tx_hash 列表再单独传 protocol，此函数可避免调用方到处重复
+    相同的 ``[m["tx_hash"] for m in metas]`` + ``protocol=protocol`` 写法。
+    """
+    if not metas:
+        return []
+    return list(await asyncio.gather(
+        *(parse_tx_brief(m["tx_hash"], protocol=m.get("protocol", "v3")) for m in metas)
+    ))

@@ -18,7 +18,7 @@ from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position,
                    fetch_user_position_at_block, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
-from ..tx_parser import parse_tx_briefs
+from ..tx_parser import parse_briefs_from_metas, parse_tx_briefs
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
@@ -1824,8 +1824,7 @@ async def get_user_position_replay(
 
         # 写缓存
         if new_cache_records:
-            miss_tx_hashes = [r["meta"]["tx_hash"] for r in new_cache_records]
-            miss_briefs = await parse_tx_briefs(miss_tx_hashes, protocol=protocol)
+            miss_briefs = await parse_briefs_from_metas([r["meta"] for r in new_cache_records])
             await upsert_snapshot_cache(
                 pool,
                 positions=[r["position"] for r in new_cache_records],

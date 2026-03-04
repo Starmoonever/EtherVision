@@ -28,7 +28,7 @@ from .rpc import (CONTRACTS_V3, EMPTY_POSITION, WETH_ADDRESS,
                   ProtocolContracts, build_web3, fetch_user_position,
                   fetch_user_position_at_block, get_all_reserve_tokens,
                   get_assets_prices, get_contracts, get_reserve_config)
-from .tx_parser import parse_tx_briefs
+from .tx_parser import parse_briefs_from_metas
 
 logger = logging.getLogger(__name__)
 
@@ -194,8 +194,7 @@ async def _sync_snapshot_cache(
         })
 
     if positions:
-        tx_hashes = [m["tx_hash"] for m in metas]
-        briefs = await parse_tx_briefs(tx_hashes, protocol=proto)
+        briefs = await parse_briefs_from_metas(metas)
         written = await upsert_snapshot_cache(pool, positions, metas, briefs=briefs)
         logger.info("快照同步完成：写入 %d 条", written)
     else:
