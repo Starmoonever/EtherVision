@@ -1,0 +1,334 @@
+"""tx_parser.py — 通过 AI-ContractParser 子模块解析 Aave 交易，返回人类可读的 brief。
+
+模板占位符 label 处理规则：
+  - ${N:amount}   → 原始整数 / 10**decimals（decimals 来自相邻 token 参数）
+  - ${N:token}    → ERC-20 symbol()（先查静态表，再 RPC fallback）
+  - ${N:contract} → 直接使用 params[N]（已是合约名，如 "Aave"）
+  - 其他 label   → 原值透传
+
+用法::
+
+    from aave_crawler.tx_parser import parse_tx_briefs
+
+    briefs = await parse_tx_briefs(
+        tx_hashes=["0xabc...", "0xdef..."],
+        protocol="v3",
+    )
+    # -> ["在 Aave 取出 700 weETH", "在 Aave 借出 500 USDC"]
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from decimal import Decimal
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# ── 路径 ────────────────────────────────────────────────────────────────────
+_PARSER_DIR = Path(__file__).parent.parent / "AI-ContractParser"
+_DECODE_SCRIPT = _PARSER_DIR / "scripts" / "decode" / "decode-tx-input.js"
+_ENV_FILE = _PARSER_DIR / ".env"
+
+# ── Aave Pool 地址 ───────────────────────────────────────────────────────────
+_POOL_BY_PROTOCOL: dict[str, str] = {
+    "v3": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "v3_borrow": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "v2": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+    "v2_borrow": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+}
+
+# ── 并发上限（避免同时 fork 过多 node 进程）────────────────────────────────
+_BRIEF_SEM = asyncio.Semaphore(8)
+
+# ── 进程内 brief 缓存（tx_hash → brief）────────────────────────────────────
+_brief_mem_cache: dict[str, str] = {}
+
+# ── 模板占位符正则：${N:label} ───────────────────────────────────────────────
+_PLACEHOLDER_PAT = re.compile(r"\$\{(\d+):([^}]+)\}")
+
+# ── 最小 ERC-20 ABI（symbol + decimals）──────────────────────────────────────
+_ERC20_ABI = [
+    {
+        "name": "symbol", "type": "function",
+        "inputs": [], "outputs": [{"type": "string"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "decimals", "type": "function",
+        "inputs": [], "outputs": [{"type": "uint8"}],
+        "stateMutability": "view",
+    },
+]
+
+# ── Mainnet 常见 Aave 代币静态表（地址全部小写）→ (symbol, decimals) ─────────
+_KNOWN_TOKENS: dict[str, tuple[str, int]] = {
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": ("WETH",   18),
+    "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": ("wstETH", 18),
+    "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee": ("weETH",  18),
+    "0xae78736cd615f374d3085123a210448e74fc6393": ("rETH",   18),
+    "0xbe9895146f7af43049ca1c1ae358b0541ea49704": ("cbETH",  18),
+    "0xbf5495efe5db9ce00f80364c8b423567e58d2110": ("ezETH",  18),
+    "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7": ("rsETH",  18),
+    "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38": ("osETH",  18),
+    "0xa35b1b31ce002fbf2058d22f30f95d405200a15b": ("ETHx",   18),
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": ("USDC",    6),
+    "0xdac17f958d2ee523a2206206994597c13d831ec7": ("USDT",    6),
+    "0x6b175474e89094c44da98b954eedeac495271d0f": ("DAI",    18),
+    "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": ("WBTC",    8),
+    "0x514910771af9ca656af840dff83e8264ecf986ca": ("LINK",   18),
+    "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9": ("AAVE",   18),
+    "0xd533a949740bb3306d119cc777fa900ba034cd52": ("CRV",    18),
+    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984": ("UNI",    18),
+    "0xba100000625a3754423978a60c9317c58a424e3d": ("BAL",    18),
+}
+
+# ── Token info 缓存 ───────────────────────────────────────────────────────────
+_token_info_cache: dict[str, tuple[str, int]] = {}
+
+# ── Web3 实例（懒加载）───────────────────────────────────────────────────────
+_w3 = None
+_w3_lock = asyncio.Lock()
+
+
+def _read_rpc_url() -> str:
+    """从 AI-ContractParser/.env 读取 ETH_RPC_URL。"""
+    try:
+        for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("ETH_RPC_URL="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
+async def _get_w3():
+    """懒加载 AsyncWeb3 实例，失败时返回 None。"""
+    global _w3
+    if _w3 is not None:
+        return _w3
+    async with _w3_lock:
+        if _w3 is not None:
+            return _w3
+        rpc = _read_rpc_url()
+        if not rpc:
+            logger.warning("tx_parser: ETH_RPC_URL 未配置，token 信息将仅用静态表")
+            return None
+        try:
+            from web3 import AsyncWeb3
+            _w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc))
+        except Exception as exc:
+            logger.warning("tx_parser: 初始化 web3 失败: %s", exc)
+        return _w3
+
+
+async def _get_token_info(addr: str) -> tuple[str, int]:
+    """返回 (symbol, decimals)；先查静态表，再 RPC，失败返回 ('', 18)。"""
+    addr = addr.lower()
+    if addr in _token_info_cache:
+        return _token_info_cache[addr]
+    if addr in _KNOWN_TOKENS:
+        info = _KNOWN_TOKENS[addr]
+        _token_info_cache[addr] = info
+        return info
+
+    w3 = await _get_w3()
+    if w3 is None:
+        return ("", 18)
+    try:
+        from web3 import AsyncWeb3 as _AW3
+        contract = w3.eth.contract(
+            address=_AW3.to_checksum_address(addr), abi=_ERC20_ABI
+        )
+        symbol, decimals = await asyncio.gather(
+            contract.functions.symbol().call(),
+            contract.functions.decimals().call(),
+        )
+        info = (str(symbol), int(decimals))
+        _token_info_cache[addr] = info
+        logger.debug("tx_parser: token %s → %s / %d decimals", addr, symbol, decimals)
+        return info
+    except Exception as exc:
+        logger.debug("tx_parser: _get_token_info 失败 %s: %s", addr, exc)
+        _token_info_cache[addr] = ("", 18)
+        return ("", 18)
+
+
+# uint256.max = 2^256-1，Aave 用作"全额偿还/全额取出"的哨兵值
+_SENTINEL_THRESHOLD = Decimal(10) ** 75  # 大于此值视为 uint256.max
+
+
+def _fmt_amount(raw: str, decimals: int) -> str:
+    """原始整数字符串 → 可读小数（最多 6 位，去尾零）。
+
+    特殊值：若 raw >= 1e75（Aave uint256.max 哨兵），返回 '全部'。
+    """
+    try:
+        raw_dec = Decimal(raw)
+        if raw_dec >= _SENTINEL_THRESHOLD:
+            return "全部"
+        value = raw_dec / Decimal(10 ** decimals)
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+    except Exception:
+        return raw
+
+
+async def _fill_template_rich(template: str, params: dict[str, str]) -> str:
+    """根据占位符 label 对 params 进行富化后填充模板。
+
+    处理顺序：
+      1. 解析所有 ``token`` 参数 → (symbol, decimals)
+      2. 用相邻 token 的 decimals 格式化 ``amount`` 参数
+      3. ``contract`` 参数直接使用 params[N]（已是名称）
+      4. 其他 label → 原值透传
+    """
+    placeholders: dict[str, str] = {
+        m.group(1): m.group(2)
+        for m in _PLACEHOLDER_PAT.finditer(template)
+    }
+
+    # ── Step 1: 解析 token 参数 ──────────────────────────────────────────────
+    # 以太坊地址格式：0x + 40 hex chars = 42 chars
+    _ADDR_LEN = 42
+
+    token_by_idx: dict[str, tuple[str, int]] = {}
+    for idx, label in placeholders.items():
+        if label == "token":
+            raw = params.get(idx, "")
+            if raw.startswith("0x") and len(raw) >= _ADDR_LEN:
+                # 合法地址：查 symbol/decimals
+                sym, dec = await _get_token_info(raw)
+                if sym:
+                    token_by_idx[idx] = (sym, dec)
+                else:
+                    # 查不到 symbol：显示缩略地址 0xabcd...1234
+                    short = raw[:6] + "…" + raw[-4:]
+                    token_by_idx[idx] = (short, dec)
+            elif raw.startswith("0x"):
+                # "0x" 或其他长度不足的 0x 前缀 → 原生币 ETH
+                token_by_idx[idx] = ("ETH", 18)
+            else:
+                # 非地址格式（已是名称）：直接使用
+                token_by_idx[idx] = (raw, 18)
+
+    # 默认 decimals：取序号最小的 token
+    default_decimals = 18
+    if token_by_idx:
+        nearest_idx = min(token_by_idx.keys(), key=lambda x: int(x))
+        default_decimals = token_by_idx[nearest_idx][1]
+
+    # ── Step 2: 构建替换值 ───────────────────────────────────────────────────
+    resolved: dict[str, str] = {}
+    for idx, label in placeholders.items():
+        raw = params.get(idx, f"${{{idx}:{label}}}")
+        if label == "token":
+            resolved[idx] = token_by_idx[idx][0] if idx in token_by_idx else raw
+        elif label == "amount":
+            # 优先取 idx+1 的 token，其次 idx-1，最后 default
+            adj = str(int(idx) + 1)
+            if adj in token_by_idx:
+                decimals = token_by_idx[adj][1]
+            else:
+                adj = str(int(idx) - 1)
+                decimals = token_by_idx[adj][1] if adj in token_by_idx else default_decimals
+            resolved[idx] = _fmt_amount(raw, decimals)
+        elif label == "contract":
+            resolved[idx] = raw  # 已是合约名，如 "Aave"
+        else:
+            resolved[idx] = raw
+
+    result = _PLACEHOLDER_PAT.sub(lambda m: resolved.get(m.group(1), m.group(0)), template)
+    # 清理因空 token 等产生的多余空格
+    import re as _re
+    result = _re.sub(r"  +", " ", result).strip()
+    return result
+
+
+async def _parse_single(tx_hash: str, pool_address: str) -> str:
+    """子进程调用 decode-tx-input.js，解析单笔 tx 的 brief（含富化处理）。"""
+    async with _BRIEF_SEM:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "node",
+                str(_DECODE_SCRIPT),
+                "--tx", tx_hash,
+                "--address", pool_address,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(_PARSER_DIR),
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=30
+            )
+        except asyncio.TimeoutError:
+            logger.warning("parse_tx_brief timeout: %s", tx_hash)
+            return ""
+        except Exception as exc:
+            logger.warning("parse_tx_brief error (%s): %s", tx_hash, exc)
+            return ""
+
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+
+    # 跳过 dotenv 头部行，找第一个 '{' 作为 JSON 起始
+    json_start = stdout_text.find("{")
+    if json_start == -1:
+        logger.debug("parse_tx_brief: no JSON in stdout for %s", tx_hash)
+        return ""
+
+    try:
+        data = json.loads(stdout_text[json_start:])
+    except json.JSONDecodeError as exc:
+        logger.debug("parse_tx_brief: JSON decode error for %s: %s", tx_hash, exc)
+        return ""
+
+    try:
+        brief_block = data["data"]["template"]["brief"]
+        tmpl: str = brief_block["template"]
+        params: dict[str, str] = {
+            k: str(v) for k, v in brief_block.get("params", {}).items()
+        }
+        return await _fill_template_rich(tmpl, params)
+    except (KeyError, TypeError):
+        logger.debug("parse_tx_brief: no brief in parsed result for %s", tx_hash)
+        return ""
+
+
+async def parse_tx_brief(tx_hash: str, protocol: str = "v3") -> str:
+    """解析单笔 tx 的人类可读摘要，结果会写入内存缓存。"""
+    tx_hash = tx_hash.lower()
+    if tx_hash in _brief_mem_cache:
+        return _brief_mem_cache[tx_hash]
+
+    pool_address = _POOL_BY_PROTOCOL.get(protocol, _POOL_BY_PROTOCOL["v3"])
+    brief = await _parse_single(tx_hash, pool_address)
+    _brief_mem_cache[tx_hash] = brief
+    return brief
+
+
+async def parse_tx_briefs(
+    tx_hashes: list[str],
+    protocol: str = "v3",
+) -> list[str]:
+    """并发解析多笔 tx 的 brief，保持与 tx_hashes 相同顺序。
+
+    :param tx_hashes: tx hash 列表
+    :param protocol:  'v2' | 'v3'
+    :returns:         与 tx_hashes 等长的 brief 列表，失败项返回空字符串
+    """
+    if not tx_hashes:
+        return []
+    pool_address = _POOL_BY_PROTOCOL.get(protocol, _POOL_BY_PROTOCOL["v3"])
+
+    async def _get(tx_hash: str) -> str:
+        h = tx_hash.lower()
+        if h in _brief_mem_cache:
+            return _brief_mem_cache[h]
+        brief = await _parse_single(h, pool_address)
+        _brief_mem_cache[h] = brief
+        return brief
+
+    return list(await asyncio.gather(*(_get(h) for h in tx_hashes)))

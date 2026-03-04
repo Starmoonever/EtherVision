@@ -890,6 +890,7 @@ CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
     eth_price_usd         NUMERIC(30, 8)   NOT NULL,
     -- 资产明细快照（JSONB 数组，结构见 _snapshot_reserve_to_dict）
     reserves_json         JSONB            NOT NULL DEFAULT '[]',
+    brief                 TEXT             NOT NULL DEFAULT '',  -- AI-ContractParser 人类可读摘要
     cached_at             TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
     UNIQUE (user_address, protocol, tx_hash)
 );
@@ -935,7 +936,7 @@ SELECT
     liq_price, liq_price_rise,
     eth_collateral_amount, eth_collateral_usd,
     weth_debt_amount, weth_debt_usd,
-    eth_price_usd, reserves_json, cached_at
+    eth_price_usd, reserves_json, brief, cached_at
 FROM loan.position_snapshot_cache
 WHERE user_address = lower($1)
   AND protocol     = $2
@@ -951,8 +952,8 @@ INSERT INTO loan.position_snapshot_cache
      health_factor, ltv, liq_threshold, liq_price, liq_price_rise,
      eth_collateral_amount, eth_collateral_usd,
      weth_debt_amount, weth_debt_usd,
-     eth_price_usd, reserves_json)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+     eth_price_usd, reserves_json, brief)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     block_number          = EXCLUDED.block_number,
     block_timestamp       = EXCLUDED.block_timestamp,
@@ -970,6 +971,7 @@ ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     weth_debt_usd         = EXCLUDED.weth_debt_usd,
     eth_price_usd         = EXCLUDED.eth_price_usd,
     reserves_json         = EXCLUDED.reserves_json,
+    brief                 = EXCLUDED.brief,
     cached_at             = NOW()
 """
 
@@ -1028,6 +1030,19 @@ DO $$ BEGIN
 END $$;
 """
 
+_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF = """
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+          AND column_name='brief'
+    ) THEN
+        ALTER TABLE loan.position_snapshot_cache
+            ADD COLUMN brief TEXT NOT NULL DEFAULT '';
+    END IF;
+END $$;
+"""
+
 
 async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
     """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
@@ -1035,6 +1050,7 @@ async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
         await conn.execute(_DDL_SNAPSHOT_CACHE)
         await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
+        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF)
     logger.info("快照缓存表已就绪：loan.position_snapshot_cache")
 
 
@@ -1088,6 +1104,7 @@ async def upsert_snapshot_cache(
     pool: asyncpg.Pool,
     positions: list["UserPosition"],
     tx_meta: list[dict],    # 与 positions 一一对应，含 tx_hash/block_timestamp/eth_price_usd/protocol
+    briefs: list[str] | None = None,  # 与 positions 等长的 brief 列表；None 时全部填空字符串
 ) -> int:
     """批量 UPSERT 快照缓存。
 
@@ -1097,6 +1114,8 @@ async def upsert_snapshot_cache(
                            block_timestamp: datetime
                            eth_price_usd  : Decimal
                            protocol       : str   ('v2' | 'v3')
+    :param briefs:     与 positions 等长的人类可读摘要列表（由 AI-ContractParser 生成）；
+                       None 或长度不足时对应项填空字符串。
     :returns: 写入行数
     """
     import json
@@ -1106,9 +1125,10 @@ async def upsert_snapshot_cache(
 
     _MAX_UINT256 = (1 << 256) - 1
     _MAX_HF = Decimal("1e18")
+    _briefs = briefs or []
 
     rows: list[tuple] = []
-    for pos, meta in zip(positions, tx_meta):
+    for i, (pos, meta) in enumerate(zip(positions, tx_meta)):
         s = pos.summary
         hf_raw = s.health_factor
         hf_dec = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
@@ -1139,6 +1159,7 @@ async def upsert_snapshot_cache(
             weth_debt_usd_dec,
             meta["eth_price_usd"],
             json.dumps(reserves_list),
+            _briefs[i] if i < len(_briefs) else "",
         ))
 
     async with pool.acquire() as conn:

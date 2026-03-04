@@ -18,6 +18,7 @@ from ..models import ReservePosition, UserPosition
 from ..rpc import (EMPTY_POSITION, fetch_user_position,
                    fetch_user_position_at_block, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
+from ..tx_parser import parse_tx_briefs
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
@@ -1621,6 +1622,14 @@ def _ts_to_dt(ts: int) -> datetime:
     return datetime.fromtimestamp(ts, tz=timezone.utc)
 
 
+def _get_brief(row) -> str:
+    """从缓存行中安全读取 brief 字段；字段不存在或为 None 时返回空字符串。"""
+    try:
+        return row["brief"] or ""
+    except (KeyError, IndexError):
+        return ""
+
+
 def _format_snapshot_point(
     row,  # asyncpg.Record from position_snapshot_cache
     detail: bool = False,
@@ -1665,6 +1674,7 @@ def _format_snapshot_point(
         eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"])), 2),
         weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
         weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"])), 2),
+        brief=_get_brief(row),
         reserves=reserves,
     )
 
@@ -1683,6 +1693,12 @@ async def get_user_tx_history(
     tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
     cached_rows = await get_cached_snapshots(pool, user_address, protocol, from_dt, to_dt)
     cached_hashes = {r["tx_hash"] for r in cached_rows}
+    cached_brief_map: dict[str, str] = {r["tx_hash"]: _get_brief(r) for r in cached_rows}
+
+    # 对未缓存的 tx 异步获取 brief
+    uncached_hashes = [r["tx_hash"] for r in tx_rows if r["tx_hash"] not in cached_hashes]
+    fresh_briefs = await parse_tx_briefs(uncached_hashes, protocol=protocol)
+    fresh_brief_map: dict[str, str] = dict(zip(uncached_hashes, fresh_briefs))
 
     items = [
         TxHistoryItem(
@@ -1692,6 +1708,7 @@ async def get_user_tx_history(
             operation_type=r["operation_type"],
             token_symbol=r["token_symbol"] or "",
             cached=r["tx_hash"] in cached_hashes,
+            brief=cached_brief_map.get(r["tx_hash"]) or fresh_brief_map.get(r["tx_hash"], ""),
         )
         for r in tx_rows
     ]
@@ -1807,10 +1824,13 @@ async def get_user_position_replay(
 
         # 写缓存
         if new_cache_records:
+            miss_tx_hashes = [r["meta"]["tx_hash"] for r in new_cache_records]
+            miss_briefs = await parse_tx_briefs(miss_tx_hashes, protocol=protocol)
             await upsert_snapshot_cache(
                 pool,
                 positions=[r["position"] for r in new_cache_records],
                 tx_meta=[r["meta"] for r in new_cache_records],
+                briefs=miss_briefs,
             )
 
     # ── 5. 重新读取缓存（含刚写入的）──────────────────────────────────────────

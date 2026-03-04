@@ -282,6 +282,7 @@ MOCK_REPLAY_RESPONSE = PositionReplayResponse(
             eth_collateral_usd="5000.00",
             weth_debt_amount="0.000000",
             weth_debt_usd="0.00",
+            brief="",
         )
     ],
 )
@@ -300,6 +301,7 @@ MOCK_TX_HISTORY_RESPONSE = TxHistoryResponse(
             operation_type="supply",
             token_symbol="WETH",
             cached=True,
+            brief="",
         ),
         TxHistoryItem(
             tx_hash="0x" + "bb" * 32,
@@ -308,6 +310,7 @@ MOCK_TX_HISTORY_RESPONSE = TxHistoryResponse(
             operation_type="borrow",
             token_symbol="USDC",
             cached=False,
+            brief="",
         ),
     ],
 )

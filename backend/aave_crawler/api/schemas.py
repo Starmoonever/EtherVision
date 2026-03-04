@@ -273,6 +273,7 @@ class PositionSnapshotPoint(BaseModel):
     eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
     weth_debt_amount: str = Field(description="ETH 系负债合计数量")
     weth_debt_usd: str = Field(description="ETH 系负债合计 USD")
+    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
     reserves: list[SnapshotReserveDetail] = Field(
         default_factory=list,
         description="资产明细；仅当请求 detail=true 时填充",
@@ -303,6 +304,7 @@ class TxHistoryItem(BaseModel):
     operation_type: str = Field(description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
     token_symbol: str = Field(description="涉及的资产符号")
     cached: bool = Field(description="该 tx 的仓位快照是否已在缓存中")
+    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
 
 
 class TxHistoryResponse(BaseModel):
