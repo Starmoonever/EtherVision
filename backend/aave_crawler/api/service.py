@@ -6,21 +6,29 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
+import asyncpg
 from web3 import AsyncWeb3
 
+from ..db import (fetch_user_tx_history, get_cached_snapshots,
+                  upsert_snapshot_cache)
 from ..models import ReservePosition, UserPosition
-from ..rpc import (EMPTY_POSITION, fetch_user_position, get_all_reserve_tokens,
+from ..rpc import (EMPTY_POSITION, fetch_user_position,
+                   fetch_user_position_at_block, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
                       LiqPriceResponse, LiquidationPeriodItem,
                       LiquidationSimItem, LiquidationSimResponse,
-                      PositionResponse, PricePeriodItem, PricePeriodResponse,
-                      PriceResponse, ReservePositionSchema, ShortLiqPeriodItem,
-                      ShortLiqSimItem, ShortLiqSimResponse)
+                      PositionReplayResponse, PositionResponse,
+                      PositionSnapshotPoint, PricePeriodItem,
+                      PricePeriodResponse, PriceResponse,
+                      ReservePositionSchema, ShortLiqPeriodItem,
+                      ShortLiqSimItem, ShortLiqSimResponse,
+                      SnapshotReserveDetail, TxHistoryItem, TxHistoryResponse)
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +302,30 @@ async def get_user_position(
             status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
         )
     return _format_position(pos)
+
+
+async def get_liq_price(
+    w3: AsyncWeb3, address: str, protocol: str = "v3"
+) -> LiqPriceResponse:
+    reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3, protocol)
+    contracts = get_contracts(protocol)
+    sem = asyncio.Semaphore(1)
+    pos = await fetch_user_position(
+        w3, address, reserve_tokens, reserve_configs, asset_prices, sem, contracts
+    )
+    from fastapi import HTTPException
+
+    if pos is EMPTY_POSITION:
+        raise HTTPException(
+            status_code=404,
+            detail=f"地址 {address} 当前在 Aave {protocol.upper()} 无任何仓位",
+        )
+    if pos is None:
+        raise HTTPException(
+            status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
+        )
+    return _calc_liquidation_line(pos)
+
 
 # ── DB 批量查询（预爬取数据） ──────────────────────────────────────────────────
 
@@ -1569,3 +1601,249 @@ async def get_positions_history(
         )
 
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 历史仓位回放（基于 position_snapshot_cache + aave_history + RPC at block）
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MAX_REPLAY_CONCURRENCY = 5   # 并发 RPC 重放上限（避免公共节点限流）
+
+
+def _utc_str(dt: datetime) -> str:
+    """datetime → 'YYYY-MM-DDTHH:MM:SSZ' UTC 字符串"""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ts_to_dt(ts: int) -> datetime:
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+def _format_snapshot_point(
+    row,  # asyncpg.Record from position_snapshot_cache
+    detail: bool = False,
+) -> PositionSnapshotPoint:
+    """将缓存表 Record 格式化为 PositionSnapshotPoint。"""
+    import json
+    _MAX_UINT256_DEC = Decimal("1e18")
+
+    hf_raw = Decimal(str(row["health_factor"]))
+    hf_str = "inf" if hf_raw >= _MAX_UINT256_DEC else _fmt(hf_raw, 4)
+
+    reserves: list[SnapshotReserveDetail] = []
+    if detail:
+        raw_list = row["reserves_json"]
+        if isinstance(raw_list, str):
+            raw_list = json.loads(raw_list)
+        for r in raw_list:
+            reserves.append(
+                SnapshotReserveDetail(
+                    symbol=r["symbol"],
+                    token_address=r["token_address"],
+                    price_usd=_fmt(Decimal(r["price_usd"]), 2),
+                    supply_usd=_fmt(Decimal(r["supply_usd"]), 2),
+                    total_debt_usd=_fmt(Decimal(r["total_debt_usd"]), 2),
+                    use_as_collateral=r["use_as_collateral"],
+                )
+            )
+
+    return PositionSnapshotPoint(
+        tx_hash=row["tx_hash"],
+        block_number=row["block_number"],
+        timestamp=_utc_str(row["block_timestamp"]),
+        eth_price_usd=_fmt(Decimal(str(row["eth_price_usd"])), 2),
+        total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"])), 2),
+        total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"])), 2),
+        available_borrows_usd=_fmt(Decimal(str(row["available_borrows_usd"])), 2),
+        health_factor=hf_str,
+        liq_threshold=_fmt(Decimal(str(row["liq_threshold"])), 4),
+        liq_price=_fmt(Decimal(str(row["liq_price"])), 2),
+        reserves=reserves,
+    )
+
+
+async def get_user_tx_history(
+    pool: asyncpg.Pool,
+    user_address: str,
+    from_ts: int,
+    to_ts: int,
+    protocol: str = "v3",
+) -> TxHistoryResponse:
+    """查询用户在时间范围内的 Aave 历史事件列表，并标注各 tx 是否已有缓存快照。"""
+    from_dt = _ts_to_dt(from_ts)
+    to_dt = _ts_to_dt(to_ts)
+
+    tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
+    cached_rows = await get_cached_snapshots(pool, user_address, protocol, from_dt, to_dt)
+    cached_hashes = {r["tx_hash"] for r in cached_rows}
+
+    items = [
+        TxHistoryItem(
+            tx_hash=r["tx_hash"],
+            block_number=r["block_number"],
+            timestamp=_utc_str(r["block_timestamp"]),
+            operation_type=r["operation_type"],
+            token_symbol=r["token_symbol"] or "",
+            cached=r["tx_hash"] in cached_hashes,
+        )
+        for r in tx_rows
+    ]
+
+    return TxHistoryResponse(
+        address=user_address.lower(),
+        protocol=protocol,
+        from_time=_utc_str(from_dt),
+        to_time=_utc_str(to_dt),
+        txs=items,
+        total=len(items),
+    )
+
+
+async def get_user_position_replay(
+    pool: asyncpg.Pool,
+    w3: AsyncWeb3,
+    user_address: str,
+    from_ts: int,
+    to_ts: int,
+    protocol: str = "v3",
+    use_cache: bool = True,
+    detail: bool = False,
+) -> PositionReplayResponse:
+    """历史仓位回放主函数。
+
+    流程：
+    1. 从 aave_history 取用户的 tx 列表（已建索引，毫秒级）
+    2. 查 position_snapshot_cache 确认哪些 tx 已缓存
+    3. 对未缓存 tx 并发 RPC eth_call at block_number（真实链上值，无利息误差）
+    4. 将新查询结果写入缓存（幂等 UPSERT）
+    5. 合并 + 按 block_timestamp 升序返回
+    """
+    from_dt = _ts_to_dt(from_ts)
+    to_dt = _ts_to_dt(to_ts)
+
+    # ── 1. 获取 tx 列表 ────────────────────────────────────────────────────────
+    tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
+    if not tx_rows:
+        return PositionReplayResponse(
+            address=user_address.lower(),
+            protocol=protocol,
+            from_time=_utc_str(from_dt),
+            to_time=_utc_str(to_dt),
+            data_source="cache",
+            points=[],
+            total_points=0,
+            cache_hit_rate="1.00",
+        )
+
+    # ── 2. 查缓存 ──────────────────────────────────────────────────────────────
+    if use_cache:
+        cached_rows = await get_cached_snapshots(
+            pool, user_address, protocol, from_dt, to_dt
+        )
+        cached_map: dict[str, object] = {r["tx_hash"]: r for r in cached_rows}
+    else:
+        cached_map = {}
+
+    # 去重：同一 block 可能有多条 tx_hash（主用户 + 清算目标角色各一条），
+    # 取 block_number 唯一，优先使用缓存命中的 tx_hash
+    seen_blocks: dict[int, dict] = {}
+    for r in tx_rows:
+        bn = r["block_number"]
+        th = r["tx_hash"]
+        if bn not in seen_blocks or (th in cached_map and r["tx_hash"] == th):
+            seen_blocks[bn] = dict(r)
+
+    deduped_txs = sorted(seen_blocks.values(), key=lambda x: x["block_number"])
+    total = len(deduped_txs)
+
+    # ── 3. 区分缓存命中 / 需 RPC 重放 ─────────────────────────────────────────
+    hit_txs = [t for t in deduped_txs if t["tx_hash"] in cached_map]
+    miss_txs = [t for t in deduped_txs if t["tx_hash"] not in cached_map]
+
+    # ── 4. 并发 RPC 重放 miss_txs ─────────────────────────────────────────────
+    new_cache_records: list[dict] = []
+    if miss_txs:
+        reserve_tokens, reserve_configs, _ = await _get_common_data(w3, protocol)
+        contracts = get_contracts(protocol)
+        semaphore = asyncio.Semaphore(_MAX_REPLAY_CONCURRENCY)
+
+        tasks = [
+            fetch_user_position_at_block(
+                w3,
+                user_address,
+                reserve_tokens,
+                reserve_configs,
+                t["block_number"],
+                semaphore,
+                contracts,
+            )
+            for t in miss_txs
+        ]
+        rpc_results = await asyncio.gather(*tasks)
+
+        for t, res in zip(miss_txs, rpc_results):
+            if res is None or res is EMPTY_POSITION:
+                continue   # RPC 失败或无仓位，跳过（不写缓存，下次继续重试）
+            pos, eth_price_raw = res
+            eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
+            new_cache_records.append(
+                {
+                    "position": pos,
+                    "meta": {
+                        "tx_hash": t["tx_hash"],
+                        "block_timestamp": t["block_timestamp"],
+                        "eth_price_usd": eth_price_dec,
+                        "protocol": protocol,
+                    },
+                }
+            )
+
+        # 写缓存
+        if new_cache_records:
+            await upsert_snapshot_cache(
+                pool,
+                positions=[r["position"] for r in new_cache_records],
+                tx_meta=[r["meta"] for r in new_cache_records],
+            )
+
+    # ── 5. 重新读取缓存（含刚写入的）──────────────────────────────────────────
+    final_cache = await get_cached_snapshots(
+        pool, user_address, protocol, from_dt, to_dt
+    )
+    final_map: dict[str, object] = {r["tx_hash"]: r for r in final_cache}
+
+    # ── 6. 按 block 排序拼装响应 ───────────────────────────────────────────────
+    points: list[PositionSnapshotPoint] = []
+    for t in deduped_txs:
+        row = final_map.get(t["tx_hash"])
+        if row is None:
+            continue  # 该 tx 的 RPC 重放失败，跳过
+        points.append(_format_snapshot_point(row, detail=detail))
+
+    cache_hit_count = sum(1 for t in deduped_txs if t["tx_hash"] in final_map
+                         and t["tx_hash"] in cached_map)
+    cache_hit_rate = (
+        _fmt(Decimal(cache_hit_count) / Decimal(total), 2)
+        if total > 0
+        else "1.00"
+    )
+
+    if not miss_txs:
+        data_source = "cache"
+    elif not hit_txs:
+        data_source = "rpc"
+    else:
+        data_source = "mixed"
+
+    return PositionReplayResponse(
+        address=user_address.lower(),
+        protocol=protocol,
+        from_time=_utc_str(from_dt),
+        to_time=_utc_str(to_dt),
+        data_source=data_source,
+        points=points,
+        total_points=len(points),
+        cache_hit_rate=cache_hit_rate,
+    )

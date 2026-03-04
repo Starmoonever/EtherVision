@@ -2,8 +2,8 @@
 API 路由单元测试。
 
 覆盖所有端点的所有参数组合：
-  - GET /api/user/position
-  - GET /api/user/liq_price
+  - GET /api/position
+  - GET /api/liq_price
   - GET /api/positions
   - GET /api/price
   - GET /api/price/period
@@ -37,15 +37,15 @@ _502 = HTTPException(status_code=502, detail="RPC失败")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/user/position
+# GET /api/position
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestUserPosition:
-    """GET /api/user/position — 必须参数 address，可选参数 date。"""
+    """GET /api/position — 必须参数 address，可选参数 date。"""
 
     def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get("/api/user/position")
+        resp = client.get("/api/position")
         assert resp.status_code == 422
 
     # ── 实时模式（无 date）────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ class TestUserPosition:
             new_callable=AsyncMock,
             return_value=MOCK_POSITION,
         ):
-            resp = client.get("/api/user/position", params={"address": ADDR})
+            resp = client.get("/api/position", params={"address": ADDR})
         assert resp.status_code == 200
         data = resp.json()
         assert data["address"] == ADDR
@@ -70,19 +70,19 @@ class TestUserPosition:
         with patch(
             f"{_ROUTES}.get_user_position", new_callable=AsyncMock, side_effect=_404
         ):
-            resp = client.get("/api/user/position", params={"address": ADDR})
+            resp = client.get("/api/position", params={"address": ADDR})
         assert resp.status_code == 404
 
     def test_realtime_rpc_failure_returns_502(self, client: TestClient):
         with patch(
             f"{_ROUTES}.get_user_position", new_callable=AsyncMock, side_effect=_502
         ):
-            resp = client.get("/api/user/position", params={"address": ADDR})
+            resp = client.get("/api/position", params={"address": ADDR})
         assert resp.status_code == 502
 
     def test_realtime_no_w3_returns_503(self, app_no_w3):
         with TestClient(app_no_w3) as c:
-            resp = c.get("/api/user/position", params={"address": ADDR})
+            resp = c.get("/api/position", params={"address": ADDR})
         assert resp.status_code == 503
 
     # ── 历史模式（带 date）────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ class TestUserPosition:
             return_value=MOCK_HIST_POSITION,
         ):
             resp = client.get(
-                "/api/user/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -113,7 +113,7 @@ class TestUserPosition:
             return_value=MOCK_POSITION,
         ):
             resp = client.get(
-                "/api/user/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -138,7 +138,7 @@ class TestUserPosition:
             return_value=MOCK_HIST_POSITION,
         ):
             resp = client.get(
-                "/api/user/position", params={"address": ADDR, "date": date_str}
+                "/api/position", params={"address": ADDR, "date": date_str}
             )
         assert resp.status_code == 200
 
@@ -153,35 +153,35 @@ class TestUserPosition:
     )
     def test_invalid_date_returns_400(self, client: TestClient, bad_date: str):
         resp = client.get(
-            "/api/user/position", params={"address": ADDR, "date": bad_date}
+            "/api/position", params={"address": ADDR, "date": bad_date}
         )
         assert resp.status_code == 400
 
     def test_historical_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
             resp = c.get(
-                "/api/user/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 503
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/user/liq_price
+# GET /api/liq_price
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestUserLiqPrice:
-    """GET /api/user/liq_price — 必须参数 address。"""
+    """GET /api/liq_price — 必须参数 address。"""
 
     def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get("/api/user/liq_price")
+        resp = client.get("/api/liq_price")
         assert resp.status_code == 422
 
     def test_normal_ok(self, client: TestClient):
         with patch(
             f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=MOCK_LIQ
         ):
-            resp = client.get("/api/user/liq_price", params={"address": ADDR})
+            resp = client.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 200
         data = resp.json()
         assert data["address"] == ADDR
@@ -204,7 +204,7 @@ class TestUserLiqPrice:
         with patch(
             f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=no_debt
         ):
-            resp = client.get("/api/user/liq_price", params={"address": ADDR})
+            resp = client.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 200
         assert resp.json()["distance_pct"] == "inf"
 
@@ -222,7 +222,7 @@ class TestUserLiqPrice:
         with patch(
             f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=no_eth
         ):
-            resp = client.get("/api/user/liq_price", params={"address": ADDR})
+            resp = client.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 200
         assert "ETH" in resp.json()["note"]
 
@@ -230,19 +230,19 @@ class TestUserLiqPrice:
         with patch(
             f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, side_effect=_404
         ):
-            resp = client.get("/api/user/liq_price", params={"address": ADDR})
+            resp = client.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 404
 
     def test_rpc_failure_returns_502(self, client: TestClient):
         with patch(
             f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, side_effect=_502
         ):
-            resp = client.get("/api/user/liq_price", params={"address": ADDR})
+            resp = client.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 502
 
     def test_no_w3_returns_503(self, app_no_w3):
         with TestClient(app_no_w3) as c:
-            resp = c.get("/api/user/liq_price", params={"address": ADDR})
+            resp = c.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 503
 
 

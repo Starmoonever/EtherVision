@@ -849,3 +849,238 @@ async def sync_addresses_from_history(
         total,
     )
     return total
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 仓位历史快照缓存（position_snapshot_cache）
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# 以 transaction 为数据点：每条记录对应一笔改变用户仓位的 tx，
+# RPC 在该 block 调用 eth_call 得到精确链上状态，一次写入后永久复用。
+#
+# 索引来源：aave.aave_history（已在脚本 _build_history_index.py 中建好）
+#   idx_aave_history_user_ts   : (lower(encode(user_address,'escape')), created_at DESC)
+#   idx_aave_history_target_ts : (lower(encode(target_user_address,'escape')), created_at DESC)
+#                                 WHERE target_user_address IS NOT NULL
+
+_DDL_SNAPSHOT_CACHE = """
+CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
+    id                    BIGSERIAL        PRIMARY KEY,
+    user_address          TEXT             NOT NULL,          -- 小写
+    protocol              TEXT             NOT NULL,          -- 'v2' | 'v3'
+    block_number          BIGINT           NOT NULL,
+    tx_hash               TEXT             NOT NULL,          -- 0x...（小写）
+    block_timestamp       TIMESTAMPTZ      NOT NULL,          -- 来自 aave_history.created_at
+    -- AccountSummary（与现有仓位表精度一致）
+    total_collateral_usd  NUMERIC(30, 8)   NOT NULL,
+    total_debt_usd        NUMERIC(30, 8)   NOT NULL,
+    available_borrows_usd NUMERIC(30, 8)   NOT NULL,
+    health_factor         NUMERIC(40, 18)  NOT NULL,
+    ltv                   NUMERIC(8, 4)    NOT NULL,
+    liq_threshold         NUMERIC(8, 4)    NOT NULL,
+    liq_price             NUMERIC(30, 8)   NOT NULL DEFAULT 0,
+    -- 同 block 链上 Oracle ETH/USD 价格（8 位精度，来自 Aave Oracle）
+    eth_price_usd         NUMERIC(30, 8)   NOT NULL,
+    -- 资产明细快照（JSONB 数组，结构见 _snapshot_reserve_to_dict）
+    reserves_json         JSONB            NOT NULL DEFAULT '[]',
+    cached_at             TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    UNIQUE (user_address, protocol, tx_hash)
+);
+"""
+
+_DDL_SNAPSHOT_CACHE_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_psc_user_ts
+    ON loan.position_snapshot_cache (user_address, protocol, block_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_psc_block
+    ON loan.position_snapshot_cache (block_number);
+"""
+
+# ── 从 aave_history 查询用户的 tx 列表（按 block 升序）─────────────────────────
+# 使用函数索引：lower(encode(user_address,'escape')) = lower($1)
+_SQL_USER_TX_HISTORY = """
+SELECT DISTINCT
+    block_number,
+    created_at                              AS block_timestamp,
+    lower(encode(tx_hash, 'escape'))        AS tx_hash,
+    operation_type::text                    AS operation_type,
+    token_symbol,
+    protocol_version::text                  AS protocol_version
+FROM aave.aave_history
+WHERE (
+    lower(encode(user_address, 'escape'))        = lower($1)
+    OR (
+        target_user_address IS NOT NULL
+        AND lower(encode(target_user_address, 'escape')) = lower($1)
+    )
+)
+  AND protocol_version::text = $2
+  AND created_at BETWEEN $3 AND $4
+ORDER BY block_number ASC
+"""
+
+# ── 从缓存表读取（按 block_timestamp 升序）────────────────────────────────────
+_SQL_GET_CACHED_SNAPSHOTS = """
+SELECT
+    id, user_address, protocol, block_number, tx_hash,
+    block_timestamp, total_collateral_usd, total_debt_usd,
+    available_borrows_usd, health_factor, ltv, liq_threshold,
+    liq_price, eth_price_usd, reserves_json, cached_at
+FROM loan.position_snapshot_cache
+WHERE user_address = lower($1)
+  AND protocol     = $2
+  AND block_timestamp BETWEEN $3 AND $4
+ORDER BY block_timestamp ASC
+"""
+
+# ── UPSERT 快照缓存 ─────────────────────────────────────────────────────────
+_SQL_UPSERT_SNAPSHOT = """
+INSERT INTO loan.position_snapshot_cache
+    (user_address, protocol, block_number, tx_hash, block_timestamp,
+     total_collateral_usd, total_debt_usd, available_borrows_usd,
+     health_factor, ltv, liq_threshold, liq_price, eth_price_usd, reserves_json)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
+    block_number          = EXCLUDED.block_number,
+    block_timestamp       = EXCLUDED.block_timestamp,
+    total_collateral_usd  = EXCLUDED.total_collateral_usd,
+    total_debt_usd        = EXCLUDED.total_debt_usd,
+    available_borrows_usd = EXCLUDED.available_borrows_usd,
+    health_factor         = EXCLUDED.health_factor,
+    ltv                   = EXCLUDED.ltv,
+    liq_threshold         = EXCLUDED.liq_threshold,
+    liq_price             = EXCLUDED.liq_price,
+    eth_price_usd         = EXCLUDED.eth_price_usd,
+    reserves_json         = EXCLUDED.reserves_json,
+    cached_at             = NOW()
+"""
+
+
+def _snapshot_reserve_to_dict(r: "ReservePosition") -> dict:
+    """将 ReservePosition 转为可写入 JSONB 的字典（保留原始整数，上层再格式化）。"""
+    price = _price_decimal(r.price_raw)
+    supply_dec = _raw_to_decimal(r.supply_raw, r.decimals)
+    stable_dec = _raw_to_decimal(r.stable_debt_raw, r.decimals)
+    variable_dec = _raw_to_decimal(r.variable_debt_raw, r.decimals)
+    return {
+        "symbol": r.symbol,
+        "token_address": r.token_address.lower(),
+        "decimals": r.decimals,
+        "price_usd": str(price),
+        "supply_raw": str(r.supply_raw),
+        "supply_usd": str(supply_dec * price),
+        "stable_debt_raw": str(r.stable_debt_raw),
+        "variable_debt_raw": str(r.variable_debt_raw),
+        "total_debt_usd": str((stable_dec + variable_dec) * price),
+        "use_as_collateral": r.usage_as_collateral_enabled,
+        "liquidation_threshold": r.liquidation_threshold,
+    }
+
+
+async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
+    """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_SNAPSHOT_CACHE)
+        await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
+    logger.info("快照缓存表已就绪：loan.position_snapshot_cache")
+
+
+async def fetch_user_tx_history(
+    pool: asyncpg.Pool,
+    user_address: str,
+    protocol: str,          # 'v2' | 'v3'
+    from_ts: datetime,
+    to_ts: datetime,
+) -> list:
+    """查询用户在指定时间范围内的所有 Aave 事件（来自 aave_history）。
+
+    使用函数索引 idx_aave_history_user_ts / idx_aave_history_target_ts，
+    以 block 升序返回，供调用方逐 tx 触发 RPC 重放。
+
+    returns: list of asyncpg.Record，每行含：
+        block_number, block_timestamp, tx_hash, operation_type,
+        token_symbol, protocol_version
+    """
+    pv = protocol[-1]   # 'v3' -> '3', 'v2' -> '2'
+    return await pool.fetch(
+        _SQL_USER_TX_HISTORY,
+        user_address.lower(),
+        pv,
+        from_ts,
+        to_ts,
+    )
+
+
+async def get_cached_snapshots(
+    pool: asyncpg.Pool,
+    user_address: str,
+    protocol: str,
+    from_ts: datetime,
+    to_ts: datetime,
+) -> list:
+    """读取缓存表中已有的快照（按 block_timestamp 升序）。
+
+    returns: list of asyncpg.Record
+    """
+    return await pool.fetch(
+        _SQL_GET_CACHED_SNAPSHOTS,
+        user_address.lower(),
+        protocol,
+        from_ts,
+        to_ts,
+    )
+
+
+async def upsert_snapshot_cache(
+    pool: asyncpg.Pool,
+    positions: list["UserPosition"],
+    tx_meta: list[dict],    # 与 positions 一一对应，含 tx_hash/block_timestamp/eth_price_usd/protocol
+) -> int:
+    """批量 UPSERT 快照缓存。
+
+    :param positions:  RPC 重放得到的 UserPosition 列表（与 tx_meta 等长）
+    :param tx_meta:    每条仓位对应的 tx 元信息字典，必须包含：
+                           tx_hash        : str   (0x...)
+                           block_timestamp: datetime
+                           eth_price_usd  : Decimal
+                           protocol       : str   ('v2' | 'v3')
+    :returns: 写入行数
+    """
+    import json
+
+    if not positions:
+        return 0
+
+    _MAX_UINT256 = (1 << 256) - 1
+    _MAX_HF = Decimal("1e18")
+
+    rows: list[tuple] = []
+    for pos, meta in zip(positions, tx_meta):
+        s = pos.summary
+        hf_raw = s.health_factor
+        hf_dec = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
+
+        reserves_list = [_snapshot_reserve_to_dict(r) for r in pos.reserves]
+
+        rows.append((
+            pos.user_address.lower(),
+            meta["protocol"],
+            pos.block_number,
+            meta["tx_hash"].lower(),
+            meta["block_timestamp"],
+            _raw_to_decimal(s.total_collateral_base, 8),
+            _raw_to_decimal(s.total_debt_base, 8),
+            _raw_to_decimal(s.available_borrows_base, 8),
+            hf_dec,
+            Decimal(s.ltv) / Decimal(10000),
+            Decimal(s.current_liquidation_threshold) / Decimal(10000),
+            _calc_liq_price(pos),
+            meta["eth_price_usd"],
+            json.dumps(reserves_list),
+        ))
+
+    async with pool.acquire() as conn:
+        await conn.executemany(_SQL_UPSERT_SNAPSHOT, rows)
+
+    logger.debug("快照缓存 UPSERT 完成：%d 条", len(rows))
+    return len(rows)

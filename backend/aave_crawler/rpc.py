@@ -187,6 +187,13 @@ ORACLE_ABI: list[dict[str, Any]] = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [{"name": "asset", "type": "address"}],
+        "name": "getAssetPrice",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 # ── 客户端工厂 ────────────────────────────────────────────────────────────────
@@ -394,4 +401,149 @@ async def fetch_user_position(
             )
         except Exception as exc:
             logger.warning("fetch_user_position 失败 user=%s: %s", user_address, exc)
+            return None
+
+
+async def fetch_user_position_at_block(
+    w3: AsyncWeb3,
+    user_address: str,
+    reserve_tokens: list[ReserveToken],
+    reserve_configs: dict[str, ReserveConfig],
+    block_number: int,
+    semaphore: asyncio.Semaphore,
+    contracts: ProtocolContracts = CONTRACTS_V3,
+) -> "tuple[UserPosition, int] | object | None":
+    """RPC 重放：用 eth_call 查询用户在指定区块时刻的链上仓位（真实值，无利息误差）。
+
+    返回值：
+    - (UserPosition, eth_price_raw) : 有效仓位，eth_price_raw 为 WETH 8 位 USD 原始值
+    - EMPTY_POSITION               : 该区块用户无仓位（collateral == debt == 0）
+    - None                         : RPC 调用失败
+    """
+    async with semaphore:
+        try:
+            pool_contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
+            raw = await pool_contract.functions.getUserAccountData(
+                AsyncWeb3.to_checksum_address(user_address)
+            ).call(block_identifier=block_number)
+
+            summary = AccountSummary(
+                total_collateral_base=raw[0],
+                total_debt_base=raw[1],
+                available_borrows_base=raw[2],
+                current_liquidation_threshold=raw[3],
+                ltv=raw[4],
+                health_factor=raw[5],
+            )
+
+            if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
+                return EMPTY_POSITION
+
+            token_addresses = [rt.token_address for rt in reserve_tokens]
+            data_contract = w3.eth.contract(
+                address=contracts.data_provider, abi=DATA_PROVIDER_ABI
+            )
+            oracle_contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
+
+            # 并发：所有 reserve 明细 + 全量价格（均 at block_number）
+            reserve_tasks = [
+                data_contract.functions.getUserReserveData(
+                    AsyncWeb3.to_checksum_address(rt.token_address),
+                    AsyncWeb3.to_checksum_address(user_address),
+                ).call(block_identifier=block_number)
+                for rt in reserve_tokens
+            ]
+            # 逐资产查询价格：历史块上新上线的 token 在老版 oracle 中不存在会 revert，
+            # 批量接口 getAssetsPrices 一旦有任意未知地址就整体失败；
+            # 改用单资产 getAssetPrice 并发 + return_exceptions，过滤失败项。
+            price_tasks = [
+                oracle_contract.functions.getAssetPrice(
+                    AsyncWeb3.to_checksum_address(a)
+                ).call(block_identifier=block_number)
+                for a in token_addresses
+            ]
+
+            all_results = await asyncio.gather(
+                *reserve_tasks, *price_tasks, return_exceptions=True
+            )
+            reserve_results = all_results[: len(reserve_tasks)]
+            price_results  = all_results[len(reserve_tasks):]
+
+            asset_prices: dict[str, int] = {
+                addr: p
+                for addr, p in zip(token_addresses, price_results)
+                if not isinstance(p, Exception) and isinstance(p, int) and p > 0
+            }
+
+            if not asset_prices:
+                logger.warning(
+                    "fetch_user_position_at_block: block %d 所有资产价格查询均失败",
+                    block_number,
+                )
+                return None
+
+            # V2 oracle 返回 ETH 计价 → 归一化为 USD（8 位精度）
+            if contracts.oracle_price_in_eth:
+                v3_oracle = w3.eth.contract(address=CONTRACTS_V3.oracle, abi=ORACLE_ABI)
+                try:
+                    eth_usd_raw = await v3_oracle.functions.getAssetPrice(
+                        WETH_ADDRESS
+                    ).call(block_identifier=block_number)
+                    if eth_usd_raw > 0:
+                        asset_prices = {
+                            addr: (price * eth_usd_raw) // (10**18)
+                            for addr, price in asset_prices.items()
+                        }
+                except Exception as exc:
+                    logger.warning("V2 ETH/USD 归一化失败 block=%d: %s", block_number, exc)
+
+            reserves: list[ReservePosition] = []
+            for rt, res in zip(reserve_tokens, reserve_results):
+                if isinstance(res, Exception):
+                    continue
+                # res: tuple from getUserReserveData
+                if res[0] == 0 and res[1] == 0 and res[2] == 0:
+                    continue
+                cfg = reserve_configs.get(rt.token_address)
+                reserves.append(
+                    ReservePosition(
+                        symbol=rt.symbol,
+                        token_address=rt.token_address,
+                        decimals=cfg.decimals if cfg else 18,
+                        price_raw=asset_prices.get(rt.token_address, 0),
+                        supply_raw=res[0],
+                        usage_as_collateral_enabled=res[8],
+                        liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
+                        stable_debt_raw=res[1],
+                        variable_debt_raw=res[2],
+                    )
+                )
+
+            # ETH/USD 价格（8 位精度）：V3 直接取 WETH oracle 价格；
+            # V2 已在上方归一化，用 WETH_ADDRESS 取归一化后的值
+            eth_price_raw = asset_prices.get(WETH_ADDRESS, 0)
+            if eth_price_raw == 0:
+                # fallback: 遍历找第一个 ETH 系资产价格
+                _eth_syms = {"WETH", "ETH", "CBETH", "WSTETH", "RETH"}
+                for rt in reserve_tokens:
+                    if rt.symbol.upper() in _eth_syms:
+                        eth_price_raw = asset_prices.get(rt.token_address, 0)
+                        if eth_price_raw:
+                            break
+
+            pos = UserPosition(
+                user_address=user_address.lower(),
+                block_number=block_number,
+                summary=summary,
+                reserves=reserves,
+            )
+            return pos, eth_price_raw
+
+        except Exception as exc:
+            logger.warning(
+                "fetch_user_position_at_block 失败 user=%s block=%d: %s",
+                user_address,
+                block_number,
+                exc,
+            )
             return None
