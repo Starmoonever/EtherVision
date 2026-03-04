@@ -6,12 +6,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
-                      HistoricalPositionResponse, LiqPriceResponse,
-                      LiquidationPeriodItem, LiquidationSimResponse,
-                      PositionReplayResponse, PositionResponse,
-                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
-                      ShortLiqSimResponse, TxHistoryResponse)
-from .service import (get_borrow_user_position, get_eth_price, get_liq_price,
+                      HistoricalPositionResponse, LiquidationPeriodItem,
+                      LiquidationSimResponse, PositionReplayResponse,
+                      PositionResponse, PricePeriodResponse, PriceResponse,
+                      ShortLiqPeriodItem, ShortLiqSimResponse,
+                      TxHistoryResponse)
+from .service import (get_borrow_user_position, get_eth_price,
                       get_positions_history, get_price_period,
                       get_sorted_borrow_positions, get_sorted_positions,
                       get_user_position, get_user_position_history,

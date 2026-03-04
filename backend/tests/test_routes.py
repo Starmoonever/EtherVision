@@ -3,10 +3,11 @@ API 路由单元测试。
 
 覆盖所有端点的所有参数组合：
   - GET /api/position
-  - GET /api/liq_price
   - GET /api/positions
   - GET /api/price
   - GET /api/price/period
+  - GET /api/position/replay
+  - GET /api/txs
 
 使用 starlette.testclient.TestClient（同步），mock 所有 service 函数，
 无需真实 RPC 或数据库连接。
@@ -25,9 +26,10 @@ from tests.conftest import (ADDR, MOCK_BORROW_POSITIONS_LIST,
                             MOCK_LIQ_PERIOD, MOCK_POSITION,
                             MOCK_POSITIONS_LIST, MOCK_PRICE_HIST,
                             MOCK_PRICE_ONCHAIN, MOCK_PRICE_PERIOD,
-                            MOCK_SHORT_LIQ_PERIOD, MOCK_SHORT_SIM_EMPTY,
-                            MOCK_SHORT_SIM_RESPONSE, MOCK_SIM_EMPTY,
-                            MOCK_SIM_RESPONSE, _make_app)
+                            MOCK_REPLAY_RESPONSE, MOCK_SHORT_LIQ_PERIOD,
+                            MOCK_SHORT_SIM_EMPTY, MOCK_SHORT_SIM_RESPONSE,
+                            MOCK_SIM_EMPTY, MOCK_SIM_RESPONSE,
+                            MOCK_TX_HISTORY_RESPONSE, _make_app)
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
 _ROUTES = "aave_crawler.api.routes"
@@ -162,87 +164,6 @@ class TestUserPosition:
             resp = c.get(
                 "/api/position", params={"address": ADDR, "date": "2025-01-01"}
             )
-        assert resp.status_code == 503
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GET /api/liq_price
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestUserLiqPrice:
-    """GET /api/liq_price — 必须参数 address。"""
-
-    def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get("/api/liq_price")
-        assert resp.status_code == 422
-
-    def test_normal_ok(self, client: TestClient):
-        with patch(
-            f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=MOCK_LIQ
-        ):
-            resp = client.get("/api/liq_price", params={"address": ADDR})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["address"] == ADDR
-        assert "current_eth_price_usd" in data
-        assert "liquidation_eth_price_usd" in data
-        assert "distance_pct" in data
-        assert "health_factor" in data
-
-    def test_no_debt_returns_inf_distance(self, client: TestClient):
-        from aave_crawler.api.schemas import LiqPriceResponse
-
-        no_debt = LiqPriceResponse(
-            address=ADDR,
-            current_eth_price_usd="3000.00",
-            liquidation_eth_price_usd="0",
-            distance_pct="inf",
-            health_factor="inf",
-            note="该地址无借贷，不存在清算风险",
-        )
-        with patch(
-            f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=no_debt
-        ):
-            resp = client.get("/api/liq_price", params={"address": ADDR})
-        assert resp.status_code == 200
-        assert resp.json()["distance_pct"] == "inf"
-
-    def test_no_eth_collateral_returns_note(self, client: TestClient):
-        from aave_crawler.api.schemas import LiqPriceResponse
-
-        no_eth = LiqPriceResponse(
-            address=ADDR,
-            current_eth_price_usd="0",
-            liquidation_eth_price_usd="0",
-            distance_pct="0",
-            health_factor="1.2000",
-            note="未发现 ETH/WETH 抵押仓位，无法计算 ETH 清算价",
-        )
-        with patch(
-            f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, return_value=no_eth
-        ):
-            resp = client.get("/api/liq_price", params={"address": ADDR})
-        assert resp.status_code == 200
-        assert "ETH" in resp.json()["note"]
-
-    def test_empty_position_returns_404(self, client: TestClient):
-        with patch(
-            f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, side_effect=_404
-        ):
-            resp = client.get("/api/liq_price", params={"address": ADDR})
-        assert resp.status_code == 404
-
-    def test_rpc_failure_returns_502(self, client: TestClient):
-        with patch(
-            f"{_ROUTES}.get_liq_price", new_callable=AsyncMock, side_effect=_502
-        ):
-            resp = client.get("/api/liq_price", params={"address": ADDR})
-        assert resp.status_code == 502
-
-    def test_no_w3_returns_503(self, app_no_w3):
-        with TestClient(app_no_w3) as c:
-            resp = c.get("/api/liq_price", params={"address": ADDR})
         assert resp.status_code == 503
 
 
@@ -1705,9 +1626,9 @@ class TestBorrowLiquidatePeriod:
 
 
 class TestBorrowUserPosition:
-    """测试 GET /api/borrow/user/position。"""
+    """测试 GET /api/borrow/position。"""
 
-    _URL = "/api/borrow/user/position"
+    _URL = "/api/borrow/position"
 
     def test_ok_returns_200_with_all_fields(self, client: TestClient):
         with patch(
@@ -1851,3 +1772,266 @@ class TestBorrowUserPosition:
         assert data["liq_price_rise"] == "2600.00"
         assert data["health_factor"] == "1.1200"
         assert data["scanned_at"] == "2026-02-28T08:00:00Z"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/position/replay
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPositionReplay:
+    """GET /api/position/replay — 必须参数 address / start / end。"""
+
+    _URL = "/api/position/replay"
+    _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
+
+    def test_missing_address_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"start": "2025-01-01", "end": "2026-01-01"})
+        assert resp.status_code == 422
+
+    def test_missing_start_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"address": ADDR, "end": "2026-01-01"})
+        assert resp.status_code == 422
+
+    def test_missing_end_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"address": ADDR, "start": "2025-01-01"})
+        assert resp.status_code == 422
+
+    def test_invalid_start_returns_400(self, client: TestClient):
+        resp = client.get(self._URL, params={**self._BASE, "start": "not-a-date"})
+        assert resp.status_code == 400
+
+    def test_invalid_end_returns_400(self, client: TestClient):
+        resp = client.get(self._URL, params={**self._BASE, "end": "2025/12/31"})
+        assert resp.status_code == 400
+
+    def test_start_after_end_returns_400(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ):
+            resp = client.get(
+                self._URL,
+                params={"address": ADDR, "start": "2026-01-01", "end": "2025-01-01"},
+            )
+        assert resp.status_code == 400
+
+    def test_ok_returns_200_with_fields(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        assert resp.status_code == 200
+        data = resp.json()
+        for field in ("address", "protocol", "from_time", "to_time",
+                      "data_source", "points", "total_points", "cache_hit_rate"):
+            assert field in data, f"缺少字段: {field}"
+
+    def test_points_is_list(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        assert isinstance(resp.json()["points"], list)
+        assert resp.json()["total_points"] == 1
+
+    def test_point_fields(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        point = resp.json()["points"][0]
+        for field in ("tx_hash", "block_number", "timestamp", "eth_price_usd",
+                      "total_collateral_usd", "total_debt_usd", "health_factor",
+                      "liq_price", "liq_price_rise",
+                      "eth_collateral_amount", "eth_collateral_usd",
+                      "weth_debt_amount", "weth_debt_usd"):
+            assert field in point, f"point 缺少字段: {field}"
+
+    def test_no_pool_returns_503(self, app_no_pool: FastAPI):
+        with TestClient(app_no_pool) as c:
+            resp = c.get(self._URL, params=self._BASE)
+        assert resp.status_code == 503
+
+    def test_no_w3_returns_503(self, app_no_w3: FastAPI):
+        with TestClient(app_no_w3) as c:
+            resp = c.get(self._URL, params=self._BASE)
+        assert resp.status_code == 503
+
+    @pytest.mark.parametrize(
+        "date_str",
+        ["2025-01-01", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00", "2025-01-01 00:00:00"],
+    )
+    def test_various_date_formats_accepted(self, client: TestClient, date_str: str):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ):
+            resp = client.get(
+                self._URL,
+                params={"address": ADDR, "start": date_str, "end": "2026-01-01"},
+            )
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("version,expected", [("v3", "v3"), ("v2", "v2")])
+    def test_version_passed_to_service(self, client: TestClient, version: str, expected: str):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ) as mock_svc:
+            client.get(self._URL, params={**self._BASE, "version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected
+
+    def test_invalid_version_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={**self._BASE, "version": "v4"})
+        assert resp.status_code == 422
+
+    def test_use_cache_false_passed_to_service(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ) as mock_svc:
+            client.get(self._URL, params={**self._BASE, "use_cache": "false"})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["use_cache"] is False
+
+    def test_detail_true_passed_to_service(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_position_replay",
+            new_callable=AsyncMock,
+            return_value=MOCK_REPLAY_RESPONSE,
+        ) as mock_svc:
+            client.get(self._URL, params={**self._BASE, "detail": "true"})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["detail"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/txs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestTxHistory:
+    """GET /api/txs — 必须参数 address / start / end。"""
+
+    _URL = "/api/txs"
+    _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
+
+    def test_missing_address_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"start": "2025-01-01", "end": "2026-01-01"})
+        assert resp.status_code == 422
+
+    def test_missing_start_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"address": ADDR, "end": "2026-01-01"})
+        assert resp.status_code == 422
+
+    def test_missing_end_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={"address": ADDR, "start": "2025-01-01"})
+        assert resp.status_code == 422
+
+    def test_invalid_start_returns_400(self, client: TestClient):
+        resp = client.get(self._URL, params={**self._BASE, "start": "not-a-date"})
+        assert resp.status_code == 400
+
+    def test_ok_returns_200_with_fields(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        assert resp.status_code == 200
+        data = resp.json()
+        for field in ("address", "protocol", "from_time", "to_time", "txs", "total"):
+            assert field in data, f"缺少字段: {field}"
+
+    def test_txs_is_list(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        data = resp.json()
+        assert isinstance(data["txs"], list)
+        assert data["total"] == 2
+
+    def test_tx_fields(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        tx = resp.json()["txs"][0]
+        for field in ("tx_hash", "block_number", "timestamp",
+                      "operation_type", "token_symbol", "cached"):
+            assert field in tx, f"tx 缺少字段: {field}"
+
+    def test_cached_flag_type(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ):
+            resp = client.get(self._URL, params=self._BASE)
+        txs = resp.json()["txs"]
+        assert txs[0]["cached"] is True
+        assert txs[1]["cached"] is False
+
+    def test_no_pool_returns_503(self, app_no_pool: FastAPI):
+        with TestClient(app_no_pool) as c:
+            resp = c.get(self._URL, params=self._BASE)
+        assert resp.status_code == 503
+
+    @pytest.mark.parametrize(
+        "date_str",
+        ["2025-01-01", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00", "2025-01-01 00:00:00"],
+    )
+    def test_various_date_formats_accepted(self, client: TestClient, date_str: str):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ):
+            resp = client.get(
+                self._URL,
+                params={"address": ADDR, "start": date_str, "end": "2026-01-01"},
+            )
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("version,expected", [("v3", "v3"), ("v2", "v2")])
+    def test_version_passed_to_service(self, client: TestClient, version: str, expected: str):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ) as mock_svc:
+            client.get(self._URL, params={**self._BASE, "version": version})
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == expected
+
+    def test_invalid_version_returns_422(self, client: TestClient):
+        resp = client.get(self._URL, params={**self._BASE, "version": "v4"})
+        assert resp.status_code == 422
+
+    def test_address_passed_to_service(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.get_user_tx_history",
+            new_callable=AsyncMock,
+            return_value=MOCK_TX_HISTORY_RESPONSE,
+        ) as mock_svc:
+            client.get(self._URL, params=self._BASE)
+        args, _ = mock_svc.call_args
+        assert args[1] == ADDR
