@@ -41,6 +41,12 @@ _POOL_BY_PROTOCOL: dict[str, str] = {
     "v2_borrow": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
 }
 
+# protocol 字符串（'v2'/'v3'）→ brief 中的版本标签
+_VERSION_LABEL: dict[str, str] = {
+    "v2": "V2",
+    "v3": "V3",
+}
+
 # ── 并发上限（避免同时 fork 过多 node 进程）────────────────────────────────
 _BRIEF_SEM = asyncio.Semaphore(8)
 
@@ -177,14 +183,16 @@ def _fmt_amount(raw: str, decimals: int) -> str:
         return raw
 
 
-async def _fill_template_rich(template: str, params: dict[str, str]) -> str:
+async def _fill_template_rich(template: str, params: dict[str, str], protocol: str = "") -> str:
     """根据占位符 label 对 params 进行富化后填充模板。
 
     处理顺序：
       1. 解析所有 ``token`` 参数 → (symbol, decimals)
       2. 用相邻 token 的 decimals 格式化 ``amount`` 参数
-      3. ``contract`` 参数直接使用 params[N]（已是名称）
+      3. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
       4. 其他 label → 原值透传
+
+    :param protocol: 'v2' | 'v3'，用于在 contract 占位符后附加版本标签
     """
     placeholders: dict[str, str] = {
         m.group(1): m.group(2)
@@ -237,7 +245,9 @@ async def _fill_template_rich(template: str, params: dict[str, str]) -> str:
                 decimals = token_by_idx[adj][1] if adj in token_by_idx else default_decimals
             resolved[idx] = _fmt_amount(raw, decimals)
         elif label == "contract":
-            resolved[idx] = raw  # 已是合约名，如 "Aave"
+            # 用调用方传入的 protocol（'v2'/'v3'）直接确定版本标签
+            version_suffix = _VERSION_LABEL.get(protocol.lower(), "")
+            resolved[idx] = f"{raw} {version_suffix}".strip() if version_suffix else raw
         else:
             resolved[idx] = raw
 
@@ -248,7 +258,7 @@ async def _fill_template_rich(template: str, params: dict[str, str]) -> str:
     return result
 
 
-async def _parse_single(tx_hash: str, pool_address: str) -> str:
+async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> str:
     """子进程调用 decode-tx-input.js，解析单笔 tx 的 brief（含富化处理）。"""
     async with _BRIEF_SEM:
         try:
@@ -273,11 +283,12 @@ async def _parse_single(tx_hash: str, pool_address: str) -> str:
 
     stdout_text = stdout_bytes.decode("utf-8", errors="replace")
 
-    # 跳过 dotenv 头部行，找第一个 '{' 作为 JSON 起始
-    json_start = stdout_text.find("{")
-    if json_start == -1:
+    # 跳过 dotenv 头部行（某些 tip 消息含 { 会干扰）：找行首的 '{' 作为 JSON 起始
+    _json_match = re.search(r"(?m)^\{", stdout_text)
+    if not _json_match:
         logger.debug("parse_tx_brief: no JSON in stdout for %s", tx_hash)
         return ""
+    json_start = _json_match.start()
 
     try:
         data = json.loads(stdout_text[json_start:])
@@ -291,7 +302,7 @@ async def _parse_single(tx_hash: str, pool_address: str) -> str:
         params: dict[str, str] = {
             k: str(v) for k, v in brief_block.get("params", {}).items()
         }
-        return await _fill_template_rich(tmpl, params)
+        return await _fill_template_rich(tmpl, params, protocol=protocol)
     except (KeyError, TypeError):
         logger.debug("parse_tx_brief: no brief in parsed result for %s", tx_hash)
         return ""
@@ -304,7 +315,7 @@ async def parse_tx_brief(tx_hash: str, protocol: str = "v3") -> str:
         return _brief_mem_cache[tx_hash]
 
     pool_address = _POOL_BY_PROTOCOL.get(protocol, _POOL_BY_PROTOCOL["v3"])
-    brief = await _parse_single(tx_hash, pool_address)
+    brief = await _parse_single(tx_hash, pool_address, protocol=protocol)
     _brief_mem_cache[tx_hash] = brief
     return brief
 
@@ -327,7 +338,7 @@ async def parse_tx_briefs(
         h = tx_hash.lower()
         if h in _brief_mem_cache:
             return _brief_mem_cache[h]
-        brief = await _parse_single(h, pool_address)
+        brief = await _parse_single(h, pool_address, protocol=protocol)
         _brief_mem_cache[h] = brief
         return brief
 
