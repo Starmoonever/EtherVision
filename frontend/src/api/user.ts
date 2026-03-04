@@ -2,7 +2,7 @@ import { apiFetch } from './client';
 
 // ---------- 类型定义 ----------
 
-/** 用户在 Aave 上的仓位概览，对应 /user/position 接口返回结构。 */
+/** 用户在 Aave 上的仓位概览，对应 /position 接口返回结构。 */
 export interface UserPosition {
   eth_collateral_amount: string;
   eth_collateral_usd: string;
@@ -24,5 +24,5 @@ export interface UserPosition {
  */
 export async function fetchUserPosition(address: string, version?: string): Promise<UserPosition> {
   const query = version ? `address=${address}&version=${version}` : `address=${address}`;
-  return apiFetch<UserPosition>(`/user/position?${query}`);
+  return apiFetch<UserPosition>(`/position?${query}`);
 }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { AddressInput } from './components/AddressInput';
 import { SummaryCard } from './components/SummaryCard';
 import { PositionTable } from './components/PositionTable';
+import { PositionReplayChart } from './components/PositionReplayChart';
 import { MarketAssessment } from './components/MarketAssessment';
 import { fetchUserPosition } from './api';
 import type { UserPosition } from './api';
@@ -19,6 +20,9 @@ export default function App() {
   const [queriedAddress, setQueriedAddress] = useState('');
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
+  const [marketVersion, setMarketVersion] = useState<'v2' | 'v3' | 'all'>('all'); // 宏观市场版本
+  const [marketSide, setMarketSide] = useState<'collateral' | 'borrow'>('collateral'); // 宏观市场方向
+  const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3'); // 个人账户分析版本
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
 
@@ -108,6 +112,134 @@ export default function App() {
             </button>
           </div>
 
+          {activeTab === 'personal' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+                <button
+                  onClick={() => setPersonalVersion('v2')}
+                  style={{
+                    background: personalVersion === 'v2' ? '#7c3aed' : 'transparent',
+                    color: personalVersion === 'v2' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  V2
+                </button>
+                <button
+                  onClick={() => setPersonalVersion('v3')}
+                  style={{
+                    background: personalVersion === 'v3' ? '#7c3aed' : 'transparent',
+                    color: personalVersion === 'v3' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  V3
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'market' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div className="side-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+                <button
+                  onClick={() => setMarketSide('collateral')}
+                  style={{
+                    background: marketSide === 'collateral' ? '#3b82f6' : 'transparent',
+                    color: marketSide === 'collateral' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  抵押端
+                </button>
+                <button
+                  onClick={() => setMarketSide('borrow')}
+                  style={{
+                    background: marketSide === 'borrow' ? '#3b82f6' : 'transparent',
+                    color: marketSide === 'borrow' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  借贷端
+                </button>
+              </div>
+              <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+                <button
+                  onClick={() => setMarketVersion('v2')}
+                  style={{
+                    background: marketVersion === 'v2' ? '#7c3aed' : 'transparent',
+                    color: marketVersion === 'v2' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  V2
+                </button>
+                <button
+                  onClick={() => setMarketVersion('v3')}
+                  style={{
+                    background: marketVersion === 'v3' ? '#7c3aed' : 'transparent',
+                    color: marketVersion === 'v3' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  V3
+                </button>
+                <button
+                  onClick={() => setMarketVersion('all')}
+                  style={{
+                    background: marketVersion === 'all' ? '#7c3aed' : 'transparent',
+                    color: marketVersion === 'all' ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  ALL
+                </button>
+              </div>
+            </div>
+          )}
+
           <span className="network-badge">数据库版</span>
         </div>
       </header>
@@ -117,7 +249,7 @@ export default function App() {
           <>
             <div className="hero">
               <h1 className="hero-title">个人账户分析</h1>
-              <p className="hero-sub">账户头寸与清算</p>
+              <p className="hero-sub">账户头寸与清算预测</p>
             </div>
 
             <AddressInput onSearch={handleSearch} loading={false} />
@@ -131,8 +263,7 @@ export default function App() {
 
             {queriedAddress && (
               <div className="results-container" style={{ marginTop: '2rem' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                  {/* V2 版块 */}
+                {personalVersion === 'v2' ? (
                   <div
                     style={{
                       border: '1px solid #334155',
@@ -147,7 +278,7 @@ export default function App() {
                     <SummaryCard address={queriedAddress} version="v2" {...v2State} />
                     <PositionTable version="v2" {...v2State} />
                   </div>
-                  {/* V3 版块 */}
+                ) : (
                   <div
                     style={{
                       border: '1px solid #334155',
@@ -162,6 +293,10 @@ export default function App() {
                     <SummaryCard address={queriedAddress} version="v3" {...v3State} />
                     <PositionTable version="v3" {...v3State} />
                   </div>
+                )}
+
+                <div style={{ marginTop: '2rem' }}>
+                  <PositionReplayChart address={queriedAddress} version={personalVersion} />
                 </div>
               </div>
             )}
