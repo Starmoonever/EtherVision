@@ -338,6 +338,12 @@ async def user_position_replay(
     version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
     use_cache: bool = Query(True, description="是否优先使用缓存（默认 true）"),
     detail: bool = Query(False, description="是否展开各个资产明细（默认 false）"),
+    max_points: int = Query(
+        2000,
+        ge=1,
+        le=10000,
+        description="最多返回的数据点数量（默认 2000，上限 10000）；原始 tx 总数见 total_tx_count",
+    ),
 ) -> PositionReplayResponse:
     from_ts = _parse_utc_time(start)
     to_ts = _parse_utc_time(end)
@@ -352,6 +358,7 @@ async def user_position_replay(
         protocol=version,
         use_cache=use_cache,
         detail=detail,
+        max_points=max_points,
     )
 
 

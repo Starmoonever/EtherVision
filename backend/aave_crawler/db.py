@@ -1162,8 +1162,14 @@ async def upsert_snapshot_cache(
             _briefs[i] if i < len(_briefs) else "",
         ))
 
-    async with pool.acquire() as conn:
-        await conn.executemany(_SQL_UPSERT_SNAPSHOT, rows)
+    _UPSERT_BATCH = 500
+    total_written = 0
+    for i in range(0, len(rows), _UPSERT_BATCH):
+        batch = rows[i : i + _UPSERT_BATCH]
+        async with pool.acquire() as conn:
+            await conn.executemany(_SQL_UPSERT_SNAPSHOT, batch)
+        total_written += len(batch)
+        logger.debug("快照缓存 UPSERT 进度：%d/%d", total_written, len(rows))
 
     logger.debug("快照缓存 UPSERT 完成：%d 条", len(rows))
     return len(rows)

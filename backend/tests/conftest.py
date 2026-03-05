@@ -264,6 +264,7 @@ MOCK_REPLAY_RESPONSE = PositionReplayResponse(
     to_time="2026-01-01T00:00:00Z",
     data_source="cache",
     total_points=1,
+    total_tx_count=1,
     cache_hit_rate="1.00",
     points=[
         PositionSnapshotPoint(
