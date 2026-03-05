@@ -15,7 +15,7 @@ from decimal import Decimal
 import asyncpg
 
 from .config import PostgresConfig
-from .models import UserPosition
+from .models import ReservePosition, UserPosition
 
 logger = logging.getLogger(__name__)
 

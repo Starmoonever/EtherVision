@@ -43,6 +43,7 @@ class WatcherConfig:
 class AppConfig:
     rpc_url: str = ""
     protocol: str = "v3"  # aave 协议版本: v2 或 v3
+    log_level: str = "info"  # 日志级别：debug / info / warning / error
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
@@ -70,6 +71,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             wt_raw = raw.get("watcher", {})
             return AppConfig(
                 rpc_url=raw.get("rpc_url", ""),
+                log_level=raw.get("log_level", "info"),
                 postgres=PostgresConfig(
                     **{
                         k: v

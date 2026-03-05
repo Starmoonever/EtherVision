@@ -1754,7 +1754,7 @@ async def get_user_position_replay(
     _t_db_tx0 = _time_mod.perf_counter()
     tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
     _t_db_tx1 = _time_mod.perf_counter()
-    logger.info(
+    logger.debug(
         "replay[%s] ① DB tx查询: %.3fs  raw_rows=%d",
         user_address[:10], _t_db_tx1 - _t_db_tx0, len(tx_rows),
     )
@@ -1782,7 +1782,7 @@ async def get_user_position_replay(
     else:
         cached_map = {}
     _t_db_cache1 = _time_mod.perf_counter()
-    logger.info(
+    logger.debug(
         "replay[%s] ② DB缓存查询: %.3fs  cached=%d",
         user_address[:10], _t_db_cache1 - _t_db_cache0, len(cached_map),
     )
@@ -1809,7 +1809,7 @@ async def get_user_position_replay(
     # ── 3. 区分缓存命中 / 需 RPC 重放 ─────────────────────────────────────────
     hit_txs = [t for t in deduped_txs if t["tx_hash"] in cached_map]
     miss_txs = [t for t in deduped_txs if t["tx_hash"] not in cached_map]
-    logger.info(
+    logger.debug(
         "replay[%s] ③ 去重后 tx=%d  hit=%d  miss=%d",
         user_address[:10], len(deduped_txs), len(hit_txs), len(miss_txs),
     )
@@ -1828,7 +1828,7 @@ async def get_user_position_replay(
         reserve_tokens, reserve_configs, _ = await _get_common_data(w3, protocol)
         contracts = get_contracts(protocol)
         semaphore = asyncio.Semaphore(_MAX_REPLAY_CONCURRENCY)
-        logger.info(
+        logger.debug(
             "replay[%s] ④ _get_common_data: %.3fs",
             user_address[:10], _time_mod.perf_counter() - _t_common0,
         )
@@ -1852,7 +1852,7 @@ async def get_user_position_replay(
                 results = await asyncio.gather(*tasks)
                 _dt = _time_mod.perf_counter() - _t0_rpc
                 _t_rpc_total += _dt
-                logger.info(
+                logger.debug(
                     "replay[%s] ⑤ RPC批次[%d-%d]: %.3fs  batch_size=%d",
                     user_address[:10], bs, bs + len(b) - 1, _dt, len(b),
                 )
@@ -1896,7 +1896,7 @@ async def get_user_position_replay(
                     )
                     _dt_brief = _time_mod.perf_counter() - _t0_brief
                     _t_brief_total += _dt_brief
-                    logger.info(
+                    logger.debug(
                         "replay[%s] ⑥ brief解析[%d-%d]: %.3fs  count=%d",
                         user_address[:10], bs, bs + len(b) - 1,
                         _dt_brief, len(batch_records),
@@ -1911,7 +1911,7 @@ async def get_user_position_replay(
                     )
                     _dt_upsert = _time_mod.perf_counter() - _t0_upsert
                     _t_upsert_total += _dt_upsert
-                    logger.info(
+                    logger.debug(
                         "replay[%s] ⑦ DB写缓存[%d-%d]: %.3fs  count=%d",
                         user_address[:10], bs, bs + len(b) - 1,
                         _dt_upsert, len(batch_records),
@@ -1927,7 +1927,7 @@ async def get_user_position_replay(
     )
     final_map: dict[str, object] = {r["tx_hash"]: r for r in final_cache}
     _t_final1 = _time_mod.perf_counter()
-    logger.info(
+    logger.debug(
         "replay[%s] ⑧ DB最终读缓存: %.3fs  rows=%d",
         user_address[:10], _t_final1 - _t_final0, len(final_cache),
     )
@@ -1963,7 +1963,7 @@ async def get_user_position_replay(
         data_source = "mixed"
 
     _t_total = _time_mod.perf_counter() - _t0
-    logger.info(
+    logger.debug(
         "replay[%s] ✅ 总耗时: %.3fs  "
         "[DB-tx=%.3f DB-cache=%.3f RPC=%.3f brief=%.3f upsert=%.3f DB-final=%.3f fmt=%.3f]  "
         "points=%d miss=%d",

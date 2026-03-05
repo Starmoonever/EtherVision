@@ -1,6 +1,9 @@
 # Aave Crawler 配置示例
 # 复制此文件为 config.yaml 并填写实际值（config.yaml 不会提交到版本控制）
 
+# 日志文件等级
+log_level: debug
+
 # Base 网络 RPC 端点（留空则自动使用公共节点）
 rpc_url: ""
 
