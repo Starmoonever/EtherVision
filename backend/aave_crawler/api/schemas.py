@@ -291,9 +291,9 @@ class PositionReplayResponse(BaseModel):
         description="数据来源：cache（全缓存命中）| rpc（全 RPC 重放）| mixed（混合）"
     )
     points: list[PositionSnapshotPoint]
-    total_points: int = Field(description="返回的数据点数量（受 max_points 截断后）")
+    total_points: int = Field(description="返回的数据点数量")
     total_tx_count: int = Field(
-        description="时间范围内原始去重 tx 总数（截断前）；等于 total_points 时表示未截断"
+        description="时间范围内原始去重 tx 总数，与 total_points 相等"
     )
     cache_hit_rate: str = Field(description="缓存命中率（0.00~1.00）")
 
@@ -317,5 +317,11 @@ class TxHistoryResponse(BaseModel):
     protocol: str
     from_time: str
     to_time: str
-    txs: list[TxHistoryItem]
     total: int
+    stats: dict[str, int] = Field(
+        description="按操作类型汇总的交易数（supply/withdraw/borrow/repay/liquidationcall 等）"
+    )
+    txs: list[TxHistoryItem] | None = Field(
+        default=None,
+        description="交易明细列表；仅当 detail=true 时返回，否则为 null",
+    )

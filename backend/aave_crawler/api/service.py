@@ -1664,12 +1664,35 @@ async def get_user_tx_history(
     from_ts: int,
     to_ts: int,
     protocol: str = "v3",
+    detail: bool = False,
 ) -> TxHistoryResponse:
-    """查询用户在时间范围内的 Aave 历史事件列表，并标注各 tx 是否已有缓存快照。"""
+    """查询用户在时间范围内的 Aave 历史事件列表。
+
+    detail=False 时仅返回汇总统计（跳过 brief 解析，速度更快）。
+    detail=True 时返回完整 txs 列表包含 brief。
+    """
     from_dt = _ts_to_dt(from_ts)
     to_dt = _ts_to_dt(to_ts)
 
     tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
+
+    # 按 operation_type 汇总统计
+    stats: dict[str, int] = {}
+    for r in tx_rows:
+        op = r["operation_type"] or "unknown"
+        stats[op] = stats.get(op, 0) + 1
+
+    if not detail:
+        return TxHistoryResponse(
+            address=user_address.lower(),
+            protocol=protocol,
+            from_time=_utc_str(from_dt),
+            to_time=_utc_str(to_dt),
+            total=len(tx_rows),
+            stats=stats,
+            txs=None,
+        )
+
     cached_rows = await get_cached_snapshots(pool, user_address, protocol, from_dt, to_dt)
     cached_hashes = {r["tx_hash"] for r in cached_rows}
     cached_brief_map: dict[str, str] = {r["tx_hash"]: _get_brief(r) for r in cached_rows}
@@ -1697,8 +1720,9 @@ async def get_user_tx_history(
         protocol=protocol,
         from_time=_utc_str(from_dt),
         to_time=_utc_str(to_dt),
-        txs=items,
         total=len(items),
+        stats=stats,
+        txs=items,
     )
 
 
@@ -1711,7 +1735,6 @@ async def get_user_position_replay(
     protocol: str = "v3",
     use_cache: bool = True,
     detail: bool = False,
-    max_points: int = 2000,
 ) -> PositionReplayResponse:
     """历史仓位回放主函数。
 
@@ -1776,13 +1799,6 @@ async def get_user_position_replay(
 
     deduped_txs = sorted(seen_blocks.values(), key=lambda x: x["block_number"])
     total_tx_count = len(deduped_txs)
-    # 截断到 max_points，防止万级 tx 导致超时 / 超大响应体
-    if total_tx_count > max_points:
-        logger.warning(
-            "replay: %s 在指定时间范围内有 %d 条 tx，截断至 max_points=%d",
-            user_address, total_tx_count, max_points,
-        )
-        deduped_txs = deduped_txs[:max_points]
 
     # ── 3. 区分缓存命中 / 需 RPC 重放 ─────────────────────────────────────────
     hit_txs = [t for t in deduped_txs if t["tx_hash"] in cached_map]

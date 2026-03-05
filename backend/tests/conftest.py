@@ -294,6 +294,7 @@ MOCK_TX_HISTORY_RESPONSE = TxHistoryResponse(
     from_time="2025-01-01T00:00:00Z",
     to_time="2026-01-01T00:00:00Z",
     total=2,
+    stats={"supply": 1, "borrow": 1},
     txs=[
         TxHistoryItem(
             tx_hash="0x" + "aa" * 32,

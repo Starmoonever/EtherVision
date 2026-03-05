@@ -338,12 +338,6 @@ async def user_position_replay(
     version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
     use_cache: bool = Query(True, description="是否优先使用缓存（默认 true）"),
     detail: bool = Query(False, description="是否展开各个资产明细（默认 false）"),
-    max_points: int = Query(
-        2000,
-        ge=1,
-        le=10000,
-        description="最多返回的数据点数量（默认 2000，上限 10000）；原始 tx 总数见 total_tx_count",
-    ),
 ) -> PositionReplayResponse:
     from_ts = _parse_utc_time(start)
     to_ts = _parse_utc_time(end)
@@ -358,7 +352,6 @@ async def user_position_replay(
         protocol=version,
         use_cache=use_cache,
         detail=detail,
-        max_points=max_points,
     )
 
 
@@ -378,11 +371,12 @@ async def user_tx_history(
     start: str = Query(..., description="起始时间（UTC）"),
     end: str = Query(..., description="结束时间（UTC）"),
     version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
+    detail: bool = Query(False, description="是否返回完整交易列表（默认 false，仅返回汇总统计）"),
 ) -> TxHistoryResponse:
     from_ts = _parse_utc_time(start)
     to_ts = _parse_utc_time(end)
     return await get_user_tx_history(
-        _pool(request), address, from_ts=from_ts, to_ts=to_ts, protocol=version
+        _pool(request), address, from_ts=from_ts, to_ts=to_ts, protocol=version, detail=detail
     )
 
 # ── 借贷端（做空 ETH / borrow WETH）清算分析路由 ─────────────────────────────
