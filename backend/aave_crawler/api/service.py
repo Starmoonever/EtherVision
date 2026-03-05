@@ -1806,8 +1806,14 @@ async def get_user_position_replay(
         rpc_results = await asyncio.gather(*tasks)
 
         for t, res in zip(miss_txs, rpc_results):
-            if res is None or res is EMPTY_POSITION:
-                continue   # RPC 失败或无仓位，跳过（不写缓存，下次继续重试）
+            if res is None:
+                logger.warning(
+                    "RPC 重放失败，跳过 tx %s (block %s, user %s)",
+                    t["tx_hash"], t["block_number"], user_address,
+                )
+                continue
+            if res is EMPTY_POSITION:
+                continue   # 该 block 用户无仓位，属正常情况，静默跳过
             pos, eth_price_raw = res
             eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
             new_cache_records.append(
@@ -1846,17 +1852,22 @@ async def get_user_position_replay(
             continue  # 该 tx 的 RPC 重放失败，跳过
         points.append(_format_snapshot_point(row, detail=detail))
 
-    cache_hit_count = sum(1 for t in deduped_txs if t["tx_hash"] in final_map
-                         and t["tx_hash"] in cached_map)
+    # 以「实际返回的点」为基准计算命中率和数据来源：
+    # - 永久 RPC 失败的 tx 不计入分母（不影响命中率，也不在响应里）
+    # - data_source 与命中率使用同一基准，避免 rate 四舍五入到 1.00 却显示 mixed
+    served_txs = [t for t in deduped_txs if t["tx_hash"] in final_map]
+    served_from_cache = sum(1 for t in served_txs if t["tx_hash"] in cached_map)
+    served_total = len(served_txs)
+
     cache_hit_rate = (
-        _fmt(Decimal(cache_hit_count) / Decimal(total), 2)
-        if total > 0
+        _fmt(Decimal(served_from_cache) / Decimal(served_total), 2)
+        if served_total > 0
         else "1.00"
     )
 
-    if not miss_txs:
+    if served_from_cache == served_total:
         data_source = "cache"
-    elif not hit_txs:
+    elif served_from_cache == 0:
         data_source = "rpc"
     else:
         data_source = "mixed"
