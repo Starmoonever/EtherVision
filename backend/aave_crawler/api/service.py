@@ -1886,6 +1886,10 @@ async def get_user_position_replay(
                             "block_timestamp": t["block_timestamp"],
                             "eth_price_usd": eth_price_dec,
                             "protocol": protocol,
+                            "prices": {
+                                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                                for r in pos.reserves
+                            },
                         },
                     })
 

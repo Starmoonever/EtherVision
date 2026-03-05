@@ -205,17 +205,24 @@ async def _resolve_token_addr(raw: str) -> tuple[str, int]:
         return (raw, 18)
 
 
-async def _fill_template_rich(template: str, params: dict[str, object], protocol: str = "") -> str:
+async def _fill_template_rich(
+    template: str,
+    params: dict[str, object],
+    protocol: str = "",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
     """根据占位符 label 对 params 进行富化后填充模板。
 
     处理顺序：
-      1. 解析所有 ``token`` 参数 → (symbol, decimals)，支持地址数组
+      1. 解析所有 ``token`` 参数 → (addr, symbol, decimals)，支持地址数组
       2. 用相邻 token 的 decimals 格式化 ``amount``/``amounts`` 参数，支持金额数组
          数组情形下，amounts[i] 与 token[i] 一一对应，输出 "N1 T1 + N2 T2"
-      3. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
-      4. 其他 label → 原值透传
+      3. ``token`` 占位符：若提供了 prices，在 symbol 后附加「（价值 X.XX USD）」
+      4. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
+      5. 其他 label → 原值透传
 
     :param protocol: 'v2' | 'v3'，用于在 contract 占位符后附加版本标签
+    :param prices:   token_address_lower → Decimal(price_usd)，用于计算 USD 价值
     """
     placeholders: dict[str, str] = {
         m.group(1): m.group(2)
@@ -223,12 +230,16 @@ async def _fill_template_rich(template: str, params: dict[str, object], protocol
     }
 
     # ── Step 1: 解析 token 参数（支持数组）──────────────────────────────────
-    # token_by_idx[idx] = list of (symbol, decimals)，每个 token 地址对应一项
-    token_by_idx: dict[str, list[tuple[str, int]]] = {}
+    # token_by_idx[idx] = list of (addr, symbol, decimals)，每个 token 地址对应一项
+    token_by_idx: dict[str, list[tuple[str, str, int]]] = {}
     for idx, label in placeholders.items():
         if label == "token":
             addrs = _normalize_param(params.get(idx, ""))
-            infos = [await _resolve_token_addr(a) for a in addrs if a]
+            infos: list[tuple[str, str, int]] = []
+            for a in addrs:
+                if a:
+                    sym, dec = await _resolve_token_addr(a)
+                    infos.append((a, sym, dec))
             if infos:
                 token_by_idx[idx] = infos
 
@@ -236,7 +247,7 @@ async def _fill_template_rich(template: str, params: dict[str, object], protocol
     default_decimals = 18
     if token_by_idx:
         nearest_idx = min(token_by_idx.keys(), key=lambda x: int(x))
-        default_decimals = token_by_idx[nearest_idx][0][1]
+        default_decimals = token_by_idx[nearest_idx][0][2]
 
     # ── Step 2: 构建替换值 ───────────────────────────────────────────────────
     resolved: dict[str, str] = {}
@@ -244,10 +255,35 @@ async def _fill_template_rich(template: str, params: dict[str, object], protocol
         raw_obj = params.get(idx, f"${{{idx}:{label}}}")
 
         if label == "token":
-            if idx in token_by_idx:
-                resolved[idx] = " + ".join(sym for sym, _ in token_by_idx[idx])
-            else:
+            if idx not in token_by_idx:
                 resolved[idx] = str(raw_obj)
+            else:
+                # 找相邻 amount 索引，用于计算 USD 价值
+                adj_prev = str(int(idx) - 1)
+                adj_next = str(int(idx) + 1)
+                amt_idx = None
+                if adj_prev in placeholders and placeholders[adj_prev] in ("amount", "amounts"):
+                    amt_idx = adj_prev
+                elif adj_next in placeholders and placeholders[adj_next] in ("amount", "amounts"):
+                    amt_idx = adj_next
+                amt_list = _normalize_param(params.get(amt_idx, "")) if amt_idx else []
+
+                parts: list[str] = []
+                for i, (addr_i, sym_i, dec_i) in enumerate(token_by_idx[idx]):
+                    token_str = sym_i
+                    if prices and amt_list and i < len(amt_list):
+                        amt_raw = amt_list[i]
+                        fmt_check = _fmt_amount(amt_raw, dec_i)
+                        if fmt_check != "全部" and addr_i:
+                            price_usd = prices.get(addr_i.lower())
+                            if price_usd:
+                                try:
+                                    usd_val = Decimal(amt_raw) / Decimal(10 ** dec_i) * price_usd
+                                    token_str += f"（价值 {usd_val:.2f} USD）"
+                                except Exception:
+                                    pass
+                    parts.append(token_str)
+                resolved[idx] = " + ".join(parts)
 
         elif label in ("amount", "amounts"):
             # 找相邻 token 索引（先 idx+1，再 idx-1）
@@ -258,14 +294,14 @@ async def _fill_template_rich(template: str, params: dict[str, object], protocol
             elif adj_prev in token_by_idx:
                 token_infos = token_by_idx[adj_prev]
             else:
-                token_infos = [("", default_decimals)]
+                token_infos = [("", "", default_decimals)]
 
             amounts = _normalize_param(raw_obj)
-            parts: list[str] = []
+            parts2: list[str] = []
             for i, amt_str in enumerate(amounts):
-                dec = token_infos[i][1] if i < len(token_infos) else default_decimals
-                parts.append(_fmt_amount(amt_str, dec))
-            resolved[idx] = " + ".join(parts) if parts else str(raw_obj)
+                dec = token_infos[i][2] if i < len(token_infos) else default_decimals
+                parts2.append(_fmt_amount(amt_str, dec))
+            resolved[idx] = " + ".join(parts2) if parts2 else str(raw_obj)
 
         elif label == "contract":
             version_suffix = _VERSION_LABEL.get(protocol.lower(), "")
@@ -281,7 +317,12 @@ async def _fill_template_rich(template: str, params: dict[str, object], protocol
     return result
 
 
-async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> str:
+async def _parse_single(
+    tx_hash: str,
+    pool_address: str,
+    protocol: str = "",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
     """子进程调用 decode-tx-input.js，解析单笔 tx 的 brief（含富化处理）。"""
     async with _BRIEF_SEM:
         try:
@@ -324,21 +365,31 @@ async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> 
         tmpl: str = brief_block["template"]
         # 保留原始类型（list 或 str），让 _fill_template_rich 处理数组 param
         params: dict[str, object] = dict(brief_block.get("params", {}))
-        return await _fill_template_rich(tmpl, params, protocol=protocol)
+        return await _fill_template_rich(tmpl, params, protocol=protocol, prices=prices)
     except (KeyError, TypeError):
         logger.debug("parse_tx_brief: no brief in parsed result for %s", tx_hash)
         return ""
 
 
-async def parse_tx_brief(tx_hash: str, protocol: str = "v3") -> str:
-    """解析单笔 tx 的人类可读摘要，结果会写入内存缓存。"""
+async def parse_tx_brief(
+    tx_hash: str,
+    protocol: str = "v3",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
+    """解析单笔 tx 的人类可读摘要。
+
+    - prices 为 None 时：查/写内存缓存（适合生产环境重复调用）
+    - prices 不为 None 时：每次重新解析并附加 USD 价值描述，绕过内存缓存
+      （同一 tx 在不同 block 时刻的价格不同，不能复用缓存结果）
+    """
     tx_hash = tx_hash.lower()
-    if tx_hash in _brief_mem_cache:
+    if prices is None and tx_hash in _brief_mem_cache:
         return _brief_mem_cache[tx_hash]
 
     pool_address = _POOL_BY_PROTOCOL.get(protocol, _POOL_BY_PROTOCOL["v3"])
-    brief = await _parse_single(tx_hash, pool_address, protocol=protocol)
-    _brief_mem_cache[tx_hash] = brief
+    brief = await _parse_single(tx_hash, pool_address, protocol=protocol, prices=prices)
+    if prices is None:
+        _brief_mem_cache[tx_hash] = brief
     return brief
 
 
@@ -382,5 +433,12 @@ async def parse_briefs_from_metas(metas: list[dict]) -> list[str]:
     if not metas:
         return []
     return list(await asyncio.gather(
-        *(parse_tx_brief(m["tx_hash"], protocol=m.get("protocol", "v3")) for m in metas)
+        *(
+            parse_tx_brief(
+                m["tx_hash"],
+                protocol=m.get("protocol", "v3"),
+                prices=m.get("prices"),
+            )
+            for m in metas
+        )
     ))
