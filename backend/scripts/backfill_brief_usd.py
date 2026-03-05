@@ -39,6 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.constants import WETH_ADDR as _WETH_ADDR  # noqa: E402
 from aave_crawler.tx_parser import parse_tx_brief  # noqa: E402
 
 logging.basicConfig(
@@ -51,27 +52,27 @@ logger = logging.getLogger(__name__)
 # ── SQL ──────────────────────────────────────────────────────────────────────
 
 _SQL_FETCH_ALL = """
-SELECT id, tx_hash, protocol, reserves_json
+SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
 FROM loan.position_snapshot_cache
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_ALL_LIMIT = """
-SELECT id, tx_hash, protocol, reserves_json
+SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
 FROM loan.position_snapshot_cache
 ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
 _SQL_FETCH_EMPTY = """
-SELECT id, tx_hash, protocol, reserves_json
+SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
 FROM loan.position_snapshot_cache
 WHERE brief = ''
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_EMPTY_LIMIT = """
-SELECT id, tx_hash, protocol, reserves_json
+SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
 FROM loan.position_snapshot_cache
 WHERE brief = ''
 ORDER BY block_timestamp ASC
@@ -87,16 +88,26 @@ WHERE id = $2
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
-def _build_prices(reserves_json: list[dict] | str | None) -> dict[str, Decimal]:
-    """从 reserves_json 字段构建 token_address_lower → USD 价格的映射。"""
+def _build_prices(
+    reserves_json: list[dict] | str | None,
+    eth_price_usd: Decimal | None = None,
+) -> dict[str, Decimal]:
+    """从 reserves_json 字段构建 token_address_lower → USD 价格的映射。
+
+    eth_price_usd 作为 WETH 价格备用：当用户全额取出 WETH 导致 reserves_json
+    中无 WETH 条目时，仍能为 ETH/WETH 相关操作提供 USD 注释。
+    """
     if not reserves_json:
-        return {}
+        prices: dict[str, Decimal] = {}
+        if eth_price_usd:
+            prices[_WETH_ADDR] = eth_price_usd
+        return prices
     if isinstance(reserves_json, str):
         try:
             reserves_json = json.loads(reserves_json)
         except Exception:
             return {}
-    prices: dict[str, Decimal] = {}
+    prices = {}
     for r in reserves_json:
         addr = r.get("token_address", "").lower()
         price_raw = r.get("price_usd", "")
@@ -105,6 +116,9 @@ def _build_prices(reserves_json: list[dict] | str | None) -> dict[str, Decimal]:
                 prices[addr] = Decimal(str(price_raw))
             except Exception:
                 pass
+    # WETH 可能因余额为 0 而缺失，用 eth_price_usd 补充
+    if eth_price_usd:
+        prices.setdefault(_WETH_ADDR, eth_price_usd)
     return prices
 
 
@@ -158,7 +172,8 @@ async def run(args: argparse.Namespace) -> None:
         if args.dry_run:
             for r in rows[:10]:
                 rv = r["reserves_json"]
-                prices = _build_prices(rv if isinstance(rv, list) else (json.loads(rv) if rv else []))
+                eth_p = Decimal(str(r["eth_price_usd"])) if r["eth_price_usd"] else None
+                prices = _build_prices(rv if isinstance(rv, list) else (json.loads(rv) if rv else []), eth_p)
                 logger.info(
                     "  [dry-run] id=%s  tx=%s  protocol=%s  tokens=%d",
                     r["id"], r["tx_hash"], r["protocol"], len(prices),
@@ -180,7 +195,10 @@ async def run(args: argparse.Namespace) -> None:
                     _parse_one(
                         r["tx_hash"],
                         r["protocol"],
-                        _build_prices(r["reserves_json"]),
+                        _build_prices(
+                            r["reserves_json"],
+                            Decimal(str(r["eth_price_usd"])) if r["eth_price_usd"] else None,
+                        ),
                     )
                     for r in batch
                 ]

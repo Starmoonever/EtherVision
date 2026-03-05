@@ -16,6 +16,7 @@ from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
 from ..constants import ETH_SYMBOLS_SQL as _ETH_SYMBOLS_SQL
 from ..constants import MAX_HF
 from ..constants import MAX_UINT256 as _MAX_UINT256
+from ..constants import WETH_ADDR as _WETH_ADDR
 from ..db import (fetch_user_tx_history, get_cached_snapshots,
                   upsert_snapshot_cache)
 from ..models import ReservePosition, UserPosition
@@ -1778,7 +1779,7 @@ async def get_user_position_replay(
     total_tx_count = len(deduped_txs)
     # 截断到 max_points，防止万级 tx 导致超时 / 超大响应体
     if total_tx_count > max_points:
-        logger.warning(
+        logger.debug(
             "replay: %s 在指定时间范围内有 %d 条 tx，截断至 max_points=%d",
             user_address, total_tx_count, max_points,
         )
@@ -1857,6 +1858,13 @@ async def get_user_position_replay(
                         continue
                     pos, eth_price_raw = res
                     eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
+                    _prices = {
+                        r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                        for r in pos.reserves
+                    }
+                    # WETH 可能因全额取出后余额为 0 而不在 reserves 里，
+                    # 天然用 eth_price_usd 作为 WETH 价格
+                    _prices.setdefault(_WETH_ADDR, eth_price_dec)
                     batch_records.append({
                         "position": pos,
                         "meta": {
@@ -1864,10 +1872,7 @@ async def get_user_position_replay(
                             "block_timestamp": t["block_timestamp"],
                             "eth_price_usd": eth_price_dec,
                             "protocol": protocol,
-                            "prices": {
-                                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
-                                for r in pos.reserves
-                            },
+                            "prices": _prices,
                         },
                     })
 
