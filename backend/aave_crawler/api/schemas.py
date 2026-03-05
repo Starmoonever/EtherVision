@@ -291,7 +291,10 @@ class PositionReplayResponse(BaseModel):
         description="数据来源：cache（全缓存命中）| rpc（全 RPC 重放）| mixed（混合）"
     )
     points: list[PositionSnapshotPoint]
-    total_points: int = Field(description="返回的数据点数量")
+    total_points: int = Field(description="返回的数据点数量（受 max_points 截断后）")
+    total_tx_count: int = Field(
+        description="时间范围内原始去重 tx 总数（截断前）；等于 total_points 时表示未截断"
+    )
     cache_hit_rate: str = Field(description="缓存命中率（0.00~1.00）")
 
 

@@ -191,6 +191,10 @@ async def _sync_snapshot_cache(
             "block_timestamp": t["block_timestamp"],
             "eth_price_usd": eth_price_dec,
             "protocol": proto,
+            "prices": {
+                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                for r in pos.reserves
+            },
         })
 
     if positions:

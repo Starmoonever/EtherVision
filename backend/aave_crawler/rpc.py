@@ -361,6 +361,21 @@ async def fetch_user_position(
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
+            # V2 oracle 返回 ETH 计价（18 位）；调用方已将 asset_prices 归一化为 USD/8dec，
+            # 其中 asset_prices[WETH_ADDRESS] 即 eth_usd_raw（8 位 USD）。
+            # AccountSummary 的 base 字段同样需要从 ETH/18dec 转换为 USD/8dec。
+            if contracts.oracle_price_in_eth:
+                eth_usd_raw = asset_prices.get(WETH_ADDRESS, 0)
+                if eth_usd_raw > 0:
+                    summary = AccountSummary(
+                        total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
+                        total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
+                        available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                        current_liquidation_threshold=summary.current_liquidation_threshold,
+                        ltv=summary.ltv,
+                        health_factor=summary.health_factor,
+                    )
+
             reserves: list[ReservePosition] = []
             for rt, res in zip(reserve_tokens, results):
                 if isinstance(res, Exception):
@@ -483,6 +498,8 @@ async def fetch_user_position_at_block(
                 return None
 
             # V2 oracle 返回 ETH 计价 → 归一化为 USD（8 位精度）
+            # V2 getUserAccountData 同样返回 ETH/Wei（18 位），需一并归一化：
+            #   (eth_wei * eth_usd_raw) // 10^18 → USD/8dec，与 V3 格式统一
             if contracts.oracle_price_in_eth:
                 v3_oracle = w3.eth.contract(address=CONTRACTS_V3.oracle, abi=ORACLE_ABI)
                 try:
@@ -494,6 +511,15 @@ async def fetch_user_position_at_block(
                             addr: (price * eth_usd_raw) // (10**18)
                             for addr, price in asset_prices.items()
                         }
+                        # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
+                        summary = AccountSummary(
+                            total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
+                            total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
+                            available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                            current_liquidation_threshold=summary.current_liquidation_threshold,
+                            ltv=summary.ltv,
+                            health_factor=summary.health_factor,
+                        )
                 except Exception as exc:
                     logger.warning("V2 ETH/USD 归一化失败 block=%d: %s", block_number, exc)
 

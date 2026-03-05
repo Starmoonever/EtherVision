@@ -15,7 +15,12 @@ from decimal import Decimal
 import asyncpg
 
 from .config import PostgresConfig
-from .models import UserPosition
+from .constants import ETH_SYMBOLS as _ETH_SYMBOLS
+from .constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP
+from .constants import MAX_HF as _MAX_HF
+from .constants import MAX_UINT256 as _MAX_UINT256
+from .models import ReservePosition, UserPosition
+from .utils import raw_to_decimal as _raw_to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -302,23 +307,6 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
 
 # ── 辅助：liq_price 计算 ─────────────────────────────────────────────────────
 
-# ETH 系资产符号（与 service.py simulate SQL 保持一致）
-# 注意：比较时统一用 r.symbol.upper()，所以这里存全大写；每当新增 ETH LST/LRT 时需同步维护
-_ETH_SYMBOLS: frozenset[str] = frozenset(
-    {
-        "WETH",
-        "ETH",
-        "CBETH",
-        "WSTETH",
-        "RETH",
-        "WEETH",
-        "EZETH",
-        "RSETH",
-        "OSETH",
-        "ETHX",
-    }
-)
-
 # aave_history 中的 ETH 系 token_symbol（大小写与链上一致，查询时做 UPPER 比较）
 _ETH_HISTORY_SYMBOLS: frozenset[str] = frozenset(
     {
@@ -366,8 +354,6 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
     以下情况返回 0：无债务、ETH liq_threshold=0、无 ETH 系抵押品。
     超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
     """
-    _LIQ_PRICE_CAP = Decimal("9999999.99999999")  # ~1000 万 USD，ETH 实际不可达
-
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
 
@@ -438,8 +424,6 @@ def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
     分母 <= 0 → 净多 ETH（ETH 上涨有益）→ 无上涨清算风险 → 返回 0
     P_rise <= 0 或无 ETH 系负债 → 返回 0
     """
-    _LIQ_PRICE_CAP = Decimal("9999999.99999999")
-
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
     if total_debt == 0:
@@ -579,11 +563,6 @@ async def fetch_user_addresses(
 # ── 写入（UPSERT 覆盖策略） ───────────────────────────────────────────────────
 
 
-def _raw_to_decimal(raw: int, decimals: int) -> Decimal:
-    """链上原始整数 → Decimal，用于 NUMERIC 列"""
-    return Decimal(raw) / Decimal(10**decimals)
-
-
 def _price_decimal(price_raw: int) -> Decimal:
     """Oracle 价格：8 位精度"""
     return _raw_to_decimal(price_raw, 8)
@@ -606,9 +585,6 @@ async def upsert_positions(
     pos_table = tables.positions
     res_table = tables.reserve_positions
     now = datetime.now(tz=timezone.utc)
-    _MAX_HF = Decimal("1e18")
-    _MAX_UINT256 = (1 << 256) - 1
-
     is_borrow = tables.side == "borrow"
 
     if is_borrow:
@@ -1123,8 +1099,6 @@ async def upsert_snapshot_cache(
     if not positions:
         return 0
 
-    _MAX_UINT256 = (1 << 256) - 1
-    _MAX_HF = Decimal("1e18")
     _briefs = briefs or []
 
     rows: list[tuple] = []
@@ -1162,8 +1136,14 @@ async def upsert_snapshot_cache(
             _briefs[i] if i < len(_briefs) else "",
         ))
 
-    async with pool.acquire() as conn:
-        await conn.executemany(_SQL_UPSERT_SNAPSHOT, rows)
+    _UPSERT_BATCH = 500
+    total_written = 0
+    for i in range(0, len(rows), _UPSERT_BATCH):
+        batch = rows[i : i + _UPSERT_BATCH]
+        async with pool.acquire() as conn:
+            await conn.executemany(_SQL_UPSERT_SNAPSHOT, batch)
+        total_written += len(batch)
+        logger.debug("快照缓存 UPSERT 进度：%d/%d", total_written, len(rows))
 
     logger.debug("快照缓存 UPSERT 完成：%d 条", len(rows))
     return len(rows)

@@ -91,7 +91,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     // Reset tooltip state when address or version changes
     setActiveTooltip(null);
     setSelectedPoint(null);
-    
+
     const fetchData = async () => {
       setLoading(true);
       setError('');
@@ -106,17 +106,17 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         const minutes = String(now.getUTCMinutes()).padStart(2, '0');
         const seconds = String(now.getUTCSeconds()).padStart(2, '0');
         const end = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-        
+
         const response = await fetch(
           `${baseUrl}/position/replay?address=${address}&start=${start}&end=${encodeURIComponent(end)}&version=${version}`
         );
-        
+
         if (!response.ok) {
           throw new Error('Failed to fetch replay data');
         }
 
         const result = await response.json();
-        
+
         if (!result.points || !Array.isArray(result.points)) {
           throw new Error('Invalid data format');
         }
@@ -165,7 +165,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     } else {
       // Don't close if clicking inside the tooltip (handled by wrapperStyle pointerEvents)
       // But Recharts click handler is on the chart area.
-      setActiveTooltip(null); 
+      setActiveTooltip(null);
     }
   };
 
@@ -199,30 +199,30 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
 
       <div style={{ height: 350 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart 
-            data={data} 
+          <LineChart
+            data={data}
             margin={{ top: 10, right: 30, left: 10, bottom: 5 }}
             onClick={handleChartClick}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis 
-              dataKey="timestamp" 
-              stroke="#64748b" 
-              tick={{ fontSize: 12 }} 
+            <XAxis
+              dataKey="timestamp"
+              stroke="#64748b"
+              tick={{ fontSize: 12 }}
               minTickGap={50}
             />
-            
+
             {/* 左轴：资产/债务价值 */}
-            <YAxis 
-              yAxisId="left" 
-              stroke="#10b981" 
+            <YAxis
+              yAxisId="left"
+              stroke="#10b981"
               tickFormatter={(val) => `$${(val/1000).toFixed(0)}k`}
             />
-            
+
             {/* 右轴：ETH价格 & 清算价格 */}
-            <YAxis 
-              yAxisId="right" 
-              orientation="right" 
+            <YAxis
+              yAxisId="right"
+              orientation="right"
               stroke="#3b82f6"
               tickFormatter={(val) => `$${val}`}
             />
@@ -230,30 +230,30 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             <Tooltip
               content={<CustomTooltip onDetailsClick={setSelectedPoint} />}
               wrapperStyle={{ pointerEvents: 'auto', zIndex: 1000 }}
-              trigger="hover" 
+              trigger="hover"
               active={activeTooltip !== null ? true : undefined}
               position={activeTooltip ? activeTooltip.coordinate : undefined}
             />
-            {/* 
-              Workaround: Recharts onClick gives us the activeIndex. 
+            {/*
+              Workaround: Recharts onClick gives us the activeIndex.
               We can conditionally render a custom overlay OR try to force the Tooltip props.
               Actually, Recharts `Tooltip` has a `shared` and `defaultIndex` prop but not "force show at index".
-              
+
               Better UX plan:
               1. Keep standard hover tooltip.
               2. When clicked, setting activeTooltipIndex.
               3. Pass `active={true}` and `payload={...}` corresponding to that index to Tooltip.
-              
+
               However, cursor follows mouse. To "freeze" it, we might need to stop the mouse events or provide a fixed coordinate.
-              Recharts doesn't make "freezing" easy. 
-              
-              Alternative: When clicked, we open the "DetailsModal" directly? 
+              Recharts doesn't make "freezing" easy.
+
+              Alternative: When clicked, we open the "DetailsModal" directly?
               User asked to "fix the tooltip".
-              
+
               Let's try controlling `active` and `payload`.
-              Positioning will still follow mouse if we don't provide `coordinate`. 
+              Positioning will still follow mouse if we don't provide `coordinate`.
               But `coordinate` is hard to calculate without internal chart state.
-              
+
               Actually, `onClick` on Chart gives `activeCoordinate`. We can save that!
             */}
             <Legend />
@@ -289,7 +289,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
           </LineChart>
         </ResponsiveContainer>
       </div>
-      
+
       {selectedPoint && (
         <DetailsModal point={selectedPoint} onClose={() => setSelectedPoint(null)} />
       )}

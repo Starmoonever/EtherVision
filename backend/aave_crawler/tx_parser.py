@@ -26,6 +26,8 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
+from .constants import POOL_V2, POOL_V3
+
 logger = logging.getLogger(__name__)
 
 # ── 路径 ────────────────────────────────────────────────────────────────────
@@ -35,10 +37,10 @@ _ENV_FILE = _PARSER_DIR / ".env"
 
 # ── Aave Pool 地址 ───────────────────────────────────────────────────────────
 _POOL_BY_PROTOCOL: dict[str, str] = {
-    "v3": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
-    "v3_borrow": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
-    "v2": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
-    "v2_borrow": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+    "v3": POOL_V3,
+    "v3_borrow": POOL_V3,
+    "v2": POOL_V2,
+    "v2_borrow": POOL_V2,
 }
 
 # protocol 字符串（'v2'/'v3'）→ brief 中的版本标签
@@ -183,82 +185,146 @@ def _fmt_amount(raw: str, decimals: int) -> str:
         return raw
 
 
-async def _fill_template_rich(template: str, params: dict[str, str], protocol: str = "") -> str:
+def _normalize_param(v: object) -> list[str]:
+    """将 param 值统一为字符串列表（处理 JSON 数组和标量两种情况）。"""
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    return [str(v)]
+
+
+async def _resolve_token_addr(raw: str) -> tuple[str, int]:
+    """单个 token 地址 → (symbol, decimals)。"""
+    _ADDR_LEN = 42
+    if raw.startswith("0x") and len(raw) >= _ADDR_LEN:
+        sym, dec = await _get_token_info(raw)
+        if sym:
+            return (sym, dec)
+        short = raw[:6] + "…" + raw[-4:]
+        return (short, dec)
+    elif raw.startswith("0x"):
+        return ("ETH", 18)
+    else:
+        return (raw, 18)
+
+
+async def _fill_template_rich(
+    template: str,
+    params: dict[str, object],
+    protocol: str = "",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
     """根据占位符 label 对 params 进行富化后填充模板。
 
     处理顺序：
-      1. 解析所有 ``token`` 参数 → (symbol, decimals)
-      2. 用相邻 token 的 decimals 格式化 ``amount`` 参数
-      3. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
-      4. 其他 label → 原值透传
+      1. 解析所有 ``token`` 参数 → (addr, symbol, decimals)，支持地址数组
+      2. 用相邻 token 的 decimals 格式化 ``amount``/``amounts`` 参数，支持金额数组
+         数组情形下，amounts[i] 与 token[i] 一一对应，输出 "N1 T1 + N2 T2"
+      3. ``token`` 占位符：若提供了 prices，在 symbol 后附加「（价值 X.XX USD）」
+      4. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
+      5. 其他 label → 原值透传
 
     :param protocol: 'v2' | 'v3'，用于在 contract 占位符后附加版本标签
+    :param prices:   token_address_lower → Decimal(price_usd)，用于计算 USD 价值
     """
     placeholders: dict[str, str] = {
         m.group(1): m.group(2)
         for m in _PLACEHOLDER_PAT.finditer(template)
     }
 
-    # ── Step 1: 解析 token 参数 ──────────────────────────────────────────────
-    # 以太坊地址格式：0x + 40 hex chars = 42 chars
-    _ADDR_LEN = 42
-
-    token_by_idx: dict[str, tuple[str, int]] = {}
+    # ── Step 1: 解析 token 参数（支持数组）──────────────────────────────────
+    # token_by_idx[idx] = list of (addr, symbol, decimals)，每个 token 地址对应一项
+    token_by_idx: dict[str, list[tuple[str, str, int]]] = {}
     for idx, label in placeholders.items():
         if label == "token":
-            raw = params.get(idx, "")
-            if raw.startswith("0x") and len(raw) >= _ADDR_LEN:
-                # 合法地址：查 symbol/decimals
-                sym, dec = await _get_token_info(raw)
-                if sym:
-                    token_by_idx[idx] = (sym, dec)
-                else:
-                    # 查不到 symbol：显示缩略地址 0xabcd...1234
-                    short = raw[:6] + "…" + raw[-4:]
-                    token_by_idx[idx] = (short, dec)
-            elif raw.startswith("0x"):
-                # "0x" 或其他长度不足的 0x 前缀 → 原生币 ETH
-                token_by_idx[idx] = ("ETH", 18)
-            else:
-                # 非地址格式（已是名称）：直接使用
-                token_by_idx[idx] = (raw, 18)
+            addrs = _normalize_param(params.get(idx, ""))
+            infos: list[tuple[str, str, int]] = []
+            for a in addrs:
+                if a:
+                    sym, dec = await _resolve_token_addr(a)
+                    infos.append((a, sym, dec))
+            if infos:
+                token_by_idx[idx] = infos
 
-    # 默认 decimals：取序号最小的 token
+    # 默认 decimals：取序号最小的 token 的第一个
     default_decimals = 18
     if token_by_idx:
         nearest_idx = min(token_by_idx.keys(), key=lambda x: int(x))
-        default_decimals = token_by_idx[nearest_idx][1]
+        default_decimals = token_by_idx[nearest_idx][0][2]
 
     # ── Step 2: 构建替换值 ───────────────────────────────────────────────────
     resolved: dict[str, str] = {}
     for idx, label in placeholders.items():
-        raw = params.get(idx, f"${{{idx}:{label}}}")
+        raw_obj = params.get(idx, f"${{{idx}:{label}}}")
+
         if label == "token":
-            resolved[idx] = token_by_idx[idx][0] if idx in token_by_idx else raw
-        elif label == "amount":
-            # 优先取 idx+1 的 token，其次 idx-1，最后 default
-            adj = str(int(idx) + 1)
-            if adj in token_by_idx:
-                decimals = token_by_idx[adj][1]
+            if idx not in token_by_idx:
+                resolved[idx] = str(raw_obj)
             else:
-                adj = str(int(idx) - 1)
-                decimals = token_by_idx[adj][1] if adj in token_by_idx else default_decimals
-            resolved[idx] = _fmt_amount(raw, decimals)
+                # 找相邻 amount 索引，用于计算 USD 价值
+                adj_prev = str(int(idx) - 1)
+                adj_next = str(int(idx) + 1)
+                amt_idx = None
+                if adj_prev in placeholders and placeholders[adj_prev] in ("amount", "amounts"):
+                    amt_idx = adj_prev
+                elif adj_next in placeholders and placeholders[adj_next] in ("amount", "amounts"):
+                    amt_idx = adj_next
+                amt_list = _normalize_param(params.get(amt_idx, "")) if amt_idx else []
+
+                parts: list[str] = []
+                for i, (addr_i, sym_i, dec_i) in enumerate(token_by_idx[idx]):
+                    token_str = sym_i
+                    if prices and amt_list and i < len(amt_list):
+                        amt_raw = amt_list[i]
+                        fmt_check = _fmt_amount(amt_raw, dec_i)
+                        if fmt_check != "全部" and addr_i:
+                            price_usd = prices.get(addr_i.lower())
+                            if price_usd:
+                                try:
+                                    usd_val = Decimal(amt_raw) / Decimal(10 ** dec_i) * price_usd
+                                    token_str += f"（价值 {usd_val:.2f} USD）"
+                                except Exception:
+                                    pass
+                    parts.append(token_str)
+                resolved[idx] = " + ".join(parts)
+
+        elif label in ("amount", "amounts"):
+            # 找相邻 token 索引（先 idx+1，再 idx-1）
+            adj_next = str(int(idx) + 1)
+            adj_prev = str(int(idx) - 1)
+            if adj_next in token_by_idx:
+                token_infos = token_by_idx[adj_next]
+            elif adj_prev in token_by_idx:
+                token_infos = token_by_idx[adj_prev]
+            else:
+                token_infos = [("", "", default_decimals)]
+
+            amounts = _normalize_param(raw_obj)
+            parts2: list[str] = []
+            for i, amt_str in enumerate(amounts):
+                dec = token_infos[i][2] if i < len(token_infos) else default_decimals
+                parts2.append(_fmt_amount(amt_str, dec))
+            resolved[idx] = " + ".join(parts2) if parts2 else str(raw_obj)
+
         elif label == "contract":
-            # 用调用方传入的 protocol（'v2'/'v3'）直接确定版本标签
             version_suffix = _VERSION_LABEL.get(protocol.lower(), "")
-            resolved[idx] = f"{raw} {version_suffix}".strip() if version_suffix else raw
+            raw_str = str(raw_obj)
+            resolved[idx] = f"{raw_str} {version_suffix}".strip() if version_suffix else raw_str
+
         else:
-            resolved[idx] = raw
+            resolved[idx] = str(raw_obj)
 
     result = _PLACEHOLDER_PAT.sub(lambda m: resolved.get(m.group(1), m.group(0)), template)
-    # 清理因空 token 等产生的多余空格
     import re as _re
     result = _re.sub(r"  +", " ", result).strip()
     return result
 
 
-async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> str:
+async def _parse_single(
+    tx_hash: str,
+    pool_address: str,
+    protocol: str = "",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
     """子进程调用 decode-tx-input.js，解析单笔 tx 的 brief（含富化处理）。"""
     async with _BRIEF_SEM:
         try:
@@ -299,24 +365,33 @@ async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> 
     try:
         brief_block = data["data"]["template"]["brief"]
         tmpl: str = brief_block["template"]
-        params: dict[str, str] = {
-            k: str(v) for k, v in brief_block.get("params", {}).items()
-        }
-        return await _fill_template_rich(tmpl, params, protocol=protocol)
+        # 保留原始类型（list 或 str），让 _fill_template_rich 处理数组 param
+        params: dict[str, object] = dict(brief_block.get("params", {}))
+        return await _fill_template_rich(tmpl, params, protocol=protocol, prices=prices)
     except (KeyError, TypeError):
         logger.debug("parse_tx_brief: no brief in parsed result for %s", tx_hash)
         return ""
 
 
-async def parse_tx_brief(tx_hash: str, protocol: str = "v3") -> str:
-    """解析单笔 tx 的人类可读摘要，结果会写入内存缓存。"""
+async def parse_tx_brief(
+    tx_hash: str,
+    protocol: str = "v3",
+    prices: "dict[str, Decimal] | None" = None,
+) -> str:
+    """解析单笔 tx 的人类可读摘要。
+
+    - prices 为 None 时：查/写内存缓存（适合生产环境重复调用）
+    - prices 不为 None 时：每次重新解析并附加 USD 价值描述，绕过内存缓存
+      （同一 tx 在不同 block 时刻的价格不同，不能复用缓存结果）
+    """
     tx_hash = tx_hash.lower()
-    if tx_hash in _brief_mem_cache:
+    if prices is None and tx_hash in _brief_mem_cache:
         return _brief_mem_cache[tx_hash]
 
     pool_address = _POOL_BY_PROTOCOL.get(protocol, _POOL_BY_PROTOCOL["v3"])
-    brief = await _parse_single(tx_hash, pool_address, protocol=protocol)
-    _brief_mem_cache[tx_hash] = brief
+    brief = await _parse_single(tx_hash, pool_address, protocol=protocol, prices=prices)
+    if prices is None:
+        _brief_mem_cache[tx_hash] = brief
     return brief
 
 
@@ -360,5 +435,12 @@ async def parse_briefs_from_metas(metas: list[dict]) -> list[str]:
     if not metas:
         return []
     return list(await asyncio.gather(
-        *(parse_tx_brief(m["tx_hash"], protocol=m.get("protocol", "v3")) for m in metas)
+        *(
+            parse_tx_brief(
+                m["tx_hash"],
+                protocol=m.get("protocol", "v3"),
+                prices=m.get("prices"),
+            )
+            for m in metas
+        )
     ))

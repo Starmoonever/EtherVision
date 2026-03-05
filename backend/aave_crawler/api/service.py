@@ -12,6 +12,10 @@ from decimal import ROUND_HALF_UP, Decimal
 import asyncpg
 from web3 import AsyncWeb3
 
+from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
+from ..constants import ETH_SYMBOLS_SQL as _ETH_SYMBOLS_SQL
+from ..constants import MAX_HF
+from ..constants import MAX_UINT256 as _MAX_UINT256
 from ..db import (fetch_user_tx_history, get_cached_snapshots,
                   upsert_snapshot_cache)
 from ..models import ReservePosition, UserPosition
@@ -19,6 +23,7 @@ from ..rpc import (EMPTY_POSITION, fetch_user_position,
                    fetch_user_position_at_block, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
 from ..tx_parser import parse_briefs_from_metas, parse_tx_briefs
+from ..utils import raw_to_decimal as _raw_to_dec
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
@@ -33,34 +38,9 @@ from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
 
 logger = logging.getLogger(__name__)
 
-# ETH/WETH 识别关键词（ETH LST/LRT 均视为 ETH 系，需与 db._ETH_SYMBOLS 和 SQL IN 列表同步维护）
-# 注意：比较时统一用 .upper()，所以这里存全大写
-_ETH_SYMBOLS = {
-    "WETH",
-    "ETH",
-    "CBETH",
-    "WSTETH",
-    "RETH",
-    "WEETH",
-    "EZETH",
-    "RSETH",
-    "OSETH",
-    "ETHX",
-}
-
-# SQL 中使用的 IN 列表（与 _ETH_SYMBOLS 保持一致）
-_ETH_SYMBOLS_SQL = "'WETH', 'ETH', 'cbETH', 'wstETH', 'rETH', 'weETH', 'ezETH', 'rsETH', 'osETH', 'ETHx'"
-
-_MAX_UINT256 = (1 << 256) - 1
-
-
 def _fmt(value: Decimal, decimals: int = 2) -> str:
     quantize = Decimal(10) ** -decimals
     return str(value.quantize(quantize, rounding=ROUND_HALF_UP))
-
-
-def _raw_to_dec(raw: int, decimals: int) -> Decimal:
-    return Decimal(raw) / Decimal(10**decimals)
 
 
 # ── 公共数据缓存（每次进程内复用，减少 RPC 调用） ────────────────────────────
@@ -1609,6 +1589,7 @@ async def get_positions_history(
 # ══════════════════════════════════════════════════════════════════════════════
 
 _MAX_REPLAY_CONCURRENCY = 5   # 并发 RPC 重放上限（避免公共节点限流）
+_REPLAY_BATCH_SIZE = 200       # 每批 RPC gather 的 tx 数，解决万级 tx 坪展内存问题
 
 
 def _utc_str(dt: datetime) -> str:
@@ -1636,10 +1617,8 @@ def _format_snapshot_point(
 ) -> PositionSnapshotPoint:
     """将缓存表 Record 格式化为 PositionSnapshotPoint。"""
     import json
-    _MAX_UINT256_DEC = Decimal("1e18")
-
     hf_raw = Decimal(str(row["health_factor"]))
-    hf_str = "inf" if hf_raw >= _MAX_UINT256_DEC else _fmt(hf_raw, 4)
+    hf_str = "inf" if hf_raw >= MAX_HF else _fmt(hf_raw, 4)
 
     reserves: list[SnapshotReserveDetail] = []
     if detail:
@@ -1732,6 +1711,7 @@ async def get_user_position_replay(
     protocol: str = "v3",
     use_cache: bool = True,
     detail: bool = False,
+    max_points: int = 2000,
 ) -> PositionReplayResponse:
     """历史仓位回放主函数。
 
@@ -1742,11 +1722,21 @@ async def get_user_position_replay(
     4. 将新查询结果写入缓存（幂等 UPSERT）
     5. 合并 + 按 block_timestamp 升序返回
     """
+    import time as _time_mod
+    _t0 = _time_mod.perf_counter()
+
     from_dt = _ts_to_dt(from_ts)
     to_dt = _ts_to_dt(to_ts)
 
     # ── 1. 获取 tx 列表 ────────────────────────────────────────────────────────
+    _t_db_tx0 = _time_mod.perf_counter()
     tx_rows = await fetch_user_tx_history(pool, user_address, protocol, from_dt, to_dt)
+    _t_db_tx1 = _time_mod.perf_counter()
+    logger.debug(
+        "replay[%s] ① DB tx查询: %.3fs  raw_rows=%d",
+        user_address[:10], _t_db_tx1 - _t_db_tx0, len(tx_rows),
+    )
+
     if not tx_rows:
         return PositionReplayResponse(
             address=user_address.lower(),
@@ -1756,10 +1746,12 @@ async def get_user_position_replay(
             data_source="cache",
             points=[],
             total_points=0,
+            total_tx_count=0,
             cache_hit_rate="1.00",
         )
 
     # ── 2. 查缓存 ──────────────────────────────────────────────────────────────
+    _t_db_cache0 = _time_mod.perf_counter()
     if use_cache:
         cached_rows = await get_cached_snapshots(
             pool, user_address, protocol, from_dt, to_dt
@@ -1767,6 +1759,11 @@ async def get_user_position_replay(
         cached_map: dict[str, object] = {r["tx_hash"]: r for r in cached_rows}
     else:
         cached_map = {}
+    _t_db_cache1 = _time_mod.perf_counter()
+    logger.debug(
+        "replay[%s] ② DB缓存查询: %.3fs  cached=%d",
+        user_address[:10], _t_db_cache1 - _t_db_cache0, len(cached_map),
+    )
 
     # 去重：同一 block 可能有多条 tx_hash（主用户 + 清算目标角色各一条），
     # 取 block_number 唯一，优先使用缓存命中的 tx_hash
@@ -1778,88 +1775,188 @@ async def get_user_position_replay(
             seen_blocks[bn] = dict(r)
 
     deduped_txs = sorted(seen_blocks.values(), key=lambda x: x["block_number"])
-    total = len(deduped_txs)
+    total_tx_count = len(deduped_txs)
+    # 截断到 max_points，防止万级 tx 导致超时 / 超大响应体
+    if total_tx_count > max_points:
+        logger.warning(
+            "replay: %s 在指定时间范围内有 %d 条 tx，截断至 max_points=%d",
+            user_address, total_tx_count, max_points,
+        )
+        deduped_txs = deduped_txs[:max_points]
 
     # ── 3. 区分缓存命中 / 需 RPC 重放 ─────────────────────────────────────────
     hit_txs = [t for t in deduped_txs if t["tx_hash"] in cached_map]
     miss_txs = [t for t in deduped_txs if t["tx_hash"] not in cached_map]
+    logger.debug(
+        "replay[%s] ③ 去重后 tx=%d  hit=%d  miss=%d",
+        user_address[:10], len(deduped_txs), len(hit_txs), len(miss_txs),
+    )
 
-    # ── 4. 并发 RPC 重放 miss_txs ─────────────────────────────────────────────
-    new_cache_records: list[dict] = []
+    # ── 4. 流水线并行：RPC producer ↔ brief+upsert consumer ──────────────────
+    # 结构：RPC gather 与下一批的 brief 解析 + DB 写入并行执行，消除串行等待。
+    # asyncio.Queue 作为 RPC→consumer 的传递通道：
+    #   Producer：逐批提交 RPC gather，完成后放入队列
+    #   Consumer：取出 RPC 结果，做 brief 解析 + upsert，与下一批 RPC 同时进行
+    _t_rpc_total = 0.0
+    _t_brief_total = 0.0
+    _t_upsert_total = 0.0
+
     if miss_txs:
+        _t_common0 = _time_mod.perf_counter()
         reserve_tokens, reserve_configs, _ = await _get_common_data(w3, protocol)
         contracts = get_contracts(protocol)
         semaphore = asyncio.Semaphore(_MAX_REPLAY_CONCURRENCY)
+        logger.debug(
+            "replay[%s] ④ _get_common_data: %.3fs",
+            user_address[:10], _time_mod.perf_counter() - _t_common0,
+        )
 
-        tasks = [
-            fetch_user_position_at_block(
-                w3,
-                user_address,
-                reserve_tokens,
-                reserve_configs,
-                t["block_number"],
-                semaphore,
-                contracts,
-            )
-            for t in miss_txs
-        ]
-        rpc_results = await asyncio.gather(*tasks)
+        # Queue 容量 1：producer 最多超前 consumer 一个批次，避免内存积压
+        _queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        _SENTINEL = object()
 
-        for t, res in zip(miss_txs, rpc_results):
-            if res is None or res is EMPTY_POSITION:
-                continue   # RPC 失败或无仓位，跳过（不写缓存，下次继续重试）
-            pos, eth_price_raw = res
-            eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
-            new_cache_records.append(
-                {
-                    "position": pos,
-                    "meta": {
-                        "tx_hash": t["tx_hash"],
-                        "block_timestamp": t["block_timestamp"],
-                        "eth_price_usd": eth_price_dec,
-                        "protocol": protocol,
-                    },
-                }
-            )
+        async def _rpc_producer() -> None:
+            nonlocal _t_rpc_total
+            for bs in range(0, len(miss_txs), _REPLAY_BATCH_SIZE):
+                b = miss_txs[bs : bs + _REPLAY_BATCH_SIZE]
+                tasks = [
+                    fetch_user_position_at_block(
+                        w3, user_address, reserve_tokens, reserve_configs,
+                        t["block_number"], semaphore, contracts,
+                    )
+                    for t in b
+                ]
+                _t0_rpc = _time_mod.perf_counter()
+                results = await asyncio.gather(*tasks)
+                _dt = _time_mod.perf_counter() - _t0_rpc
+                _t_rpc_total += _dt
+                logger.debug(
+                    "replay[%s] ⑤ RPC批次[%d-%d]: %.3fs  batch_size=%d",
+                    user_address[:10], bs, bs + len(b) - 1, _dt, len(b),
+                )
+                await _queue.put((bs, b, results))
+            await _queue.put(_SENTINEL)
 
-        # 写缓存
-        if new_cache_records:
-            miss_briefs = await parse_briefs_from_metas([r["meta"] for r in new_cache_records])
-            await upsert_snapshot_cache(
-                pool,
-                positions=[r["position"] for r in new_cache_records],
-                tx_meta=[r["meta"] for r in new_cache_records],
-                briefs=miss_briefs,
-            )
+        async def _brief_upsert_consumer() -> None:
+            nonlocal _t_brief_total, _t_upsert_total
+            while True:
+                item = await _queue.get()
+                if item is _SENTINEL:
+                    break
+                bs, b, rpc_results = item
+
+                batch_records: list[dict] = []
+                for t, res in zip(b, rpc_results):
+                    if res is None:
+                        logger.warning(
+                            "RPC 重放失败，跳过 tx %s (block %s, user %s)",
+                            t["tx_hash"], t["block_number"], user_address,
+                        )
+                        continue
+                    if res is EMPTY_POSITION:
+                        continue
+                    pos, eth_price_raw = res
+                    eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
+                    batch_records.append({
+                        "position": pos,
+                        "meta": {
+                            "tx_hash": t["tx_hash"],
+                            "block_timestamp": t["block_timestamp"],
+                            "eth_price_usd": eth_price_dec,
+                            "protocol": protocol,
+                            "prices": {
+                                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                                for r in pos.reserves
+                            },
+                        },
+                    })
+
+                if batch_records:
+                    _t0_brief = _time_mod.perf_counter()
+                    batch_briefs = await parse_briefs_from_metas(
+                        [r["meta"] for r in batch_records]
+                    )
+                    _dt_brief = _time_mod.perf_counter() - _t0_brief
+                    _t_brief_total += _dt_brief
+                    logger.debug(
+                        "replay[%s] ⑥ brief解析[%d-%d]: %.3fs  count=%d",
+                        user_address[:10], bs, bs + len(b) - 1,
+                        _dt_brief, len(batch_records),
+                    )
+
+                    _t0_upsert = _time_mod.perf_counter()
+                    await upsert_snapshot_cache(
+                        pool,
+                        positions=[r["position"] for r in batch_records],
+                        tx_meta=[r["meta"] for r in batch_records],
+                        briefs=batch_briefs,
+                    )
+                    _dt_upsert = _time_mod.perf_counter() - _t0_upsert
+                    _t_upsert_total += _dt_upsert
+                    logger.debug(
+                        "replay[%s] ⑦ DB写缓存[%d-%d]: %.3fs  count=%d",
+                        user_address[:10], bs, bs + len(b) - 1,
+                        _dt_upsert, len(batch_records),
+                    )
+
+        # producer 与 consumer 并发运行，实现 RPC ↔ brief+upsert 流水线
+        await asyncio.gather(_rpc_producer(), _brief_upsert_consumer())
 
     # ── 5. 重新读取缓存（含刚写入的）──────────────────────────────────────────
+    _t_final0 = _time_mod.perf_counter()
     final_cache = await get_cached_snapshots(
         pool, user_address, protocol, from_dt, to_dt
     )
     final_map: dict[str, object] = {r["tx_hash"]: r for r in final_cache}
+    _t_final1 = _time_mod.perf_counter()
+    logger.debug(
+        "replay[%s] ⑧ DB最终读缓存: %.3fs  rows=%d",
+        user_address[:10], _t_final1 - _t_final0, len(final_cache),
+    )
 
     # ── 6. 按 block 排序拼装响应 ───────────────────────────────────────────────
+    _t_fmt0 = _time_mod.perf_counter()
     points: list[PositionSnapshotPoint] = []
     for t in deduped_txs:
         row = final_map.get(t["tx_hash"])
         if row is None:
             continue  # 该 tx 的 RPC 重放失败，跳过
         points.append(_format_snapshot_point(row, detail=detail))
+    _t_fmt1 = _time_mod.perf_counter()
 
-    cache_hit_count = sum(1 for t in deduped_txs if t["tx_hash"] in final_map
-                         and t["tx_hash"] in cached_map)
+    # 以「实际返回的点」为基准计算命中率和数据来源：
+    # - 永久 RPC 失败的 tx 不计入分母（不影响命中率，也不在响应里）
+    # - data_source 与命中率使用同一基准，避免 rate 四舍五入到 1.00 却显示 mixed
+    served_txs = [t for t in deduped_txs if t["tx_hash"] in final_map]
+    served_from_cache = sum(1 for t in served_txs if t["tx_hash"] in cached_map)
+    served_total = len(served_txs)
+
     cache_hit_rate = (
-        _fmt(Decimal(cache_hit_count) / Decimal(total), 2)
-        if total > 0
+        _fmt(Decimal(served_from_cache) / Decimal(served_total), 2)
+        if served_total > 0
         else "1.00"
     )
 
-    if not miss_txs:
+    if served_from_cache == served_total:
         data_source = "cache"
-    elif not hit_txs:
+    elif served_from_cache == 0:
         data_source = "rpc"
     else:
         data_source = "mixed"
+
+    _t_total = _time_mod.perf_counter() - _t0
+    logger.debug(
+        "replay[%s] ✅ 总耗时: %.3fs  "
+        "[DB-tx=%.3f DB-cache=%.3f RPC=%.3f brief=%.3f upsert=%.3f DB-final=%.3f fmt=%.3f]  "
+        "points=%d miss=%d",
+        user_address[:10], _t_total,
+        _t_db_tx1 - _t_db_tx0,
+        _t_db_cache1 - _t_db_cache0,
+        _t_rpc_total, _t_brief_total, _t_upsert_total,
+        _t_final1 - _t_final0,
+        _t_fmt1 - _t_fmt0,
+        len(points), len(miss_txs),
+    )
 
     return PositionReplayResponse(
         address=user_address.lower(),
@@ -1869,5 +1966,6 @@ async def get_user_position_replay(
         data_source=data_source,
         points=points,
         total_points=len(points),
+        total_tx_count=total_tx_count,
         cache_hit_rate=cache_hit_rate,
     )
