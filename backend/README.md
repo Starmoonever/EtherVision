@@ -184,7 +184,7 @@ uv run aave-crawler crawl -p v3_borrow
 nohup uv run aave-crawler watch -p v3        > nohup_v3.log 2>&1 &
 nohup uv run aave-crawler watch -p v3_borrow > nohup_v3_borrow.log 2>&1 &
 
-# 4. 启动 API
+# 4. 启动 API 
 uv run aave-api
 ```
 
