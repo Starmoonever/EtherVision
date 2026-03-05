@@ -32,12 +32,11 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from aave_crawler.config import load_config
-from aave_crawler.db import _ETH_SYMBOLS  # frozenset，与 upsert 逻辑同源
+from aave_crawler.constants import ETH_SYMBOLS as _ETH_SYMBOLS
+from aave_crawler.constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
-
-_LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 # ── 纯 Python 计算（镜像 db.py 中的函数，直接操作 JSONB dict）────────────────
 

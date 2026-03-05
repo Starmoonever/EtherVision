@@ -12,6 +12,10 @@ from decimal import ROUND_HALF_UP, Decimal
 import asyncpg
 from web3 import AsyncWeb3
 
+from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
+from ..constants import ETH_SYMBOLS_SQL as _ETH_SYMBOLS_SQL
+from ..constants import MAX_HF
+from ..constants import MAX_UINT256 as _MAX_UINT256
 from ..db import (fetch_user_tx_history, get_cached_snapshots,
                   upsert_snapshot_cache)
 from ..models import ReservePosition, UserPosition
@@ -19,6 +23,7 @@ from ..rpc import (EMPTY_POSITION, fetch_user_position,
                    fetch_user_position_at_block, get_all_reserve_tokens,
                    get_assets_prices, get_contracts, get_reserve_config)
 from ..tx_parser import parse_briefs_from_metas, parse_tx_briefs
+from ..utils import raw_to_decimal as _raw_to_dec
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
@@ -33,34 +38,9 @@ from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
 
 logger = logging.getLogger(__name__)
 
-# ETH/WETH 识别关键词（ETH LST/LRT 均视为 ETH 系，需与 db._ETH_SYMBOLS 和 SQL IN 列表同步维护）
-# 注意：比较时统一用 .upper()，所以这里存全大写
-_ETH_SYMBOLS = {
-    "WETH",
-    "ETH",
-    "CBETH",
-    "WSTETH",
-    "RETH",
-    "WEETH",
-    "EZETH",
-    "RSETH",
-    "OSETH",
-    "ETHX",
-}
-
-# SQL 中使用的 IN 列表（与 _ETH_SYMBOLS 保持一致）
-_ETH_SYMBOLS_SQL = "'WETH', 'ETH', 'cbETH', 'wstETH', 'rETH', 'weETH', 'ezETH', 'rsETH', 'osETH', 'ETHx'"
-
-_MAX_UINT256 = (1 << 256) - 1
-
-
 def _fmt(value: Decimal, decimals: int = 2) -> str:
     quantize = Decimal(10) ** -decimals
     return str(value.quantize(quantize, rounding=ROUND_HALF_UP))
-
-
-def _raw_to_dec(raw: int, decimals: int) -> Decimal:
-    return Decimal(raw) / Decimal(10**decimals)
 
 
 # ── 公共数据缓存（每次进程内复用，减少 RPC 调用） ────────────────────────────
@@ -1637,10 +1617,8 @@ def _format_snapshot_point(
 ) -> PositionSnapshotPoint:
     """将缓存表 Record 格式化为 PositionSnapshotPoint。"""
     import json
-    _MAX_UINT256_DEC = Decimal("1e18")
-
     hf_raw = Decimal(str(row["health_factor"]))
-    hf_str = "inf" if hf_raw >= _MAX_UINT256_DEC else _fmt(hf_raw, 4)
+    hf_str = "inf" if hf_raw >= MAX_HF else _fmt(hf_raw, 4)
 
     reserves: list[SnapshotReserveDetail] = []
     if detail:

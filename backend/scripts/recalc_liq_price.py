@@ -35,6 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.constants import ETH_SYMBOLS as _ETH_SYMBOLS  # noqa: E402
+from aave_crawler.constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP
 from aave_crawler.db import get_tables  # noqa: E402
 from aave_crawler.rpc import get_all_reserve_tokens  # noqa: E402
 from aave_crawler.rpc import build_web3, get_contracts, get_reserve_config

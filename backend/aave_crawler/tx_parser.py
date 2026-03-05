@@ -26,6 +26,8 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
+from .constants import POOL_V2, POOL_V3
+
 logger = logging.getLogger(__name__)
 
 # ── 路径 ────────────────────────────────────────────────────────────────────
@@ -35,10 +37,10 @@ _ENV_FILE = _PARSER_DIR / ".env"
 
 # ── Aave Pool 地址 ───────────────────────────────────────────────────────────
 _POOL_BY_PROTOCOL: dict[str, str] = {
-    "v3": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
-    "v3_borrow": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
-    "v2": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
-    "v2_borrow": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+    "v3": POOL_V3,
+    "v3_borrow": POOL_V3,
+    "v2": POOL_V2,
+    "v2_borrow": POOL_V2,
 }
 
 # protocol 字符串（'v2'/'v3'）→ brief 中的版本标签
