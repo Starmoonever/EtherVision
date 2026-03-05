@@ -196,6 +196,25 @@ ORACLE_ABI: list[dict[str, Any]] = [
     },
 ]
 
+# Chainlink ETH/USD 聚合器（主网，2019年起可用，比 Aave V3 oracle 更早）
+CHAINLINK_ETH_USD = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+# latestRoundData() → (roundId, answer/8dec, startedAt, updatedAt, answeredInRound)
+CHAINLINK_ETH_USD_ABI: list[dict] = [
+    {
+        "inputs": [],
+        "name": "latestRoundData",
+        "outputs": [
+            {"name": "roundId",          "type": "uint80"},
+            {"name": "answer",           "type": "int256"},
+            {"name": "startedAt",        "type": "uint256"},
+            {"name": "updatedAt",        "type": "uint256"},
+            {"name": "answeredInRound",  "type": "uint80"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
 # ── 客户端工厂 ────────────────────────────────────────────────────────────────
 
 
@@ -500,28 +519,56 @@ async def fetch_user_position_at_block(
             # V2 oracle 返回 ETH 计价 → 归一化为 USD（8 位精度）
             # V2 getUserAccountData 同样返回 ETH/Wei（18 位），需一并归一化：
             #   (eth_wei * eth_usd_raw) // 10^18 → USD/8dec，与 V3 格式统一
+            # 优先使用 Chainlink ETH/USD 聚合器，因其从 2019 年起即可用；
+            # V3 Aave oracle 于 2023-01 才部署，无法用于更早的历史块。
             if contracts.oracle_price_in_eth:
-                v3_oracle = w3.eth.contract(address=CONTRACTS_V3.oracle, abi=ORACLE_ABI)
+                eth_usd_raw: int = 0
+
+                # 1️⃣ Chainlink ETH/USD（主备）
                 try:
-                    eth_usd_raw = await v3_oracle.functions.getAssetPrice(
-                        WETH_ADDRESS
-                    ).call(block_identifier=block_number)
-                    if eth_usd_raw > 0:
-                        asset_prices = {
-                            addr: (price * eth_usd_raw) // (10**18)
-                            for addr, price in asset_prices.items()
-                        }
-                        # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
-                        summary = AccountSummary(
-                            total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
-                            total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
-                            available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
-                            current_liquidation_threshold=summary.current_liquidation_threshold,
-                            ltv=summary.ltv,
-                            health_factor=summary.health_factor,
+                    cl_feed = w3.eth.contract(
+                        address=CHAINLINK_ETH_USD, abi=CHAINLINK_ETH_USD_ABI
+                    )
+                    _round = await cl_feed.functions.latestRoundData().call(
+                        block_identifier=block_number
+                    )
+                    # answer 为 int256，正常情况 > 0
+                    if _round[1] > 0:
+                        eth_usd_raw = int(_round[1])
+                except Exception as _cl_exc:
+                    logger.debug(
+                        "Chainlink ETH/USD 查询失败 block=%d: %s", block_number, _cl_exc
+                    )
+
+                # 2️⃣ 若 Chainlink 失败，降级到 V3 Aave oracle
+                if eth_usd_raw == 0:
+                    try:
+                        v3_oracle = w3.eth.contract(
+                            address=CONTRACTS_V3.oracle, abi=ORACLE_ABI
                         )
-                except Exception as exc:
-                    logger.warning("V2 ETH/USD 归一化失败 block=%d: %s", block_number, exc)
+                        eth_usd_raw = await v3_oracle.functions.getAssetPrice(
+                            WETH_ADDRESS
+                        ).call(block_identifier=block_number)
+                    except Exception as _v3_exc:
+                        logger.warning(
+                            "V2 ETH/USD 归一化失败 block=%d (Chainlink+V3均失败): %s",
+                            block_number, _v3_exc,
+                        )
+
+                if eth_usd_raw > 0:
+                    asset_prices = {
+                        addr: (price * eth_usd_raw) // (10**18)
+                        for addr, price in asset_prices.items()
+                    }
+                    # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
+                    summary = AccountSummary(
+                        total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
+                        total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
+                        available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                        current_liquidation_threshold=summary.current_liquidation_threshold,
+                        ltv=summary.ltv,
+                        health_factor=summary.health_factor,
+                    )
 
             reserves: list[ReservePosition] = []
             for rt, res in zip(reserve_tokens, reserve_results):

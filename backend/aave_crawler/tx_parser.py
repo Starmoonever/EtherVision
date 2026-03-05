@@ -26,7 +26,9 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
+from .constants import ETH_SYMBOLS as _ETH_SYMBOLS
 from .constants import POOL_V2, POOL_V3
+from .constants import WETH_ADDR as _WETH_ADDR
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ _ERC20_ABI = [
 # ── Mainnet 常见 Aave 代币静态表（地址全部小写）→ (symbol, decimals) ─────────
 _KNOWN_TOKENS: dict[str, tuple[str, int]] = {
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": ("WETH",   18),
+    # ETH sentinel 地址（Aave V1/V2 用于表示 native ETH）
+    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": ("ETH",    18),
     "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": ("wstETH", 18),
     "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee": ("weETH",  18),
     "0xae78736cd615f374d3085123a210448e74fc6393": ("rETH",   18),
@@ -278,6 +282,10 @@ async def _fill_template_rich(
                         fmt_check = _fmt_amount(amt_raw, dec_i)
                         if fmt_check != "全部" and addr_i:
                             price_usd = prices.get(addr_i.lower())
+                            # ETH/WETH 等价回退：若地址未命中（如全部取出 = pos.reserves 中 WETH 余额为 0）
+                            # 或使用了 ETH sentinel 地址，但 symbol 属于 ETH 系，回退到 WETH 价格
+                            if not price_usd and sym_i.upper() in _ETH_SYMBOLS:
+                                price_usd = prices.get(_WETH_ADDR)
                             if price_usd:
                                 try:
                                     usd_val = Decimal(amt_raw) / Decimal(10 ** dec_i) * price_usd
