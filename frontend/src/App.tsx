@@ -37,11 +37,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!queriedAddress) return;
-    setV2State({ data: null, loading: true, notFound: false });
-    setV3State({ data: null, loading: true, notFound: false });
+    // 每次地址变化时，清空之前的数据状态
+    setV2State(emptyState());
+    setV3State(emptyState());
+  }, [queriedAddress]);
 
+  useEffect(() => {
+    if (!queriedAddress) return;
+    
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
+      setState(prev => ({ ...prev, loading: true, notFound: false }));
       try {
         const data = await fetchUserPosition(queriedAddress, version);
         setState({ data, loading: false, notFound: false });
@@ -55,9 +60,13 @@ export default function App() {
       }
     };
 
-    load('v2', setV2State);
-    load('v3', setV3State);
-  }, [queriedAddress]);
+    // 仅加载当前选中的版本
+    if (personalVersion === 'v2') {
+      load('v2', setV2State);
+    } else {
+      load('v3', setV3State);
+    }
+  }, [queriedAddress, personalVersion]);
 
   return (
     <div className="app">
