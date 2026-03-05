@@ -20,5 +20,6 @@ dist/
 
 *.log
 watchers.pid
+parsed_example.json
 
 derived_users/

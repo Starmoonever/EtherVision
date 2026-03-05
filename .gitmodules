@@ -1,0 +1,3 @@
+[submodule "backend/AI-ContractParser"]
+	path = backend/AI-ContractParser
+	url = git@github.com:web3intel/AI-ContractParser.git

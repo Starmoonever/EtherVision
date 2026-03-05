@@ -239,3 +239,80 @@ class BorrowUserPositionResponse(BaseModel):
     reserves: list[ReservePositionSchema] = Field(
         description="资产明细列表，按负债 USD 降序排列"
     )
+
+
+# ── 历史仓位回放（position_snapshot_cache）─────────────────────────────────────
+
+
+class SnapshotReserveDetail(BaseModel):
+    """快照中单个资产的明细（从 reserves_json 反序列化）。"""
+
+    symbol: str
+    token_address: str
+    price_usd: str = Field(description="该区块时刻的 Oracle 价格（USD，8 位精度）")
+    supply_usd: str = Field(description="供给 USD 估值")
+    total_debt_usd: str = Field(description="借贷 USD 估值")
+    use_as_collateral: bool
+
+
+class PositionSnapshotPoint(BaseModel):
+    """回放序列中的单个数据点（对应一笔 tx 时刻的链上真实仓位）。"""
+
+    tx_hash: str
+    block_number: int
+    timestamp: str = Field(description="区块 UTC 时间，格式 2024-01-15T08:23:11Z")
+    eth_price_usd: str = Field(description="同区块链上 Oracle ETH/USD 价格")
+    total_collateral_usd: str
+    total_debt_usd: str
+    available_borrows_usd: str
+    health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
+    liq_threshold: str = Field(description="清算阈值（0~1）")
+    liq_price: str = Field(description="ETH 下跌清算触发价（USD）；0 表示无风险")
+    liq_price_rise: str = Field(description="ETH 上涨清算触发价（USD）；0 表示无上涨风险")
+    eth_collateral_amount: str = Field(description="ETH 系抵押品合计数量")
+    eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
+    weth_debt_amount: str = Field(description="ETH 系负债合计数量")
+    weth_debt_usd: str = Field(description="ETH 系负债合计 USD")
+    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
+    reserves: list[SnapshotReserveDetail] = Field(
+        default_factory=list,
+        description="资产明细；仅当请求 detail=true 时填充",
+    )
+
+
+class PositionReplayResponse(BaseModel):
+    """历史仓位回放响应。"""
+
+    address: str
+    protocol: str = Field(description="协议版本：v2 | v3")
+    from_time: str = Field(description="查询起始时间（UTC）")
+    to_time: str = Field(description="查询结束时间（UTC）")
+    data_source: str = Field(
+        description="数据来源：cache（全缓存命中）| rpc（全 RPC 重放）| mixed（混合）"
+    )
+    points: list[PositionSnapshotPoint]
+    total_points: int = Field(description="返回的数据点数量")
+    cache_hit_rate: str = Field(description="缓存命中率（0.00~1.00）")
+
+
+class TxHistoryItem(BaseModel):
+    """用户 Aave 事件列表中的单条记录（来自 aave_history）。"""
+
+    tx_hash: str
+    block_number: int
+    timestamp: str = Field(description="区块 UTC 时间")
+    operation_type: str = Field(description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
+    token_symbol: str = Field(description="涉及的资产符号")
+    cached: bool = Field(description="该 tx 的仓位快照是否已在缓存中")
+    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
+
+
+class TxHistoryResponse(BaseModel):
+    """用户 Aave 历史事件列表响应。"""
+
+    address: str
+    protocol: str
+    from_time: str
+    to_time: str
+    txs: list[TxHistoryItem]
+    total: int

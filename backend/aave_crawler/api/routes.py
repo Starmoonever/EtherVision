@@ -6,14 +6,16 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
-                      HistoricalPositionResponse, LiqPriceResponse,
-                      LiquidationPeriodItem, LiquidationSimResponse,
+                      HistoricalPositionResponse, LiquidationPeriodItem,
+                      LiquidationSimResponse, PositionReplayResponse,
                       PositionResponse, PricePeriodResponse, PriceResponse,
-                      ShortLiqPeriodItem, ShortLiqSimResponse)
-from .service import (get_borrow_user_position, get_eth_price, get_liq_price,
+                      ShortLiqPeriodItem, ShortLiqSimResponse,
+                      TxHistoryResponse)
+from .service import (get_borrow_user_position, get_eth_price,
                       get_positions_history, get_price_period,
                       get_sorted_borrow_positions, get_sorted_positions,
                       get_user_position, get_user_position_history,
+                      get_user_position_replay, get_user_tx_history,
                       simulate_liquidation, simulate_liquidation_period,
                       simulate_short_liquidation,
                       simulate_short_liquidation_period)
@@ -61,7 +63,7 @@ def _parse_utc_time(time_str: str) -> int:
 
 
 @router.get(
-    "/user/position",
+    "/position",
     response_model=PositionResponse | HistoricalPositionResponse,
     summary="查询用户 Aave 仓位",
     description=(
@@ -90,22 +92,6 @@ async def user_position(
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
         return await get_user_position(_w3(request), address, protocol=version)
     return result
-
-
-@router.get(
-    "/user/liq_price",
-    response_model=LiqPriceResponse,
-    summary="查询 ETH liq_price",
-    description="计算当 ETH 价格跌至多少时，该用户的 Aave 健康系数将触碰 1.0",
-)
-async def user_liq_price(
-    request: Request,
-    address: str = Query(..., description="以太坊钱包地址"),
-    version: Literal["v2", "v3"] = Query(
-        "v3", description="Aave 协议版本：v2 或 v3（默认）"
-    ),
-) -> LiqPriceResponse:
-    return await get_liq_price(_w3(request), address, protocol=version)
 
 
 @router.get(
@@ -328,6 +314,69 @@ async def liquidate_period(
         current_eth_price=current_eth_price,
     )
 
+# ── 历史回放路由 ───────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/position/replay",
+    response_model=PositionReplayResponse,
+    summary="历史仓位回放",
+    description=(
+        "以 transaction 为数据点，回放指定地址在时间范围内每笔交易时刻的链上真实仓位。\n\n"
+        "- 通过 RPC `eth_call(block_identifier=N)` 直接读取链上状态，**无利息重建误差**\n"
+        "- 首次查询多数时间用于 RPC 重放；缓存命中后直接返回，响应毫秒级\n"
+        "- 返回字段：`timestamp`, `total_collateral_usd`, `total_debt_usd`, "
+        "`health_factor`, `liq_price`, `eth_price_usd`，可选 `detail=true` 展开资产明细\n\n"
+        "支持时间格式：`2024-01-01` / `2024-11-14T12:00:00Z` / `2024-11-14 12:00:00`"
+    ),
+)
+async def user_position_replay(
+    request: Request,
+    address: str = Query(..., description="以太坊錢包地址"),
+    start: str = Query(..., description="起始时间（UTC），如 2024-01-01"),
+    end: str = Query(..., description="结束时间（UTC），如 2024-12-31"),
+    version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
+    use_cache: bool = Query(True, description="是否优先使用缓存（默认 true）"),
+    detail: bool = Query(False, description="是否展开各个资产明细（默认 false）"),
+) -> PositionReplayResponse:
+    from_ts = _parse_utc_time(start)
+    to_ts = _parse_utc_time(end)
+    if from_ts > to_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+    return await get_user_position_replay(
+        _pool(request),
+        _w3(request),
+        address,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        protocol=version,
+        use_cache=use_cache,
+        detail=detail,
+    )
+
+
+@router.get(
+    "/txs",
+    response_model=TxHistoryResponse,
+    summary="查询用户 Aave 历史交易列表",
+    description=(
+        "列出指定地址在时间范围内所有触发 Aave 仓位变化的交易（supply / withdraw / borrow / repay / liquidationcall）。\n\n"
+        "每条记录会标注该 tx 的仓位快照是否已在缓存中（`cached: true/false`），方便估训后续回放的 RPC 开销。\n\n"
+        "数据来源：`aave.aave_history` 表。"
+    ),
+)
+async def user_tx_history(
+    request: Request,
+    address: str = Query(..., description="以太坊錢包地址"),
+    start: str = Query(..., description="起始时间（UTC）"),
+    end: str = Query(..., description="结束时间（UTC）"),
+    version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
+) -> TxHistoryResponse:
+    from_ts = _parse_utc_time(start)
+    to_ts = _parse_utc_time(end)
+    return await get_user_tx_history(
+        _pool(request), address, from_ts=from_ts, to_ts=to_ts, protocol=version
+    )
 
 # ── 借贷端（做空 ETH / borrow WETH）清算分析路由 ─────────────────────────────
 
@@ -371,7 +420,7 @@ async def borrow_positions(
 
 
 @router.get(
-    "/borrow/user/position",
+    "/borrow/position",
     response_model=BorrowUserPositionResponse,
     summary="查询单个地址的借贷端仓位详情",
     description=(

@@ -218,9 +218,11 @@ uv run aave-api --workers 4
 
 | 方法 | 路径                    | 说明                                                                |
 | ---- | ----------------------- | ------------------------------------------------------------------- |
-| GET  | `/api/user/position`    | 查询单用户实时或历史仓位                                            |
-| GET  | `/api/user/liq_price`   | 计算单用户 ETH 下跌清算触发价                                       |
+| GET  | `/api/position`         | 查询单用户实时或历史仓位                                            |
+| GET  | `/api/liq_price`        | 计算单用户 ETH 下跌清算触发价                                       |
 | GET  | `/api/positions`        | 批量仓位排行（实时快照或历史重建）；仅含 `liq_price > 0` 的有效仓位 |
+| GET  | `/api/position/replay`  | 以 transaction 为数据点回放指定地址历史仓位（支持缓存）             |
+| GET  | `/api/txs`              | 查询指定地址在时间范围内的 Aave 历史交易列表                        |
 | GET  | `/api/price`            | 查询资产价格（实时链上或 DeFiLlama 历史）                           |
 | GET  | `/api/price/period`     | 查询资产在时间段内按分钟间隔的历史价格序列                          |
 | GET  | `/api/liquidate`        | 模拟 ETH 价格下跌时的全网清算情况                                   |
@@ -231,7 +233,7 @@ uv run aave-api --workers 4
 | 方法 | 路径                           | 说明                                                           |
 | ---- | ------------------------------ | -------------------------------------------------------------- |
 | GET  | `/api/borrow/positions`        | 查询借入 WETH 的仓位排行；仅含 `liq_price_rise > 0` 的有效仓位 |
-| GET  | `/api/borrow/user/position`    | 查询单地址借贷端仓位详情                                       |
+| GET  | `/api/borrow/position`         | 查询单地址借贷端仓位详情                                       |
 | GET  | `/api/borrow/liquidate`        | 模拟 ETH 价格上涨时的做空清算情况                              |
 | GET  | `/api/borrow/liquidate/period` | 模拟 ETH 价格在区间内上涨时空头清算量的变化趋势                |
 
@@ -243,7 +245,7 @@ uv run aave-api --workers 4
 
 ---
 
-### `GET /api/user/position`
+### `GET /api/position`
 
 查询指定用户的 Aave 完整仓位。
 
@@ -256,7 +258,7 @@ uv run aave-api --workers 4
 **省略 `date`（实时）**，返回 `PositionResponse`：
 
 ```bash
-curl "http://localhost:8000/api/user/position?address=0xYourAddress"
+curl "http://localhost:8000/api/position?address=0xYourAddress"
 ```
 
 ```json
@@ -275,7 +277,7 @@ curl "http://localhost:8000/api/user/position?address=0xYourAddress"
 **指定 `date`（历史重建）**，返回 `HistoricalPositionResponse`：
 
 ```bash
-curl "http://localhost:8000/api/user/position?address=0xYourAddress&date=2024-11-14"
+curl "http://localhost:8000/api/position?address=0xYourAddress&date=2024-11-14"
 ```
 
 ```json
@@ -303,7 +305,7 @@ curl "http://localhost:8000/api/user/position?address=0xYourAddress&date=2024-11
 
 ---
 
-### `GET /api/user/liq_price`
+### `GET /api/liq_price`
 
 计算当 ETH 价格跌至多少时，该用户的健康系数将触碰 1.0。
 
@@ -313,7 +315,7 @@ curl "http://localhost:8000/api/user/position?address=0xYourAddress&date=2024-11
 | `version` | string | ❌   | `v2` 或 `v3`（默认） |
 
 ```bash
-curl "http://localhost:8000/api/user/liq_price?address=0xYourAddress"
+curl "http://localhost:8000/api/liq_price?address=0xYourAddress"
 ```
 
 ```json
@@ -347,6 +349,120 @@ curl "http://localhost:8000/api/user/liq_price?address=0xYourAddress"
 # 清算价最高的 20 个账户（最危险）
 curl "http://localhost:8000/api/positions?orderby=liq_price&order=desc&limit=20"
 ```
+
+---
+
+### `GET /api/position/replay`
+
+以 transaction 为数据点，回放指定地址在时间范围内**每笔 Aave 操作时刻的链上真实仓位**。
+
+- 底层通过 `eth_call(block_identifier=N)` 直接读取历史链上状态，**无利息重建误差**
+- 首次查询触发并发 RPC 重放（每批最多 5 个），结果写入 `loan.position_snapshot_cache`；缓存命中后直接返回，响应毫秒级
+- 参数 `detail=true` 可展开每个数据点的资产明细（token 级别的供给量、借贷量、Oracle 价格）
+
+| 参数        | 类型   | 必填 | 默认    | 说明                                                           |
+| ----------- | ------ | ---- | ------- | -------------------------------------------------------------- |
+| `address`   | string | ✅   | —       | 以太坊钱包地址                                                 |
+| `start`     | string | ✅   | —       | 起始时间（UTC），如 `2024-01-01` / `2024-11-14T12:00:00Z`      |
+| `end`       | string | ✅   | —       | 结束时间（UTC）                                                |
+| `version`   | string | ❌   | `v3`    | `v2` 或 `v3`                                                   |
+| `use_cache` | bool   | ❌   | `true`  | 是否优先读取缓存；设为 `false` 强制全量 RPC 重新查询并刷新缓存 |
+| `detail`    | bool   | ❌   | `false` | `true` 时每个数据点附带 `reserves` 资产明细数组                |
+
+```bash
+curl "http://localhost:8000/api/position/replay?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3&detail=true"
+```
+
+```json
+{
+  "address": "0xabc...",
+  "protocol": "v3",
+  "from_time": "2024-11-01T00:00:00Z",
+  "to_time": "2025-01-01T00:00:00Z",
+  "data_source": "rpc",
+  "total_points": 3,
+  "cache_hit_rate": "0.00",
+  "points": [
+    {
+      "tx_hash": "0xe005...",
+      "block_number": 21281734,
+      "timestamp": "2024-11-27T21:21:47Z",
+      "eth_price_usd": "3633.92",
+      "total_collateral_usd": "140461.55",
+      "total_debt_usd": "83580.16",
+      "available_borrows_usd": "0.00",
+      "health_factor": "1.4266",
+      "liq_threshold": "0.8250",
+      "liq_price": "2470.00",
+      "reserves": [
+        {
+          "symbol": "WETH",
+          "token_address": "0xC02aaA...",
+          "price_usd": "3633.92",
+          "supply_usd": "140461.55",
+          "total_debt_usd": "83580.16",
+          "use_as_collateral": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+| 响应字段         | 说明                                                    |
+| ---------------- | ------------------------------------------------------- |
+| `data_source`    | `cache`（全命中）/ `rpc`（全重放）/ `mixed`（混合）     |
+| `cache_hit_rate` | 缓存命中比例（`0.00`~`1.00`）                           |
+| `liq_price`      | 该区块时刻 ETH 下跌清算触发价（USD）；`0` 表示无风险    |
+| `health_factor`  | 健康系数；无借贷时为 `"inf"`                            |
+| `reserves`       | 仅 `detail=true` 时填充；含 Oracle 价格、供给量、借贷量 |
+
+---
+
+### `GET /api/txs`
+
+列出指定地址在时间范围内所有触发 Aave 仓位变化的历史交易。数据来源：`aave.aave_history` 表。每条记录附带 `cached` 字段，标注该 tx 的仓位快照是否已在 `/api/position/replay` 的缓存中。
+
+| 参数      | 类型   | 必填 | 默认 | 说明            |
+| --------- | ------ | ---- | ---- | --------------- |
+| `address` | string | ✅   | —    | 以太坊钱包地址  |
+| `start`   | string | ✅   | —    | 起始时间（UTC） |
+| `end`     | string | ✅   | —    | 结束时间（UTC） |
+| `version` | string | ❌   | `v3` | `v2` 或 `v3`    |
+
+```bash
+curl "http://localhost:8000/api/txs?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3"
+```
+
+```json
+{
+  "address": "0xabc...",
+  "protocol": "v3",
+  "from_time": "2024-11-01T00:00:00Z",
+  "to_time": "2025-01-01T00:00:00Z",
+  "total": 3,
+  "txs": [
+    {
+      "tx_hash": "0xe005...",
+      "block_number": 21281734,
+      "timestamp": "2024-11-27T21:21:47Z",
+      "operation_type": "borrow",
+      "token_symbol": "WETH",
+      "cached": false
+    },
+    {
+      "tx_hash": "0x118f...",
+      "block_number": 21290022,
+      "timestamp": "2024-11-29T01:17:59Z",
+      "operation_type": "repay",
+      "token_symbol": "WETH",
+      "cached": false
+    }
+  ]
+}
+```
+
+`operation_type` 取值：`deposit` / `withdraw` / `borrow` / `repay` / `liquidationcall`。
 
 ---
 
@@ -462,7 +578,7 @@ curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=as
 
 ---
 
-### `GET /api/borrow/user/position`
+### `GET /api/borrow/position`
 
 从数据库快照中读取单地址借贷端仓位（借入 WETH 场景），含汇总信息及每个资产的 reserve 明细。
 
@@ -579,7 +695,7 @@ curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=as
 
 ## 项目结构
 
-```
+```text
 backend/
 ├── pyproject.toml
 ├── config.yaml.example

@@ -13,11 +13,14 @@ from aave_crawler.api.schemas import (BorrowPositionResponse,
                                       HistoricalReserveDetail,
                                       LiqPriceResponse, LiquidationPeriodItem,
                                       LiquidationSimItem,
-                                      LiquidationSimResponse, PositionResponse,
-                                      PricePeriodItem, PricePeriodResponse,
-                                      PriceResponse, ReservePositionSchema,
+                                      LiquidationSimResponse,
+                                      PositionReplayResponse, PositionResponse,
+                                      PositionSnapshotPoint, PricePeriodItem,
+                                      PricePeriodResponse, PriceResponse,
+                                      ReservePositionSchema,
                                       ShortLiqPeriodItem, ShortLiqSimItem,
-                                      ShortLiqSimResponse)
+                                      ShortLiqSimResponse, TxHistoryItem,
+                                      TxHistoryResponse)
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
@@ -253,6 +256,64 @@ MOCK_BORROW_USER_POSITION = BorrowUserPositionResponse(
     ],
 )
 
+
+MOCK_REPLAY_RESPONSE = PositionReplayResponse(
+    address=ADDR,
+    protocol="v3",
+    from_time="2025-01-01T00:00:00Z",
+    to_time="2026-01-01T00:00:00Z",
+    data_source="cache",
+    total_points=1,
+    cache_hit_rate="1.00",
+    points=[
+        PositionSnapshotPoint(
+            tx_hash="0x" + "aa" * 32,
+            block_number=21_000_000,
+            timestamp="2025-06-01T10:00:00Z",
+            eth_price_usd="2500.00",
+            total_collateral_usd="5000.00",
+            total_debt_usd="2000.00",
+            available_borrows_usd="1000.00",
+            health_factor="1.8750",
+            liq_threshold="0.8000",
+            liq_price="1250.00",
+            liq_price_rise="0.00",
+            eth_collateral_amount="2.000000",
+            eth_collateral_usd="5000.00",
+            weth_debt_amount="0.000000",
+            weth_debt_usd="0.00",
+            brief="",
+        )
+    ],
+)
+
+MOCK_TX_HISTORY_RESPONSE = TxHistoryResponse(
+    address=ADDR,
+    protocol="v3",
+    from_time="2025-01-01T00:00:00Z",
+    to_time="2026-01-01T00:00:00Z",
+    total=2,
+    txs=[
+        TxHistoryItem(
+            tx_hash="0x" + "aa" * 32,
+            block_number=21_000_000,
+            timestamp="2025-06-01T10:00:00Z",
+            operation_type="supply",
+            token_symbol="WETH",
+            cached=True,
+            brief="",
+        ),
+        TxHistoryItem(
+            tx_hash="0x" + "bb" * 32,
+            block_number=21_100_000,
+            timestamp="2025-07-01T12:00:00Z",
+            operation_type="borrow",
+            token_symbol="USDC",
+            cached=False,
+            brief="",
+        ),
+    ],
+)
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
