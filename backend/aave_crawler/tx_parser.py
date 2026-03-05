@@ -183,12 +183,35 @@ def _fmt_amount(raw: str, decimals: int) -> str:
         return raw
 
 
-async def _fill_template_rich(template: str, params: dict[str, str], protocol: str = "") -> str:
+def _normalize_param(v: object) -> list[str]:
+    """将 param 值统一为字符串列表（处理 JSON 数组和标量两种情况）。"""
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    return [str(v)]
+
+
+async def _resolve_token_addr(raw: str) -> tuple[str, int]:
+    """单个 token 地址 → (symbol, decimals)。"""
+    _ADDR_LEN = 42
+    if raw.startswith("0x") and len(raw) >= _ADDR_LEN:
+        sym, dec = await _get_token_info(raw)
+        if sym:
+            return (sym, dec)
+        short = raw[:6] + "…" + raw[-4:]
+        return (short, dec)
+    elif raw.startswith("0x"):
+        return ("ETH", 18)
+    else:
+        return (raw, 18)
+
+
+async def _fill_template_rich(template: str, params: dict[str, object], protocol: str = "") -> str:
     """根据占位符 label 对 params 进行富化后填充模板。
 
     处理顺序：
-      1. 解析所有 ``token`` 参数 → (symbol, decimals)
-      2. 用相邻 token 的 decimals 格式化 ``amount`` 参数
+      1. 解析所有 ``token`` 参数 → (symbol, decimals)，支持地址数组
+      2. 用相邻 token 的 decimals 格式化 ``amount``/``amounts`` 参数，支持金额数组
+         数组情形下，amounts[i] 与 token[i] 一一对应，输出 "N1 T1 + N2 T2"
       3. ``contract`` 参数：名称 + 版本号后缀（来自 protocol 参数）
       4. 其他 label → 原值透传
 
@@ -199,60 +222,60 @@ async def _fill_template_rich(template: str, params: dict[str, str], protocol: s
         for m in _PLACEHOLDER_PAT.finditer(template)
     }
 
-    # ── Step 1: 解析 token 参数 ──────────────────────────────────────────────
-    # 以太坊地址格式：0x + 40 hex chars = 42 chars
-    _ADDR_LEN = 42
-
-    token_by_idx: dict[str, tuple[str, int]] = {}
+    # ── Step 1: 解析 token 参数（支持数组）──────────────────────────────────
+    # token_by_idx[idx] = list of (symbol, decimals)，每个 token 地址对应一项
+    token_by_idx: dict[str, list[tuple[str, int]]] = {}
     for idx, label in placeholders.items():
         if label == "token":
-            raw = params.get(idx, "")
-            if raw.startswith("0x") and len(raw) >= _ADDR_LEN:
-                # 合法地址：查 symbol/decimals
-                sym, dec = await _get_token_info(raw)
-                if sym:
-                    token_by_idx[idx] = (sym, dec)
-                else:
-                    # 查不到 symbol：显示缩略地址 0xabcd...1234
-                    short = raw[:6] + "…" + raw[-4:]
-                    token_by_idx[idx] = (short, dec)
-            elif raw.startswith("0x"):
-                # "0x" 或其他长度不足的 0x 前缀 → 原生币 ETH
-                token_by_idx[idx] = ("ETH", 18)
-            else:
-                # 非地址格式（已是名称）：直接使用
-                token_by_idx[idx] = (raw, 18)
+            addrs = _normalize_param(params.get(idx, ""))
+            infos = [await _resolve_token_addr(a) for a in addrs if a]
+            if infos:
+                token_by_idx[idx] = infos
 
-    # 默认 decimals：取序号最小的 token
+    # 默认 decimals：取序号最小的 token 的第一个
     default_decimals = 18
     if token_by_idx:
         nearest_idx = min(token_by_idx.keys(), key=lambda x: int(x))
-        default_decimals = token_by_idx[nearest_idx][1]
+        default_decimals = token_by_idx[nearest_idx][0][1]
 
     # ── Step 2: 构建替换值 ───────────────────────────────────────────────────
     resolved: dict[str, str] = {}
     for idx, label in placeholders.items():
-        raw = params.get(idx, f"${{{idx}:{label}}}")
+        raw_obj = params.get(idx, f"${{{idx}:{label}}}")
+
         if label == "token":
-            resolved[idx] = token_by_idx[idx][0] if idx in token_by_idx else raw
-        elif label == "amount":
-            # 优先取 idx+1 的 token，其次 idx-1，最后 default
-            adj = str(int(idx) + 1)
-            if adj in token_by_idx:
-                decimals = token_by_idx[adj][1]
+            if idx in token_by_idx:
+                resolved[idx] = " + ".join(sym for sym, _ in token_by_idx[idx])
             else:
-                adj = str(int(idx) - 1)
-                decimals = token_by_idx[adj][1] if adj in token_by_idx else default_decimals
-            resolved[idx] = _fmt_amount(raw, decimals)
+                resolved[idx] = str(raw_obj)
+
+        elif label in ("amount", "amounts"):
+            # 找相邻 token 索引（先 idx+1，再 idx-1）
+            adj_next = str(int(idx) + 1)
+            adj_prev = str(int(idx) - 1)
+            if adj_next in token_by_idx:
+                token_infos = token_by_idx[adj_next]
+            elif adj_prev in token_by_idx:
+                token_infos = token_by_idx[adj_prev]
+            else:
+                token_infos = [("", default_decimals)]
+
+            amounts = _normalize_param(raw_obj)
+            parts: list[str] = []
+            for i, amt_str in enumerate(amounts):
+                dec = token_infos[i][1] if i < len(token_infos) else default_decimals
+                parts.append(_fmt_amount(amt_str, dec))
+            resolved[idx] = " + ".join(parts) if parts else str(raw_obj)
+
         elif label == "contract":
-            # 用调用方传入的 protocol（'v2'/'v3'）直接确定版本标签
             version_suffix = _VERSION_LABEL.get(protocol.lower(), "")
-            resolved[idx] = f"{raw} {version_suffix}".strip() if version_suffix else raw
+            raw_str = str(raw_obj)
+            resolved[idx] = f"{raw_str} {version_suffix}".strip() if version_suffix else raw_str
+
         else:
-            resolved[idx] = raw
+            resolved[idx] = str(raw_obj)
 
     result = _PLACEHOLDER_PAT.sub(lambda m: resolved.get(m.group(1), m.group(0)), template)
-    # 清理因空 token 等产生的多余空格
     import re as _re
     result = _re.sub(r"  +", " ", result).strip()
     return result
@@ -299,9 +322,8 @@ async def _parse_single(tx_hash: str, pool_address: str, protocol: str = "") -> 
     try:
         brief_block = data["data"]["template"]["brief"]
         tmpl: str = brief_block["template"]
-        params: dict[str, str] = {
-            k: str(v) for k, v in brief_block.get("params", {}).items()
-        }
+        # 保留原始类型（list 或 str），让 _fill_template_rich 处理数组 param
+        params: dict[str, object] = dict(brief_block.get("params", {}))
         return await _fill_template_rich(tmpl, params, protocol=protocol)
     except (KeyError, TypeError):
         logger.debug("parse_tx_brief: no brief in parsed result for %s", tx_hash)
