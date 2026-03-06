@@ -49,6 +49,9 @@ def _fmt(value: Decimal, decimals: int = 2) -> str:
 
 _cache: dict = {}
 
+# 单次 API 触发最多在线补采区块数，防止长时阻塞
+_MAX_MARKET_ONLINE_COLLECT = 15
+
 
 async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
     """缓存当次进程内的储备资产列表 / 配置（按协议版本分别缓存，不缓存价格）"""
@@ -1756,12 +1759,16 @@ async def get_market_replay(
     to_ts: int = 0,
     interval_days: int = 1,
     detail: bool = False,
+    w3: "AsyncWeb3 | None" = None,
 ) -> "MarketReplayResponse":
     """查询大盘历史快照序列。
 
     从 loan.aave_v{2|3}_market_totals（物化视图）和可选的
     loan.aave_v{2|3}_market_snapshots（reserve 明细）读取，
     按 interval_days 天间隔抽样（每个间隔取时间最近的区块）。
+
+    当 w3 不为 None 时，若检测到时间范围内存在缺失的数据桶，会实时
+    通过 RPC 补采缺失区块并写表，随后刷新物化视图再返回。
     """
     from .schemas import (MarketReplayResponse, MarketReservePoint,
                           MarketSnapshotPoint)
@@ -1809,6 +1816,61 @@ async def get_market_replay(
     """
 
     rows = await pool.fetch(sql_totals, from_dt, to_dt)
+
+    # ── 在线补采：若有缺失时间桶，实时 RPC 采集写表 ───────────────────────────
+    if w3 is not None:
+        # 已覆盖的桶 key 集合（UTC epoch 对齐到 interval_epoch 的整数倍）
+        covered = {
+            (int(r["block_timestamp"].timestamp()) // interval_epoch) * interval_epoch
+            for r in rows
+        }
+        # 期望桶列表：从 from_ts 所在桶到 to_ts 所在桶，步长 interval_epoch
+        bk_start = (from_ts // interval_epoch) * interval_epoch
+        missing = [
+            bk
+            for bk in range(bk_start, to_ts + interval_epoch, interval_epoch)
+            if bk + interval_epoch > from_ts and bk <= to_ts and bk not in covered
+        ]
+        if missing:
+            from ..market_collector import _block_at_timestamp
+            from ..market_collector import \
+                collect_block_snapshot as _collect_block_snapshot
+            from ..market_collector import \
+                ensure_market_snapshot_table as _ensure_mkt_table
+            from ..market_collector import \
+                refresh_market_totals as _refresh_mkt_totals
+            if len(missing) > _MAX_MARKET_ONLINE_COLLECT:
+                logger.warning(
+                    "market_replay[%s]: 缺失 %d 个时间桶，仅补采最近 %d 个",
+                    protocol, len(missing), _MAX_MARKET_ONLINE_COLLECT,
+                )
+                missing = missing[-_MAX_MARKET_ONLINE_COLLECT:]
+            logger.info(
+                "market_replay[%s]: 开始在线补采 %d 个缺失时间桶",
+                protocol, len(missing),
+            )
+            await _ensure_mkt_table(pool, protocol)
+            now_unix = int(datetime.now(tz=timezone.utc).timestamp())
+            collect_sem = asyncio.Semaphore(12)
+
+            async def _find_and_collect(bk_anchor: int) -> None:
+                # 取桶中心时间戳（不超过当前时间 -60s，防止越界最新区块）
+                target_ts = min(bk_anchor + interval_epoch // 2, now_unix - 60)
+                try:
+                    block = await _block_at_timestamp(w3, target_ts)
+                    await _collect_block_snapshot(w3, pool, protocol, block, collect_sem)
+                except Exception as exc:
+                    logger.warning(
+                        "market_replay[%s]: 补采桶 %s 失败: %s",
+                        protocol,
+                        datetime.fromtimestamp(bk_anchor, tz=timezone.utc).isoformat(),
+                        exc,
+                    )
+
+            await asyncio.gather(*[_find_and_collect(bk) for bk in missing])
+            await _refresh_mkt_totals(pool, protocol)
+            # 补采完成后重新查询
+            rows = await pool.fetch(sql_totals, from_dt, to_dt)
 
     if not rows:
         return MarketReplayResponse(

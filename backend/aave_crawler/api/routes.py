@@ -387,6 +387,7 @@ async def market_snapshot_replay(
         to_ts=to_ts,
         interval_days=interval,
         detail=detail,
+        w3=_w3(request),
     )
 
 
