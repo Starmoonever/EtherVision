@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { fetchEthPrice } from '../api';
 import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
+import { MarketHistoryChart } from './MarketHistoryChart';
 
 export function MarketAssessment() {
   const [ethPrice, setEthPrice] = useState<number | null>(null);
@@ -207,6 +208,8 @@ export function MarketAssessment() {
               onPriceChange={setPriceChange}
             />
           </div>
+
+          <MarketHistoryChart version={version} />
         </div>
       </div>
     </div>
