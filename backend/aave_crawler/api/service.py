@@ -1624,6 +1624,7 @@ def _get_brief(row) -> str:
 def _format_snapshot_point(
     row,  # asyncpg.Record from position_snapshot_cache
     detail: bool = False,
+    operation_type: str = "",
 ) -> PositionSnapshotPoint:
     """将缓存表 Record 格式化为 PositionSnapshotPoint。"""
     import json
@@ -1664,6 +1665,7 @@ def _format_snapshot_point(
         eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"])), 2),
         weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
         weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"])), 2),
+        operation_type=operation_type,
         brief=_get_brief(row),
         reserves=reserves,
     )
@@ -2130,7 +2132,7 @@ async def get_user_position_replay(
         row = final_map.get(t["tx_hash"])
         if row is None:
             continue  # 该 tx 的 RPC 重放失败，跳过
-        points.append(_format_snapshot_point(row, detail=detail))
+        points.append(_format_snapshot_point(row, detail=detail, operation_type=t.get("operation_type", "")))
     _t_fmt1 = _time_mod.perf_counter()
 
     # 以「实际返回的点」为基准计算命中率和数据来源：

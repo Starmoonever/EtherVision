@@ -273,6 +273,7 @@ class PositionSnapshotPoint(BaseModel):
     eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
     weth_debt_amount: str = Field(description="ETH 系负债合计数量")
     weth_debt_usd: str = Field(description="ETH 系负债合计 USD")
+    operation_type: str = Field(default="", description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
     brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
     reserves: list[SnapshotReserveDetail] = Field(
         default_factory=list,
