@@ -1682,7 +1682,7 @@ async def get_user_tx_history(
     uncached_hashes = [
         r["tx_hash"] for r in tx_rows if r["tx_hash"] not in cached_hashes
     ]
-    fresh_briefs = await parse_tx_briefs(uncached_hashes, protocol=protocol)
+    fresh_briefs = await parse_tx_briefs(pool, uncached_hashes, protocol=protocol)
     fresh_brief_map: dict[str, str] = dict(zip(uncached_hashes, fresh_briefs))
 
     items = [
@@ -2100,7 +2100,7 @@ async def get_user_position_replay(
                 if batch_records:
                     _t0_brief = _time_mod.perf_counter()
                     batch_briefs = await parse_briefs_from_metas(
-                        [r["meta"] for r in batch_records]
+                        pool, [r["meta"] for r in batch_records]
                     )
                     _dt_brief = _time_mod.perf_counter() - _t0_brief
                     _t_brief_total += _dt_brief

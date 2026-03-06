@@ -363,10 +363,10 @@ CREATE TABLE IF NOT EXISTS loan."{table}" (
 """
 
 
-def _calc_liq_price(pos: UserPosition) -> Decimal:
+def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     """计算 ETH 下跌触发清算价。
 
-    公式推导（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 ETH 价格）：
+    公式推导（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 WETH 价格）：
         Σ(ETH抵押_i × P × θ_i) + Σ(非ETH抵押_j_USD × θ_j) = total_debt_USD_at_P
         其中 total_debt = ETH系债务 × (P/P_now) + 非ETH债务（固定USD）
 
@@ -389,18 +389,17 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
 
     以下情况返回 0：无债务、无 ETH 系抵押品、denom ≤ 0（净空 ETH 或纯 ETH 对冲）。
     超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
+
+    :param eth_price_usd: 当前 WETH/USD 价格（8位精度），统一使用 WETH 价格作为 P_now，
+                          避免 wstETH/weETH 价格差异导致的单位不一致问题。
     """
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
     if total_debt == 0:
         return Decimal("0")
 
-    # 取 ETH 系参考价格（P_now）
-    eth_price_now: Decimal | None = None
-    for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS and r.price_raw > 0:
-            eth_price_now = _raw_to_decimal(r.price_raw, 8)
-            break
+    # 统一使用 WETH 价格作为 P_now（由调用方传入）
+    eth_price_now = eth_price_usd
     if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
@@ -446,16 +445,21 @@ def _calc_liq_price(pos: UserPosition) -> Decimal:
     if liq_price <= 0:
         return Decimal("0")
 
+    # 若 liq_price >= eth_price_now，说明非 ETH 抵押品足以覆盖债务，
+    # ETH 下跌不会导致清算 → 无下跌风险，返回 0
+    if liq_price >= eth_price_now:
+        return Decimal("0")
+
     return min(liq_price, _LIQ_PRICE_CAP)
 
 
-def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
+def _calc_liq_price_rise(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     """计算 ETH 上涨触发清算价（借入 WETH 场景）。
 
     场景：用户以稳定币/其他资产为抵押品，借入了 WETH（负债）。
     当 ETH 价格上涨时，WETH 债务的 USD 价值增大，最终超过抵押品安全边际，触发清算。
 
-    公式（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 ETH 价格）：
+    公式（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 WETH 价格）：
         ETH系抵押品贡献（USD） × P/P_now × θ + C_fixed = ETH系负债贡献（USD） × P/P_now + D_fixed
         => P = P_now × (D_fixed - C_fixed) / (eth_debt_usd_sum - eth_col_theta_usd_sum)
 
@@ -467,18 +471,16 @@ def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
 
     分母 <= 0 → 净多 ETH（ETH 上涨有益）→ 无上涨清算风险 → 返回 0
     P_rise <= 0 或无 ETH 系负债 → 返回 0
+
+    :param eth_price_usd: 当前 WETH/USD 价格（8位精度），统一使用 WETH 价格作为 P_now。
     """
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
     if total_debt == 0:
         return Decimal("0")
 
-    # 寻找 ETH 系资产的参考价格（用于换算 P_now）
-    eth_price_now: Decimal | None = None
-    for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS and r.price_raw > 0:
-            eth_price_now = _raw_to_decimal(r.price_raw, 8)
-            break
+    # 统一使用 WETH 价格作为 P_now（由调用方传入）
+    eth_price_now = eth_price_usd
     if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
@@ -1182,8 +1184,8 @@ async def upsert_snapshot_cache(
             hf_dec,
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
-            _calc_liq_price(pos),
-            _calc_liq_price_rise(pos),
+            _calc_liq_price(pos, meta["eth_price_usd"]),
+            _calc_liq_price_rise(pos, meta["eth_price_usd"]),
             eth_col_amount,
             eth_col_usd,
             weth_debt_amount,

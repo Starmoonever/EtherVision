@@ -198,7 +198,7 @@ async def _sync_snapshot_cache(
         })
 
     if positions:
-        briefs = await parse_briefs_from_metas(metas)
+        briefs = await parse_briefs_from_metas(pool, metas)
         written = await upsert_snapshot_cache(pool, positions, metas, briefs=briefs)
         logger.info("快照同步完成：写入 %d 条", written)
     else:

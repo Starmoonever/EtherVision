@@ -87,22 +87,15 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
         use_as_collateral    : bool
         liquidation_threshold: int  (basis points, e.g. 9500 = 95%)
 
-    eth_price_usd_col：DB 中 eth_price_usd 列的值，用于无 ETH reserve 时的兜底。
+    eth_price_usd_col：DB 中 eth_price_usd 列的值，统一使用 WETH 价格作为 P_now，
+                       避免 wstETH/weETH 价格差异导致的单位不一致问题。
     """
     if not reserves_json:
         return Decimal("0")
 
-    # P_now：与 _calc_liq_price 一致，取 reserves_json 中第一个 ETH 系 token 的 price_usd
-    eth_price_now = Decimal("0")
-    for r in reserves_json:
-        if r.get("symbol", "").upper() in _ETH_SYMBOLS:
-            eth_price_now = _dec(r.get("price_usd", 0))
-            if eth_price_now > 0:
-                break
-    # 兜底：使用 DB 列记录的全局 ETH 价格
-    if eth_price_now <= 0:
-        eth_price_now = eth_price_usd_col
-    if eth_price_now <= 0:
+    # P_now：统一使用 WETH 价格（eth_price_usd_col 列），不再从 reserves 取 LST 价格
+    eth_price_now = eth_price_usd_col
+    if eth_price_now is None or eth_price_now <= 0:
         return Decimal("0")
 
     eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×price×θ
@@ -144,6 +137,11 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
     numer = d_fixed - c_fixed
     liq_price_raw = numer / denom * eth_price_now
     if liq_price_raw <= 0:
+        return Decimal("0")
+
+    # 若 liq_price >= eth_price_now，说明非 ETH 抵押品足以覆盖债务，
+    # ETH 下跌不会导致清算 → 无下跌风险，返回 0
+    if liq_price_raw >= eth_price_now:
         return Decimal("0")
 
     return min(liq_price_raw, _LIQ_PRICE_CAP)
