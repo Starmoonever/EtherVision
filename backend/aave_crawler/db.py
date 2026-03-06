@@ -364,64 +364,88 @@ CREATE TABLE IF NOT EXISTS loan."{table}" (
 
 
 def _calc_liq_price(pos: UserPosition) -> Decimal:
-    """计算 ETH 清算触发价。
+    """计算 ETH 下跌触发清算价。
 
-    正确公式（HF = 1 时触发清算）：
-        eth_amount × P × liq_threshold_ETH + Σ(other_i_USD × liq_threshold_i) = total_debt
-        => P = (total_debt - Σ(other_i_USD × liq_threshold_i)) / (eth_amount × liq_threshold_ETH)
+    公式推导（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 ETH 价格）：
+        Σ(ETH抵押_i × P × θ_i) + Σ(非ETH抵押_j_USD × θ_j) = total_debt_USD_at_P
+        其中 total_debt = ETH系债务 × (P/P_now) + 非ETH债务（固定USD）
 
-    每个资产使用其自身的 liquidation_threshold（来自 ReservePosition.liquidation_threshold）。
-    以下情况返回 0：无债务、ETH liq_threshold=0、无 ETH 系抵押品。
+        展开并令 HF = 1：
+        ETH_col_theta × P + C_fixed = ETH_debt_USD × (P/P_now) + D_fixed
+        P × (ETH_col_theta - ETH_debt_USD/P_now) = D_fixed - C_fixed
+        P = (D_fixed - C_fixed) / (ETH_col_theta - ETH_debt_USD/P_now)
+
+    简化表达：
+        eth_col_theta_usd  = Σ(ETH系抵押amount_i × P_now × θ_i)  -- ETH抵押加权安全垫（当前价）
+        eth_debt_usd       = Σ(ETH系负债amount_i × P_now)         -- ETH系负债USD（当前价）
+        c_fixed            = Σ(非ETH抵押 USD × θ_j)               -- 非ETH抵押安全垫
+        d_fixed            = Σ(非ETH负债 USD)                      -- 非ETH负债（价格不随ETH变动）
+
+        denom  = eth_col_theta_usd - eth_debt_usd  （ETH敞口：>0 净多ETH, <0 净空ETH）
+        numer  = d_fixed - c_fixed
+
+        denom > 0：ETH 下跌减少净资产 → 存在下跌清算风险
+        denom ≤ 0：ETH 上涨对仓位有利或中性 → 无下跌清算风险 → 返回 0
+
+    以下情况返回 0：无债务、无 ETH 系抵押品、denom ≤ 0（净空 ETH 或纯 ETH 对冲）。
     超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
     """
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
-
     if total_debt == 0:
         return Decimal("0")
 
-    # 找第一个 ETH 系抵押品，取其独立 liq_threshold
-    eth_reserve = None
+    # 取 ETH 系参考价格（P_now）
+    eth_price_now: Decimal | None = None
     for r in pos.reserves:
-        if (
-            r.symbol.upper() in _ETH_SYMBOLS
-            and r.usage_as_collateral_enabled
-            and r.supply_raw > 0
-        ):
-            eth_reserve = r
+        if r.symbol.upper() in _ETH_SYMBOLS and r.price_raw > 0:
+            eth_price_now = _raw_to_decimal(r.price_raw, 8)
             break
-
-    if eth_reserve is None:
+    if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
-    eth_liq_threshold = Decimal(eth_reserve.liquidation_threshold) / Decimal(10000)
-    if eth_liq_threshold == 0:
-        return Decimal("0")
+    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×P_now×θ
+    eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×P_now
+    c_fixed           = Decimal("0")   # Σ 非ETH抵押 USD×θ
+    d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
 
-    eth_amount = _raw_to_decimal(eth_reserve.supply_raw, eth_reserve.decimals)
-    if eth_amount == 0:
-        return Decimal("0")
-
-    # 其他（非 ETH）抵押品的安全垫，使用各自独立 liq_threshold
-    other_safe = Decimal("0")
     for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS:
-            continue
-        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
-            continue
-        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
-        if r_liq_threshold == 0:
-            continue
-        amount = _raw_to_decimal(r.supply_raw, r.decimals)
         price = _raw_to_decimal(r.price_raw, 8)
-        other_safe += amount * price * r_liq_threshold
+        supply_amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        debt_amount = (
+            _raw_to_decimal(r.stable_debt_raw, r.decimals)
+            + _raw_to_decimal(r.variable_debt_raw, r.decimals)
+        )
+        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
 
-    numerator = total_debt - other_safe
-    if numerator <= 0:
-        # 其他抵押品已足够覆盖债务，ETH 降到 0 也不触发清算
+        if r.symbol.upper() in _ETH_SYMBOLS:
+            if supply_amount > 0 and r.usage_as_collateral_enabled:
+                eth_col_theta_usd += supply_amount * price * r_liq_threshold
+            if debt_amount > 0:
+                eth_debt_usd += debt_amount * price
+        else:
+            if supply_amount > 0 and r.usage_as_collateral_enabled and r_liq_threshold > 0:
+                c_fixed += supply_amount * price * r_liq_threshold
+            if debt_amount > 0:
+                d_fixed += debt_amount * price
+
+    if eth_col_theta_usd == 0:
+        # 无 ETH 系抵押品，ETH 价格与该仓位无关
         return Decimal("0")
 
-    liq_price = numerator / (eth_amount * eth_liq_threshold)
+    # denom = 加权ETH抵押 - ETH债务（均以当前P_now计量）
+    # denom > 0 → 净多ETH敞口 → ETH下跌有害 → 存在下跌清算风险
+    # denom ≤ 0 → ETH两边对冲或净空 → 下跌对仓位无害
+    denom = eth_col_theta_usd - eth_debt_usd
+    if denom <= 0:
+        return Decimal("0")
+
+    numer = d_fixed - c_fixed
+    # numer 可以为负（非ETH抵押安全垫 > 非ETH债务），此时清算价更低，趋于 0
+    liq_price = numer / denom * eth_price_now
+    if liq_price <= 0:
+        return Decimal("0")
+
     return min(liq_price, _LIQ_PRICE_CAP)
 
 
