@@ -555,20 +555,29 @@ async def fetch_user_position_at_block(
                             block_number, _v3_exc,
                         )
 
-                if eth_usd_raw > 0:
-                    asset_prices = {
-                        addr: (price * eth_usd_raw) // (10**18)
-                        for addr, price in asset_prices.items()
-                    }
-                    # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
-                    summary = AccountSummary(
-                        total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
-                        total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
-                        available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
-                        current_liquidation_threshold=summary.current_liquidation_threshold,
-                        ltv=summary.ltv,
-                        health_factor=summary.health_factor,
+                if eth_usd_raw == 0:
+                    # 两个数据源均失败：V2 oracle 价格仍为 ETH/18dec 原始值，
+                    # 无法归一化为 USD，继续写入会产生严重失真（如 $100亿）。
+                    # 返回 None 让调用方跳过本 tx，等下次重试。
+                    logger.warning(
+                        "V2 ETH/USD 归一化失败 block=%d，跳过本仓位",
+                        block_number,
                     )
+                    return None
+
+                asset_prices = {
+                    addr: (price * eth_usd_raw) // (10**18)
+                    for addr, price in asset_prices.items()
+                }
+                # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
+                summary = AccountSummary(
+                    total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
+                    total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
+                    available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                    current_liquidation_threshold=summary.current_liquidation_threshold,
+                    ltv=summary.ltv,
+                    health_factor=summary.health_factor,
+                )
 
             reserves: list[ReservePosition] = []
             for rt, res in zip(reserve_tokens, reserve_results):

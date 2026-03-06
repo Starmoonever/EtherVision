@@ -1,19 +1,23 @@
 """
 backfill_brief.py
 ─────────────────────────────────────────────────────────────────────────────
-对 position_snapshot_cache 中 brief = '' 的旧数据，通过 AI-ContractParser
-子模块批量解析并回填 brief 字段。
+对 position_snapshot_cache 中 brief = '' 的旧数据，从 aave_history 读取操作
+数据并回填 brief 字段。
+
+格式："{操作类型} {数量} {token符号} (价值 {value} usd)"
+（与 tx_parser.generate_brief 完全一致）
 
 运行方式
     cd backend
-    uv run python scripts/backfill_brief.py [--config config.yaml] [--dry-run]
+    uv run python scripts/backfill_brief.py [--dry-run]
                                              [--batch BATCH] [--limit LIMIT]
 
 选项
-    --config CONFIG   配置文件路径（默认 config.yaml）
     --dry-run         仅打印将要处理的 tx，不写入数据库
-    --batch  BATCH    每批并发解析的 tx 数量（默认 20）
+    --batch  BATCH    每批处理的行数（默认 500）
     --limit  LIMIT    最多处理多少行（默认不限，全量回填）
+    --force           全量重写（含已有 brief 的行）
+    --pattern PATTERN 只处理 brief LIKE '%PATTERN%' 的行（如 --pattern 执行）
 """
 
 from __future__ import annotations
@@ -22,14 +26,14 @@ import argparse
 import asyncio
 import logging
 import sys
+from collections import defaultdict
 from pathlib import Path
-
-import asyncpg
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.db import create_pool  # noqa: E402
 from aave_crawler.tx_parser import parse_tx_briefs  # noqa: E402
 
 logging.basicConfig(
@@ -56,7 +60,6 @@ ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
-# --force 模式：忽略 brief 是否为空，全量重写
 _SQL_FETCH_FORCE = """
 SELECT id, tx_hash, protocol
 FROM loan.position_snapshot_cache
@@ -70,6 +73,21 @@ ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
+_SQL_FETCH_PATTERN = """
+SELECT id, tx_hash, protocol
+FROM loan.position_snapshot_cache
+WHERE brief LIKE '%' || $1 || '%'
+ORDER BY block_timestamp ASC
+"""
+
+_SQL_FETCH_PATTERN_LIMIT = """
+SELECT id, tx_hash, protocol
+FROM loan.position_snapshot_cache
+WHERE brief LIKE '%' || $1 || '%'
+ORDER BY block_timestamp ASC
+LIMIT $2
+"""
+
 _SQL_UPDATE = """
 UPDATE loan.position_snapshot_cache
 SET brief = $1
@@ -80,25 +98,30 @@ WHERE id = $2
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
 
 async def run(args: argparse.Namespace) -> None:
-    cfg = load_config(args.config)
-    dsn = cfg.postgres.dsn
-
-    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=5)
+    cfg  = load_config()
+    pool = await create_pool(cfg.postgres)
 
     try:
         # 1. 读取待处理行
-        if args.force:
+        if args.pattern:
+            # --pattern 模式：只处理 brief LIKE '%pattern%' 的行
+            if args.limit:
+                fetch_sql = _SQL_FETCH_PATTERN_LIMIT
+                rows = await pool.fetch(fetch_sql, args.pattern, args.limit)
+            else:
+                fetch_sql = _SQL_FETCH_PATTERN
+                rows = await pool.fetch(fetch_sql, args.pattern)
+            mode_label = f"匹配 '%{args.pattern}%'"
+        elif args.force:
             fetch_sql  = _SQL_FETCH_FORCE_LIMIT if args.limit else _SQL_FETCH_FORCE
             mode_label = "全量重写（--force）"
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(fetch_sql, args.limit) if args.limit else await conn.fetch(fetch_sql)
         else:
             fetch_sql  = _SQL_FETCH_LIMIT if args.limit else _SQL_FETCH
             mode_label = "仅补空"
-
-        async with pool.acquire() as conn:
-            if args.limit:
-                rows = await conn.fetch(fetch_sql, args.limit)
-            else:
-                rows = await conn.fetch(fetch_sql)
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(fetch_sql, args.limit) if args.limit else await conn.fetch(fetch_sql)
 
         total = len(rows)
         if total == 0:
@@ -117,32 +140,30 @@ async def run(args: argparse.Namespace) -> None:
         # 2. 按批次处理
         batch_size = args.batch
         updated = 0
-        failed = 0
+        failed  = 0
 
         for batch_start in range(0, total, batch_size):
             batch = rows[batch_start: batch_start + batch_size]
 
-            # 按 protocol 分组，减少无效 pool 地址切换
-            # 实际上 parse_tx_briefs 每行指定一次 protocol，这里分组仅用于日志清晰度
-            tx_hashes = [r["tx_hash"] for r in batch]
-            protocols  = [r["protocol"] for r in batch]
+            # 同一批内按 protocol 分组，分别查市场快照价格
+            # 每组调用一次 parse_tx_briefs(pool, hashes, protocol=...)
+            # 最后按原始顺序重组结果
+            proto_groups: dict[str, list[tuple[int, str]]] = defaultdict(list)
+            for idx, r in enumerate(batch):
+                proto_groups[r["protocol"]].append((idx, r["tx_hash"]))
 
-            # 分别对每种 protocol 的 tx 解析（通常一批内 protocol 相同）
-            # 为简化：逐行 gather，parse_tx_brief 内部有信号量限流
-            briefs = await asyncio.gather(
-                *[
-                    _parse_one(tx, proto)
-                    for tx, proto in zip(tx_hashes, protocols)
-                ]
-            )
+            briefs: list[str] = [""] * len(batch)
+            for proto, idx_hashes in proto_groups.items():
+                idxs   = [ih[0] for ih in idx_hashes]
+                hashes = [ih[1] for ih in idx_hashes]
+                results = await parse_tx_briefs(pool, hashes, protocol=proto)
+                for i, brief in zip(idxs, results):
+                    briefs[i] = brief
 
             # 3. 批量写回
+            pairs = [(brief, r["id"]) for brief, r in zip(briefs, batch)]
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    pairs = [
-                        (brief, r["id"])
-                        for brief, r in zip(briefs, batch)
-                    ]
                     await conn.executemany(_SQL_UPDATE, pairs)
 
             batch_updated = sum(1 for b in briefs if b)
@@ -159,22 +180,12 @@ async def run(args: argparse.Namespace) -> None:
             )
 
         logger.info(
-            "回填完成：共处理 %d 行，解析成功 %d，空结果（不支持的方法等）%d",
+            "回填完成：共处理 %d 行，解析成功 %d，空结果 %d",
             total, updated, failed,
         )
 
     finally:
         await pool.close()
-
-
-async def _parse_one(tx_hash: str, protocol: str) -> str:
-    """单笔解析，捕获异常保证不中断整批。"""
-    try:
-        results = await parse_tx_briefs([tx_hash], protocol=protocol)
-        return results[0] if results else ""
-    except Exception as exc:
-        logger.warning("解析失败 tx=%s: %s", tx_hash, exc)
-        return ""
 
 
 # ── 入口 ──────────────────────────────────────────────────────────────────────
@@ -183,16 +194,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="回填 position_snapshot_cache.brief 字段"
     )
-    parser.add_argument("--config",  default="config.yaml",
-                        help="配置文件路径（默认 config.yaml）")
     parser.add_argument("--dry-run", action="store_true",
                         help="仅打印待处理行，不修改数据库")
-    parser.add_argument("--batch",   type=int, default=20,
-                        help="每批并发解析数量（默认 20）")
+    parser.add_argument("--batch",   type=int, default=500,
+                        help="每批处理行数（默认 500）")
     parser.add_argument("--limit",   type=int, default=0,
                         help="最多处理行数（0 = 全量，默认 0）")
     parser.add_argument("--force",   action="store_true",
-                        help="全量重写：覆盖所有行（含已有 brief 的），用于修复格式错误")
+                        help="全量重写：覆盖所有行（含已有 brief 的），用于修复格式")
+    parser.add_argument("--pattern", type=str, default="",
+                        help="只处理 brief LIKE '%%PATTERN%%' 的行（如 --pattern 执行）")
     args = parser.parse_args()
 
     asyncio.run(run(args))

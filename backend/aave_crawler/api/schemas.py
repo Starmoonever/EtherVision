@@ -273,6 +273,7 @@ class PositionSnapshotPoint(BaseModel):
     eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
     weth_debt_amount: str = Field(description="ETH 系负债合计数量")
     weth_debt_usd: str = Field(description="ETH 系负债合计 USD")
+    operation_type: str = Field(default="", description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
     brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
     reserves: list[SnapshotReserveDetail] = Field(
         default_factory=list,
@@ -296,6 +297,52 @@ class PositionReplayResponse(BaseModel):
         description="时间范围内原始去重 tx 总数，与 total_points 相等"
     )
     cache_hit_rate: str = Field(description="缓存命中率（0.00~1.00）")
+
+
+# ── 大盘快照回放（market_snapshots + market_totals）──────────────────────
+
+
+class MarketReservePoint(BaseModel):
+    """单个 reserve 在某区块的大盘数据（仅当 detail=true 时返回）。"""
+
+    token_address: str
+    symbol: str
+    price_usd: str = Field(description="资产 USD 价格（8 位精度）")
+    total_supply_usd: str = Field(description="总供给 USD")
+    total_debt_usd: str = Field(description="总借贷 USD")
+    available_liquidity_usd: str = Field(description="可用流动性 USD")
+    utilization_rate: str = Field(description="利用率（0.000000～1.000000）")
+    supply_apy: str = Field(description="存款 APY（小数，如 0.0312 = 3.12%）")
+    variable_borrow_apy: str = Field(description="浮动借款 APY")
+    stable_borrow_apy: str = Field(description="固定借款 APY")
+
+
+class MarketSnapshotPoint(BaseModel):
+    """大盘回放序列中的单个区块数据点。"""
+
+    block_number: int
+    block_timestamp: str = Field(description="区块 UTC 时间，格式 2024-01-15T00:00:00Z")
+    tvl_usd: str = Field(description="全市场总 TVL（USD）")
+    debt_usd: str = Field(description="全市场总借贷（USD）")
+    liquidity_usd: str = Field(description="全市场可用流动性（USD）")
+    weighted_utilization: str = Field(description="加权平均利用率（8 位小数）")
+    weighted_supply_apy: str = Field(description="加权平均存款 APY")
+    weighted_borrow_apy: str = Field(description="加权平均浮动借款 APY")
+    reserves: list[MarketReservePoint] = Field(
+        default_factory=list,
+        description="reserve 明细；仅当请求 detail=true 时填充",
+    )
+
+
+class MarketReplayResponse(BaseModel):
+    """大盘历史回放响应。"""
+
+    protocol: str = Field(description="协议版本：v2 | v3")
+    from_time: str = Field(description="查询起始时间（UTC）")
+    to_time: str = Field(description="查询结束时间（UTC）")
+    interval_days: int = Field(description="实际根据区块间隔采样，单位天")
+    points: list[MarketSnapshotPoint]
+    total_points: int
 
 
 class TxHistoryItem(BaseModel):

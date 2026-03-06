@@ -105,7 +105,9 @@ CREATE TABLE IF NOT EXISTS loan.{positions} (
     health_factor           NUMERIC(40, 18) NOT NULL,  -- ∞ 时存 1e18（19位整数位），需 40 总精度
     ltv                     NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
     liq_threshold           NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
-    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
+    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
+    eth_collateral_amount   NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 系抵押品合计（token 数量）
+    eth_collateral_usd      NUMERIC(30, 8)  NOT NULL DEFAULT 0   -- ETH 系抵押品合计 USD（扫描时刻价格）
 );
 """
 
@@ -283,6 +285,24 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                     END$$;
                 """
                 )
+            # 为旧表添加 eth_collateral_amount / eth_collateral_usd 预计算列
+            for _col in ("eth_collateral_amount", "eth_collateral_usd"):
+                await conn.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{pos}'
+                              AND column_name  = '{_col}'
+                        ) THEN
+                            ALTER TABLE loan."{pos}"
+                                ADD COLUMN "{_col}" NUMERIC(30, 8) NOT NULL DEFAULT 0;
+                        END IF;
+                    END$$;
+                """
+                )
         # reserve_positions 精度迁移对两种 side 均执行
         for _col in ("price_usd", "supply_usd", "total_debt_usd"):
             await conn.execute(
@@ -343,75 +363,103 @@ CREATE TABLE IF NOT EXISTS loan."{table}" (
 """
 
 
-def _calc_liq_price(pos: UserPosition) -> Decimal:
-    """计算 ETH 清算触发价。
+def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
+    """计算 ETH 下跌触发清算价。
 
-    正确公式（HF = 1 时触发清算）：
-        eth_amount × P × liq_threshold_ETH + Σ(other_i_USD × liq_threshold_i) = total_debt
-        => P = (total_debt - Σ(other_i_USD × liq_threshold_i)) / (eth_amount × liq_threshold_ETH)
+    公式推导（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 WETH 价格）：
+        Σ(ETH抵押_i × P × θ_i) + Σ(非ETH抵押_j_USD × θ_j) = total_debt_USD_at_P
+        其中 total_debt = ETH系债务 × (P/P_now) + 非ETH债务（固定USD）
 
-    每个资产使用其自身的 liquidation_threshold（来自 ReservePosition.liquidation_threshold）。
-    以下情况返回 0：无债务、ETH liq_threshold=0、无 ETH 系抵押品。
+        展开并令 HF = 1：
+        ETH_col_theta × P + C_fixed = ETH_debt_USD × (P/P_now) + D_fixed
+        P × (ETH_col_theta - ETH_debt_USD/P_now) = D_fixed - C_fixed
+        P = (D_fixed - C_fixed) / (ETH_col_theta - ETH_debt_USD/P_now)
+
+    简化表达：
+        eth_col_theta_usd  = Σ(ETH系抵押amount_i × P_now × θ_i)  -- ETH抵押加权安全垫（当前价）
+        eth_debt_usd       = Σ(ETH系负债amount_i × P_now)         -- ETH系负债USD（当前价）
+        c_fixed            = Σ(非ETH抵押 USD × θ_j)               -- 非ETH抵押安全垫
+        d_fixed            = Σ(非ETH负债 USD)                      -- 非ETH负债（价格不随ETH变动）
+
+        denom  = eth_col_theta_usd - eth_debt_usd  （ETH敞口：>0 净多ETH, <0 净空ETH）
+        numer  = d_fixed - c_fixed
+
+        denom > 0：ETH 下跌减少净资产 → 存在下跌清算风险
+        denom ≤ 0：ETH 上涨对仓位有利或中性 → 无下跌清算风险 → 返回 0
+
+    以下情况返回 0：无债务、无 ETH 系抵押品、denom ≤ 0（净空 ETH 或纯 ETH 对冲）。
     超出 ETH 合理价格上限（1000 万 USD）时截断，避免极端仓位溢出数据库列。
+
+    :param eth_price_usd: 当前 WETH/USD 价格（8位精度），统一使用 WETH 价格作为 P_now，
+                          避免 wstETH/weETH 价格差异导致的单位不一致问题。
     """
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
-
     if total_debt == 0:
         return Decimal("0")
 
-    # 找第一个 ETH 系抵押品，取其独立 liq_threshold
-    eth_reserve = None
+    # 统一使用 WETH 价格作为 P_now（由调用方传入）
+    eth_price_now = eth_price_usd
+    if eth_price_now is None or eth_price_now == 0:
+        return Decimal("0")
+
+    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×P_now×θ
+    eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×P_now
+    c_fixed           = Decimal("0")   # Σ 非ETH抵押 USD×θ
+    d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
+
     for r in pos.reserves:
-        if (
-            r.symbol.upper() in _ETH_SYMBOLS
-            and r.usage_as_collateral_enabled
-            and r.supply_raw > 0
-        ):
-            eth_reserve = r
-            break
-
-    if eth_reserve is None:
-        return Decimal("0")
-
-    eth_liq_threshold = Decimal(eth_reserve.liquidation_threshold) / Decimal(10000)
-    if eth_liq_threshold == 0:
-        return Decimal("0")
-
-    eth_amount = _raw_to_decimal(eth_reserve.supply_raw, eth_reserve.decimals)
-    if eth_amount == 0:
-        return Decimal("0")
-
-    # 其他（非 ETH）抵押品的安全垫，使用各自独立 liq_threshold
-    other_safe = Decimal("0")
-    for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS:
-            continue
-        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
-            continue
-        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
-        if r_liq_threshold == 0:
-            continue
-        amount = _raw_to_decimal(r.supply_raw, r.decimals)
         price = _raw_to_decimal(r.price_raw, 8)
-        other_safe += amount * price * r_liq_threshold
+        supply_amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        debt_amount = (
+            _raw_to_decimal(r.stable_debt_raw, r.decimals)
+            + _raw_to_decimal(r.variable_debt_raw, r.decimals)
+        )
+        r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
 
-    numerator = total_debt - other_safe
-    if numerator <= 0:
-        # 其他抵押品已足够覆盖债务，ETH 降到 0 也不触发清算
+        if r.symbol.upper() in _ETH_SYMBOLS:
+            if supply_amount > 0 and r.usage_as_collateral_enabled:
+                eth_col_theta_usd += supply_amount * price * r_liq_threshold
+            if debt_amount > 0:
+                eth_debt_usd += debt_amount * price
+        else:
+            if supply_amount > 0 and r.usage_as_collateral_enabled and r_liq_threshold > 0:
+                c_fixed += supply_amount * price * r_liq_threshold
+            if debt_amount > 0:
+                d_fixed += debt_amount * price
+
+    if eth_col_theta_usd == 0:
+        # 无 ETH 系抵押品，ETH 价格与该仓位无关
         return Decimal("0")
 
-    liq_price = numerator / (eth_amount * eth_liq_threshold)
+    # denom = 加权ETH抵押 - ETH债务（均以当前P_now计量）
+    # denom > 0 → 净多ETH敞口 → ETH下跌有害 → 存在下跌清算风险
+    # denom ≤ 0 → ETH两边对冲或净空 → 下跌对仓位无害
+    denom = eth_col_theta_usd - eth_debt_usd
+    if denom <= 0:
+        return Decimal("0")
+
+    numer = d_fixed - c_fixed
+    # numer 可以为负（非ETH抵押安全垫 > 非ETH债务），此时清算价更低，趋于 0
+    liq_price = numer / denom * eth_price_now
+    if liq_price <= 0:
+        return Decimal("0")
+
+    # 若 liq_price >= eth_price_now，说明非 ETH 抵押品足以覆盖债务，
+    # ETH 下跌不会导致清算 → 无下跌风险，返回 0
+    if liq_price >= eth_price_now:
+        return Decimal("0")
+
     return min(liq_price, _LIQ_PRICE_CAP)
 
 
-def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
+def _calc_liq_price_rise(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     """计算 ETH 上涨触发清算价（借入 WETH 场景）。
 
     场景：用户以稳定币/其他资产为抵押品，借入了 WETH（负债）。
     当 ETH 价格上涨时，WETH 债务的 USD 价值增大，最终超过抵押品安全边际，触发清算。
 
-    公式（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 ETH 价格）：
+    公式（HF = 1 时触发，设 P = 未来 ETH 价格，P_now = 当前 WETH 价格）：
         ETH系抵押品贡献（USD） × P/P_now × θ + C_fixed = ETH系负债贡献（USD） × P/P_now + D_fixed
         => P = P_now × (D_fixed - C_fixed) / (eth_debt_usd_sum - eth_col_theta_usd_sum)
 
@@ -423,18 +471,16 @@ def _calc_liq_price_rise(pos: UserPosition) -> Decimal:
 
     分母 <= 0 → 净多 ETH（ETH 上涨有益）→ 无上涨清算风险 → 返回 0
     P_rise <= 0 或无 ETH 系负债 → 返回 0
+
+    :param eth_price_usd: 当前 WETH/USD 价格（8位精度），统一使用 WETH 价格作为 P_now。
     """
     s = pos.summary
     total_debt = _raw_to_decimal(s.total_debt_base, 8)
     if total_debt == 0:
         return Decimal("0")
 
-    # 寻找 ETH 系资产的参考价格（用于换算 P_now）
-    eth_price_now: Decimal | None = None
-    for r in pos.reserves:
-        if r.symbol.upper() in _ETH_SYMBOLS and r.price_raw > 0:
-            eth_price_now = _raw_to_decimal(r.price_raw, 8)
-            break
+    # 统一使用 WETH 价格作为 P_now（由调用方传入）
+    eth_price_now = eth_price_usd
     if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
@@ -517,6 +563,22 @@ def _calc_weth_debt(pos: UserPosition) -> tuple[Decimal, Decimal]:
     return weth_debt_raw, weth_debt_usd
 
 
+def _calc_eth_collateral(pos: UserPosition) -> tuple[Decimal, Decimal]:
+    """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
+    total_amount = Decimal("0")
+    total_usd = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() not in _ETH_SYMBOLS:
+            continue
+        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
+            continue
+        amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        price = _raw_to_decimal(r.price_raw, 8)
+        total_amount += amount
+        total_usd += amount * price
+    return total_amount, total_usd
+
+
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────
 
 
@@ -542,8 +604,10 @@ async def fetch_user_addresses(
     if incremental:
         tgt = target_tables if target_tables is not None else tables
         where_parts.append(
-            f'LOWER("{address_column}") NOT IN '
-            f'(SELECT user_address FROM loan."{tgt.positions}")'
+            f'NOT EXISTS ('
+            f'SELECT 1 FROM loan."{tgt.positions}" p '
+            f'WHERE p.user_address = LOWER("{address_column}")'
+            f')'
         )
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     limit_clause = f"LIMIT {limit}" if limit else ""
@@ -614,18 +678,21 @@ async def upsert_positions(
             INSERT INTO loan."{pos_table}"
                 (user_address, block_number, scanned_at,
                  total_collateral_usd, total_debt_usd, available_borrows_usd,
-                 health_factor, ltv, liq_threshold, liq_price)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                 health_factor, ltv, liq_threshold, liq_price,
+                 eth_collateral_amount, eth_collateral_usd)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (user_address) DO UPDATE SET
-                block_number          = EXCLUDED.block_number,
-                scanned_at            = EXCLUDED.scanned_at,
-                total_collateral_usd  = EXCLUDED.total_collateral_usd,
-                total_debt_usd        = EXCLUDED.total_debt_usd,
-                available_borrows_usd = EXCLUDED.available_borrows_usd,
-                health_factor         = EXCLUDED.health_factor,
-                ltv                   = EXCLUDED.ltv,
-                liq_threshold         = EXCLUDED.liq_threshold,
-                liq_price             = EXCLUDED.liq_price;
+                block_number            = EXCLUDED.block_number,
+                scanned_at              = EXCLUDED.scanned_at,
+                total_collateral_usd    = EXCLUDED.total_collateral_usd,
+                total_debt_usd          = EXCLUDED.total_debt_usd,
+                available_borrows_usd   = EXCLUDED.available_borrows_usd,
+                health_factor           = EXCLUDED.health_factor,
+                ltv                     = EXCLUDED.ltv,
+                liq_threshold           = EXCLUDED.liq_threshold,
+                liq_price               = EXCLUDED.liq_price,
+                eth_collateral_amount   = EXCLUDED.eth_collateral_amount,
+                eth_collateral_usd      = EXCLUDED.eth_collateral_usd;
         """
 
     # ── 1. 构建所有 summary 行 ──────────────────────────────────────────────
@@ -653,7 +720,8 @@ async def upsert_positions(
                 base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos))
             )
         else:
-            summary_rows.append(base_row)
+            eth_col_amount, eth_col_usd = _calc_eth_collateral(pos)
+            summary_rows.append(base_row + (eth_col_amount, eth_col_usd))
 
     # ── 2. 构建所有明细行 ────────────────────────────────────────────────────
     all_user_addrs = [pos.user_address.lower() for pos in positions]
@@ -883,7 +951,7 @@ CREATE INDEX IF NOT EXISTS idx_psc_block
 # ── 从 aave_history 查询用户的 tx 列表（按 block 升序）─────────────────────────
 # 使用函数索引：lower(encode(user_address,'escape')) = lower($1)
 _SQL_USER_TX_HISTORY = """
-SELECT DISTINCT
+SELECT
     block_number,
     created_at                              AS block_timestamp,
     lower(encode(tx_hash, 'escape'))        AS tx_hash,
@@ -891,13 +959,20 @@ SELECT DISTINCT
     token_symbol,
     protocol_version::text                  AS protocol_version
 FROM aave.aave_history
-WHERE (
-    lower(encode(user_address, 'escape'))        = lower($1)
-    OR (
-        target_user_address IS NOT NULL
-        AND lower(encode(target_user_address, 'escape')) = lower($1)
-    )
-)
+WHERE lower(encode(user_address, 'escape')) = lower($1)
+  AND protocol_version::text = $2
+  AND created_at BETWEEN $3 AND $4
+UNION
+SELECT
+    block_number,
+    created_at                              AS block_timestamp,
+    lower(encode(tx_hash, 'escape'))        AS tx_hash,
+    operation_type::text                    AS operation_type,
+    token_symbol,
+    protocol_version::text                  AS protocol_version
+FROM aave.aave_history
+WHERE target_user_address IS NOT NULL
+  AND lower(encode(target_user_address, 'escape')) = lower($1)
   AND protocol_version::text = $2
   AND created_at BETWEEN $3 AND $4
 ORDER BY block_number ASC
@@ -950,22 +1025,6 @@ ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     brief                 = EXCLUDED.brief,
     cached_at             = NOW()
 """
-
-
-def _calc_eth_collateral(pos: "UserPosition") -> tuple[Decimal, Decimal]:
-    """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
-    total_amount = Decimal("0")
-    total_usd = Decimal("0")
-    for r in pos.reserves:
-        if r.symbol.upper() not in _ETH_SYMBOLS:
-            continue
-        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
-            continue
-        amount = _raw_to_decimal(r.supply_raw, r.decimals)
-        price = _raw_to_decimal(r.price_raw, 8)
-        total_amount += amount
-        total_usd += amount * price
-    return total_amount, total_usd
 
 
 def _snapshot_reserve_to_dict(r: "ReservePosition") -> dict:
@@ -1125,8 +1184,8 @@ async def upsert_snapshot_cache(
             hf_dec,
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
-            _calc_liq_price(pos),
-            _calc_liq_price_rise(pos),
+            _calc_liq_price(pos, meta["eth_price_usd"]),
+            _calc_liq_price_rise(pos, meta["eth_price_usd"]),
             eth_col_amount,
             eth_col_usd,
             weth_debt_amount,
