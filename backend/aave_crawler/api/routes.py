@@ -7,17 +7,17 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, LiquidationPeriodItem,
-                      LiquidationSimResponse, PositionReplayResponse,
-                      PositionResponse, PricePeriodResponse, PriceResponse,
-                      ShortLiqPeriodItem, ShortLiqSimResponse,
-                      TxHistoryResponse)
+                      LiquidationSimResponse, MarketReplayResponse,
+                      PositionReplayResponse, PositionResponse,
+                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
+                      ShortLiqSimResponse, TxHistoryResponse)
 from .service import (get_borrow_user_position, get_eth_price,
-                      get_positions_history, get_price_period,
-                      get_sorted_borrow_positions, get_sorted_positions,
-                      get_user_position, get_user_position_history,
-                      get_user_position_replay, get_user_tx_history,
-                      simulate_liquidation, simulate_liquidation_period,
-                      simulate_short_liquidation,
+                      get_market_replay, get_positions_history,
+                      get_price_period, get_sorted_borrow_positions,
+                      get_sorted_positions, get_user_position,
+                      get_user_position_history, get_user_position_replay,
+                      get_user_tx_history, simulate_liquidation,
+                      simulate_liquidation_period, simulate_short_liquidation,
                       simulate_short_liquidation_period)
 
 router = APIRouter(prefix="/api")
@@ -351,6 +351,41 @@ async def user_position_replay(
         to_ts=to_ts,
         protocol=version,
         use_cache=use_cache,
+        detail=detail,
+    )
+
+
+@router.get(
+    "/positions/replay",
+    response_model=MarketReplayResponse,
+    summary="大盘历史快照回放",
+    description=(
+        "查询 Aave V2/V3 某时间段内的全市场历史大盘数据，"
+        "每个区块快照为一个数据点。\n\n"
+        "- 数据来源：`loan.aave_v{2|3}_market_totals`（物化视图），需要先运行 `collect_market_snapshots.py` 采集\n"
+        "- `interval` 控制数据点密度，单位天，从起始时间按间隔选取最近的快照\n"
+        "- `detail=true` 时展开每个 reserve 的明细数据\n\n"
+        "支持时间格式：`2024-11-14T12:00:00Z` / `2024-01-01`"
+    ),
+)
+async def market_snapshot_replay(
+    request: Request,
+    start: str = Query(..., description="起始时间（UTC），如 2024-01-01"),
+    end: str = Query(..., description="结束时间（UTC），如 2025-01-01"),
+    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
+    interval: int = Query(1, ge=1, description="采样间隔（天），默认 1（每天一个数据点）"),
+    detail: bool = Query(False, description="是否展开每个 reserve 明细（默认 false）"),
+) -> MarketReplayResponse:
+    from_ts = _parse_utc_time(start)
+    to_ts = _parse_utc_time(end)
+    if from_ts > to_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+    return await get_market_replay(
+        _pool(request),
+        protocol=version,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        interval_days=interval,
         detail=detail,
     )
 

@@ -30,14 +30,15 @@ from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, HistoricalReserveDetail,
                       LiqPriceResponse, LiquidationPeriodItem,
                       LiquidationSimItem, LiquidationSimResponse,
-                      PositionReplayResponse, PositionResponse,
-                      PositionSnapshotPoint, PricePeriodItem,
+                      MarketReplayResponse, PositionReplayResponse,
+                      PositionResponse, PositionSnapshotPoint, PricePeriodItem,
                       PricePeriodResponse, PriceResponse,
                       ReservePositionSchema, ShortLiqPeriodItem,
                       ShortLiqSimItem, ShortLiqSimResponse,
                       SnapshotReserveDetail, TxHistoryItem, TxHistoryResponse)
 
 logger = logging.getLogger(__name__)
+
 
 def _fmt(value: Decimal, decimals: int = 2) -> str:
     quantize = Decimal(10) ** -decimals
@@ -501,7 +502,10 @@ async def simulate_liquidation(
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
     pos_table, res_table = _tables(protocol)
     sql = _build_simulate_sql(
-        order_col, order_dir, pos_table, res_table,
+        order_col,
+        order_dir,
+        pos_table,
+        res_table,
         use_cap=cap is not None,
         use_current_eth_price=current_eth_price is not None,
     )
@@ -551,7 +555,11 @@ async def simulate_liquidation(
     items = all_items[:limit]
 
     cap_note = f"；liq_price 上限过滤：< {cap}" if cap is not None else ""
-    cur_price_note = f"；当前 ETH 实时价格：${current_eth_price}（仅含跌价清算风险仓位）" if current_eth_price is not None else ""
+    cur_price_note = (
+        f"；当前 ETH 实时价格：${current_eth_price}（仅含跌价清算风险仓位）"
+        if current_eth_price is not None
+        else ""
+    )
     note = (
         f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发清算"
         f"（本次返回前 {len(items)} 条）；"
@@ -633,7 +641,8 @@ async def simulate_liquidation_period(
         )
         for r in rows
         # 仅保留跌价清算仓位：liq_price 必须 <= 当前 ETH 价格
-        if current_eth_price is None or Decimal(str(r["liq_price"])) <= current_eth_price
+        if current_eth_price is None
+        or Decimal(str(r["liq_price"])) <= current_eth_price
     ]
 
     result: list[LiquidationPeriodItem] = []
@@ -1589,8 +1598,8 @@ async def get_positions_history(
 # 历史仓位回放（基于 position_snapshot_cache + aave_history + RPC at block）
 # ══════════════════════════════════════════════════════════════════════════════
 
-_MAX_REPLAY_CONCURRENCY = 5   # 并发 RPC 重放上限（避免公共节点限流）
-_REPLAY_BATCH_SIZE = 200       # 每批 RPC gather 的 tx 数，解决万级 tx 坪展内存问题
+_MAX_REPLAY_CONCURRENCY = 5  # 并发 RPC 重放上限（避免公共节点限流）
+_REPLAY_BATCH_SIZE = 200  # 每批 RPC gather 的 tx 数，解决万级 tx 坪展内存问题
 
 
 def _utc_str(dt: datetime) -> str:
@@ -1618,6 +1627,7 @@ def _format_snapshot_point(
 ) -> PositionSnapshotPoint:
     """将缓存表 Record 格式化为 PositionSnapshotPoint。"""
     import json
+
     hf_raw = Decimal(str(row["health_factor"]))
     hf_str = "inf" if hf_raw >= MAX_HF else _fmt(hf_raw, 4)
 
@@ -1694,12 +1704,18 @@ async def get_user_tx_history(
             txs=None,
         )
 
-    cached_rows = await get_cached_snapshots(pool, user_address, protocol, from_dt, to_dt)
+    cached_rows = await get_cached_snapshots(
+        pool, user_address, protocol, from_dt, to_dt
+    )
     cached_hashes = {r["tx_hash"] for r in cached_rows}
-    cached_brief_map: dict[str, str] = {r["tx_hash"]: _get_brief(r) for r in cached_rows}
+    cached_brief_map: dict[str, str] = {
+        r["tx_hash"]: _get_brief(r) for r in cached_rows
+    }
 
     # 对未缓存的 tx 异步获取 brief
-    uncached_hashes = [r["tx_hash"] for r in tx_rows if r["tx_hash"] not in cached_hashes]
+    uncached_hashes = [
+        r["tx_hash"] for r in tx_rows if r["tx_hash"] not in cached_hashes
+    ]
     fresh_briefs = await parse_tx_briefs(uncached_hashes, protocol=protocol)
     fresh_brief_map: dict[str, str] = dict(zip(uncached_hashes, fresh_briefs))
 
@@ -1711,7 +1727,8 @@ async def get_user_tx_history(
             operation_type=r["operation_type"],
             token_symbol=r["token_symbol"] or "",
             cached=r["tx_hash"] in cached_hashes,
-            brief=cached_brief_map.get(r["tx_hash"]) or fresh_brief_map.get(r["tx_hash"], ""),
+            brief=cached_brief_map.get(r["tx_hash"])
+            or fresh_brief_map.get(r["tx_hash"], ""),
         )
         for r in tx_rows
     ]
@@ -1724,6 +1741,147 @@ async def get_user_tx_history(
         total=len(items),
         stats=stats,
         txs=items,
+    )
+
+
+_RAY = Decimal(10**27)
+
+
+async def get_market_replay(
+    pool: asyncpg.Pool,
+    protocol: str = "v3",
+    from_ts: int = 0,
+    to_ts: int = 0,
+    interval_days: int = 1,
+    detail: bool = False,
+) -> "MarketReplayResponse":
+    """查询大盘历史快照序列。
+
+    从 loan.aave_v{2|3}_market_totals（物化视图）和可选的
+    loan.aave_v{2|3}_market_snapshots（reserve 明细）读取，
+    按 interval_days 天间隔抽样（每个间隔取时间最近的区块）。
+    """
+    from .schemas import (MarketReplayResponse, MarketReservePoint,
+                          MarketSnapshotPoint)
+
+    base = protocol.split("_")[0].lower()
+    totals_table = f"aave_{base}_market_totals"
+    detail_table = f"aave_{base}_market_snapshots"
+
+    from_dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
+    to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
+
+    # 每 interval_days 天一个"锚点时刻"，取距该锚点最近的已有区块
+    # 使用 DISTINCT ON (day_bucket) 按桶选最近区块，单次查询全部数据点
+    interval_epoch = interval_days * 86400
+    sql_totals = f"""
+        WITH bucketed AS (
+            SELECT
+                block_number,
+                block_timestamp,
+                tvl_usd,
+                debt_usd,
+                liquidity_usd,
+                weighted_utilization,
+                weighted_supply_apy,
+                weighted_borrow_apy,
+                -- 将时间戳对齐到 interval_days 天的桶
+                to_timestamp(
+                    (EXTRACT(EPOCH FROM block_timestamp)::BIGINT
+                     / {interval_epoch}) * {interval_epoch}
+                ) AT TIME ZONE 'UTC' AS day_bucket,
+                ABS(
+                    EXTRACT(EPOCH FROM block_timestamp) -
+                    (EXTRACT(EPOCH FROM block_timestamp)::BIGINT
+                     / {interval_epoch}) * {interval_epoch}
+                ) AS bucket_dist
+            FROM loan.{totals_table}
+            WHERE block_timestamp >= $1 AND block_timestamp <= $2
+        )
+        SELECT DISTINCT ON (day_bucket)
+            block_number, block_timestamp,
+            tvl_usd, debt_usd, liquidity_usd,
+            weighted_utilization, weighted_supply_apy, weighted_borrow_apy
+        FROM bucketed
+        ORDER BY day_bucket, bucket_dist ASC
+    """
+
+    rows = await pool.fetch(sql_totals, from_dt, to_dt)
+
+    if not rows:
+        return MarketReplayResponse(
+            protocol=protocol,
+            from_time=from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            to_time=to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            interval_days=interval_days,
+            points=[],
+            total_points=0,
+        )
+
+    selected_blocks = [r["block_number"] for r in rows]
+
+    # 只有 detail=true 时才查 reserve 明细
+    reserve_map: dict[int, list[MarketReservePoint]] = {}
+    if detail and selected_blocks:
+        placeholders = ", ".join(f"${i+1}" for i in range(len(selected_blocks)))
+        sql_detail = f"""
+            SELECT
+                block_number, token_address, symbol,
+                price_usd, total_supply_usd, total_debt_usd,
+                available_liquidity_usd, utilization_rate,
+                liquidity_rate_ray, variable_borrow_rate_ray, stable_borrow_rate_ray
+            FROM loan.{detail_table}
+            WHERE block_number IN ({placeholders})
+            ORDER BY block_number, total_supply_usd DESC
+        """
+        detail_rows = await pool.fetch(sql_detail, *selected_blocks)
+        for dr in detail_rows:
+            blk = dr["block_number"]
+            supply_apy = _fmt(Decimal(str(dr["liquidity_rate_ray"])) / _RAY, 8)
+            var_apy = _fmt(Decimal(str(dr["variable_borrow_rate_ray"])) / _RAY, 8)
+            stb_apy = _fmt(Decimal(str(dr["stable_borrow_rate_ray"])) / _RAY, 8)
+            reserve_map.setdefault(blk, []).append(
+                MarketReservePoint(
+                    token_address=dr["token_address"],
+                    symbol=dr["symbol"],
+                    price_usd=_fmt(Decimal(str(dr["price_usd"])), 8),
+                    total_supply_usd=_fmt(Decimal(str(dr["total_supply_usd"])), 2),
+                    total_debt_usd=_fmt(Decimal(str(dr["total_debt_usd"])), 2),
+                    available_liquidity_usd=_fmt(
+                        Decimal(str(dr["available_liquidity_usd"])), 2
+                    ),
+                    utilization_rate=_fmt(Decimal(str(dr["utilization_rate"])), 6),
+                    supply_apy=supply_apy,
+                    variable_borrow_apy=var_apy,
+                    stable_borrow_apy=stb_apy,
+                )
+            )
+
+    points: list[MarketSnapshotPoint] = []
+    for r in rows:
+        blk = r["block_number"]
+        ts_str = r["block_timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
+        points.append(
+            MarketSnapshotPoint(
+                block_number=blk,
+                block_timestamp=ts_str,
+                tvl_usd=_fmt(Decimal(str(r["tvl_usd"])), 2),
+                debt_usd=_fmt(Decimal(str(r["debt_usd"])), 2),
+                liquidity_usd=_fmt(Decimal(str(r["liquidity_usd"])), 2),
+                weighted_utilization=_fmt(Decimal(str(r["weighted_utilization"])), 8),
+                weighted_supply_apy=_fmt(Decimal(str(r["weighted_supply_apy"])), 8),
+                weighted_borrow_apy=_fmt(Decimal(str(r["weighted_borrow_apy"])), 8),
+                reserves=reserve_map.get(blk, []),
+            )
+        )
+
+    return MarketReplayResponse(
+        protocol=protocol,
+        from_time=from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        to_time=to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        interval_days=interval_days,
+        points=points,
+        total_points=len(points),
     )
 
 
@@ -1747,6 +1905,7 @@ async def get_user_position_replay(
     5. 合并 + 按 block_timestamp 升序返回
     """
     import time as _time_mod
+
     _t0 = _time_mod.perf_counter()
 
     from_dt = _ts_to_dt(from_ts)
@@ -1758,7 +1917,9 @@ async def get_user_position_replay(
     _t_db_tx1 = _time_mod.perf_counter()
     logger.debug(
         "replay[%s] ① DB tx查询: %.3fs  raw_rows=%d",
-        user_address[:10], _t_db_tx1 - _t_db_tx0, len(tx_rows),
+        user_address[:10],
+        _t_db_tx1 - _t_db_tx0,
+        len(tx_rows),
     )
 
     if not tx_rows:
@@ -1786,7 +1947,9 @@ async def get_user_position_replay(
     _t_db_cache1 = _time_mod.perf_counter()
     logger.debug(
         "replay[%s] ② DB缓存查询: %.3fs  cached=%d",
-        user_address[:10], _t_db_cache1 - _t_db_cache0, len(cached_map),
+        user_address[:10],
+        _t_db_cache1 - _t_db_cache0,
+        len(cached_map),
     )
 
     # 去重：同一 block 可能有多条 tx_hash（主用户 + 清算目标角色各一条），
@@ -1806,7 +1969,10 @@ async def get_user_position_replay(
     miss_txs = [t for t in deduped_txs if t["tx_hash"] not in cached_map]
     logger.debug(
         "replay[%s] ③ 去重后 tx=%d  hit=%d  miss=%d",
-        user_address[:10], len(deduped_txs), len(hit_txs), len(miss_txs),
+        user_address[:10],
+        len(deduped_txs),
+        len(hit_txs),
+        len(miss_txs),
     )
 
     # ── 4. 流水线并行：RPC producer ↔ brief+upsert consumer ──────────────────
@@ -1825,7 +1991,8 @@ async def get_user_position_replay(
         semaphore = asyncio.Semaphore(_MAX_REPLAY_CONCURRENCY)
         logger.debug(
             "replay[%s] ④ _get_common_data: %.3fs",
-            user_address[:10], _time_mod.perf_counter() - _t_common0,
+            user_address[:10],
+            _time_mod.perf_counter() - _t_common0,
         )
 
         # Queue 容量 1：producer 最多超前 consumer 一个批次，避免内存积压
@@ -1838,8 +2005,13 @@ async def get_user_position_replay(
                 b = miss_txs[bs : bs + _REPLAY_BATCH_SIZE]
                 tasks = [
                     fetch_user_position_at_block(
-                        w3, user_address, reserve_tokens, reserve_configs,
-                        t["block_number"], semaphore, contracts,
+                        w3,
+                        user_address,
+                        reserve_tokens,
+                        reserve_configs,
+                        t["block_number"],
+                        semaphore,
+                        contracts,
                     )
                     for t in b
                 ]
@@ -1849,7 +2021,11 @@ async def get_user_position_replay(
                 _t_rpc_total += _dt
                 logger.debug(
                     "replay[%s] ⑤ RPC批次[%d-%d]: %.3fs  batch_size=%d",
-                    user_address[:10], bs, bs + len(b) - 1, _dt, len(b),
+                    user_address[:10],
+                    bs,
+                    bs + len(b) - 1,
+                    _dt,
+                    len(b),
                 )
                 await _queue.put((bs, b, results))
             await _queue.put(_SENTINEL)
@@ -1867,7 +2043,9 @@ async def get_user_position_replay(
                     if res is None:
                         logger.warning(
                             "RPC 重放失败，跳过 tx %s (block %s, user %s)",
-                            t["tx_hash"], t["block_number"], user_address,
+                            t["tx_hash"],
+                            t["block_number"],
+                            user_address,
                         )
                         continue
                     if res is EMPTY_POSITION:
@@ -1875,22 +2053,24 @@ async def get_user_position_replay(
                     pos, eth_price_raw = res
                     eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
                     _prices = {
-                        r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                        r.token_address.lower(): Decimal(r.price_raw) / Decimal(10**8)
                         for r in pos.reserves
                     }
                     # WETH 可能因全额取出后余额为 0 而不在 reserves 里，
                     # 天然用 eth_price_usd 作为 WETH 价格
                     _prices.setdefault(_WETH_ADDR, eth_price_dec)
-                    batch_records.append({
-                        "position": pos,
-                        "meta": {
-                            "tx_hash": t["tx_hash"],
-                            "block_timestamp": t["block_timestamp"],
-                            "eth_price_usd": eth_price_dec,
-                            "protocol": protocol,
-                            "prices": _prices,
-                        },
-                    })
+                    batch_records.append(
+                        {
+                            "position": pos,
+                            "meta": {
+                                "tx_hash": t["tx_hash"],
+                                "block_timestamp": t["block_timestamp"],
+                                "eth_price_usd": eth_price_dec,
+                                "protocol": protocol,
+                                "prices": _prices,
+                            },
+                        }
+                    )
 
                 if batch_records:
                     _t0_brief = _time_mod.perf_counter()
@@ -1901,8 +2081,11 @@ async def get_user_position_replay(
                     _t_brief_total += _dt_brief
                     logger.debug(
                         "replay[%s] ⑥ brief解析[%d-%d]: %.3fs  count=%d",
-                        user_address[:10], bs, bs + len(b) - 1,
-                        _dt_brief, len(batch_records),
+                        user_address[:10],
+                        bs,
+                        bs + len(b) - 1,
+                        _dt_brief,
+                        len(batch_records),
                     )
 
                     _t0_upsert = _time_mod.perf_counter()
@@ -1916,8 +2099,11 @@ async def get_user_position_replay(
                     _t_upsert_total += _dt_upsert
                     logger.debug(
                         "replay[%s] ⑦ DB写缓存[%d-%d]: %.3fs  count=%d",
-                        user_address[:10], bs, bs + len(b) - 1,
-                        _dt_upsert, len(batch_records),
+                        user_address[:10],
+                        bs,
+                        bs + len(b) - 1,
+                        _dt_upsert,
+                        len(batch_records),
                     )
 
         # producer 与 consumer 并发运行，实现 RPC ↔ brief+upsert 流水线
@@ -1932,7 +2118,9 @@ async def get_user_position_replay(
     _t_final1 = _time_mod.perf_counter()
     logger.debug(
         "replay[%s] ⑧ DB最终读缓存: %.3fs  rows=%d",
-        user_address[:10], _t_final1 - _t_final0, len(final_cache),
+        user_address[:10],
+        _t_final1 - _t_final0,
+        len(final_cache),
     )
 
     # ── 6. 按 block 排序拼装响应 ───────────────────────────────────────────────
@@ -1970,13 +2158,17 @@ async def get_user_position_replay(
         "replay[%s] ✅ 总耗时: %.3fs  "
         "[DB-tx=%.3f DB-cache=%.3f RPC=%.3f brief=%.3f upsert=%.3f DB-final=%.3f fmt=%.3f]  "
         "points=%d miss=%d",
-        user_address[:10], _t_total,
+        user_address[:10],
+        _t_total,
         _t_db_tx1 - _t_db_tx0,
         _t_db_cache1 - _t_db_cache0,
-        _t_rpc_total, _t_brief_total, _t_upsert_total,
+        _t_rpc_total,
+        _t_brief_total,
+        _t_upsert_total,
         _t_final1 - _t_final0,
         _t_fmt1 - _t_fmt0,
-        len(points), len(miss_txs),
+        len(points),
+        len(miss_txs),
     )
 
     return PositionReplayResponse(

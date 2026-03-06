@@ -172,6 +172,16 @@ async def process_user(
             if res is None or res is EMPTY_POSITION:
                 continue
             pos, eth_price_raw = res
+            # 二道防线：ETH 价格合理范围 $1 ~ $100,000（raw = 8dec USD）
+            # V2 ETH/USD 归一化失败时 eth_price_raw 会是 1e18（WETH V2 oracle 原始值），
+            # rpc.py 已在首道拦截，此处兜底，防止历史缓存写入失真数据。
+            _ETH_PRICE_RAW_MAX = 100_000 * 10**8  # $100k * 1e8
+            if eth_price_raw == 0 or eth_price_raw > _ETH_PRICE_RAW_MAX:
+                logger.warning(
+                    "跳过异常 ETH 价格 raw=%d block=%d user=%s",
+                    eth_price_raw, t["block_number"], pos.user_address,
+                )
+                continue
             eth_price_dec = Decimal(eth_price_raw) / Decimal(10 ** 8)
             _prices = {
                 r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
