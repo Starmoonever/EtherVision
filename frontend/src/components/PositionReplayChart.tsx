@@ -87,56 +87,64 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     coordinate: { x: number; y: number };
   } | null>(null);
 
+  const [startTime, setStartTime] = useState('2020-12-01 00:00:00');
+  const [endTime, setEndTime] = useState(() => {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(now.getUTCDate()).padStart(2, '0');
+    const hours = String(now.getUTCHours()).padStart(2, '0');
+    const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(now.getUTCSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  });
+  
+  // 用于触发查询的 state
+  const [queryParams, setQueryParams] = useState({ start: '2020-12-01 00:00:00', end: endTime });
+
   useEffect(() => {
     // Reset tooltip state when address or version changes
     setActiveTooltip(null);
     setSelectedPoint(null);
-
+    
     const fetchData = async () => {
       setLoading(true);
       setError('');
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const start = '2020-12-01';
-        const now = new Date();
-        const year = now.getUTCFullYear();
-        const month = String(now.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(now.getUTCDate()).padStart(2, '0');
-        const hours = String(now.getUTCHours()).padStart(2, '0');
-        const minutes = String(now.getUTCMinutes()).padStart(2, '0');
-        const seconds = String(now.getUTCSeconds()).padStart(2, '0');
-        const end = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-
+        
         const response = await fetch(
-          `${baseUrl}/position/replay?address=${address}&start=${start}&end=${encodeURIComponent(end)}&version=${version}`
+          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(queryParams.start)}&end=${encodeURIComponent(queryParams.end)}&version=${version}`
         );
-
+        
         if (!response.ok) {
           throw new Error('Failed to fetch replay data');
         }
 
         const result = await response.json();
-
+        
         if (!result.points || !Array.isArray(result.points)) {
           throw new Error('Invalid data format');
         }
 
-        const formattedData = result.points.map((pt: any) => ({
-          timestamp: new Date(pt.timestamp).toLocaleDateString(undefined, {
-            year: 'numeric',
-            month: 'numeric',
-            day: 'numeric'
-          }),
-          eth_price_usd: parseFloat(pt.eth_price_usd || '0'),
-          eth_collateral_usd: parseFloat(pt.eth_collateral_usd || '0'),
-          weth_debt_usd: parseFloat(pt.weth_debt_usd || '0'),
-          liq_price: parseFloat(pt.liq_price || '0'),
-          brief: pt.brief || '',
-          total_collateral_usd: parseFloat(pt.total_collateral_usd || '0'),
-          total_debt_usd: parseFloat(pt.total_debt_usd || '0'),
-          available_borrows_usd: parseFloat(pt.available_borrows_usd || '0'),
-          health_factor: parseFloat(pt.health_factor || '0'),
-        })).sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const formattedData = result.points.map((pt: any) => {
+          const d = new Date(pt.timestamp);
+          const pad = (n: number) => n.toString().padStart(2, '0');
+          const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          
+          return {
+            timestamp: timeStr,
+            eth_price_usd: parseFloat(pt.eth_price_usd || '0'),
+            eth_collateral_usd: parseFloat(pt.eth_collateral_usd || '0'),
+            weth_debt_usd: parseFloat(pt.weth_debt_usd || '0'),
+            liq_price: parseFloat(pt.liq_price || '0'),
+            brief: pt.brief || '',
+            total_collateral_usd: parseFloat(pt.total_collateral_usd || '0'),
+            total_debt_usd: parseFloat(pt.total_debt_usd || '0'),
+            available_borrows_usd: parseFloat(pt.available_borrows_usd || '0'),
+            health_factor: parseFloat(pt.health_factor || '0'),
+          };
+        }).sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
         setData(formattedData);
       } catch (err) {
@@ -150,7 +158,11 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     if (address) {
       fetchData();
     }
-  }, [address, version]);
+  }, [address, version, queryParams]);
+
+  const handleSearch = () => {
+    setQueryParams({ start: startTime, end: endTime });
+  };
 
   const handleChartClick = (e: any) => {
     if (e && e.activeTooltipIndex !== undefined && e.activeCoordinate) {
@@ -178,7 +190,54 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
       <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="card-title">历史交易与头寸变化记录</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>指标:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+            <input
+              type="text"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              placeholder="起始时间"
+              style={{
+                background: '#1e293b',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+                fontSize: '0.8rem',
+                width: '140px'
+              }}
+            />
+            <span style={{ color: '#94a3b8' }}>-</span>
+            <input
+              type="text"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              placeholder="结束时间"
+              style={{
+                background: '#1e293b',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+                fontSize: '0.8rem',
+                width: '140px'
+              }}
+            />
+            <button
+              onClick={handleSearch}
+              style={{
+                background: '#3b82f6',
+                color: '#fff',
+                border: 'none',
+                padding: '0.2rem 0.8rem',
+                borderRadius: '4px',
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
+            >
+              查询
+            </button>
+          </div>
+          <span style={{ fontSize: '0.85rem', color: '#94a3b8', marginLeft: '0.5rem' }}>指标:</span>
           <select
             value={primaryMetric}
             onChange={(e) => setPrimaryMetric(e.target.value as any)}
