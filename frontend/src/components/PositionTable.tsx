@@ -209,7 +209,6 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
               <thead>
                 <tr>
                   <th>资产</th>
-                  <th className="right">单价 (USD)</th>
                   <th className="right">合计借贷 (USD)</th>
                   <th className="right">估值 (USD)</th>
                 </tr>
@@ -220,7 +219,6 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                     <td>
                       <span className="token-symbol">{r.symbol}</span>
                     </td>
-                    <td className="right mono">-</td>
                     <td className="right mono bold">
                       {parseFloat(r.balance).toLocaleString(undefined, {
                         minimumFractionDigits: 2,
