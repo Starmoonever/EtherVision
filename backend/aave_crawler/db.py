@@ -105,7 +105,9 @@ CREATE TABLE IF NOT EXISTS loan.{positions} (
     health_factor           NUMERIC(40, 18) NOT NULL,  -- ∞ 时存 1e18（19位整数位），需 40 总精度
     ltv                     NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
     liq_threshold           NUMERIC(8, 4)   NOT NULL,   -- basis points / 10000
-    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
+    liq_price               NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 清算触发价（USD）；0 表示无债务或无法计算
+    eth_collateral_amount   NUMERIC(30, 8)  NOT NULL DEFAULT 0,  -- ETH 系抵押品合计（token 数量）
+    eth_collateral_usd      NUMERIC(30, 8)  NOT NULL DEFAULT 0   -- ETH 系抵押品合计 USD（扫描时刻价格）
 );
 """
 
@@ -279,6 +281,24 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                         ) THEN
                             ALTER TABLE loan."{pos}"
                                 ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                        END IF;
+                    END$$;
+                """
+                )
+            # 为旧表添加 eth_collateral_amount / eth_collateral_usd 预计算列
+            for _col in ("eth_collateral_amount", "eth_collateral_usd"):
+                await conn.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{pos}'
+                              AND column_name  = '{_col}'
+                        ) THEN
+                            ALTER TABLE loan."{pos}"
+                                ADD COLUMN "{_col}" NUMERIC(30, 8) NOT NULL DEFAULT 0;
                         END IF;
                     END$$;
                 """
@@ -517,6 +537,22 @@ def _calc_weth_debt(pos: UserPosition) -> tuple[Decimal, Decimal]:
     return weth_debt_raw, weth_debt_usd
 
 
+def _calc_eth_collateral(pos: UserPosition) -> tuple[Decimal, Decimal]:
+    """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
+    total_amount = Decimal("0")
+    total_usd = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() not in _ETH_SYMBOLS:
+            continue
+        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
+            continue
+        amount = _raw_to_decimal(r.supply_raw, r.decimals)
+        price = _raw_to_decimal(r.price_raw, 8)
+        total_amount += amount
+        total_usd += amount * price
+    return total_amount, total_usd
+
+
 # ── 读取用户地址 ──────────────────────────────────────────────────────────────
 
 
@@ -542,8 +578,10 @@ async def fetch_user_addresses(
     if incremental:
         tgt = target_tables if target_tables is not None else tables
         where_parts.append(
-            f'LOWER("{address_column}") NOT IN '
-            f'(SELECT user_address FROM loan."{tgt.positions}")'
+            f'NOT EXISTS ('
+            f'SELECT 1 FROM loan."{tgt.positions}" p '
+            f'WHERE p.user_address = LOWER("{address_column}")'
+            f')'
         )
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     limit_clause = f"LIMIT {limit}" if limit else ""
@@ -614,18 +652,21 @@ async def upsert_positions(
             INSERT INTO loan."{pos_table}"
                 (user_address, block_number, scanned_at,
                  total_collateral_usd, total_debt_usd, available_borrows_usd,
-                 health_factor, ltv, liq_threshold, liq_price)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                 health_factor, ltv, liq_threshold, liq_price,
+                 eth_collateral_amount, eth_collateral_usd)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (user_address) DO UPDATE SET
-                block_number          = EXCLUDED.block_number,
-                scanned_at            = EXCLUDED.scanned_at,
-                total_collateral_usd  = EXCLUDED.total_collateral_usd,
-                total_debt_usd        = EXCLUDED.total_debt_usd,
-                available_borrows_usd = EXCLUDED.available_borrows_usd,
-                health_factor         = EXCLUDED.health_factor,
-                ltv                   = EXCLUDED.ltv,
-                liq_threshold         = EXCLUDED.liq_threshold,
-                liq_price             = EXCLUDED.liq_price;
+                block_number            = EXCLUDED.block_number,
+                scanned_at              = EXCLUDED.scanned_at,
+                total_collateral_usd    = EXCLUDED.total_collateral_usd,
+                total_debt_usd          = EXCLUDED.total_debt_usd,
+                available_borrows_usd   = EXCLUDED.available_borrows_usd,
+                health_factor           = EXCLUDED.health_factor,
+                ltv                     = EXCLUDED.ltv,
+                liq_threshold           = EXCLUDED.liq_threshold,
+                liq_price               = EXCLUDED.liq_price,
+                eth_collateral_amount   = EXCLUDED.eth_collateral_amount,
+                eth_collateral_usd      = EXCLUDED.eth_collateral_usd;
         """
 
     # ── 1. 构建所有 summary 行 ──────────────────────────────────────────────
@@ -653,7 +694,8 @@ async def upsert_positions(
                 base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos))
             )
         else:
-            summary_rows.append(base_row)
+            eth_col_amount, eth_col_usd = _calc_eth_collateral(pos)
+            summary_rows.append(base_row + (eth_col_amount, eth_col_usd))
 
     # ── 2. 构建所有明细行 ────────────────────────────────────────────────────
     all_user_addrs = [pos.user_address.lower() for pos in positions]
@@ -883,7 +925,7 @@ CREATE INDEX IF NOT EXISTS idx_psc_block
 # ── 从 aave_history 查询用户的 tx 列表（按 block 升序）─────────────────────────
 # 使用函数索引：lower(encode(user_address,'escape')) = lower($1)
 _SQL_USER_TX_HISTORY = """
-SELECT DISTINCT
+SELECT
     block_number,
     created_at                              AS block_timestamp,
     lower(encode(tx_hash, 'escape'))        AS tx_hash,
@@ -891,13 +933,20 @@ SELECT DISTINCT
     token_symbol,
     protocol_version::text                  AS protocol_version
 FROM aave.aave_history
-WHERE (
-    lower(encode(user_address, 'escape'))        = lower($1)
-    OR (
-        target_user_address IS NOT NULL
-        AND lower(encode(target_user_address, 'escape')) = lower($1)
-    )
-)
+WHERE lower(encode(user_address, 'escape')) = lower($1)
+  AND protocol_version::text = $2
+  AND created_at BETWEEN $3 AND $4
+UNION
+SELECT
+    block_number,
+    created_at                              AS block_timestamp,
+    lower(encode(tx_hash, 'escape'))        AS tx_hash,
+    operation_type::text                    AS operation_type,
+    token_symbol,
+    protocol_version::text                  AS protocol_version
+FROM aave.aave_history
+WHERE target_user_address IS NOT NULL
+  AND lower(encode(target_user_address, 'escape')) = lower($1)
   AND protocol_version::text = $2
   AND created_at BETWEEN $3 AND $4
 ORDER BY block_number ASC
@@ -950,22 +999,6 @@ ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     brief                 = EXCLUDED.brief,
     cached_at             = NOW()
 """
-
-
-def _calc_eth_collateral(pos: "UserPosition") -> tuple[Decimal, Decimal]:
-    """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
-    total_amount = Decimal("0")
-    total_usd = Decimal("0")
-    for r in pos.reserves:
-        if r.symbol.upper() not in _ETH_SYMBOLS:
-            continue
-        if not r.usage_as_collateral_enabled or r.supply_raw == 0:
-            continue
-        amount = _raw_to_decimal(r.supply_raw, r.decimals)
-        price = _raw_to_decimal(r.price_raw, 8)
-        total_amount += amount
-        total_usd += amount * price
-    return total_amount, total_usd
 
 
 def _snapshot_reserve_to_dict(r: "ReservePosition") -> dict:

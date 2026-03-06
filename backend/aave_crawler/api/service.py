@@ -360,24 +360,13 @@ async def get_sorted_positions(
     """
     order_col = _SORT_COLS.get(orderby, "liq_price")
     order_dir = _SORT_DIRS.get(order, "ASC")
-    pos_table, res_table = _tables(protocol)
+    pos_table, _ = _tables(protocol)
 
     sql = f"""
-WITH eth_col AS (
-    SELECT
-        user_address,
-        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        SUM(supply_usd::numeric)                               AS eth_collateral_usd
-    FROM loan.{res_table}
-    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
-      AND use_as_collateral = true
-      AND supply_raw > 0
-    GROUP BY user_address
-)
 SELECT
     p.user_address                                            AS address,
-    COALESCE(e.eth_amount,        0::numeric)                AS eth_collateral_amount,
-    COALESCE(e.eth_collateral_usd, 0::numeric)               AS eth_collateral_usd,
+    p.eth_collateral_amount,
+    p.eth_collateral_usd,
     p.total_collateral_usd,
     p.available_borrows_usd,
     p.total_debt_usd,
@@ -386,7 +375,6 @@ SELECT
     p.liq_threshold,
     p.liq_price
 FROM loan.{pos_table} p
-LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
   AND p.liq_price < 9999999.99
 ORDER BY {order_col} {order_dir}
@@ -436,11 +424,9 @@ def _build_simulate_sql(
     order_col: str,
     order_dir: str,
     pos_table: str,
-    res_table: str,
     use_cap: bool = False,
     use_current_eth_price: bool = False,
 ) -> str:
-    # 参数顺序：$1=模拟ETH价格, [$2=当前ETH价格], [$2/$3=cap上限]
     next_param = 2
     current_price_filter = ""
     if use_current_eth_price:
@@ -448,27 +434,15 @@ def _build_simulate_sql(
         next_param += 1
     cap_filter = f"  AND p.liq_price < ${next_param}::numeric" if use_cap else ""
     return f"""
-WITH eth_col AS (
-    SELECT
-        user_address,
-        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        SUM(supply_usd::numeric)                               AS eth_supply_usd_stored
-    FROM loan.{res_table}
-    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
-      AND use_as_collateral = true
-      AND supply_raw > 0
-    GROUP BY user_address
-)
 SELECT
     p.user_address                                                AS address,
-    COALESCE(e.eth_amount, 0::numeric)                            AS eth_collateral_amount,
-    COALESCE(e.eth_amount, 0::numeric) * $1::numeric              AS eth_collateral_usd,
-    COALESCE(e.eth_supply_usd_stored, 0::numeric)                 AS eth_supply_usd_stored,
+    p.eth_collateral_amount,
+    p.eth_collateral_amount * $1::numeric                         AS eth_collateral_usd,
+    p.eth_collateral_usd                                          AS eth_supply_usd_stored,
     p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
 FROM loan.{pos_table} p
-LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
   AND p.liq_price < 9999999.99
   AND p.liq_price >= $1::numeric
@@ -503,12 +477,11 @@ async def simulate_liquidation(
     """
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
-    pos_table, res_table = _tables(protocol)
+    pos_table, _ = _tables(protocol)
     sql = _build_simulate_sql(
         order_col,
         order_dir,
         pos_table,
-        res_table,
         use_cap=cap is not None,
         use_current_eth_price=current_eth_price is not None,
     )
@@ -585,27 +558,15 @@ async def simulate_liquidation(
 
 
 # 全量拉取所有有清算价的仓位（用于区间模拟，避免每个价格点单独查询）
-def _sql_all_liq_positions(pos_table: str, res_table: str) -> str:
+def _sql_all_liq_positions(pos_table: str) -> str:
     return f"""
-WITH eth_col AS (
-    SELECT
-        user_address,
-        SUM(supply_raw::numeric / POWER(10::numeric, decimals)) AS eth_amount,
-        SUM(supply_usd::numeric)                               AS eth_supply_usd_stored
-    FROM loan.{res_table}
-    WHERE symbol IN ({_ETH_SYMBOLS_SQL})
-      AND use_as_collateral = true
-      AND supply_raw > 0
-    GROUP BY user_address
-)
 SELECT
-    COALESCE(e.eth_amount, 0::numeric)           AS eth_collateral_amount,
-    COALESCE(e.eth_supply_usd_stored, 0::numeric) AS eth_supply_usd_stored,
+    p.eth_collateral_amount,
+    p.eth_collateral_usd                             AS eth_supply_usd_stored,
     p.total_collateral_usd,
     p.total_debt_usd,
     p.liq_price
 FROM loan.{pos_table} p
-LEFT JOIN eth_col e ON p.user_address = e.user_address
 WHERE p.liq_price > 0
   AND p.liq_price < 9999999.99
 """
@@ -632,8 +593,8 @@ async def simulate_liquidation_period(
         raise HTTPException(status_code=400, detail="start 必须 <= end")
 
     # 一次拉取所有有清算价的仓位
-    pos_table, res_table = _tables(protocol)
-    rows = await pool.fetch(_sql_all_liq_positions(pos_table, res_table))
+    pos_table, _ = _tables(protocol)
+    rows = await pool.fetch(_sql_all_liq_positions(pos_table))
     positions = [
         (
             Decimal(str(r["eth_collateral_amount"])),
