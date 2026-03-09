@@ -403,9 +403,8 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
-    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×P_now×θ
+    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×P_now×θ（ETH资产θ长期稳定，可信）
     eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×P_now
-    c_fixed           = Decimal("0")   # Σ 非ETH抵押 USD×θ
     d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
 
     for r in pos.reserves:
@@ -423,14 +422,20 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
             if debt_amount > 0:
                 eth_debt_usd += debt_amount * price
         else:
-            if supply_amount > 0 and r.usage_as_collateral_enabled and r_liq_threshold > 0:
-                c_fixed += supply_amount * price * r_liq_threshold
             if debt_amount > 0:
                 d_fixed += debt_amount * price
 
     if eth_col_theta_usd == 0:
         # 无 ETH 系抵押品，ETH 价格与该仓位无关
         return Decimal("0")
+
+    # 使用 getUserAccountData 返回的聚合加权 LT（历史区块正确值）推导非 ETH 抵押的 θ 加权安全垫：
+    #   total_col_theta = total_collateral_usd × current_liq_threshold
+    #   c_fixed = total_col_theta − eth_col_theta_usd
+    # 这样可以完全绕过 reserves_json 里因治理更新而失效的每资产 θ 值
+    total_col_usd = _raw_to_decimal(s.total_collateral_base, 8)
+    total_col_theta_usd = total_col_usd * (Decimal(s.current_liquidation_threshold) / Decimal(10000))
+    c_fixed = max(Decimal("0"), total_col_theta_usd - eth_col_theta_usd)
 
     # denom = 加权ETH抵押 - ETH债务（均以当前P_now计量）
     # denom > 0 → 净多ETH敞口 → ETH下跌有害 → 存在下跌清算风险
@@ -444,9 +449,6 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     liq_price = numer / denom * eth_price_now
     if liq_price <= 0:
         return Decimal("0")
-
-    # 注意：liq_price >= eth_price_now 表示需要 ETH 上涨才会清算，
-    # 这种情况语义上属于 liq_price_rise 场景，但仍保留计算值供分析使用
 
     return min(liq_price, _LIQ_PRICE_CAP)
 

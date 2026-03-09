@@ -73,7 +73,12 @@ def _raw_to_dec(raw: int | str, decimals: int) -> Decimal:
     return r / Decimal(10**decimals)
 
 
-def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> Decimal:
+def recalc_liq_price(
+    reserves_json: list[dict],
+    eth_price_usd_col: Decimal,
+    total_collateral_usd: Decimal,
+    liq_threshold_ratio: Decimal,
+) -> Decimal:
     """
     从 reserves_json 重新计算 liq_price（ETH 下跌触发清算价）。
     逻辑与 aave_crawler/db.py 中的 _calc_liq_price 严格对应。
@@ -88,8 +93,12 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
         use_as_collateral    : bool
         liquidation_threshold: int  (basis points, e.g. 9500 = 95%)
 
-    eth_price_usd_col：DB 中 eth_price_usd 列的值，统一使用 WETH 价格作为 P_now，
-                       避免 wstETH/weETH 价格差异导致的单位不一致问题。
+    eth_price_usd_col：DB 中 eth_price_usd 列的值，统一使用 WETH 价格作为 P_now。
+    total_collateral_usd：DB 的 total_collateral_usd 列（来自 getUserAccountData，历史正确值）。
+    liq_threshold_ratio：DB 的 liq_threshold 列（0.0~1.0，来自 getUserAccountData，历史正确值）。
+                         只有 ETH 系资产的 θ 用 reserves 里的值（长期稳定）；
+                         非 ETH 资产的 θ 加权值由 total_col_theta − eth_col_theta 推导，
+                         完全绕过因治理更新而失效的 reserves_json.liquidation_threshold。
     """
     if not reserves_json:
         return Decimal("0")
@@ -99,9 +108,8 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
     if eth_price_now is None or eth_price_now <= 0:
         return Decimal("0")
 
-    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×price×θ
+    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×price×θ（ETH资产θ长期稳定，可信）
     eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×price
-    c_fixed           = Decimal("0")   # Σ 非ETH抵押 USD×θ
     d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
 
     for r in reserves_json:
@@ -123,13 +131,18 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
             if debt_dec > 0:
                 eth_debt_usd += debt_dec * price_usd
         else:
-            if supply_dec > 0 and use_col and theta > 0:
-                c_fixed += supply_dec * price_usd * theta
             if debt_dec > 0:
                 d_fixed += debt_dec * price_usd
 
     if eth_col_theta_usd == 0:
         return Decimal("0")
+
+    # 使用 getUserAccountData 聚合 LT（历史区块正确值）推导非 ETH 抵押的 θ 加权安全垫：
+    #   total_col_theta = total_collateral_usd × liq_threshold_ratio
+    #   c_fixed = total_col_theta − eth_col_theta_usd
+    # 完全绕过 reserves_json 里因治理更新而失效的每资产 θ 值
+    total_col_theta_usd = total_collateral_usd * liq_threshold_ratio
+    c_fixed = max(Decimal("0"), total_col_theta_usd - eth_col_theta_usd)
 
     denom = eth_col_theta_usd - eth_debt_usd
     if denom <= 0:
@@ -139,9 +152,6 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
     liq_price_raw = numer / denom * eth_price_now
     if liq_price_raw <= 0:
         return Decimal("0")
-
-    # 注意：liq_price >= eth_price_now 表示需要 ETH 上涨才会清算，
-    # 这种情况语义上属于 liq_price_rise 场景，但仍保留计算值供分析使用
 
     return min(liq_price_raw, _LIQ_PRICE_CAP)
 
@@ -182,7 +192,8 @@ async def recalc_all(
 
     while offset < total:
         fetch_q = (
-            f"SELECT id, liq_price, eth_price_usd, reserves_json "
+            f"SELECT id, liq_price, eth_price_usd, reserves_json, "
+            f"total_collateral_usd, liq_threshold "
             f"FROM loan.position_snapshot_cache {where} "
             f"ORDER BY id LIMIT {batch_size} OFFSET {offset}"
         )
@@ -199,7 +210,11 @@ async def recalc_all(
             except Exception:
                 reserves = []
 
-            new_liq = recalc_liq_price(reserves, p_now)  # 基于 WETH 价格计算
+            new_liq = recalc_liq_price(
+                reserves, p_now,
+                _dec(row["total_collateral_usd"]),
+                _dec(row["liq_threshold"]),
+            )
 
             if new_liq == old_liq:
                 skipped += 1
