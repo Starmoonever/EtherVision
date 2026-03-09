@@ -20,7 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.routes import router
 from .api.service import _cache
 from .config import load_config
-from .db import create_pool
+from .db import (TABLES_V2, TABLES_V2_BORROW, TABLES_V3, TABLES_V3_BORROW,
+                 create_pool, ensure_snapshot_cache_table, ensure_tables)
 from .rpc import build_web3
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("正在连接数据库...")
     pool = await create_pool(cfg.postgres)
     application.state.pool = pool
+    # 确保所有协议表存在并应用 migration（幂等，开销极小）
+    for _tables in (TABLES_V3, TABLES_V2, TABLES_V3_BORROW, TABLES_V2_BORROW):
+        await ensure_tables(pool, _tables)
+    await ensure_snapshot_cache_table(pool)
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
     await pool.close()

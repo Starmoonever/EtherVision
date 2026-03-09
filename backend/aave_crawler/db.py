@@ -563,6 +563,23 @@ def _calc_weth_debt(pos: UserPosition) -> tuple[Decimal, Decimal]:
     return weth_debt_raw, weth_debt_usd
 
 
+def _get_weth_price(pos: UserPosition) -> Decimal:
+    """从 reserves 中提取 WETH 的 oracle 价格（8位精度）。
+    若不存在 WETH 则取任意 ETH 系资产价格；若 reserves 中无 ETH 系资产则返回 0。
+    """
+    weth_price = Decimal("0")
+    for r in pos.reserves:
+        if r.symbol.upper() not in _ETH_SYMBOLS:
+            continue
+        price = _raw_to_decimal(r.price_raw, 8)
+        if price > 0:
+            # 优先取 WETH 本身，否则取第一个有效 ETH 系价格
+            if r.symbol.upper() == "WETH":
+                return price
+            weth_price = price
+    return weth_price
+
+
 def _calc_eth_collateral(pos: UserPosition) -> tuple[Decimal, Decimal]:
     """汇总所有 ETH 系抵押品（amount 合计, USD 合计）。"""
     total_amount = Decimal("0")
@@ -702,6 +719,7 @@ async def upsert_positions(
         hf_raw = s.health_factor
         hf_decimal = _MAX_HF if hf_raw >= _MAX_UINT256 else _raw_to_decimal(hf_raw, 18)
         useraddr = pos.user_address.lower()
+        eth_price_now = _get_weth_price(pos)
         base_row = (
             useraddr,
             pos.block_number,
@@ -712,12 +730,12 @@ async def upsert_positions(
             hf_decimal,
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
-            _calc_liq_price(pos),
+            _calc_liq_price(pos, eth_price_now),
         )
         if is_borrow:
             weth_debt_raw, weth_debt_usd = _calc_weth_debt(pos)
             summary_rows.append(
-                base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos))
+                base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos, eth_price_now))
             )
         else:
             eth_col_amount, eth_col_usd = _calc_eth_collateral(pos)

@@ -360,23 +360,46 @@ async def get_sorted_positions(
     """
     order_col = _SORT_COLS.get(orderby, "liq_price")
     order_dir = _SORT_DIRS.get(order, "ASC")
-    pos_table, _ = _tables(protocol)
+    pos_table, res_table = _tables(protocol)
+    eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
 
     sql = f"""
+WITH eth_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_raw / POWER(10, r.decimals::NUMERIC))  AS eth_col_amount,
+        SUM(r.supply_usd)                                    AS eth_col_usd
+    FROM loan."{res_table}" r
+    WHERE UPPER(r.symbol) = ANY(ARRAY[{eth_upper_sql}]::text[])
+      AND r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+),
+latest_snaps AS (
+    SELECT DISTINCT ON (user_address)
+        user_address,
+        liq_price_weth
+    FROM loan.position_snapshot_cache
+    WHERE protocol = '{protocol}'
+      AND liq_price_weth > 0
+    ORDER BY user_address, block_timestamp DESC
+)
 SELECT
     p.user_address                                            AS address,
-    p.eth_collateral_amount,
-    p.eth_collateral_usd,
+    COALESCE(e.eth_col_amount, 0)                             AS eth_collateral_amount,
+    COALESCE(e.eth_col_usd, 0)                                AS eth_collateral_usd,
     p.total_collateral_usd,
     p.available_borrows_usd,
     p.total_debt_usd,
     p.health_factor,
     p.ltv,
     p.liq_threshold,
-    p.liq_price
-FROM loan.{pos_table} p
-WHERE p.liq_price > 0
-  AND p.liq_price < 9999999.99
+    COALESCE(s.liq_price_weth, p.liq_price)                  AS liq_price
+FROM loan."{pos_table}" p
+LEFT JOIN eth_cols e     ON e.user_address = p.user_address
+LEFT JOIN latest_snaps s ON s.user_address = p.user_address
+WHERE COALESCE(s.liq_price_weth, p.liq_price) > 0
+  AND COALESCE(s.liq_price_weth, p.liq_price) < 9999999.99
 ORDER BY {order_col} {order_dir}
 LIMIT $1
 """
@@ -424,28 +447,56 @@ def _build_simulate_sql(
     order_col: str,
     order_dir: str,
     pos_table: str,
+    res_table: str,
+    protocol: str,
     use_cap: bool = False,
     use_current_eth_price: bool = False,
 ) -> str:
+    eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
     next_param = 2
     current_price_filter = ""
     if use_current_eth_price:
-        current_price_filter = f"  AND p.liq_price <= ${next_param}::numeric"
+        current_price_filter = f"  AND liq_price <= ${next_param}::numeric"
         next_param += 1
-    cap_filter = f"  AND p.liq_price < ${next_param}::numeric" if use_cap else ""
+    cap_filter = f"  AND liq_price < ${next_param}::numeric" if use_cap else ""
     return f"""
-SELECT
-    p.user_address                                                AS address,
-    p.eth_collateral_amount,
-    p.eth_collateral_amount * $1::numeric                         AS eth_collateral_usd,
-    p.eth_collateral_usd                                          AS eth_supply_usd_stored,
-    p.total_collateral_usd,
-    p.total_debt_usd,
-    p.liq_price
-FROM loan.{pos_table} p
-WHERE p.liq_price > 0
-  AND p.liq_price < 9999999.99
-  AND p.liq_price >= $1::numeric
+WITH eth_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_raw / POWER(10, r.decimals::NUMERIC))  AS eth_col_amount,
+        SUM(r.supply_usd)                                    AS eth_col_usd
+    FROM loan."{res_table}" r
+    WHERE UPPER(r.symbol) = ANY(ARRAY[{eth_upper_sql}]::text[])
+      AND r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+),
+latest_snaps AS (
+    SELECT DISTINCT ON (user_address)
+        user_address,
+        liq_price_weth
+    FROM loan.position_snapshot_cache
+    WHERE protocol = '{protocol}'
+      AND liq_price_weth > 0
+    ORDER BY user_address, block_timestamp DESC
+),
+base AS (
+    SELECT
+        p.user_address                                                AS address,
+        COALESCE(e.eth_col_amount, 0)                                 AS eth_collateral_amount,
+        COALESCE(e.eth_col_amount, 0) * $1::numeric                   AS eth_collateral_usd,
+        COALESCE(e.eth_col_usd, 0)                                    AS eth_supply_usd_stored,
+        p.total_collateral_usd,
+        p.total_debt_usd,
+        COALESCE(s.liq_price_weth, p.liq_price)                      AS liq_price
+    FROM loan."{pos_table}" p
+    LEFT JOIN eth_cols e    ON e.user_address = p.user_address
+    LEFT JOIN latest_snaps s ON s.user_address = p.user_address
+)
+SELECT * FROM base
+WHERE liq_price > 0
+  AND liq_price < 9999999.99
+  AND liq_price >= $1::numeric
 {current_price_filter}
 {cap_filter}
 ORDER BY {order_col} {order_dir}
@@ -477,11 +528,13 @@ async def simulate_liquidation(
     """
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
-    pos_table, _ = _tables(protocol)
+    pos_table, res_table = _tables(protocol)
     sql = _build_simulate_sql(
         order_col,
         order_dir,
         pos_table,
+        res_table,
+        protocol,
         use_cap=cap is not None,
         use_current_eth_price=current_eth_price is not None,
     )
@@ -558,17 +611,44 @@ async def simulate_liquidation(
 
 
 # 全量拉取所有有清算价的仓位（用于区间模拟，避免每个价格点单独查询）
-def _sql_all_liq_positions(pos_table: str) -> str:
+def _sql_all_liq_positions(pos_table: str, res_table: str, protocol: str) -> str:
+    """构建查询 SQL。
+    - 通过 JOIN reserve_positions 表实时计算 eth_collateral_amount/usd（避免依赖可能为 0 的预计算列）。
+    - 优先使用 position_snapshot_cache 中经过修正的 liq_price_weth，回退到主表的 liq_price。
+    """
+    eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
     return f"""
+WITH eth_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_raw / POWER(10, r.decimals::NUMERIC))  AS eth_col_amount,
+        SUM(r.supply_usd)                                    AS eth_col_usd
+    FROM loan."{res_table}" r
+    WHERE UPPER(r.symbol) = ANY(ARRAY[{eth_upper_sql}]::text[])
+      AND r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+),
+latest_snaps AS (
+    SELECT DISTINCT ON (user_address)
+        user_address,
+        liq_price_weth
+    FROM loan.position_snapshot_cache
+    WHERE protocol = '{protocol}'
+      AND liq_price_weth > 0
+    ORDER BY user_address, block_timestamp DESC
+)
 SELECT
-    p.eth_collateral_amount,
-    p.eth_collateral_usd                             AS eth_supply_usd_stored,
+    COALESCE(e.eth_col_amount, 0)                AS eth_collateral_amount,
+    COALESCE(e.eth_col_usd, 0)                   AS eth_supply_usd_stored,
     p.total_collateral_usd,
     p.total_debt_usd,
-    p.liq_price
-FROM loan.{pos_table} p
-WHERE p.liq_price > 0
-  AND p.liq_price < 9999999.99
+    COALESCE(s.liq_price_weth, p.liq_price)      AS liq_price
+FROM loan."{pos_table}" p
+LEFT JOIN eth_cols e    ON e.user_address = p.user_address
+LEFT JOIN latest_snaps s ON s.user_address = p.user_address
+WHERE COALESCE(s.liq_price_weth, p.liq_price) > 0
+  AND COALESCE(s.liq_price_weth, p.liq_price) < 9999999.99
 """
 
 
@@ -593,8 +673,8 @@ async def simulate_liquidation_period(
         raise HTTPException(status_code=400, detail="start 必须 <= end")
 
     # 一次拉取所有有清算价的仓位
-    pos_table, _ = _tables(protocol)
-    rows = await pool.fetch(_sql_all_liq_positions(pos_table))
+    pos_table, res_table = _tables(protocol)
+    rows = await pool.fetch(_sql_all_liq_positions(pos_table, res_table, protocol))
     positions = [
         (
             Decimal(str(r["eth_collateral_amount"])),
