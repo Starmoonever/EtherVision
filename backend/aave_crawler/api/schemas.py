@@ -267,14 +267,23 @@ class PositionSnapshotPoint(BaseModel):
     available_borrows_usd: str
     health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
     liq_threshold: str = Field(description="清算阈值（0~1）")
-    liq_price: str = Field(description="ETH 下跌清算触发价（USD，基于 WETH 价格计算，可直接与 eth_price_usd 比较）；0 表示无风险")
-    liq_price_rise: str = Field(description="ETH 上涨清算触发价（USD）；0 表示无上涨风险")
+    liq_price: str = Field(
+        description="ETH 下跌清算触发价（USD，基于 WETH 价格计算，可直接与 eth_price_usd 比较）；0 表示无风险"
+    )
+    liq_price_rise: str = Field(
+        description="ETH 上涨清算触发价（USD）；0 表示无上涨风险"
+    )
     eth_collateral_amount: str = Field(description="ETH 系抵押品合计数量")
     eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
     weth_debt_amount: str = Field(description="ETH 系负债合计数量")
     weth_debt_usd: str = Field(description="ETH 系负债合计 USD")
-    operation_type: str = Field(default="", description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
-    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
+    operation_type: str = Field(
+        default="",
+        description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等",
+    )
+    brief: str = Field(
+        default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）"
+    )
     reserves: list[SnapshotReserveDetail] = Field(
         default_factory=list,
         description="资产明细；仅当请求 detail=true 时填充",
@@ -351,10 +360,14 @@ class TxHistoryItem(BaseModel):
     tx_hash: str
     block_number: int
     timestamp: str = Field(description="区块 UTC 时间")
-    operation_type: str = Field(description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等")
+    operation_type: str = Field(
+        description="事件类型：supply / withdraw / borrow / repay / liquidationcall 等"
+    )
     token_symbol: str = Field(description="涉及的资产符号")
     cached: bool = Field(description="该 tx 的仓位快照是否已在缓存中")
-    brief: str = Field(default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）")
+    brief: str = Field(
+        default="", description="人类可读的交易摘要（由 AI-ContractParser 生成）"
+    )
 
 
 class TxHistoryResponse(BaseModel):

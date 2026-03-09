@@ -93,7 +93,11 @@ def main() -> None:
         type=int,
         help="工作进程数（reload 时固定为 1）",
     )
-    @click.option("--log-level", default=None, help="日志级别（默认读取 config.yaml log_level，缺省 info）")
+    @click.option(
+        "--log-level",
+        default=None,
+        help="日志级别（默认读取 config.yaml log_level，缺省 info）",
+    )
     @click.option(
         "--reload-dir",
         "reload_dirs",
@@ -130,6 +134,7 @@ def main() -> None:
         if log_level is None:
             try:
                 from .config import load_config as _load_cfg
+
                 log_level = _load_cfg().log_level
             except Exception:
                 log_level = "info"

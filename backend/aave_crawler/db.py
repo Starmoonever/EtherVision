@@ -403,16 +403,17 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     if eth_price_now is None or eth_price_now == 0:
         return Decimal("0")
 
-    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×P_now×θ（ETH资产θ长期稳定，可信）
-    eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×P_now
-    d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
+    eth_col_theta_usd = Decimal(
+        "0"
+    )  # Σ ETH系抵押 amount×P_now×θ（ETH资产θ长期稳定，可信）
+    eth_debt_usd = Decimal("0")  # Σ ETH系负债 amount×P_now
+    d_fixed = Decimal("0")  # Σ 非ETH负债 USD
 
     for r in pos.reserves:
         price = _raw_to_decimal(r.price_raw, 8)
         supply_amount = _raw_to_decimal(r.supply_raw, r.decimals)
-        debt_amount = (
-            _raw_to_decimal(r.stable_debt_raw, r.decimals)
-            + _raw_to_decimal(r.variable_debt_raw, r.decimals)
+        debt_amount = _raw_to_decimal(r.stable_debt_raw, r.decimals) + _raw_to_decimal(
+            r.variable_debt_raw, r.decimals
         )
         r_liq_threshold = Decimal(r.liquidation_threshold) / Decimal(10000)
 
@@ -434,7 +435,9 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     #   c_fixed = total_col_theta − eth_col_theta_usd
     # 这样可以完全绕过 reserves_json 里因治理更新而失效的每资产 θ 值
     total_col_usd = _raw_to_decimal(s.total_collateral_base, 8)
-    total_col_theta_usd = total_col_usd * (Decimal(s.current_liquidation_threshold) / Decimal(10000))
+    total_col_theta_usd = total_col_usd * (
+        Decimal(s.current_liquidation_threshold) / Decimal(10000)
+    )
     c_fixed = max(Decimal("0"), total_col_theta_usd - eth_col_theta_usd)
 
     # denom = 加权ETH抵押 - ETH债务（均以当前P_now计量）
@@ -621,10 +624,10 @@ async def fetch_user_addresses(
     if incremental:
         tgt = target_tables if target_tables is not None else tables
         where_parts.append(
-            f'NOT EXISTS ('
+            f"NOT EXISTS ("
             f'SELECT 1 FROM loan."{tgt.positions}" p '
             f'WHERE p.user_address = LOWER("{address_column}")'
-            f')'
+            f")"
         )
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     limit_clause = f"LIMIT {limit}" if limit else ""
@@ -735,7 +738,12 @@ async def upsert_positions(
         if is_borrow:
             weth_debt_raw, weth_debt_usd = _calc_weth_debt(pos)
             summary_rows.append(
-                base_row + (weth_debt_raw, weth_debt_usd, _calc_liq_price_rise(pos, eth_price_now))
+                base_row
+                + (
+                    weth_debt_raw,
+                    weth_debt_usd,
+                    _calc_liq_price_rise(pos, eth_price_now),
+                )
             )
         else:
             eth_col_amount, eth_col_usd = _calc_eth_collateral(pos)
@@ -1126,7 +1134,7 @@ async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
 async def fetch_user_tx_history(
     pool: asyncpg.Pool,
     user_address: str,
-    protocol: str,          # 'v2' | 'v3'
+    protocol: str,  # 'v2' | 'v3'
     from_ts: datetime,
     to_ts: datetime,
 ) -> list:
@@ -1139,7 +1147,7 @@ async def fetch_user_tx_history(
         block_number, block_timestamp, tx_hash, operation_type,
         token_symbol, protocol_version
     """
-    pv = protocol[-1]   # 'v3' -> '3', 'v2' -> '2'
+    pv = protocol[-1]  # 'v3' -> '3', 'v2' -> '2'
     return await pool.fetch(
         _SQL_USER_TX_HISTORY,
         user_address.lower(),
@@ -1172,8 +1180,12 @@ async def get_cached_snapshots(
 async def upsert_snapshot_cache(
     pool: asyncpg.Pool,
     positions: list["UserPosition"],
-    tx_meta: list[dict],    # 与 positions 一一对应，含 tx_hash/block_timestamp/eth_price_usd/protocol
-    briefs: list[str] | None = None,  # 与 positions 等长的 brief 列表；None 时全部填空字符串
+    tx_meta: list[
+        dict
+    ],  # 与 positions 一一对应，含 tx_hash/block_timestamp/eth_price_usd/protocol
+    briefs: (
+        list[str] | None
+    ) = None,  # 与 positions 等长的 brief 列表；None 时全部填空字符串
 ) -> int:
     """批量 UPSERT 快照缓存。
 
@@ -1208,29 +1220,31 @@ async def upsert_snapshot_cache(
         # liq_price_weth:基于 WETH 价格的清算触发价，与 liq_price 使用相同计算
         liq_price_weth = _calc_liq_price(pos, meta["eth_price_usd"])
 
-        rows.append((
-            pos.user_address.lower(),
-            meta["protocol"],
-            pos.block_number,
-            meta["tx_hash"].lower(),
-            meta["block_timestamp"],
-            _raw_to_decimal(s.total_collateral_base, 8),
-            _raw_to_decimal(s.total_debt_base, 8),
-            _raw_to_decimal(s.available_borrows_base, 8),
-            hf_dec,
-            Decimal(s.ltv) / Decimal(10000),
-            Decimal(s.current_liquidation_threshold) / Decimal(10000),
-            liq_price_weth,   # liq_price
-            _calc_liq_price_rise(pos, meta["eth_price_usd"]),
-            liq_price_weth,   # liq_price_weth
-            eth_col_amount,
-            eth_col_usd,
-            weth_debt_amount,
-            weth_debt_usd_dec,
-            meta["eth_price_usd"],
-            json.dumps(reserves_list),
-            _briefs[i] if i < len(_briefs) else "",
-        ))
+        rows.append(
+            (
+                pos.user_address.lower(),
+                meta["protocol"],
+                pos.block_number,
+                meta["tx_hash"].lower(),
+                meta["block_timestamp"],
+                _raw_to_decimal(s.total_collateral_base, 8),
+                _raw_to_decimal(s.total_debt_base, 8),
+                _raw_to_decimal(s.available_borrows_base, 8),
+                hf_dec,
+                Decimal(s.ltv) / Decimal(10000),
+                Decimal(s.current_liquidation_threshold) / Decimal(10000),
+                liq_price_weth,  # liq_price
+                _calc_liq_price_rise(pos, meta["eth_price_usd"]),
+                liq_price_weth,  # liq_price_weth
+                eth_col_amount,
+                eth_col_usd,
+                weth_debt_amount,
+                weth_debt_usd_dec,
+                meta["eth_price_usd"],
+                json.dumps(reserves_list),
+                _briefs[i] if i < len(_briefs) else "",
+            )
+        )
 
     _UPSERT_BATCH = 500
     total_written = 0

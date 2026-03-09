@@ -3,7 +3,7 @@
 格式："{操作类型} {数量} {token符号} (价值 {value} usd)"
 
   - 操作类型（6种中文）：deposit→存入, withdraw→取出, borrow→借出,
-                         repay→偿还, liquidation_call→清算, flashloan→闪电贷
+                         repay→偿还, liquidate→清算, flashloan→闪电贷
   - 数量：amount / 10^decimals，最多 6 位有效小数（尾零去掉）
   - 价值：仅当 token_symbol 在 Aave reserve 中（即能从市场快照表找到 price_usd）时显示
 
@@ -27,19 +27,19 @@ logger = logging.getLogger(__name__)
 
 # ── 操作类型 → 中文标签（6 种）────────────────────────────────────────────────
 _OP_LABELS: dict[str, str] = {
-    "deposit":          "存入",
-    "withdraw":         "取出",
-    "borrow":           "借出",
-    "repay":            "偿还",
-    "liquidation_call": "清算",
-    "flashloan":        "闪电贷",
+    "deposit": "存入",
+    "withdraw": "取出",
+    "borrow": "借出",
+    "repay": "偿还",
+    "liquidate": "清算",
+    "flashloan": "闪电贷",
 }
 
 # protocol → 版本标签（用于 brief 前缀 "在 Aave V{n}"）
 _VERSION_LABEL: dict[str, str] = {
-    "v2":        "V2",
+    "v2": "V2",
     "v2_borrow": "V2",
-    "v3":        "V3",
+    "v3": "V3",
     "v3_borrow": "V3",
 }
 
@@ -81,6 +81,7 @@ _SNAPSHOTS_TABLE: dict[str, str] = {
 
 # ── 格式化工具 ────────────────────────────────────────────────────────────────
 
+
 def _fmt_amount(amount_int: int | str, decimals: int) -> str:
     """原始整数 → 可读小数，最多 6 位，去尾零。uint256.max 返回 '全部'。"""
     try:
@@ -115,7 +116,7 @@ def generate_brief(
         try:
             v = Decimal(str(amount_int))
             if v < _SENTINEL:
-                usd = v / Decimal(10 ** decimals) * price_usd
+                usd = v / Decimal(10**decimals) * price_usd
                 return f"{prefix}{label} {amt_str} {symbol} (价值 {usd:.2f} usd)"
         except Exception:
             pass
@@ -123,6 +124,7 @@ def generate_brief(
 
 
 # ── 价格查询（从市场快照表）──────────────────────────────────────────────────
+
 
 async def _lookup_price(
     pool: asyncpg.Pool,
@@ -143,6 +145,7 @@ async def _lookup_price(
 
 
 # ── 公开接口 ──────────────────────────────────────────────────────────────────
+
 
 async def parse_tx_briefs(
     pool: asyncpg.Pool,
@@ -231,7 +234,9 @@ async def parse_briefs_from_metas(
         if price is None:
             # 回退：从市场快照表查（token 在 reserve 中才有记录）
             price = await _lookup_price(
-                pool, token_addr, row["block_number"],
+                pool,
+                token_addr,
+                row["block_number"],
                 meta.get("protocol", "v3"),
             )
 

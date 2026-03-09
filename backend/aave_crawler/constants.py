@@ -27,8 +27,16 @@ ETH_SYMBOLS: frozenset[str] = frozenset(
 
 # 链上原始大小写（用于 SQL IN 列表，与 ETH_SYMBOLS 元素一一对应）
 _ETH_DISPLAY = (
-    "WETH", "ETH", "cbETH", "wstETH", "rETH",
-    "weETH", "ezETH", "rsETH", "osETH", "ETHx",
+    "WETH",
+    "ETH",
+    "cbETH",
+    "wstETH",
+    "rETH",
+    "weETH",
+    "ezETH",
+    "rsETH",
+    "osETH",
+    "ETHx",
 )
 
 # WHERE symbol IN (...) 字符串，可直接插入 SQL f-string

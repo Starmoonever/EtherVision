@@ -14,6 +14,7 @@ Aave 大盘快照采集核心逻辑。
   upsert_block_timestamps(pool, pairs)
   _block_at_timestamp(w3, target_ts)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,18 +45,18 @@ _GET_RESERVE_DATA_ABI_V3: list[dict[str, Any]] = [
         "inputs": [{"name": "asset", "type": "address"}],
         "name": "getReserveData",
         "outputs": [
-            {"name": "unbacked",                 "type": "uint256"},
-            {"name": "accruedToTreasuryScaled",  "type": "uint256"},
-            {"name": "totalAToken",              "type": "uint256"},
-            {"name": "totalStableDebt",          "type": "uint256"},
-            {"name": "totalVariableDebt",        "type": "uint256"},
-            {"name": "liquidityRate",            "type": "uint256"},
-            {"name": "variableBorrowRate",       "type": "uint256"},
-            {"name": "stableBorrowRate",         "type": "uint256"},
-            {"name": "averageStableRate",        "type": "uint256"},
-            {"name": "liquidityIndex",           "type": "uint256"},
-            {"name": "variableBorrowIndex",      "type": "uint256"},
-            {"name": "lastUpdateTimestamp",      "type": "uint40"},
+            {"name": "unbacked", "type": "uint256"},
+            {"name": "accruedToTreasuryScaled", "type": "uint256"},
+            {"name": "totalAToken", "type": "uint256"},
+            {"name": "totalStableDebt", "type": "uint256"},
+            {"name": "totalVariableDebt", "type": "uint256"},
+            {"name": "liquidityRate", "type": "uint256"},
+            {"name": "variableBorrowRate", "type": "uint256"},
+            {"name": "stableBorrowRate", "type": "uint256"},
+            {"name": "averageStableRate", "type": "uint256"},
+            {"name": "liquidityIndex", "type": "uint256"},
+            {"name": "variableBorrowIndex", "type": "uint256"},
+            {"name": "lastUpdateTimestamp", "type": "uint40"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -68,16 +69,16 @@ _GET_RESERVE_DATA_ABI_V2: list[dict[str, Any]] = [
         "inputs": [{"name": "asset", "type": "address"}],
         "name": "getReserveData",
         "outputs": [
-            {"name": "availableLiquidity",      "type": "uint256"},
-            {"name": "totalStableDebt",         "type": "uint256"},
-            {"name": "totalVariableDebt",       "type": "uint256"},
-            {"name": "liquidityRate",           "type": "uint256"},
-            {"name": "variableBorrowRate",      "type": "uint256"},
-            {"name": "stableBorrowRate",        "type": "uint256"},
+            {"name": "availableLiquidity", "type": "uint256"},
+            {"name": "totalStableDebt", "type": "uint256"},
+            {"name": "totalVariableDebt", "type": "uint256"},
+            {"name": "liquidityRate", "type": "uint256"},
+            {"name": "variableBorrowRate", "type": "uint256"},
+            {"name": "stableBorrowRate", "type": "uint256"},
             {"name": "averageStableBorrowRate", "type": "uint256"},
-            {"name": "liquidityIndex",          "type": "uint256"},
-            {"name": "variableBorrowIndex",     "type": "uint256"},
-            {"name": "lastUpdateTimestamp",     "type": "uint40"},
+            {"name": "liquidityIndex", "type": "uint256"},
+            {"name": "variableBorrowIndex", "type": "uint256"},
+            {"name": "lastUpdateTimestamp", "type": "uint40"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -220,6 +221,7 @@ CREATE INDEX IF NOT EXISTS eth_block_timestamps_ts_idx
 
 # ── 表名辅助 ──────────────────────────────────────────────────────────────────
 
+
 def _table_name(protocol: str) -> str:
     base = protocol.split("_")[0].lower()
     return f"aave_{base}_market_snapshots"
@@ -231,6 +233,7 @@ def _view_name(protocol: str) -> str:
 
 
 # ── 区块时间戳缓存 ────────────────────────────────────────────────────────────
+
 
 async def ensure_block_timestamps_table(pool: asyncpg.Pool) -> None:
     """创建全局区块时间缓存表（protocol 无关，只需调用一次）。"""
@@ -256,6 +259,7 @@ async def upsert_block_timestamps(
 
 
 # ── 区块时间 → 区块号（二分搜索） ────────────────────────────────────────────
+
 
 async def _block_at_timestamp(w3: AsyncWeb3, target_ts: int) -> int:
     """
@@ -308,6 +312,7 @@ async def _block_at_timestamp(w3: AsyncWeb3, target_ts: int) -> int:
 
 # ── 链上数据采集 ──────────────────────────────────────────────────────────────
 
+
 async def _fetch_eth_usd_price(w3: AsyncWeb3, block: int) -> int:
     """通过 Chainlink ETH/USD 聚合器获取 ETH 价格（8 位精度 USD 原始整数）。"""
     try:
@@ -351,51 +356,57 @@ async def _fetch_reserve_data_one(
             px_task = oracle_contract.functions.getAssetPrice(addr_cs).call(
                 block_identifier=block
             )
-            rd, price_raw = await asyncio.gather(rd_task, px_task, return_exceptions=True)
+            rd, price_raw = await asyncio.gather(
+                rd_task, px_task, return_exceptions=True
+            )
         except Exception as exc:
-            logger.debug("reserve %s(%s) block=%d 异常: %s", symbol, token_address, block, exc)
+            logger.debug(
+                "reserve %s(%s) block=%d 异常: %s", symbol, token_address, block, exc
+            )
             return None
 
     if isinstance(rd, Exception):
         logger.debug("getReserveData 失败 %s: %s", symbol, rd)
         return None
-    price_int: int = int(price_raw) if (not isinstance(price_raw, Exception) and price_raw) else 0
+    price_int: int = (
+        int(price_raw) if (not isinstance(price_raw, Exception) and price_raw) else 0
+    )
 
     if is_v2:
-        avail_liq        = int(rd[0])
-        total_stable     = int(rd[1])
-        total_variable   = int(rd[2])
-        liquidity_rate   = int(rd[3])
-        variable_rate    = int(rd[4])
-        stable_rate      = int(rd[5])
-        liquidity_index  = int(rd[7])
-        variable_index   = int(rd[8])
-        last_update_ts   = int(rd[9])
-        total_supply     = avail_liq + total_stable + total_variable
+        avail_liq = int(rd[0])
+        total_stable = int(rd[1])
+        total_variable = int(rd[2])
+        liquidity_rate = int(rd[3])
+        variable_rate = int(rd[4])
+        stable_rate = int(rd[5])
+        liquidity_index = int(rd[7])
+        variable_index = int(rd[8])
+        last_update_ts = int(rd[9])
+        total_supply = avail_liq + total_stable + total_variable
     else:
-        total_supply     = int(rd[2])
-        total_stable     = int(rd[3])
-        total_variable   = int(rd[4])
-        liquidity_rate   = int(rd[5])
-        variable_rate    = int(rd[6])
-        stable_rate      = int(rd[7])
-        liquidity_index  = int(rd[9])
-        variable_index   = int(rd[10])
-        last_update_ts   = int(rd[11])
+        total_supply = int(rd[2])
+        total_stable = int(rd[3])
+        total_variable = int(rd[4])
+        liquidity_rate = int(rd[5])
+        variable_rate = int(rd[6])
+        stable_rate = int(rd[7])
+        liquidity_index = int(rd[9])
+        variable_index = int(rd[10])
+        last_update_ts = int(rd[11])
 
     return {
-        "token_address":      token_address.lower(),
-        "symbol":             symbol,
-        "price_raw":          price_int,
-        "total_supply_raw":   total_supply,
-        "total_stable_raw":   total_stable,
+        "token_address": token_address.lower(),
+        "symbol": symbol,
+        "price_raw": price_int,
+        "total_supply_raw": total_supply,
+        "total_stable_raw": total_stable,
         "total_variable_raw": total_variable,
-        "liquidity_rate":     liquidity_rate,
-        "variable_rate":      variable_rate,
-        "stable_rate":        stable_rate,
-        "liquidity_index":    liquidity_index,
-        "variable_index":     variable_index,
-        "last_update_ts":     last_update_ts,
+        "liquidity_rate": liquidity_rate,
+        "variable_rate": variable_rate,
+        "stable_rate": stable_rate,
+        "liquidity_index": liquidity_index,
+        "variable_index": variable_index,
+        "last_update_ts": last_update_ts,
     }
 
 
@@ -452,8 +463,7 @@ async def collect_block_snapshot(
 
     tasks = [
         _fetch_reserve_data_one(
-            data_contract, oracle_contract,
-            addr, sym, block, semaphore, is_v2
+            data_contract, oracle_contract, addr, sym, block, semaphore, is_v2
         )
         for sym, addr in reserve_tokens
     ]
@@ -469,7 +479,9 @@ async def collect_block_snapshot(
         valid = [r for r in results if r is not None]
         logger.info(
             "[%s][dry-run] block=%d  有效 reserve=%d，跳过写库",
-            protocol, block, len(valid),
+            protocol,
+            block,
+            len(valid),
         )
         return len(valid)
 
@@ -478,8 +490,8 @@ async def collect_block_snapshot(
         if item is None:
             continue
 
-        addr       = item["token_address"]
-        dec        = decimals_map.get(addr, 18)
+        addr = item["token_address"]
+        dec = decimals_map.get(addr, 18)
         dec_factor = Decimal(10**dec)
 
         price_raw = item["price_raw"]
@@ -490,13 +502,13 @@ async def collect_block_snapshot(
 
         price_usd = Decimal(price_usd_raw) / Decimal(10**8)
 
-        supply_raw     = item["total_supply_raw"]
-        stable_raw     = item["total_stable_raw"]
-        variable_raw   = item["total_variable_raw"]
+        supply_raw = item["total_supply_raw"]
+        stable_raw = item["total_stable_raw"]
+        variable_raw = item["total_variable_raw"]
         total_debt_raw = stable_raw + variable_raw
 
-        supply_usd    = price_usd * Decimal(supply_raw) / dec_factor
-        debt_usd      = price_usd * Decimal(total_debt_raw) / dec_factor
+        supply_usd = price_usd * Decimal(supply_raw) / dec_factor
+        debt_usd = price_usd * Decimal(total_debt_raw) / dec_factor
         avail_liq_usd = supply_usd - debt_usd
 
         util = (
@@ -511,28 +523,30 @@ async def collect_block_snapshot(
             else None
         )
 
-        rows.append((
-            block,
-            block_ts,
-            collected_at,
-            addr,
-            item["symbol"],
-            dec,
-            price_usd.quantize(Decimal("1e-8")),
-            supply_raw,
-            stable_raw,
-            variable_raw,
-            supply_usd.quantize(Decimal("1e-8")),
-            debt_usd.quantize(Decimal("1e-8")),
-            max(avail_liq_usd, Decimal(0)).quantize(Decimal("1e-8")),
-            item["liquidity_rate"],
-            item["variable_rate"],
-            item["stable_rate"],
-            util.quantize(Decimal("1e-6")),
-            item["liquidity_index"],
-            item["variable_index"],
-            lut,
-        ))
+        rows.append(
+            (
+                block,
+                block_ts,
+                collected_at,
+                addr,
+                item["symbol"],
+                dec,
+                price_usd.quantize(Decimal("1e-8")),
+                supply_raw,
+                stable_raw,
+                variable_raw,
+                supply_usd.quantize(Decimal("1e-8")),
+                debt_usd.quantize(Decimal("1e-8")),
+                max(avail_liq_usd, Decimal(0)).quantize(Decimal("1e-8")),
+                item["liquidity_rate"],
+                item["variable_rate"],
+                item["stable_rate"],
+                util.quantize(Decimal("1e-6")),
+                item["liquidity_index"],
+                item["variable_index"],
+                lut,
+            )
+        )
 
     if rows:
         sql = _UPSERT_SQL.format(table=table)
@@ -540,7 +554,10 @@ async def collect_block_snapshot(
             await conn.executemany(sql, rows)
         logger.info(
             "[%s] block=%d  写入 %d 条 reserve 快照 (block_ts=%s)",
-            protocol, block, len(rows), block_ts.isoformat(),
+            protocol,
+            block,
+            len(rows),
+            block_ts.isoformat(),
         )
         await upsert_block_timestamps(pool, [(block, block_ts)])
     else:
@@ -551,9 +568,10 @@ async def collect_block_snapshot(
 
 # ── 表初始化 ──────────────────────────────────────────────────────────────────
 
+
 async def ensure_market_snapshot_table(pool: asyncpg.Pool, protocol: str) -> None:
     table = _table_name(protocol)
-    view  = _view_name(protocol)
+    view = _view_name(protocol)
     async with pool.acquire() as conn:
         await conn.execute(_DDL_MARKET_SNAPSHOTS.format(table=table))
         await conn.execute(_DDL_MARKET_TOTALS.format(table=table, view=view))

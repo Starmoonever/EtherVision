@@ -186,16 +186,18 @@ async def _sync_snapshot_cache(
         pos, eth_price_raw = res
         eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
         positions.append(pos)
-        metas.append({
-            "tx_hash": t["tx_hash"],
-            "block_timestamp": t["block_timestamp"],
-            "eth_price_usd": eth_price_dec,
-            "protocol": proto,
-            "prices": {
-                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
-                for r in pos.reserves
-            },
-        })
+        metas.append(
+            {
+                "tx_hash": t["tx_hash"],
+                "block_timestamp": t["block_timestamp"],
+                "eth_price_usd": eth_price_dec,
+                "protocol": proto,
+                "prices": {
+                    r.token_address.lower(): Decimal(r.price_raw) / Decimal(10**8)
+                    for r in pos.reserves
+                },
+            }
+        )
 
     if positions:
         briefs = await parse_briefs_from_metas(pool, metas)

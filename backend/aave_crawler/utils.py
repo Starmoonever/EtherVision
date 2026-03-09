@@ -12,4 +12,4 @@ def raw_to_decimal(raw: int, decimals: int) -> Decimal:
 
     等价于 Decimal(raw) / 10**decimals，集中定义避免各模块重复实现。
     """
-    return Decimal(raw) / Decimal(10 ** decimals)
+    return Decimal(raw) / Decimal(10**decimals)

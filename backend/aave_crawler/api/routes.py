@@ -314,6 +314,7 @@ async def liquidate_period(
         current_eth_price=current_eth_price,
     )
 
+
 # ── 历史回放路由 ───────────────────────────────────────────────────────────────────────
 
 
@@ -372,8 +373,12 @@ async def market_snapshot_replay(
     request: Request,
     start: str = Query(..., description="起始时间（UTC），如 2024-01-01"),
     end: str = Query(..., description="结束时间（UTC），如 2025-01-01"),
-    version: Literal["v2", "v3"] = Query("v3", description="Aave 协议版本：v2 或 v3（默认）"),
-    interval: int = Query(1, ge=1, description="采样间隔（天），默认 1（每天一个数据点）"),
+    version: Literal["v2", "v3"] = Query(
+        "v3", description="Aave 协议版本：v2 或 v3（默认）"
+    ),
+    interval: int = Query(
+        1, ge=1, description="采样间隔（天），默认 1（每天一个数据点）"
+    ),
     detail: bool = Query(False, description="是否展开每个 reserve 明细（默认 false）"),
 ) -> MarketReplayResponse:
     from_ts = _parse_utc_time(start)
@@ -407,13 +412,21 @@ async def user_tx_history(
     start: str = Query(..., description="起始时间（UTC）"),
     end: str = Query(..., description="结束时间（UTC）"),
     version: Literal["v2", "v3"] = Query("v3", description="协议版本"),
-    detail: bool = Query(False, description="是否返回完整交易列表（默认 false，仅返回汇总统计）"),
+    detail: bool = Query(
+        False, description="是否返回完整交易列表（默认 false，仅返回汇总统计）"
+    ),
 ) -> TxHistoryResponse:
     from_ts = _parse_utc_time(start)
     to_ts = _parse_utc_time(end)
     return await get_user_tx_history(
-        _pool(request), address, from_ts=from_ts, to_ts=to_ts, protocol=version, detail=detail
+        _pool(request),
+        address,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        protocol=version,
+        detail=detail,
     )
+
 
 # ── 借贷端（做空 ETH / borrow WETH）清算分析路由 ─────────────────────────────
 

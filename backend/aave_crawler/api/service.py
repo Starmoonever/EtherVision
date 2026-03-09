@@ -1880,15 +1880,19 @@ async def get_market_replay(
                 ensure_market_snapshot_table as _ensure_mkt_table
             from ..market_collector import \
                 refresh_market_totals as _refresh_mkt_totals
+
             if len(missing) > _MAX_MARKET_ONLINE_COLLECT:
                 logger.warning(
                     "market_replay[%s]: 缺失 %d 个时间桶，仅补采最近 %d 个",
-                    protocol, len(missing), _MAX_MARKET_ONLINE_COLLECT,
+                    protocol,
+                    len(missing),
+                    _MAX_MARKET_ONLINE_COLLECT,
                 )
                 missing = missing[-_MAX_MARKET_ONLINE_COLLECT:]
             logger.info(
                 "market_replay[%s]: 开始在线补采 %d 个缺失时间桶",
-                protocol, len(missing),
+                protocol,
+                len(missing),
             )
             await _ensure_mkt_table(pool, protocol)
             now_unix = int(datetime.now(tz=timezone.utc).timestamp())
@@ -1899,7 +1903,9 @@ async def get_market_replay(
                 target_ts = min(bk_anchor + interval_epoch // 2, now_unix - 60)
                 try:
                     block = await _block_at_timestamp(w3, target_ts)
-                    await _collect_block_snapshot(w3, pool, protocol, block, collect_sem)
+                    await _collect_block_snapshot(
+                        w3, pool, protocol, block, collect_sem
+                    )
                 except Exception as exc:
                     logger.warning(
                         "market_replay[%s]: 补采桶 %s 失败: %s",
@@ -2235,7 +2241,11 @@ async def get_user_position_replay(
         row = final_map.get(t["tx_hash"])
         if row is None:
             continue  # 该 tx 的 RPC 重放失败，跳过
-        points.append(_format_snapshot_point(row, detail=detail, operation_type=t.get("operation_type", "")))
+        points.append(
+            _format_snapshot_point(
+                row, detail=detail, operation_type=t.get("operation_type", "")
+            )
+        )
     _t_fmt1 = _time_mod.perf_counter()
 
     # 以「实际返回的点」为基准计算命中率和数据来源：

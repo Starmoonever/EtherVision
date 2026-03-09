@@ -204,11 +204,11 @@ CHAINLINK_ETH_USD_ABI: list[dict] = [
         "inputs": [],
         "name": "latestRoundData",
         "outputs": [
-            {"name": "roundId",          "type": "uint80"},
-            {"name": "answer",           "type": "int256"},
-            {"name": "startedAt",        "type": "uint256"},
-            {"name": "updatedAt",        "type": "uint256"},
-            {"name": "answeredInRound",  "type": "uint80"},
+            {"name": "roundId", "type": "uint80"},
+            {"name": "answer", "type": "int256"},
+            {"name": "startedAt", "type": "uint256"},
+            {"name": "updatedAt", "type": "uint256"},
+            {"name": "answeredInRound", "type": "uint80"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -387,9 +387,16 @@ async def fetch_user_position(
                 eth_usd_raw = asset_prices.get(WETH_ADDRESS, 0)
                 if eth_usd_raw > 0:
                     summary = AccountSummary(
-                        total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
-                        total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
-                        available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                        total_collateral_base=(
+                            summary.total_collateral_base * eth_usd_raw
+                        )
+                        // (10**18),
+                        total_debt_base=(summary.total_debt_base * eth_usd_raw)
+                        // (10**18),
+                        available_borrows_base=(
+                            summary.available_borrows_base * eth_usd_raw
+                        )
+                        // (10**18),
                         current_liquidation_threshold=summary.current_liquidation_threshold,
                         ltv=summary.ltv,
                         health_factor=summary.health_factor,
@@ -501,7 +508,7 @@ async def fetch_user_position_at_block(
                 *reserve_tasks, *price_tasks, return_exceptions=True
             )
             reserve_results = all_results[: len(reserve_tasks)]
-            price_results  = all_results[len(reserve_tasks):]
+            price_results = all_results[len(reserve_tasks) :]
 
             asset_prices: dict[str, int] = {
                 addr: p
@@ -552,7 +559,8 @@ async def fetch_user_position_at_block(
                     except Exception as _v3_exc:
                         logger.warning(
                             "V2 ETH/USD 归一化失败 block=%d (Chainlink+V3均失败): %s",
-                            block_number, _v3_exc,
+                            block_number,
+                            _v3_exc,
                         )
 
                 if eth_usd_raw == 0:
@@ -571,9 +579,13 @@ async def fetch_user_position_at_block(
                 }
                 # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
                 summary = AccountSummary(
-                    total_collateral_base=(summary.total_collateral_base * eth_usd_raw) // (10**18),
+                    total_collateral_base=(summary.total_collateral_base * eth_usd_raw)
+                    // (10**18),
                     total_debt_base=(summary.total_debt_base * eth_usd_raw) // (10**18),
-                    available_borrows_base=(summary.available_borrows_base * eth_usd_raw) // (10**18),
+                    available_borrows_base=(
+                        summary.available_borrows_base * eth_usd_raw
+                    )
+                    // (10**18),
                     current_liquidation_threshold=summary.current_liquidation_threshold,
                     ltv=summary.ltv,
                     health_factor=summary.health_factor,
