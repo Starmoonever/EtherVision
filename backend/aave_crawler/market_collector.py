@@ -166,47 +166,72 @@ ON CONFLICT (block_number, token_address) DO UPDATE SET
     last_update_timestamp    = EXCLUDED.last_update_timestamp;
 """
 
-_DDL_MARKET_TOTALS = """
-CREATE MATERIALIZED VIEW IF NOT EXISTS loan.{view} AS
-SELECT
-    block_number,
-    block_timestamp,
-    -- 全市场规模
-    SUM(total_supply_usd)                           AS tvl_usd,
-    SUM(total_debt_usd)                             AS debt_usd,
-    SUM(total_supply_usd) - SUM(total_debt_usd)     AS liquidity_usd,
-    -- 加权平均利用率（以 total_supply_usd 为权重）
-    CASE WHEN SUM(total_supply_usd) > 0
-         THEN SUM(utilization_rate * total_supply_usd) / SUM(total_supply_usd)
-         ELSE 0
-    END                                             AS weighted_utilization,
-    -- 加权平均存款利率（APY ≈ liquidity_rate_ray / 1e27，以供给 USD 为权）
-    CASE WHEN SUM(total_supply_usd) > 0
-         THEN SUM((liquidity_rate_ray::NUMERIC / 1e27) * total_supply_usd)
-              / SUM(total_supply_usd)
-         ELSE 0
-    END                                             AS weighted_supply_apy,
-    -- 加权平均浮动借款利率（以债务 USD 为权）
-    CASE WHEN SUM(total_debt_usd) > 0
-         THEN SUM((variable_borrow_rate_ray::NUMERIC / 1e27) * total_debt_usd)
-              / SUM(total_debt_usd)
-         ELSE 0
-    END                                             AS weighted_borrow_apy,
-    -- 采集时间（取该区块所有 reserve 中最新的 collected_at）
-    MAX(collected_at)                               AS collected_at
-FROM loan.{table}
-GROUP BY block_number, block_timestamp
-ORDER BY block_number;
+# ── 旧物化视图迁移：若存在物化视图则删除，普通表保留 ────────────────────────────
+# 通过 pg_class.relkind 判断对象类型（'m'=物化视图，'r'=普通表），避免跨类型 DROP 报错
+_DDL_DROP_TOTALS_VIEW = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'loan' AND c.relname = '{view}' AND c.relkind = 'm'
+    ) THEN
+        EXECUTE 'DROP MATERIALIZED VIEW loan.{view}';
+    END IF;
+END$$;
 """
 
-_DDL_TOTALS_INDEX = """
-CREATE UNIQUE INDEX IF NOT EXISTS {view}_block_idx
-    ON loan.{view} (block_number);
+_DDL_MARKET_TOTALS = """
+CREATE TABLE IF NOT EXISTS loan.{view} (
+    block_number             BIGINT          NOT NULL PRIMARY KEY,
+    block_timestamp          TIMESTAMPTZ     NOT NULL,
+    tvl_usd                  NUMERIC(30,8)   NOT NULL DEFAULT 0,
+    debt_usd                 NUMERIC(30,8)   NOT NULL DEFAULT 0,
+    liquidity_usd            NUMERIC(30,8)   NOT NULL DEFAULT 0,
+    weighted_utilization     NUMERIC(20,8)   NOT NULL DEFAULT 0,
+    weighted_supply_apy      NUMERIC(20,8)   NOT NULL DEFAULT 0,
+    weighted_borrow_apy      NUMERIC(20,8)   NOT NULL DEFAULT 0,
+    collected_at             TIMESTAMPTZ     NOT NULL
+);
 """
 
 _DDL_TOTALS_TS_INDEX = """
 CREATE INDEX IF NOT EXISTS {view}_ts_idx
     ON loan.{view} (block_timestamp);
+"""
+
+# 滚动增量更新：将 snapshots 中尚未汇总的区块聚合写入 totals 表
+_UPSERT_TOTALS_SQL = """
+INSERT INTO loan.{view} (
+    block_number, block_timestamp,
+    tvl_usd, debt_usd, liquidity_usd,
+    weighted_utilization, weighted_supply_apy, weighted_borrow_apy,
+    collected_at
+)
+SELECT
+    s.block_number,
+    s.block_timestamp,
+    SUM(s.total_supply_usd),
+    SUM(s.total_debt_usd),
+    SUM(s.total_supply_usd) - SUM(s.total_debt_usd),
+    CASE WHEN SUM(s.total_supply_usd) > 0
+         THEN SUM(s.utilization_rate * s.total_supply_usd) / SUM(s.total_supply_usd)
+         ELSE 0 END,
+    CASE WHEN SUM(s.total_supply_usd) > 0
+         THEN SUM((s.liquidity_rate_ray::NUMERIC / 1e27) * s.total_supply_usd)
+              / SUM(s.total_supply_usd)
+         ELSE 0 END,
+    CASE WHEN SUM(s.total_debt_usd) > 0
+         THEN SUM((s.variable_borrow_rate_ray::NUMERIC / 1e27) * s.total_debt_usd)
+              / SUM(s.total_debt_usd)
+         ELSE 0 END,
+    MAX(s.collected_at)
+FROM loan.{table} s
+WHERE NOT EXISTS (
+    SELECT 1 FROM loan.{view} t WHERE t.block_number = s.block_number
+)
+GROUP BY s.block_number, s.block_timestamp
+ON CONFLICT (block_number) DO NOTHING;
 """
 
 _DDL_BLOCK_TIMESTAMPS = """
@@ -571,22 +596,21 @@ async def collect_block_snapshot(
 
 async def ensure_market_snapshot_table(pool: asyncpg.Pool, protocol: str) -> None:
     table = _table_name(protocol)
-    view = _view_name(protocol)
+    totals = _view_name(protocol)
     async with pool.acquire() as conn:
         await conn.execute(_DDL_MARKET_SNAPSHOTS.format(table=table))
-        await conn.execute(_DDL_MARKET_TOTALS.format(table=table, view=view))
-        await conn.execute(_DDL_TOTALS_INDEX.format(view=view))
-        await conn.execute(_DDL_TOTALS_TS_INDEX.format(view=view))
-    logger.info("表 loan.%s 及物化视图 loan.%s 已就绪", table, view)
+        # 迁移：若旧物化视图存在则先删除（CREATE TABLE 与 CREATE MATERIALIZED VIEW 同名会冲突）
+        await conn.execute(_DDL_DROP_TOTALS_VIEW.format(view=totals))
+        await conn.execute(_DDL_MARKET_TOTALS.format(view=totals))
+        await conn.execute(_DDL_TOTALS_TS_INDEX.format(view=totals))
+    logger.info("表 loan.%s 及汇总表 loan.%s 已就绪", table, totals)
 
 
 async def refresh_market_totals(pool: asyncpg.Pool, protocol: str) -> None:
-    """刷新物化视图（在每次写入新快照后调用）。"""
-    view = _view_name(protocol)
+    """将 market_snapshots 中新增的区块增量写入 market_totals 汇总表（滚动更新）。"""
+    totals = _view_name(protocol)
+    table = _table_name(protocol)
+    sql = _UPSERT_TOTALS_SQL.format(view=totals, table=table)
     async with pool.acquire() as conn:
-        try:
-            await conn.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY loan.{view};")
-            logger.info("物化视图 loan.%s 已刷新（CONCURRENTLY）", view)
-        except Exception:
-            await conn.execute(f"REFRESH MATERIALIZED VIEW loan.{view};")
-            logger.info("物化视图 loan.%s 已刷新", view)
+        result = await conn.execute(sql)
+    logger.info("汇总表 loan.%s 滚动更新完成: %s", totals, result)

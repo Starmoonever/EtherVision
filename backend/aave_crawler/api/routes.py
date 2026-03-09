@@ -363,8 +363,8 @@ async def user_position_replay(
     description=(
         "查询 Aave V2/V3 某时间段内的全市场历史大盘数据，"
         "每个区块快照为一个数据点。\n\n"
-        "- 数据来源：`loan.aave_v{2|3}_market_totals`（物化视图），需要先运行 `collect_market_snapshots.py` 采集\n"
-        "- `interval` 控制数据点密度，单位天，从起始时间按间隔选取最近的快照\n"
+        "- 数据来源：`loan.aave_v{2|3}_market_totals`（汇总表，滚动更新），需要先运行 `collect_market_snapshots.py` 采集\n"
+        "- `interval` 控制数据点密度，单位小时，从起始时间按间隔选取最近的快照\n"
         "- `detail=true` 时展开每个 reserve 的明细数据\n\n"
         "支持时间格式：`2024-11-14T12:00:00Z` / `2024-01-01`"
     ),
@@ -377,7 +377,7 @@ async def market_snapshot_replay(
         "v3", description="Aave 协议版本：v2 或 v3（默认）"
     ),
     interval: int = Query(
-        1, ge=1, description="采样间隔（天），默认 1（每天一个数据点）"
+        24, ge=1, description="采样间隔（小时），默认 24（每天一个数据点）"
     ),
     detail: bool = Query(False, description="是否展开每个 reserve 明细（默认 false）"),
 ) -> MarketReplayResponse:
@@ -390,7 +390,7 @@ async def market_snapshot_replay(
         protocol=version,
         from_ts=from_ts,
         to_ts=to_ts,
-        interval_days=interval,
+        interval_hours=interval,
         detail=detail,
         w3=_w3(request),
     )

@@ -349,7 +349,7 @@ class MarketReplayResponse(BaseModel):
     protocol: str = Field(description="协议版本：v2 | v3")
     from_time: str = Field(description="查询起始时间（UTC）")
     to_time: str = Field(description="查询结束时间（UTC）")
-    interval_days: int = Field(description="实际根据区块间隔采样，单位天")
+    interval_hours: int = Field(description="实际根据区块间隔采样，单位小时")
     points: list[MarketSnapshotPoint]
     total_points: int
 

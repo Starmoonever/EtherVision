@@ -17,19 +17,23 @@ collect_market_snapshots.py
     cd backend
     # 采集单个区块
     uv run python scripts/collect_market_snapshots.py -p v3 --block 21000000
-    # 采集单个日期（UTC 0 点附近区块）
-    uv run python scripts/collect_market_snapshots.py -p v2 -p v3 --date 2024-06-01
-    # 采集日期区间（每 7 天一个快照）
+    # 采集单个时间点（支持日期或 datetime）
+    uv run python scripts/collect_market_snapshots.py -p v2 -p v3 --time 2024-06-01
+    uv run python scripts/collect_market_snapshots.py -p v3 --time 2024-06-01T12:00:00Z
+    # 采集时间区间（每 1 小时一个快照，默认）
     uv run python scripts/collect_market_snapshots.py -p v3 \\
-        --from-date 2024-01-01 --to-date 2025-01-01 --step-days 7
+        --from 2024-01-01 --to 2025-01-01
+    # 每 6 小时一个快照
+    uv run python scripts/collect_market_snapshots.py -p v3 \\
+        --from 2024-01-01T00:00:00Z --to 2024-02-01T00:00:00Z --step-hours 6
 
 选项
     -p / --protocol     v2 | v3，可多次指定（默认 v3）
-    --block    N        指定单个区块号（可与 --date 互斥使用）
-    --date     DATE     指定日期（UTC 0 点），自动二分搜索最近区块
-    --from-date DATE    起始日期（配合 --step-days 生成区间）
-    --to-date   DATE    结束日期（默认今天）
-    --step-days N       日期步长（天，默认 1）
+    --block    N        指定单个区块号
+    --time     DATETIME 指定单个时间点（YYYY-MM-DD 或 YYYY-MM-DDTHH:MM:SSZ）
+    --from     DATETIME 起始时间（配合 --step-hours 生成时间序列）
+    --to       DATETIME 结束时间（默认当前时间，配合 --from）
+    --step-hours N      时间步长（小时，默认 1）
     --rpc-concurrency N RPC 并发上限（默认 12，archive 节点可适当提高）
     --dry-run           仅打印将要采集的区块/协议，不执行 RPC/写库
     --config   PATH     配置文件路径（默认 config.yaml）
@@ -68,21 +72,34 @@ logger = logging.getLogger(__name__)
 
 
 
-async def _date_to_block(
-    w3: AsyncWeb3,
-    date_str: str,
-    pool: "asyncpg.Pool | None" = None,
-) -> int:
-    """将 'YYYY-MM-DD'（UTC 0 点）转换为最近区块号。
+async def _parse_time(time_str: str) -> datetime:
+    """将时间字符串解析为 UTC datetime。
 
-    若提供 pool，先从 eth_block_timestamps 缓存表查询（误差窗口 ±10 分钟），
-    命中则跳过二分搜索；未命中则执行 RPC 搜索后写入缓存。
+    支持格式：
+      YYYY-MM-DD             → 当天 UTC 0 点
+      YYYY-MM-DDTHH:MM:SSZ   → UTC 精确时刻
+      YYYY-MM-DDTHH:MM:SS+00:00
     """
-    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    ts = int(dt.timestamp())
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S+00:00", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(time_str, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    # 纯日期
+    return datetime.strptime(time_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+
+async def _ts_to_block(
+    w3: AsyncWeb3,
+    target_dt: datetime,
+    pool: "asyncpg.Pool | None" = None,
+    cache_window_minutes: int = 5,
+) -> int:
+    """将 UTC datetime 转换为最近区块号，优先查询缓存表。"""
+    ts = int(target_dt.timestamp())
 
     if pool is not None:
-        # 查缓存：找 block_timestamp 最接近 UTC 0 点且在 ±10 分钟内的区块
+        window = timedelta(minutes=cache_window_minutes)
         row = await pool.fetchrow(
             """
             SELECT block_number, block_timestamp
@@ -91,21 +108,25 @@ async def _date_to_block(
             ORDER BY ABS(EXTRACT(EPOCH FROM (block_timestamp - $3))) ASC
             LIMIT 1
             """,
-            dt - timedelta(minutes=10),
-            dt + timedelta(minutes=10),
-            dt,
+            target_dt - window,
+            target_dt + window,
+            target_dt,
         )
         if row:
             logger.info(
-                "日期 %s → 区块 %d (缓存命中，block_ts=%s)",
-                date_str, row["block_number"], row["block_timestamp"].isoformat(),
+                "%s → 区块 %d (缓存命中，block_ts=%s)",
+                target_dt.isoformat(), row["block_number"],
+                row["block_timestamp"].isoformat(),
             )
             return int(row["block_number"])
 
     block = await _block_at_timestamp(w3, ts)
     block_meta = await w3.eth.get_block(block)
     block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)
-    logger.info("日期 %s (unix=%d) → 区块 %d (block_ts=%s)", date_str, ts, block, block_ts.isoformat())
+    logger.info(
+        "%s (unix=%d) → 区块 %d (block_ts=%s)",
+        target_dt.isoformat(), ts, block, block_ts.isoformat(),
+    )
 
     if pool is not None:
         await upsert_block_timestamps(pool, [(block, block_ts)])
@@ -131,14 +152,24 @@ def _parse_args() -> argparse.Namespace:
     # 区块来源（三选其一）
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--block", type=int, help="指定单个区块号")
-    group.add_argument("--date", type=str, metavar="YYYY-MM-DD", help="指定日期（UTC 0 点）")
-    group.add_argument("--from-date", type=str, metavar="YYYY-MM-DD",
-                       help="起始日期（配合 --step-days）")
+    group.add_argument(
+        "--time", type=str, metavar="DATETIME",
+        help="指定单个时间点（YYYY-MM-DD 或 YYYY-MM-DDTHH:MM:SSZ）",
+    )
+    group.add_argument(
+        "--from", dest="from_time", type=str, metavar="DATETIME",
+        help="起始时间（配合 --step-hours 生成时间序列）",
+    )
 
-    p.add_argument("--to-date",   type=str, default="", metavar="YYYY-MM-DD",
-                   help="结束日期（默认今天，配合 --from-date）")
-    p.add_argument("--step-days", type=int, default=1,
-                   help="日期步长（天，默认 1）")
+    p.add_argument(
+        "--to", dest="to_time", type=str, default="",
+        metavar="DATETIME",
+        help="结束时间（默认当前 UTC 时间，配合 --from）",
+    )
+    p.add_argument(
+        "--step-hours", type=int, default=1,
+        help="时间步长（小时，默认 1）",
+    )
     p.add_argument("--rpc-concurrency", type=int, default=12,
                    help="RPC 并发上限（默认 12）")
     p.add_argument("--dry-run", action="store_true",
@@ -173,29 +204,50 @@ async def _main() -> None:
         if args.block is not None:
             target_blocks = [args.block]
 
-        elif args.date:
-            target_blocks = [await _date_to_block(w3, args.date, pool)]
+        elif args.time:
+            target_dt = await _parse_time(args.time)
+            target_blocks = [await _ts_to_block(w3, target_dt, pool)]
 
-        else:  # args.from_date
-            end_str = args.to_date or datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
-            start_dt = datetime.strptime(args.from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            end_dt   = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            step     = timedelta(days=args.step_days)
+        else:  # args.from_time
+            start_dt = await _parse_time(args.from_time)
+            end_dt = (
+                await _parse_time(args.to_time)
+                if args.to_time
+                else datetime.now(tz=timezone.utc)
+            )
+            step = timedelta(hours=args.step_hours)
 
-            date_list: list[str] = []
+            time_points: list[datetime] = []
             cur = start_dt
             while cur <= end_dt:
-                date_list.append(cur.strftime("%Y-%m-%d"))
+                time_points.append(cur)
                 cur += step
 
-            logger.info("日期区间 %s → %s，步长 %d 天，共 %d 个时间点",
-                        args.from_date, end_str, args.step_days, len(date_list))
+            logger.info(
+                "时间区间 %s → %s，步长 %d 小时，共 %d 个时间点",
+                start_dt.isoformat(), end_dt.isoformat(),
+                args.step_hours, len(time_points),
+            )
 
-            # 串行将日期转换为区块号（缓存命中时跳过 RPC 二分搜索）
-            for d in date_list:
-                target_blocks.append(await _date_to_block(w3, d, pool))
+            # 串行将时间点转换为区块号（缓存命中时跳过 RPC 二分搜索）
+            for tp in time_points:
+                target_blocks.append(await _ts_to_block(w3, tp, pool))
 
-        logger.info("目标区块: %s", target_blocks)
+        # 去重（多个时间点可能二分到同一区块）
+        seen: set[int] = set()
+        deduped_blocks: list[int] = []
+        for blk in target_blocks:
+            if blk not in seen:
+                seen.add(blk)
+                deduped_blocks.append(blk)
+        if len(deduped_blocks) < len(target_blocks):
+            logger.info(
+                "去重后目标区块数：%d（原 %d）",
+                len(deduped_blocks), len(target_blocks),
+            )
+        target_blocks = deduped_blocks
+
+        logger.info("目标区块: %d 个", len(target_blocks))
         logger.info("目标协议: %s", protocols)
 
         if args.dry_run:
@@ -205,7 +257,7 @@ async def _main() -> None:
                     logger.info("[dry-run] protocol=%s  block=%d", prot, blk)
             return
 
-        # 确保协议明细表及物化视图存在
+        # 确保协议明细表及汇总表存在
         for prot in protocols:
             await ensure_market_snapshot_table(pool, prot)
 
@@ -218,7 +270,7 @@ async def _main() -> None:
                 )
                 total_written += written
 
-        # 所有区块写入完成后统一刷新物化视图
+        # 所有区块写入完成后统一滚动更新汇总表
         for prot in protocols:
             await refresh_market_totals(pool, prot)
 

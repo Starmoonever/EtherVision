@@ -1798,18 +1798,18 @@ async def get_market_replay(
     protocol: str = "v3",
     from_ts: int = 0,
     to_ts: int = 0,
-    interval_days: int = 1,
+    interval_hours: int = 24,
     detail: bool = False,
     w3: "AsyncWeb3 | None" = None,
 ) -> "MarketReplayResponse":
     """查询大盘历史快照序列。
 
-    从 loan.aave_v{2|3}_market_totals（物化视图）和可选的
+    从 loan.aave_v{2|3}_market_totals（汇总表）和可选的
     loan.aave_v{2|3}_market_snapshots（reserve 明细）读取，
-    按 interval_days 天间隔抽样（每个间隔取时间最近的区块）。
+    按 interval_hours 小时间隔抽样（每个间隔取时间最近的区块）。
 
     当 w3 不为 None 时，若检测到时间范围内存在缺失的数据桶，会实时
-    通过 RPC 补采缺失区块并写表，随后刷新物化视图再返回。
+    通过 RPC 补采缺失区块并写表，随后滚动更新汇总表再返回。
     """
     from .schemas import (MarketReplayResponse, MarketReservePoint,
                           MarketSnapshotPoint)
@@ -1821,9 +1821,9 @@ async def get_market_replay(
     from_dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
     to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
 
-    # 每 interval_days 天一个"锚点时刻"，取距该锚点最近的已有区块
+    # 每 interval_hours 小时一个"锚点时刻"，取距该锚点最近的已有区块
     # 使用 DISTINCT ON (day_bucket) 按桶选最近区块，单次查询全部数据点
-    interval_epoch = interval_days * 86400
+    interval_epoch = interval_hours * 3600
     sql_totals = f"""
         WITH bucketed AS (
             SELECT
@@ -1924,7 +1924,7 @@ async def get_market_replay(
             protocol=protocol,
             from_time=from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             to_time=to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            interval_days=interval_days,
+            interval_hours=interval_hours,
             points=[],
             total_points=0,
         )
@@ -1990,7 +1990,7 @@ async def get_market_replay(
         protocol=protocol,
         from_time=from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         to_time=to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        interval_days=interval_days,
+        interval_hours=interval_hours,
         points=points,
         total_points=len(points),
     )
