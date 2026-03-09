@@ -50,6 +50,7 @@ if str(_ROOT) not in sys.path:
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.constants import ETH_SYMBOLS, LIQ_PRICE_CAP  # noqa: E402
 from aave_crawler.db import create_pool  # noqa: E402
+from aave_crawler.db import ensure_snapshot_cache_table
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -139,10 +140,8 @@ def recalc_liq_price(reserves_json: list[dict], eth_price_usd_col: Decimal) -> D
     if liq_price_raw <= 0:
         return Decimal("0")
 
-    # 若 liq_price >= eth_price_now，说明非 ETH 抵押品足以覆盖债务，
-    # ETH 下跌不会导致清算 → 无下跌风险，返回 0
-    if liq_price_raw >= eth_price_now:
-        return Decimal("0")
+    # 注意：liq_price >= eth_price_now 表示需要 ETH 上涨才会清算，
+    # 这种情况语义上属于 liq_price_rise 场景，但仍保留计算值供分析使用
 
     return min(liq_price_raw, _LIQ_PRICE_CAP)
 
@@ -191,7 +190,7 @@ async def recalc_all(
         if not rows:
             break
 
-        update_args: list[tuple[Decimal, int]] = []
+        update_args: list[tuple[Decimal, Decimal, int]] = []  # (liq_price, liq_price_weth, id)
         for row in rows:
             old_liq = _dec(row["liq_price"])
             p_now   = _dec(row["eth_price_usd"])
@@ -200,7 +199,7 @@ async def recalc_all(
             except Exception:
                 reserves = []
 
-            new_liq = recalc_liq_price(reserves, p_now)  # p_now = eth_price_usd fallback
+            new_liq = recalc_liq_price(reserves, p_now)  # 基于 WETH 价格计算
 
             if new_liq == old_liq:
                 skipped += 1
@@ -210,7 +209,8 @@ async def recalc_all(
                 skipped += 1
                 continue
 
-            update_args.append((new_liq, row["id"]))
+            # liq_price 和 liq_price_weth 使用相同的值（都基于 WETH 价格计算）
+            update_args.append((new_liq, new_liq, row["id"]))
             if new_liq == 0:
                 zeroed += 1
             updated += 1
@@ -224,7 +224,7 @@ async def recalc_all(
             async with pool.acquire() as conn:
                 await conn.executemany(
                     "UPDATE loan.position_snapshot_cache "
-                    "SET liq_price = $1 WHERE id = $2",
+                    "SET liq_price = $1, liq_price_weth = $2 WHERE id = $3",
                     update_args,
                 )
 
@@ -260,6 +260,8 @@ async def _main() -> None:
     cfg  = load_config()  # 自动查找 backend/config.yaml
     pool = await create_pool(cfg.postgres)
     try:
+        # 确保 liq_price_weth 等新列已存在（幂等）
+        await ensure_snapshot_cache_table(pool)
         await recalc_all(
             pool,
             protocol=args.protocol,

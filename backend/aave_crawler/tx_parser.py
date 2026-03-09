@@ -35,6 +35,14 @@ _OP_LABELS: dict[str, str] = {
     "flashloan":        "闪电贷",
 }
 
+# protocol → 版本标签（用于 brief 前缀 "在 Aave V{n}"）
+_VERSION_LABEL: dict[str, str] = {
+    "v2":        "V2",
+    "v2_borrow": "V2",
+    "v3":        "V3",
+    "v3_borrow": "V3",
+}
+
 # uint256.max 哨兵（Aave 用于"全额"操作）
 _SENTINEL = Decimal(10) ** 75
 
@@ -90,25 +98,28 @@ def generate_brief(
     decimals: int,
     symbol: str,
     price_usd: Decimal | None = None,
+    protocol: str = "",
 ) -> str:
     """生成单条操作的人类可读摘要。
 
-    格式："{操作类型} {数量} {symbol} (价值 {value} usd)"
-    price_usd 为 None 时省略价值部分。
+    格式："在 Aave {version} {操作类型} {数量} {symbol} (价值 {value} usd)"
+    price_usd 为 None 时省略价值部分；protocol 为空时省略版本前缀。
     """
     label = _OP_LABELS.get((op or "").lower(), op or "")
     amt_str = _fmt_amount(amount_int, decimals)
+    ver = _VERSION_LABEL.get((protocol or "").lower(), "")
+    prefix = f"在 Aave {ver} " if ver else ""
     if not symbol:
-        return f"{label} {amt_str}"
+        return f"{prefix}{label} {amt_str}"
     if price_usd and price_usd > 0:
         try:
             v = Decimal(str(amount_int))
             if v < _SENTINEL:
                 usd = v / Decimal(10 ** decimals) * price_usd
-                return f"{label} {amt_str} {symbol} (价值 {usd:.2f} usd)"
+                return f"{prefix}{label} {amt_str} {symbol} (价值 {usd:.2f} usd)"
         except Exception:
             pass
-    return f"{label} {amt_str} {symbol}"
+    return f"{prefix}{label} {amt_str} {symbol}"
 
 
 # ── 价格查询（从市场快照表）──────────────────────────────────────────────────
@@ -172,6 +183,7 @@ async def parse_tx_briefs(
                 row["decimals"],
                 row["token_symbol"] or "",
                 price,
+                protocol,
             )
         )
     return results
@@ -230,6 +242,7 @@ async def parse_briefs_from_metas(
                 row["decimals"],
                 row["token_symbol"] or "",
                 price,
+                meta.get("protocol", "v3"),
             )
         )
     return results

@@ -40,7 +40,7 @@ sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.constants import WETH_ADDR as _WETH_ADDR  # noqa: E402
-from aave_crawler.tx_parser import parse_tx_brief  # noqa: E402
+from aave_crawler.tx_parser import parse_briefs_from_metas  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -127,16 +127,8 @@ async def _parse_one(
     protocol: str,
     prices: dict[str, Decimal],
 ) -> str:
-    """单笔解析，捕获异常保证不中断整批。prices 不为空才传入（有 prices 时绕过缓存）。"""
-    try:
-        return await parse_tx_brief(
-            tx_hash,
-            protocol=protocol,
-            prices=prices if prices else None,
-        )
-    except Exception as exc:
-        logger.warning("解析失败 tx=%s: %s", tx_hash, exc)
-        return ""
+    """单笔解析（仅保留签名兼容性，实际不再使用）。"""
+    raise NotImplementedError("use parse_briefs_from_metas instead")
 
 
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
@@ -190,18 +182,19 @@ async def run(args: argparse.Namespace) -> None:
         for batch_start in range(0, total, batch_size):
             batch = rows[batch_start: batch_start + batch_size]
 
-            briefs = await asyncio.gather(
-                *[
-                    _parse_one(
-                        r["tx_hash"],
-                        r["protocol"],
-                        _build_prices(
+            briefs = await parse_briefs_from_metas(
+                pool,
+                [
+                    {
+                        "tx_hash": r["tx_hash"],
+                        "protocol": r["protocol"],
+                        "prices": _build_prices(
                             r["reserves_json"],
                             Decimal(str(r["eth_price_usd"])) if r["eth_price_usd"] else None,
                         ),
-                    )
+                    }
                     for r in batch
-                ]
+                ],
             )
 
             # 3. 批量写回

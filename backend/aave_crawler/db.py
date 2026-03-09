@@ -445,10 +445,8 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     if liq_price <= 0:
         return Decimal("0")
 
-    # 若 liq_price >= eth_price_now，说明非 ETH 抵押品足以覆盖债务，
-    # ETH 下跌不会导致清算 → 无下跌风险，返回 0
-    if liq_price >= eth_price_now:
-        return Decimal("0")
+    # 注意：liq_price >= eth_price_now 表示需要 ETH 上涨才会清算，
+    # 这种情况语义上属于 liq_price_rise 场景，但仍保留计算值供分析使用
 
     return min(liq_price, _LIQ_PRICE_CAP)
 
@@ -924,6 +922,7 @@ CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
     liq_threshold         NUMERIC(8, 4)    NOT NULL,
     liq_price             NUMERIC(30, 8)   NOT NULL DEFAULT 0,
     liq_price_rise        NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 上涨触发清算价（USD）；0 = 无风险
+    liq_price_weth        NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- 基于 WETH 价格的清算触发价（USD），可直接与 eth_price_usd 比较
     -- ETH 系抵押品汇总
     eth_collateral_amount NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系抵押品合计数量
     eth_collateral_usd    NUMERIC(30, 8)   NOT NULL DEFAULT 0,  -- ETH 系抵押品合计 USD
@@ -984,7 +983,7 @@ SELECT
     id, user_address, protocol, block_number, tx_hash,
     block_timestamp, total_collateral_usd, total_debt_usd,
     available_borrows_usd, health_factor, ltv, liq_threshold,
-    liq_price, liq_price_rise,
+    liq_price, liq_price_rise, liq_price_weth,
     eth_collateral_amount, eth_collateral_usd,
     weth_debt_amount, weth_debt_usd,
     eth_price_usd, reserves_json, brief, cached_at
@@ -1000,11 +999,11 @@ _SQL_UPSERT_SNAPSHOT = """
 INSERT INTO loan.position_snapshot_cache
     (user_address, protocol, block_number, tx_hash, block_timestamp,
      total_collateral_usd, total_debt_usd, available_borrows_usd,
-     health_factor, ltv, liq_threshold, liq_price, liq_price_rise,
+     health_factor, ltv, liq_threshold, liq_price, liq_price_rise, liq_price_weth,
      eth_collateral_amount, eth_collateral_usd,
      weth_debt_amount, weth_debt_usd,
      eth_price_usd, reserves_json, brief)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     block_number          = EXCLUDED.block_number,
     block_timestamp       = EXCLUDED.block_timestamp,
@@ -1016,6 +1015,7 @@ ON CONFLICT (user_address, protocol, tx_hash) DO UPDATE SET
     liq_threshold         = EXCLUDED.liq_threshold,
     liq_price             = EXCLUDED.liq_price,
     liq_price_rise        = EXCLUDED.liq_price_rise,
+    liq_price_weth        = EXCLUDED.liq_price_weth,
     eth_collateral_amount = EXCLUDED.eth_collateral_amount,
     eth_collateral_usd    = EXCLUDED.eth_collateral_usd,
     weth_debt_amount      = EXCLUDED.weth_debt_amount,
@@ -1078,6 +1078,19 @@ DO $$ BEGIN
 END $$;
 """
 
+_DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH = """
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+          AND column_name='liq_price_weth'
+    ) THEN
+        ALTER TABLE loan.position_snapshot_cache
+            ADD COLUMN liq_price_weth NUMERIC(30,8) NOT NULL DEFAULT 0;
+    END IF;
+END $$;
+"""
+
 
 async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
     """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
@@ -1086,6 +1099,7 @@ async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
         await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF)
+        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH)
     logger.info("快照缓存表已就绪：loan.position_snapshot_cache")
 
 
@@ -1171,6 +1185,8 @@ async def upsert_snapshot_cache(
         weth_debt_raw_dec, weth_debt_usd_dec = _calc_weth_debt(pos)
         # weth_debt_amount: 换算为 ETH 数量（18 位 decimals，WETH 系均为 18 位）
         weth_debt_amount = weth_debt_raw_dec / Decimal(10**18)
+        # liq_price_weth:基于 WETH 价格的清算触发价，与 liq_price 使用相同计算
+        liq_price_weth = _calc_liq_price(pos, meta["eth_price_usd"])
 
         rows.append((
             pos.user_address.lower(),
@@ -1184,8 +1200,9 @@ async def upsert_snapshot_cache(
             hf_dec,
             Decimal(s.ltv) / Decimal(10000),
             Decimal(s.current_liquidation_threshold) / Decimal(10000),
-            _calc_liq_price(pos, meta["eth_price_usd"]),
+            liq_price_weth,   # liq_price
             _calc_liq_price_rise(pos, meta["eth_price_usd"]),
+            liq_price_weth,   # liq_price_weth
             eth_col_amount,
             eth_col_usd,
             weth_debt_amount,

@@ -1623,7 +1623,7 @@ def _format_snapshot_point(
         available_borrows_usd=_fmt(Decimal(str(row["available_borrows_usd"])), 2),
         health_factor=hf_str,
         liq_threshold=_fmt(Decimal(str(row["liq_threshold"])), 4),
-        liq_price=_fmt(Decimal(str(row["liq_price"])), 2),
+        liq_price=_fmt(Decimal(str(row.get("liq_price_weth") or row["liq_price"])), 2),
         liq_price_rise=_fmt(Decimal(str(row["liq_price_rise"])), 2),
         eth_collateral_amount=_fmt(Decimal(str(row["eth_collateral_amount"])), 6),
         eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"])), 2),

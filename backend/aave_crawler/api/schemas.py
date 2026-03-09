@@ -267,7 +267,7 @@ class PositionSnapshotPoint(BaseModel):
     available_borrows_usd: str
     health_factor: str = Field(description="健康系数；无借贷时返回 'inf'")
     liq_threshold: str = Field(description="清算阈值（0~1）")
-    liq_price: str = Field(description="ETH 下跌清算触发价（USD）；0 表示无风险")
+    liq_price: str = Field(description="ETH 下跌清算触发价（USD，基于 WETH 价格计算，可直接与 eth_price_usd 比较）；0 表示无风险")
     liq_price_rise: str = Field(description="ETH 上涨清算触发价（USD）；0 表示无上涨风险")
     eth_collateral_amount: str = Field(description="ETH 系抵押品合计数量")
     eth_collateral_usd: str = Field(description="ETH 系抵押品合计 USD")
