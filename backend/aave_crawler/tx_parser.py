@@ -88,7 +88,7 @@ def _fmt_amount(amount_int: int | str, decimals: int) -> str:
         v = Decimal(str(amount_int))
         if v >= _SENTINEL:
             return "全部"
-        return f"{v / Decimal(10 ** decimals):.6f}".rstrip("0").rstrip(".")
+        return f"{v / Decimal(10**decimals):.6f}".rstrip("0").rstrip(".")
     except (InvalidOperation, TypeError):
         return str(amount_int)
 

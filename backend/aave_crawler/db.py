@@ -25,7 +25,7 @@ from .utils import raw_to_decimal as _raw_to_decimal
 logger = logging.getLogger(__name__)
 
 # ── 协议表名配置 ────────────────────────────────────────────────────────────────
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: E402
 
 
 @dataclass

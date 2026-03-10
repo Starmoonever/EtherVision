@@ -16,8 +16,7 @@ from typing import Annotated, AsyncGenerator
 
 import asyncpg
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
-                                    create_async_engine)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import PostgresConfig
 
@@ -37,9 +36,7 @@ def init_engine(pg: PostgresConfig) -> None:
     )
     _engine = create_async_engine(url, pool_size=5, max_overflow=10, echo=False)
     _AsyncSessionLocal = async_sessionmaker(_engine, expire_on_commit=False)
-    logger.info(
-        "SQLAlchemy 异步引擎已初始化：%s:%d/%s", pg.host, pg.port, pg.database
-    )
+    logger.info("SQLAlchemy 异步引擎已初始化：%s:%d/%s", pg.host, pg.port, pg.database)
 
 
 async def close_engine() -> None:

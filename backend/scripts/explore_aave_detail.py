@@ -19,7 +19,7 @@ async def main():
     pg = raw["postgres"]
     dsn = (
         f"postgresql://{pg['user']}:{pg['password']}"
-        f"@{pg.get('host','127.0.0.1')}:{pg.get('port',5432)}/{pg['database']}"
+        f"@{pg.get('host', '127.0.0.1')}:{pg.get('port', 5432)}/{pg['database']}"
     )
     conn = await asyncpg.connect(dsn)
 

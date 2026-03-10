@@ -20,16 +20,26 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.testclient import TestClient
-from tests.conftest import (ADDR, MOCK_BORROW_POSITIONS_LIST,
-                            MOCK_BORROW_USER_POSITION, MOCK_HIST_POSITION,
-                            MOCK_HIST_POSITIONS_LIST, MOCK_LIQ,
-                            MOCK_LIQ_PERIOD, MOCK_POSITION,
-                            MOCK_POSITIONS_LIST, MOCK_PRICE_HIST,
-                            MOCK_PRICE_ONCHAIN, MOCK_PRICE_PERIOD,
-                            MOCK_REPLAY_RESPONSE, MOCK_SHORT_LIQ_PERIOD,
-                            MOCK_SHORT_SIM_EMPTY, MOCK_SHORT_SIM_RESPONSE,
-                            MOCK_SIM_EMPTY, MOCK_SIM_RESPONSE,
-                            MOCK_TX_HISTORY_RESPONSE, _make_app)
+from tests.conftest import (
+    ADDR,
+    MOCK_BORROW_POSITIONS_LIST,
+    MOCK_BORROW_USER_POSITION,
+    MOCK_HIST_POSITION,
+    MOCK_HIST_POSITIONS_LIST,
+    MOCK_LIQ_PERIOD,
+    MOCK_POSITION,
+    MOCK_POSITIONS_LIST,
+    MOCK_PRICE_HIST,
+    MOCK_PRICE_ONCHAIN,
+    MOCK_PRICE_PERIOD,
+    MOCK_REPLAY_RESPONSE,
+    MOCK_SHORT_LIQ_PERIOD,
+    MOCK_SHORT_SIM_EMPTY,
+    MOCK_SHORT_SIM_RESPONSE,
+    MOCK_SIM_EMPTY,
+    MOCK_SIM_RESPONSE,
+    MOCK_TX_HISTORY_RESPONSE,
+)
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
 _ROUTES = "aave_crawler.api.routes"
@@ -105,14 +115,17 @@ class TestUserPosition:
 
     def test_historical_fallback_to_realtime_when_no_history(self, client: TestClient):
         """history 无记录 → 返回 None → 回退到实时链上查询。"""
-        with patch(
-            f"{_ROUTES}.get_user_position_history",
-            new_callable=AsyncMock,
-            return_value=None,
-        ), patch(
-            f"{_ROUTES}.get_user_position",
-            new_callable=AsyncMock,
-            return_value=MOCK_POSITION,
+        with (
+            patch(
+                f"{_ROUTES}.get_user_position_history",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                f"{_ROUTES}.get_user_position",
+                new_callable=AsyncMock,
+                return_value=MOCK_POSITION,
+            ),
         ):
             resp = client.get(
                 "/api/position", params={"address": ADDR, "date": "2025-01-01"}
@@ -154,9 +167,7 @@ class TestUserPosition:
         ],
     )
     def test_invalid_date_returns_400(self, client: TestClient, bad_date: str):
-        resp = client.get(
-            "/api/position", params={"address": ADDR, "date": bad_date}
-        )
+        resp = client.get("/api/position", params={"address": ADDR, "date": bad_date})
         assert resp.status_code == 400
 
     def test_historical_no_pool_returns_503(self, app_no_pool):
@@ -1788,7 +1799,9 @@ class TestPositionReplay:
     _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
 
     def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get(self._URL, params={"start": "2025-01-01", "end": "2026-01-01"})
+        resp = client.get(
+            self._URL, params={"start": "2025-01-01", "end": "2026-01-01"}
+        )
         assert resp.status_code == 422
 
     def test_missing_start_returns_422(self, client: TestClient):
@@ -1828,8 +1841,16 @@ class TestPositionReplay:
             resp = client.get(self._URL, params=self._BASE)
         assert resp.status_code == 200
         data = resp.json()
-        for field in ("address", "protocol", "from_time", "to_time",
-                      "data_source", "points", "total_points", "cache_hit_rate"):
+        for field in (
+            "address",
+            "protocol",
+            "from_time",
+            "to_time",
+            "data_source",
+            "points",
+            "total_points",
+            "cache_hit_rate",
+        ):
             assert field in data, f"缺少字段: {field}"
 
     def test_points_is_list(self, client: TestClient):
@@ -1850,11 +1871,21 @@ class TestPositionReplay:
         ):
             resp = client.get(self._URL, params=self._BASE)
         point = resp.json()["points"][0]
-        for field in ("tx_hash", "block_number", "timestamp", "eth_price_usd",
-                      "total_collateral_usd", "total_debt_usd", "health_factor",
-                      "liq_price", "liq_price_rise",
-                      "eth_collateral_amount", "eth_collateral_usd",
-                      "weth_debt_amount", "weth_debt_usd"):
+        for field in (
+            "tx_hash",
+            "block_number",
+            "timestamp",
+            "eth_price_usd",
+            "total_collateral_usd",
+            "total_debt_usd",
+            "health_factor",
+            "liq_price",
+            "liq_price_rise",
+            "eth_collateral_amount",
+            "eth_collateral_usd",
+            "weth_debt_amount",
+            "weth_debt_usd",
+        ):
             assert field in point, f"point 缺少字段: {field}"
 
     def test_no_pool_returns_503(self, app_no_pool: FastAPI):
@@ -1869,7 +1900,12 @@ class TestPositionReplay:
 
     @pytest.mark.parametrize(
         "date_str",
-        ["2025-01-01", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00", "2025-01-01 00:00:00"],
+        [
+            "2025-01-01",
+            "2025-01-01T00:00:00Z",
+            "2025-01-01T00:00:00",
+            "2025-01-01 00:00:00",
+        ],
     )
     def test_various_date_formats_accepted(self, client: TestClient, date_str: str):
         with patch(
@@ -1884,7 +1920,9 @@ class TestPositionReplay:
         assert resp.status_code == 200
 
     @pytest.mark.parametrize("version,expected", [("v3", "v3"), ("v2", "v2")])
-    def test_version_passed_to_service(self, client: TestClient, version: str, expected: str):
+    def test_version_passed_to_service(
+        self, client: TestClient, version: str, expected: str
+    ):
         with patch(
             f"{_ROUTES}.get_user_position_replay",
             new_callable=AsyncMock,
@@ -1931,7 +1969,9 @@ class TestTxHistory:
     _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
 
     def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get(self._URL, params={"start": "2025-01-01", "end": "2026-01-01"})
+        resp = client.get(
+            self._URL, params={"start": "2025-01-01", "end": "2026-01-01"}
+        )
         assert resp.status_code == 422
 
     def test_missing_start_returns_422(self, client: TestClient):
@@ -1977,8 +2017,14 @@ class TestTxHistory:
         ):
             resp = client.get(self._URL, params=self._BASE)
         tx = resp.json()["txs"][0]
-        for field in ("tx_hash", "block_number", "timestamp",
-                      "operation_type", "token_symbol", "cached"):
+        for field in (
+            "tx_hash",
+            "block_number",
+            "timestamp",
+            "operation_type",
+            "token_symbol",
+            "cached",
+        ):
             assert field in tx, f"tx 缺少字段: {field}"
 
     def test_cached_flag_type(self, client: TestClient):
@@ -1999,7 +2045,12 @@ class TestTxHistory:
 
     @pytest.mark.parametrize(
         "date_str",
-        ["2025-01-01", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00", "2025-01-01 00:00:00"],
+        [
+            "2025-01-01",
+            "2025-01-01T00:00:00Z",
+            "2025-01-01T00:00:00",
+            "2025-01-01 00:00:00",
+        ],
     )
     def test_various_date_formats_accepted(self, client: TestClient, date_str: str):
         with patch(
@@ -2014,7 +2065,9 @@ class TestTxHistory:
         assert resp.status_code == 200
 
     @pytest.mark.parametrize("version,expected", [("v3", "v3"), ("v2", "v2")])
-    def test_version_passed_to_service(self, client: TestClient, version: str, expected: str):
+    def test_version_passed_to_service(
+        self, client: TestClient, version: str, expected: str
+    ):
         with patch(
             f"{_ROUTES}.get_user_tx_history",
             new_callable=AsyncMock,

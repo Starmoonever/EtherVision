@@ -7,20 +7,28 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aave_crawler.api.routes import router
-from aave_crawler.api.schemas import (BorrowPositionResponse,
-                                      BorrowUserPositionResponse,
-                                      HistoricalPositionResponse,
-                                      HistoricalReserveDetail,
-                                      LiqPriceResponse, LiquidationPeriodItem,
-                                      LiquidationSimItem,
-                                      LiquidationSimResponse,
-                                      PositionReplayResponse, PositionResponse,
-                                      PositionSnapshotPoint, PricePeriodItem,
-                                      PricePeriodResponse, PriceResponse,
-                                      ReservePositionSchema,
-                                      ShortLiqPeriodItem, ShortLiqSimItem,
-                                      ShortLiqSimResponse, TxHistoryItem,
-                                      TxHistoryResponse)
+from aave_crawler.api.schemas import (
+    BorrowPositionResponse,
+    BorrowUserPositionResponse,
+    HistoricalPositionResponse,
+    HistoricalReserveDetail,
+    LiqPriceResponse,
+    LiquidationPeriodItem,
+    LiquidationSimItem,
+    LiquidationSimResponse,
+    PositionReplayResponse,
+    PositionResponse,
+    PositionSnapshotPoint,
+    PricePeriodItem,
+    PricePeriodResponse,
+    PriceResponse,
+    ReservePositionSchema,
+    ShortLiqPeriodItem,
+    ShortLiqSimItem,
+    ShortLiqSimResponse,
+    TxHistoryItem,
+    TxHistoryResponse,
+)
 from aave_crawler.database import get_db, get_pool
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -337,9 +345,12 @@ def _make_app(w3=..., pool=...) -> FastAPI:
     async def override_get_pool():
         """Mock asyncpg.Pool for dependency injection, with 503 check"""
         from fastapi import HTTPException
+
         pool = _app.state.pool
         if pool is None:
-            raise HTTPException(status_code=503, detail="数据库连接尚未就绪，请稍后重试")
+            raise HTTPException(
+                status_code=503, detail="数据库连接尚未就绪，请稍后重试"
+            )
         return pool
 
     _app.dependency_overrides[get_db] = override_get_db
@@ -363,10 +374,10 @@ def client(app: FastAPI) -> Generator[TestClient, None, None]:
 @pytest.fixture
 def app_no_w3() -> FastAPI:
     """w3=None 的 app，用于测试 503 场景。"""
-    return _make_app(w3=None)
+    return _make_app(w3=None)  # type: ignore[arg-type]
 
 
 @pytest.fixture
 def app_no_pool() -> FastAPI:
     """pool=None 的 app，用于测试 503 场景。"""
-    return _make_app(pool=None)
+    return _make_app(pool=None)  # type: ignore[arg-type]

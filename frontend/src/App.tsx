@@ -44,9 +44,9 @@ export default function App() {
 
   useEffect(() => {
     if (!queriedAddress) return;
-    
+
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
-      setState(prev => ({ ...prev, loading: true, notFound: false }));
+      setState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         const data = await fetchUserPosition(queriedAddress, version);
         setState({ data, loading: false, notFound: false });
@@ -123,7 +123,15 @@ export default function App() {
 
           {activeTab === 'personal' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <div
+                className="version-switch"
+                style={{
+                  display: 'flex',
+                  background: '#1e293b',
+                  borderRadius: '8px',
+                  padding: '2px',
+                }}
+              >
                 <button
                   onClick={() => setPersonalVersion('v2')}
                   style={{
@@ -135,7 +143,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   V2
@@ -151,7 +159,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   V3
@@ -162,7 +170,15 @@ export default function App() {
 
           {activeTab === 'market' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div className="side-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <div
+                className="side-switch"
+                style={{
+                  display: 'flex',
+                  background: '#1e293b',
+                  borderRadius: '8px',
+                  padding: '2px',
+                }}
+              >
                 <button
                   onClick={() => setMarketSide('collateral')}
                   style={{
@@ -174,7 +190,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   抵押端
@@ -190,13 +206,21 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   借贷端
                 </button>
               </div>
-              <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <div
+                className="version-switch"
+                style={{
+                  display: 'flex',
+                  background: '#1e293b',
+                  borderRadius: '8px',
+                  padding: '2px',
+                }}
+              >
                 <button
                   onClick={() => setMarketVersion('v2')}
                   style={{
@@ -208,7 +232,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   V2
@@ -224,7 +248,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   V3
@@ -240,7 +264,7 @@ export default function App() {
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     fontWeight: 600,
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
                   }}
                 >
                   ALL

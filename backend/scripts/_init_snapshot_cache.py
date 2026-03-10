@@ -1,9 +1,9 @@
 """创建 loan.position_snapshot_cache 表及索引"""
+
 import asyncio
 import sys
 from pathlib import Path
 
-import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -17,5 +17,6 @@ async def main():
     await ensure_snapshot_cache_table(pool)
     await pool.close()
     print("Done.")
+
 
 asyncio.run(main())

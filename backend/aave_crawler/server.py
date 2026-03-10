@@ -21,8 +21,15 @@ from .api.routes import router
 from .api.service import _cache
 from .config import load_config
 from .database import close_engine, init_engine
-from .db import (TABLES_V2, TABLES_V2_BORROW, TABLES_V3, TABLES_V3_BORROW,
-                 create_pool, ensure_snapshot_cache_table, ensure_tables)
+from .db import (
+    TABLES_V2,
+    TABLES_V2_BORROW,
+    TABLES_V3,
+    TABLES_V3_BORROW,
+    create_pool,
+    ensure_snapshot_cache_table,
+    ensure_tables,
+)
 from .rpc import build_web3
 
 logger = logging.getLogger(__name__)

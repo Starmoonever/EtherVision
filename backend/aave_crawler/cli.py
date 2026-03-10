@@ -10,6 +10,7 @@ import click
 from .config import load_config
 from .crawler import run_crawler
 from .db import create_pool, get_tables, sync_addresses_from_history
+from .models import ReserveConfig, UserPosition
 from .watcher import run_watcher
 
 
@@ -216,9 +217,14 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
     import json
     from dataclasses import asdict
 
-    from .rpc import (EMPTY_POSITION, build_web3, fetch_user_position,
-                      get_all_reserve_tokens, get_assets_prices,
-                      get_reserve_config)
+    from .rpc import (
+        EMPTY_POSITION,
+        build_web3,
+        fetch_user_position,
+        get_all_reserve_tokens,
+        get_assets_prices,
+        get_reserve_config,
+    )
 
     _setup_logging(verbose)
     cfg = load_config(config)
@@ -233,7 +239,7 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
             *[get_reserve_config(w3, a) for a in token_addresses],
             return_exceptions=True,
         )
-        reserve_configs = {
+        reserve_configs: dict[str, ReserveConfig] = {  # type: ignore[assignment]
             a: c
             for a, c in zip(token_addresses, configs_list)
             if not isinstance(c, Exception)
@@ -250,6 +256,10 @@ def cmd_check(address: str, config: str | None, verbose: bool) -> None:
         elif pos is EMPTY_POSITION:
             click.echo(f"该地址在 Aave 无任何抵押/借贷仓位: {address}")
         else:
-            click.echo(json.dumps(asdict(pos), indent=2, default=str))
+            from typing import cast
+
+            click.echo(
+                json.dumps(asdict(cast(UserPosition, pos)), indent=2, default=str)
+            )
 
     asyncio.run(_run())

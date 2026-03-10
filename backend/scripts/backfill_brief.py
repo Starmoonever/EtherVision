@@ -97,8 +97,9 @@ WHERE id = $2
 
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
 
+
 async def run(args: argparse.Namespace) -> None:
-    cfg  = load_config()
+    cfg = load_config()
     pool = await create_pool(cfg.postgres)
 
     try:
@@ -113,15 +114,23 @@ async def run(args: argparse.Namespace) -> None:
                 rows = await pool.fetch(fetch_sql, args.pattern)
             mode_label = f"匹配 '%{args.pattern}%'"
         elif args.force:
-            fetch_sql  = _SQL_FETCH_FORCE_LIMIT if args.limit else _SQL_FETCH_FORCE
+            fetch_sql = _SQL_FETCH_FORCE_LIMIT if args.limit else _SQL_FETCH_FORCE
             mode_label = "全量重写（--force）"
             async with pool.acquire() as conn:
-                rows = await conn.fetch(fetch_sql, args.limit) if args.limit else await conn.fetch(fetch_sql)
+                rows = (
+                    await conn.fetch(fetch_sql, args.limit)
+                    if args.limit
+                    else await conn.fetch(fetch_sql)
+                )
         else:
-            fetch_sql  = _SQL_FETCH_LIMIT if args.limit else _SQL_FETCH
+            fetch_sql = _SQL_FETCH_LIMIT if args.limit else _SQL_FETCH
             mode_label = "仅补空"
             async with pool.acquire() as conn:
-                rows = await conn.fetch(fetch_sql, args.limit) if args.limit else await conn.fetch(fetch_sql)
+                rows = (
+                    await conn.fetch(fetch_sql, args.limit)
+                    if args.limit
+                    else await conn.fetch(fetch_sql)
+                )
 
         total = len(rows)
         if total == 0:
@@ -131,8 +140,12 @@ async def run(args: argparse.Namespace) -> None:
         logger.info("共 %d 行待处理（模式：%s）", total, mode_label)
         if args.dry_run:
             for r in rows[:10]:
-                logger.info("  [dry-run] id=%s  tx=%s  protocol=%s",
-                             r["id"], r["tx_hash"], r["protocol"])
+                logger.info(
+                    "  [dry-run] id=%s  tx=%s  protocol=%s",
+                    r["id"],
+                    r["tx_hash"],
+                    r["protocol"],
+                )
             if total > 10:
                 logger.info("  ... 共 %d 行（仅展示前 10 行）", total)
             return
@@ -140,10 +153,10 @@ async def run(args: argparse.Namespace) -> None:
         # 2. 按批次处理
         batch_size = args.batch
         updated = 0
-        failed  = 0
+        failed = 0
 
         for batch_start in range(0, total, batch_size):
-            batch = rows[batch_start: batch_start + batch_size]
+            batch = rows[batch_start : batch_start + batch_size]
 
             # 同一批内按 protocol 分组，分别查市场快照价格
             # 每组调用一次 parse_tx_briefs(pool, hashes, protocol=...)
@@ -154,7 +167,7 @@ async def run(args: argparse.Namespace) -> None:
 
             briefs: list[str] = [""] * len(batch)
             for proto, idx_hashes in proto_groups.items():
-                idxs   = [ih[0] for ih in idx_hashes]
+                idxs = [ih[0] for ih in idx_hashes]
                 hashes = [ih[1] for ih in idx_hashes]
                 results = await parse_tx_briefs(pool, hashes, protocol=proto)
                 for i, brief in zip(idxs, results):
@@ -167,9 +180,9 @@ async def run(args: argparse.Namespace) -> None:
                     await conn.executemany(_SQL_UPDATE, pairs)
 
             batch_updated = sum(1 for b in briefs if b)
-            batch_failed  = len(briefs) - batch_updated
+            batch_failed = len(briefs) - batch_updated
             updated += batch_updated
-            failed  += batch_failed
+            failed += batch_failed
 
             logger.info(
                 "进度 %d/%d  本批：成功 %d  空结果 %d",
@@ -181,7 +194,9 @@ async def run(args: argparse.Namespace) -> None:
 
         logger.info(
             "回填完成：共处理 %d 行，解析成功 %d，空结果 %d",
-            total, updated, failed,
+            total,
+            updated,
+            failed,
         )
 
     finally:
@@ -190,20 +205,31 @@ async def run(args: argparse.Namespace) -> None:
 
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="回填 position_snapshot_cache.brief 字段"
     )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="仅打印待处理行，不修改数据库")
-    parser.add_argument("--batch",   type=int, default=500,
-                        help="每批处理行数（默认 500）")
-    parser.add_argument("--limit",   type=int, default=0,
-                        help="最多处理行数（0 = 全量，默认 0）")
-    parser.add_argument("--force",   action="store_true",
-                        help="全量重写：覆盖所有行（含已有 brief 的），用于修复格式")
-    parser.add_argument("--pattern", type=str, default="",
-                        help="只处理 brief LIKE '%%PATTERN%%' 的行（如 --pattern 执行）")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="仅打印待处理行，不修改数据库"
+    )
+    parser.add_argument(
+        "--batch", type=int, default=500, help="每批处理行数（默认 500）"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="最多处理行数（0 = 全量，默认 0）"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="全量重写：覆盖所有行（含已有 brief 的），用于修复格式",
+    )
+    parser.add_argument(
+        "--pattern",
+        type=str,
+        default="",
+        help="只处理 brief LIKE '%%PATTERN%%' 的行（如 --pattern 执行）",
+    )
     args = parser.parse_args()
 
     asyncio.run(run(args))

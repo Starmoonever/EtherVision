@@ -17,8 +17,14 @@ from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
 from .config import AppConfig
-from .models import (AccountSummary, ReserveConfig, ReservePosition,
-                     ReserveToken, UserPosition, UserReserveData)
+from .models import (
+    AccountSummary,
+    ReserveConfig,
+    ReservePosition,
+    ReserveToken,
+    UserPosition,
+    UserReserveData,
+)
 
 logger = logging.getLogger(__name__)
 

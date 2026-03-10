@@ -33,21 +33,41 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick }: any) => {
   if (active && payload && payload.length) {
     const point = payload[0].payload;
     return (
-      <div className="custom-tooltip" style={{ backgroundColor: '#0f172a', borderColor: '#1e293b', border: '1px solid', padding: '10px', borderRadius: '4px' }}>
+      <div
+        className="custom-tooltip"
+        style={{
+          backgroundColor: '#0f172a',
+          borderColor: '#1e293b',
+          border: '1px solid',
+          padding: '10px',
+          borderRadius: '4px',
+        }}
+      >
         <p className="label" style={{ color: '#94a3b8', marginBottom: '5px' }}>
-           {point.brief ? `${label} - ${point.brief}` : label}
+          {point.brief ? `${label} - ${point.brief}` : label}
         </p>
-        <p style={{ color: '#fbbf24', fontSize: '0.8rem', marginBottom: '5px' }}>类型: {point.operation_type}</p>
+        <p style={{ color: '#fbbf24', fontSize: '0.8rem', marginBottom: '5px' }}>
+          类型: {point.operation_type}
+        </p>
         {payload.map((entry: any, index: number) => (
           <p key={index} style={{ color: entry.color, margin: 0, fontSize: '0.9rem' }}>
             {entry.name}: {entry.value}
           </p>
         ))}
         <button
-            onClick={() => onDetailsClick(point)}
-            style={{ marginTop: '8px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}
+          onClick={() => onDetailsClick(point)}
+          style={{
+            marginTop: '8px',
+            background: '#3b82f6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '4px 8px',
+            cursor: 'pointer',
+            fontSize: '0.8rem',
+          }}
         >
-            账户头寸明细
+          账户头寸明细
         </button>
       </div>
     );
@@ -55,34 +75,100 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick }: any) => {
   return null;
 };
 
-const DetailsModal = ({ point, onClose }: { point: ReplayPoint, onClose: () => void }) => {
-    if (!point) return null;
-    return (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <div style={{ background: '#1e293b', padding: '20px', borderRadius: '8px', width: '400px', maxWidth: '90%', border: '1px solid #334155' }}>
-                <h3 style={{ color: '#fff', marginTop: 0, marginBottom: '1rem' }}>账户详情</h3>
-                <div style={{ display: 'grid', gap: '10px', color: '#e2e8f0', fontSize: '0.9rem' }}>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>时间:</span> <span>{point.timestamp}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>总抵押资产价值:</span> <span>${point.total_collateral_usd.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>总贷出债务价值:</span> <span>${point.total_debt_usd.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>可借出总额:</span> <span>${point.available_borrows_usd.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>健康因子:</span> <span>{point.health_factor.toFixed(2)}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>抵押ETH价值:</span> <span>${point.eth_collateral_usd.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                    <div style={{display:'flex', justifyContent:'space-between'}}><span style={{color:'#94a3b8'}}>贷出ETH价值:</span> <span>${point.weth_debt_usd.toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                    <button onClick={onClose} style={{ padding: '6px 16px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>关闭</button>
-                </div>
-            </div>
+const DetailsModal = ({ point, onClose }: { point: ReplayPoint; onClose: () => void }) => {
+  if (!point) return null;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: '#1e293b',
+          padding: '20px',
+          borderRadius: '8px',
+          width: '400px',
+          maxWidth: '90%',
+          border: '1px solid #334155',
+        }}
+      >
+        <h3 style={{ color: '#fff', marginTop: 0, marginBottom: '1rem' }}>账户详情</h3>
+        <div style={{ display: 'grid', gap: '10px', color: '#e2e8f0', fontSize: '0.9rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>时间:</span> <span>{point.timestamp}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>总抵押资产价值:</span>{' '}
+            <span>
+              ${point.total_collateral_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>总贷出债务价值:</span>{' '}
+            <span>
+              ${point.total_debt_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>可借出总额:</span>{' '}
+            <span>
+              ${point.available_borrows_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>健康因子:</span>{' '}
+            <span>{point.health_factor.toFixed(2)}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>抵押ETH价值:</span>{' '}
+            <span>
+              ${point.eth_collateral_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#94a3b8' }}>贷出ETH价值:</span>{' '}
+            <span>
+              ${point.weth_debt_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </span>
+          </div>
         </div>
-    )
-}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '6px 16px',
+              background: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export function PositionReplayChart({ address, version }: PositionReplayProps) {
   const [data, setData] = useState<ReplayPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [primaryMetric, setPrimaryMetric] = useState<'eth_collateral_usd' | 'weth_debt_usd'>('eth_collateral_usd');
+  const [primaryMetric, setPrimaryMetric] = useState<'eth_collateral_usd' | 'weth_debt_usd'>(
+    'eth_collateral_usd',
+  );
   const [selectedPoint, setSelectedPoint] = useState<ReplayPoint | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<{
     index: number;
@@ -100,9 +186,9 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     const seconds = String(now.getUTCSeconds()).padStart(2, '0');
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   });
-  
+
   const [selectedType, setSelectedType] = useState<string>('all');
-  
+
   // 用于触发查询的 state
   const [queryParams, setQueryParams] = useState({ start: '2020-12-01 00:00:00', end: endTime });
 
@@ -110,67 +196,71 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     // Reset tooltip state when address or version changes
     setActiveTooltip(null);
     setSelectedPoint(null);
-    
+
     const fetchData = async () => {
       setLoading(true);
       setError('');
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        
+
         const response = await fetch(
-          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(queryParams.start)}&end=${encodeURIComponent(queryParams.end)}&version=${version}`
+          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(queryParams.start)}&end=${encodeURIComponent(queryParams.end)}&version=${version}`,
         );
-        
+
         if (!response.ok) {
           throw new Error('Failed to fetch replay data');
         }
 
         const result = await response.json();
-        
+
         if (!result.points || !Array.isArray(result.points)) {
           throw new Error('Invalid data format');
         }
 
-        const formattedData = result.points.map((pt: any) => {
-          const d = new Date(pt.timestamp);
-          const pad = (n: number) => n.toString().padStart(2, '0');
-          const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-          
-          let operation_type = pt.operation_type || 'unknown';
-          let liq_price = parseFloat(pt.liq_price || '0');
-          const eth_price_usd = parseFloat(pt.eth_price_usd || '0');
-          const eth_collateral_usd = parseFloat(pt.eth_collateral_usd || '0');
-          const total_collateral_usd = parseFloat(pt.total_collateral_usd || '0');
-          const weth_debt_usd = parseFloat(pt.weth_debt_usd || '0');
-          const total_debt_usd = parseFloat(pt.total_debt_usd || '0');
+        const formattedData = result.points
+          .map((pt: any) => {
+            const d = new Date(pt.timestamp);
+            const pad = (n: number) => n.toString().padStart(2, '0');
+            const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-          // Check for "同类资产借贷" (Same asset borrowing)
-          // total_collateral_usd == eth_collateral_usd AND total_debt_usd == weth_debt_usd
-          // Use a small epsilon for float comparison if needed, but direct comparison is usually fine for these derived values if they come from same source.
-          // Let's use Math.abs for safety.
-          const isSameAsset = 
-            Math.abs(total_collateral_usd - eth_collateral_usd) < 1 && 
-            Math.abs(total_debt_usd - weth_debt_usd) < 1;
+            let operation_type = pt.operation_type || 'unknown';
+            let liq_price = parseFloat(pt.liq_price || '0');
+            const eth_price_usd = parseFloat(pt.eth_price_usd || '0');
+            const eth_collateral_usd = parseFloat(pt.eth_collateral_usd || '0');
+            const total_collateral_usd = parseFloat(pt.total_collateral_usd || '0');
+            const weth_debt_usd = parseFloat(pt.weth_debt_usd || '0');
+            const total_debt_usd = parseFloat(pt.total_debt_usd || '0');
 
-          if (isSameAsset) {
-            operation_type = '借贷资产均为ETH';
-            liq_price = 0;
-          }
+            // Check for "同类资产借贷" (Same asset borrowing)
+            // total_collateral_usd == eth_collateral_usd AND total_debt_usd == weth_debt_usd
+            // Use a small epsilon for float comparison if needed, but direct comparison is usually fine for these derived values if they come from same source.
+            // Let's use Math.abs for safety.
+            const isSameAsset =
+              Math.abs(total_collateral_usd - eth_collateral_usd) < 1 &&
+              Math.abs(total_debt_usd - weth_debt_usd) < 1;
 
-          return {
-            timestamp: timeStr,
-            eth_price_usd,
-            eth_collateral_usd,
-            weth_debt_usd,
-            liq_price,
-            brief: pt.brief || '',
-            total_collateral_usd,
-            total_debt_usd,
-            available_borrows_usd: parseFloat(pt.available_borrows_usd || '0'),
-            health_factor: parseFloat(pt.health_factor || '0'),
-            operation_type,
-          };
-        }).sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            if (isSameAsset) {
+              operation_type = '借贷资产均为ETH';
+              liq_price = 0;
+            }
+
+            return {
+              timestamp: timeStr,
+              eth_price_usd,
+              eth_collateral_usd,
+              weth_debt_usd,
+              liq_price,
+              brief: pt.brief || '',
+              total_collateral_usd,
+              total_debt_usd,
+              available_borrows_usd: parseFloat(pt.available_borrows_usd || '0'),
+              health_factor: parseFloat(pt.health_factor || '0'),
+              operation_type,
+            };
+          })
+          .sort(
+            (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+          );
 
         setData(formattedData);
       } catch (err) {
@@ -196,8 +286,8 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         setActiveTooltip(null); // Toggle off if clicking the same point
       } else {
         setActiveTooltip({
-            index: e.activeTooltipIndex,
-            coordinate: e.activeCoordinate
+          index: e.activeTooltipIndex,
+          coordinate: e.activeCoordinate,
         });
       }
     } else {
@@ -207,13 +297,38 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     }
   };
 
-  if (loading) return <div className="card" style={{height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center'}}><div className="spinner"></div></div>;
-  if (error) return <div className="card" style={{height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171'}}>{error}</div>;
+  if (loading)
+    return (
+      <div
+        className="card"
+        style={{ height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
+        <div className="spinner"></div>
+      </div>
+    );
+  if (error)
+    return (
+      <div
+        className="card"
+        style={{
+          height: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#f87171',
+        }}
+      >
+        {error}
+      </div>
+    );
   if (!data.length) return null;
 
   return (
     <div className="card" style={{ marginTop: '1.5rem' }}>
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        className="card-header"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <span className="card-title">历史交易与头寸变化记录</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
@@ -229,7 +344,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 padding: '0.2rem 0.5rem',
                 borderRadius: '4px',
                 fontSize: '0.8rem',
-                width: '140px'
+                width: '140px',
               }}
             />
             <span style={{ color: '#94a3b8' }}>-</span>
@@ -245,7 +360,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 padding: '0.2rem 0.5rem',
                 borderRadius: '4px',
                 fontSize: '0.8rem',
-                width: '140px'
+                width: '140px',
               }}
             />
             <button
@@ -257,7 +372,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 padding: '0.2rem 0.8rem',
                 borderRadius: '4px',
                 fontSize: '0.8rem',
-                cursor: 'pointer'
+                cursor: 'pointer',
               }}
             >
               查询
@@ -273,7 +388,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
               border: '1px solid #334155',
               padding: '0.2rem 0.5rem',
               borderRadius: '4px',
-              fontSize: '0.85rem'
+              fontSize: '0.85rem',
             }}
           >
             <option value="eth_collateral_usd">抵押ETH价值 (USD)</option>
@@ -282,8 +397,19 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         </div>
       </div>
 
-      <div style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {['all', 'borrow', 'repay', 'deposit', 'withdraw', 'liquidate', 'flash loan', '借贷资产均为ETH'].map(type => (
+      <div
+        style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}
+      >
+        {[
+          'all',
+          'borrow',
+          'repay',
+          'deposit',
+          'withdraw',
+          'liquidate',
+          'flash loan',
+          '借贷资产均为ETH',
+        ].map((type) => (
           <button
             key={type}
             onClick={() => setSelectedType(type)}
@@ -295,7 +421,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
               background: selectedType === type ? '#3b82f6' : 'transparent',
               color: selectedType === type ? '#fff' : '#94a3b8',
               cursor: 'pointer',
-              textTransform: 'capitalize'
+              textTransform: 'capitalize',
             }}
           >
             {type}
@@ -311,18 +437,13 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             onClick={handleChartClick}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis
-              dataKey="timestamp"
-              stroke="#64748b"
-              tick={{ fontSize: 12 }}
-              minTickGap={50}
-            />
+            <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={50} />
 
             {/* 左轴：资产/债务价值 */}
             <YAxis
               yAxisId="left"
               stroke="#10b981"
-              tickFormatter={(val) => `$${(val/1000).toFixed(0)}k`}
+              tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
             />
 
             {/* 右轴：ETH价格 & 清算价格 */}
@@ -374,14 +495,14 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 const { cx, cy, payload } = props;
                 if (selectedType !== 'all' && payload.operation_type === selectedType) {
                   return (
-                    <circle 
-                        key={payload.timestamp} 
-                        cx={cx} 
-                        cy={cy} 
-                        r={6} 
-                        fill="#fbbf24" 
-                        stroke="#fff"
-                        strokeWidth={2}
+                    <circle
+                      key={payload.timestamp}
+                      cx={cx}
+                      cy={cy}
+                      r={6}
+                      fill="#fbbf24"
+                      stroke="#fff"
+                      strokeWidth={2}
                     />
                   );
                 }

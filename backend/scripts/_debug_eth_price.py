@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import asyncpg
-from aave_crawler.config import load_config
+import asyncpg  # noqa: E402
+from aave_crawler.config import load_config  # noqa: E402
 
 ANOMALY = "10000000000.00000000"
 DRY_RUN = "--fix" not in sys.argv
@@ -63,7 +63,9 @@ async def main() -> None:
         await pool.execute(
             f"DELETE FROM loan.position_snapshot_cache WHERE eth_price_usd = {ANOMALY}"
         )
-        print(f"\n已删除 {cnt} 条异常行。下次运行 build_all_snapshots.py 会自动重建这些缓存。")
+        print(
+            f"\n已删除 {cnt} 条异常行。下次运行 build_all_snapshots.py 会自动重建这些缓存。"
+        )
 
     await pool.close()
 

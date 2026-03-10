@@ -16,29 +16,47 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from web3 import AsyncWeb3
 
 from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
-from ..constants import ETH_SYMBOLS_SQL as _ETH_SYMBOLS_SQL
 from ..constants import MAX_HF
 from ..constants import MAX_UINT256 as _MAX_UINT256
 from ..constants import WETH_ADDR as _WETH_ADDR
-from ..db import (fetch_user_tx_history, get_cached_snapshots,
-                  upsert_snapshot_cache)
+from ..db import fetch_user_tx_history, get_cached_snapshots, upsert_snapshot_cache
 from ..models import ReservePosition, UserPosition
-from ..rpc import (EMPTY_POSITION, fetch_user_position,
-                   fetch_user_position_at_block, get_all_reserve_tokens,
-                   get_assets_prices, get_contracts, get_reserve_config)
+from ..rpc import (
+    EMPTY_POSITION,
+    fetch_user_position,
+    fetch_user_position_at_block,
+    get_all_reserve_tokens,
+    get_assets_prices,
+    get_contracts,
+    get_reserve_config,
+)
 from ..tx_parser import parse_briefs_from_metas, parse_tx_briefs
 from ..utils import raw_to_decimal as _raw_to_dec
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
-from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
-                      HistoricalPositionResponse, HistoricalReserveDetail,
-                      LiqPriceResponse, LiquidationPeriodItem,
-                      LiquidationSimItem, LiquidationSimResponse,
-                      MarketReplayResponse, PositionReplayResponse,
-                      PositionResponse, PositionSnapshotPoint, PricePeriodItem,
-                      PricePeriodResponse, PriceResponse,
-                      ReservePositionSchema, ShortLiqPeriodItem,
-                      ShortLiqSimItem, ShortLiqSimResponse,
-                      SnapshotReserveDetail, TxHistoryItem, TxHistoryResponse)
+from .schemas import (
+    BorrowPositionResponse,
+    BorrowUserPositionResponse,
+    HistoricalPositionResponse,
+    HistoricalReserveDetail,
+    LiqPriceResponse,
+    LiquidationPeriodItem,
+    LiquidationSimItem,
+    LiquidationSimResponse,
+    MarketReplayResponse,
+    PositionReplayResponse,
+    PositionResponse,
+    PositionSnapshotPoint,
+    PricePeriodItem,
+    PricePeriodResponse,
+    PriceResponse,
+    ReservePositionSchema,
+    ShortLiqPeriodItem,
+    ShortLiqSimItem,
+    ShortLiqSimResponse,
+    SnapshotReserveDetail,
+    TxHistoryItem,
+    TxHistoryResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -421,9 +439,7 @@ LIMIT :limit
         results.append(
             PositionResponse(
                 address=row.address,
-                eth_collateral_amount=_fmt(
-                    Decimal(str(row.eth_collateral_amount)), 6
-                ),
+                eth_collateral_amount=_fmt(Decimal(str(row.eth_collateral_amount)), 6),
                 eth_collateral_usd=_fmt(Decimal(str(row.eth_collateral_usd))),
                 total_collateral_usd=_fmt(Decimal(str(row.total_collateral_usd))),
                 available_borrows_usd=_fmt(Decimal(str(row.available_borrows_usd))),
@@ -1398,7 +1414,6 @@ async def _defillama_prices_bulk(
     返回 symbol → Decimal(price_usd)。
     稳定币直接返回 1，其余并发查询。
     """
-    from datetime import datetime, timezone
 
     import aiohttp
 
@@ -1821,8 +1836,7 @@ async def get_market_replay(
     当 w3 不为 None 时，若检测到时间范围内存在缺失的数据桶，会实时
     通过 RPC 补采缺失区块并写表，随后滚动更新汇总表再返回。
     """
-    from .schemas import (MarketReplayResponse, MarketReservePoint,
-                          MarketSnapshotPoint)
+    from .schemas import MarketReplayResponse, MarketReservePoint, MarketSnapshotPoint
 
     base = protocol.split("_")[0].lower()
     totals_table = f"aave_{base}_market_totals"
@@ -1884,12 +1898,13 @@ async def get_market_replay(
         ]
         if missing:
             from ..market_collector import _block_at_timestamp
-            from ..market_collector import \
-                collect_block_snapshot as _collect_block_snapshot
-            from ..market_collector import \
-                ensure_market_snapshot_table as _ensure_mkt_table
-            from ..market_collector import \
-                refresh_market_totals as _refresh_mkt_totals
+            from ..market_collector import (
+                collect_block_snapshot as _collect_block_snapshot,
+            )
+            from ..market_collector import (
+                ensure_market_snapshot_table as _ensure_mkt_table,
+            )
+            from ..market_collector import refresh_market_totals as _refresh_mkt_totals
 
             if len(missing) > _MAX_MARKET_ONLINE_COLLECT:
                 logger.warning(
@@ -1944,7 +1959,7 @@ async def get_market_replay(
     # 只有 detail=true 时才查 reserve 明细
     reserve_map: dict[int, list[MarketReservePoint]] = {}
     if detail and selected_blocks:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(selected_blocks)))
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(selected_blocks)))
         sql_detail = f"""
             SELECT
                 block_number, token_address, symbol,

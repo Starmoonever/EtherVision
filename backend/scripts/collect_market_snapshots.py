@@ -53,15 +53,17 @@ import asyncpg
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from aave_crawler.config import load_config
-from aave_crawler.market_collector import (_block_at_timestamp,
-                                           collect_block_snapshot,
-                                           ensure_block_timestamps_table,
-                                           ensure_market_snapshot_table,
-                                           refresh_market_totals,
-                                           upsert_block_timestamps)
-from aave_crawler.rpc import build_web3
-from web3 import AsyncWeb3
+from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.market_collector import (  # noqa: E402
+    _block_at_timestamp,
+    collect_block_snapshot,
+    ensure_block_timestamps_table,
+    ensure_market_snapshot_table,
+    refresh_market_totals,
+    upsert_block_timestamps,
+)
+from aave_crawler.rpc import build_web3  # noqa: E402
+from web3 import AsyncWeb3  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,7 +71,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
 
 
 async def _parse_time(time_str: str) -> datetime:
@@ -115,17 +116,21 @@ async def _ts_to_block(
         if row:
             logger.info(
                 "%s → 区块 %d (缓存命中，block_ts=%s)",
-                target_dt.isoformat(), row["block_number"],
+                target_dt.isoformat(),
+                row["block_number"],
                 row["block_timestamp"].isoformat(),
             )
             return int(row["block_number"])
 
     block = await _block_at_timestamp(w3, ts, pool)
     block_meta = await w3.eth.get_block(block)
-    block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)
+    block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)  # type: ignore[typeddict-item]
     logger.info(
         "%s (unix=%d) → 区块 %d (block_ts=%s)",
-        target_dt.isoformat(), ts, block, block_ts.isoformat(),
+        target_dt.isoformat(),
+        ts,
+        block,
+        block_ts.isoformat(),
     )
 
     if pool is not None:
@@ -136,12 +141,14 @@ async def _ts_to_block(
 
 # ── CLI 入口 ──────────────────────────────────────────────────────────────────
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="采集 Aave V2/V3 历史大盘快照（eth_call@block）"
     )
     p.add_argument(
-        "-p", "--protocol",
+        "-p",
+        "--protocol",
         dest="protocols",
         action="append",
         default=[],
@@ -153,29 +160,44 @@ def _parse_args() -> argparse.Namespace:
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--block", type=int, help="指定单个区块号")
     group.add_argument(
-        "--time", type=str, metavar="DATETIME",
+        "--time",
+        type=str,
+        metavar="DATETIME",
         help="指定单个时间点（YYYY-MM-DD 或 YYYY-MM-DDTHH:MM:SSZ）",
     )
     group.add_argument(
-        "--from", dest="from_time", type=str, metavar="DATETIME",
+        "--from",
+        dest="from_time",
+        type=str,
+        metavar="DATETIME",
         help="起始时间（配合 --step-hours 生成时间序列）",
     )
 
     p.add_argument(
-        "--to", dest="to_time", type=str, default="",
+        "--to",
+        dest="to_time",
+        type=str,
+        default="",
         metavar="DATETIME",
         help="结束时间（默认当前 UTC 时间，配合 --from）",
     )
     p.add_argument(
-        "--step-hours", type=int, default=1,
+        "--step-hours",
+        type=int,
+        default=1,
         help="时间步长（小时，默认 1）",
     )
-    p.add_argument("--rpc-concurrency", type=int, default=12,
-                   help="RPC 并发上限（默认 12）")
-    p.add_argument("--dry-run", action="store_true",
-                   help="仅打印将要采集的区块/协议，不执行 RPC/写库")
-    p.add_argument("--config", type=str, default="",
-                   help="配置文件路径（默认 config.yaml）")
+    p.add_argument(
+        "--rpc-concurrency", type=int, default=12, help="RPC 并发上限（默认 12）"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅打印将要采集的区块/协议，不执行 RPC/写库",
+    )
+    p.add_argument(
+        "--config", type=str, default="", help="配置文件路径（默认 config.yaml）"
+    )
     return p.parse_args()
 
 
@@ -225,8 +247,10 @@ async def _main() -> None:
 
             logger.info(
                 "时间区间 %s → %s，步长 %d 小时，共 %d 个时间点",
-                start_dt.isoformat(), end_dt.isoformat(),
-                args.step_hours, len(time_points),
+                start_dt.isoformat(),
+                end_dt.isoformat(),
+                args.step_hours,
+                len(time_points),
             )
 
             # 串行将时间点转换为区块号（缓存命中时跳过 RPC 二分搜索）
@@ -243,7 +267,8 @@ async def _main() -> None:
         if len(deduped_blocks) < len(target_blocks):
             logger.info(
                 "去重后目标区块数：%d（原 %d）",
-                len(deduped_blocks), len(target_blocks),
+                len(deduped_blocks),
+                len(target_blocks),
             )
         target_blocks = deduped_blocks
 

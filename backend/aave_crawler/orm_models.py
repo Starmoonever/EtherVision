@@ -11,8 +11,15 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import (BigInteger, Boolean, DateTime, Integer, LargeBinary,
-                        Numeric, String, Text, UniqueConstraint)
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

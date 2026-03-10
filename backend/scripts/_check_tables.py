@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """诊断：检查各表的数据量和liq_price分布"""
+
 import asyncio
 import os
 import sys
@@ -25,13 +26,15 @@ async def main():
         print(" ", c["column_name"])
 
     # Sample row
-    r = await pool.fetchrow("SELECT * FROM loan.aave_v3_eth_reserve_positions_collateral LIMIT 1")
+    r = await pool.fetchrow(
+        "SELECT * FROM loan.aave_v3_eth_reserve_positions_collateral LIMIT 1"
+    )
     if r:
         print("\nSample row keys:", list(r.keys()))
         print("Sample:", dict(r))
 
     # Count ETH symbol rows
-    ETH_SYMBOLS = ['WETH', 'wstETH', 'rETH', 'cbETH', 'ETH', 'weETH', 'ezETH', 'rsETH']
+    ETH_SYMBOLS = ["WETH", "wstETH", "rETH", "cbETH", "ETH", "weETH", "ezETH", "rsETH"]
     r2 = await pool.fetchrow(
         f"SELECT COUNT(DISTINCT user_address) FROM loan.aave_v3_eth_reserve_positions_collateral WHERE UPPER(symbol) = ANY(ARRAY{[s.upper() for s in ETH_SYMBOLS]}::text[]) AND usage_as_collateral_enabled = true AND supply_raw > 0"
     )

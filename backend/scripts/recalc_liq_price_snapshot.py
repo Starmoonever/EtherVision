@@ -50,7 +50,7 @@ if str(_ROOT) not in sys.path:
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.constants import ETH_SYMBOLS, LIQ_PRICE_CAP  # noqa: E402
 from aave_crawler.db import create_pool  # noqa: E402
-from aave_crawler.db import ensure_snapshot_cache_table
+from aave_crawler.db import ensure_snapshot_cache_table  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -108,20 +108,21 @@ def recalc_liq_price(
     if eth_price_now is None or eth_price_now <= 0:
         return Decimal("0")
 
-    eth_col_theta_usd = Decimal("0")   # Σ ETH系抵押 amount×price×θ（ETH资产θ长期稳定，可信）
-    eth_debt_usd      = Decimal("0")   # Σ ETH系负债 amount×price
-    d_fixed           = Decimal("0")   # Σ 非ETH负债 USD
+    eth_col_theta_usd = Decimal(
+        "0"
+    )  # Σ ETH系抵押 amount×price×θ（ETH资产θ长期稳定，可信）
+    eth_debt_usd = Decimal("0")  # Σ ETH系负债 amount×price
+    d_fixed = Decimal("0")  # Σ 非ETH负债 USD
 
     for r in reserves_json:
-        symbol    = r.get("symbol", "").upper()
-        decimals  = int(r.get("decimals", 18))
-        theta     = _dec(r.get("liquidation_threshold", 0)) / Decimal(10000)
-        use_col   = bool(r.get("use_as_collateral", False))
+        symbol = r.get("symbol", "").upper()
+        decimals = int(r.get("decimals", 18))
+        theta = _dec(r.get("liquidation_threshold", 0)) / Decimal(10000)
+        use_col = bool(r.get("use_as_collateral", False))
 
         supply_dec = _raw_to_dec(r.get("supply_raw", 0), decimals)
-        debt_dec   = (
-            _raw_to_dec(r.get("stable_debt_raw", 0), decimals)
-            + _raw_to_dec(r.get("variable_debt_raw", 0), decimals)
+        debt_dec = _raw_to_dec(r.get("stable_debt_raw", 0), decimals) + _raw_to_dec(
+            r.get("variable_debt_raw", 0), decimals
         )
         price_usd = _dec(r.get("price_usd", 0))
 
@@ -187,7 +188,7 @@ async def recalc_all(
 
     offset = 0
     updated = 0
-    zeroed  = 0
+    zeroed = 0
     skipped = 0
 
     while offset < total:
@@ -201,17 +202,24 @@ async def recalc_all(
         if not rows:
             break
 
-        update_args: list[tuple[Decimal, Decimal, int]] = []  # (liq_price, liq_price_weth, id)
+        update_args: list[
+            tuple[Decimal, Decimal, int]
+        ] = []  # (liq_price, liq_price_weth, id)
         for row in rows:
             old_liq = _dec(row["liq_price"])
-            p_now   = _dec(row["eth_price_usd"])
+            p_now = _dec(row["eth_price_usd"])
             try:
-                reserves = json.loads(row["reserves_json"]) if isinstance(row["reserves_json"], str) else row["reserves_json"]
+                reserves = (
+                    json.loads(row["reserves_json"])
+                    if isinstance(row["reserves_json"], str)
+                    else row["reserves_json"]
+                )
             except Exception:
                 reserves = []
 
             new_liq = recalc_liq_price(
-                reserves, p_now,
+                reserves,
+                p_now,
                 _dec(row["total_collateral_usd"]),
                 _dec(row["liq_threshold"]),
             )
@@ -232,7 +240,10 @@ async def recalc_all(
 
             logger.debug(
                 "id=%d  old_liq=%s  new_liq=%s  (eth_price=%s)",
-                row["id"], old_liq, new_liq, p_now,
+                row["id"],
+                old_liq,
+                new_liq,
+                p_now,
             )
 
         if update_args and not dry_run:
@@ -246,33 +257,58 @@ async def recalc_all(
         offset += len(rows)
         logger.info(
             "进度 %d/%d  已更新 %d（其中归零 %d）  跳过 %d",
-            min(offset, total), total, updated, zeroed, skipped,
+            min(offset, total),
+            total,
+            updated,
+            zeroed,
+            skipped,
         )
 
     if dry_run:
-        logger.info("[dry-run] 共检测到 %d 行需要更新（其中归零 %d 行），未写库。", updated, zeroed)
+        logger.info(
+            "[dry-run] 共检测到 %d 行需要更新（其中归零 %d 行），未写库。",
+            updated,
+            zeroed,
+        )
     else:
-        logger.info("完成！共更新 %d 行（其中归零 %d 行），跳过 %d 行（值未变）。", updated, zeroed, skipped)
+        logger.info(
+            "完成！共更新 %d 行（其中归零 %d 行），跳过 %d 行（值未变）。",
+            updated,
+            zeroed,
+            skipped,
+        )
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="重新计算 position_snapshot_cache.liq_price")
-    p.add_argument("--protocol", choices=["v2", "v3"], default=None,
-                   help="仅处理指定版本（默认全部）")
-    p.add_argument("--address", default=None,
-                   help="仅处理单个用户地址（0x...）")
-    p.add_argument("--dry-run", action="store_true",
-                   help="仅统计需更新行数，不写库")
-    p.add_argument("--batch", type=int, default=500, dest="batch",
-                   help="每批处理的行数（默认 500）")
-    p.add_argument("--fix-only-positive", action="store_true",
-                   help="只修复 liq_price > 0 但新公式结果 = 0 的行（最快速修复已知 bug）")
+    p = argparse.ArgumentParser(
+        description="重新计算 position_snapshot_cache.liq_price"
+    )
+    p.add_argument(
+        "--protocol",
+        choices=["v2", "v3"],
+        default=None,
+        help="仅处理指定版本（默认全部）",
+    )
+    p.add_argument("--address", default=None, help="仅处理单个用户地址（0x...）")
+    p.add_argument("--dry-run", action="store_true", help="仅统计需更新行数，不写库")
+    p.add_argument(
+        "--batch",
+        type=int,
+        default=500,
+        dest="batch",
+        help="每批处理的行数（默认 500）",
+    )
+    p.add_argument(
+        "--fix-only-positive",
+        action="store_true",
+        help="只修复 liq_price > 0 但新公式结果 = 0 的行（最快速修复已知 bug）",
+    )
     return p.parse_args()
 
 
 async def _main() -> None:
     args = _parse_args()
-    cfg  = load_config()  # 自动查找 backend/config.yaml
+    cfg = load_config()  # 自动查找 backend/config.yaml
     pool = await create_pool(cfg.postgres)
     try:
         # 确保 liq_price_weth 等新列已存在（幂等）

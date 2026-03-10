@@ -5,6 +5,7 @@
 convert_from 等效），满足 TimescaleDB 超表及 PostgreSQL 函数索引的 IMMUTABLE 要求。
 建索引期间会短暂锁表，495 万行通常 10~30 秒完成。
 """
+
 import asyncio
 import logging
 import time

@@ -1,9 +1,10 @@
 """临时调试脚本：检查指定地址的 aave_history liquidation 记录
 与 position_snapshot_cache 的差异，以及 seen_blocks 去重逻辑的影响。
 """
+
 import asyncio
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 
 sys.path.insert(0, ".")
 
@@ -16,7 +17,7 @@ async def main():
     from aave_crawler.db import create_pool
 
     cfg = load_config()
-    pool = await create_pool(cfg)
+    pool = await create_pool(cfg.postgres)
 
     # ── 1. aave_history 原始数据 ────────────────────────────────────────────
     rows = await pool.fetch(
@@ -41,7 +42,9 @@ async def main():
           )
         ORDER BY block_number ASC
         """,
-        ADDR.lower(), ADDR.lower(), PROTOCOL[-1],  # $1, $2(unused here), $3
+        ADDR.lower(),
+        ADDR.lower(),
+        PROTOCOL[-1],  # $1, $2(unused here), $3
     )
 
     # fetch 不支持多次 $1，改写：
@@ -67,7 +70,8 @@ async def main():
           )
         ORDER BY block_number ASC
         """,
-        ADDR.lower(), PROTOCOL[-1],
+        ADDR.lower(),
+        PROTOCOL[-1],
     )
 
     print("=" * 60)
@@ -91,7 +95,8 @@ async def main():
         SELECT tx_hash FROM loan.position_snapshot_cache
         WHERE user_address = lower($1) AND protocol = $2
         """,
-        ADDR.lower(), PROTOCOL,
+        ADDR.lower(),
+        PROTOCOL,
     )
     cached_set = {r["tx_hash"] for r in cached_rows}
     print(f"\nposition_snapshot_cache 已有 {len(cached_set)} 条")

@@ -29,10 +29,13 @@ import asyncpg
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from aave_crawler.config import load_config
-from aave_crawler.market_collector import (_table_name, _view_name,
-                                           ensure_market_snapshot_table,
-                                           refresh_market_totals)
+from aave_crawler.config import load_config  # noqa: E402
+from aave_crawler.market_collector import (  # noqa: E402
+    _table_name,
+    _view_name,
+    ensure_market_snapshot_table,
+    refresh_market_totals,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,7 +75,10 @@ async def _migrate_protocol(pool: asyncpg.Pool, protocol: str, dry_run: bool) ->
     )
     logger.info(
         "[%s] loan.%s: %d 条 reserve 行，共 %d 个区块",
-        protocol, snapshots, snap_rows, distinct_blocks,
+        protocol,
+        snapshots,
+        snap_rows,
+        distinct_blocks,
     )
 
     if dry_run:
@@ -94,7 +100,8 @@ async def _migrate_protocol(pool: asyncpg.Pool, protocol: str, dry_run: bool) ->
 async def _main() -> None:
     p = argparse.ArgumentParser(description="迁移 market_totals 物化视图 → 普通汇总表")
     p.add_argument(
-        "--protocol", "-p",
+        "--protocol",
+        "-p",
         dest="protocols",
         action="append",
         default=[],

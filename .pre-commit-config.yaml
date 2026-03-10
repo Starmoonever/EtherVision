@@ -1,24 +1,42 @@
-# See https://pre-commit.com for more information
-# See https://pre-commit.com/hooks.html for more hooks
 repos:
+  # 基础文件检查
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
       - id: check-added-large-files
 
-  - repo: https://github.com/pycqa/isort
-    rev: 8.0.0
-    hooks:
-      - id: isort
-
+  # Prettier (JS / TS / JSON / Markdown / YAML)
   - repo: https://github.com/rbubley/mirrors-prettier
     rev: v3.8.1
     hooks:
       - id: prettier
-        types_or: [markdown, yaml, json]
+
+  # Markdown 规范检查
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.21.0
+    hooks:
+      - id: markdownlint-cli2
+        args: ['--fix'] # 自动修复可修复的问题
+
+  # Python lint + formatter (Ruff)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.5
+    hooks:
+      - id: ruff-check
+        args: ['--fix'] # 自动修复可修复的问题
+      - id: ruff-format
+
+  # Python 类型检查
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.408
+    hooks:
+      - id: pyright
 
 ci:
   autoupdate_schedule: weekly

@@ -51,34 +51,34 @@ def _calc_from_reserves(
     返回：(eth_col_amount, eth_col_usd, weth_debt_amount, weth_debt_usd, liq_price_rise)
     """
     eth_col_amount = Decimal("0")
-    eth_col_usd    = Decimal("0")
-    weth_debt_raw  = Decimal("0")
-    weth_debt_usd  = Decimal("0")
+    eth_col_usd = Decimal("0")
+    weth_debt_raw = Decimal("0")
+    weth_debt_usd = Decimal("0")
 
     # liq_price_rise 所需中间量
-    eth_debt_usd_sum      = Decimal("0")
+    eth_debt_usd_sum = Decimal("0")
     eth_col_theta_usd_sum = Decimal("0")
-    d_fixed               = Decimal("0")
-    c_fixed               = Decimal("0")
+    d_fixed = Decimal("0")
+    c_fixed = Decimal("0")
 
     for r in reserves:
-        symbol    = r["symbol"].upper()
-        decimals  = int(r["decimals"])
-        price     = Decimal(str(r["price_usd"]))
-        sup_raw   = int(r["supply_raw"])
-        st_raw    = int(r["stable_debt_raw"])
-        var_raw   = int(r["variable_debt_raw"])
-        use_col   = bool(r["use_as_collateral"])
-        liq_thr   = Decimal(str(r["liquidation_threshold"])) / Decimal(10000)
+        symbol = r["symbol"].upper()
+        decimals = int(r["decimals"])
+        price = Decimal(str(r["price_usd"]))
+        sup_raw = int(r["supply_raw"])
+        st_raw = int(r["stable_debt_raw"])
+        var_raw = int(r["variable_debt_raw"])
+        use_col = bool(r["use_as_collateral"])
+        liq_thr = Decimal(str(r["liquidation_threshold"])) / Decimal(10000)
 
-        sup_amt   = Decimal(sup_raw)   / Decimal(10 ** decimals)
-        debt_amt  = Decimal(st_raw + var_raw) / Decimal(10 ** decimals)
+        sup_amt = Decimal(sup_raw) / Decimal(10**decimals)
+        debt_amt = Decimal(st_raw + var_raw) / Decimal(10**decimals)
 
         if symbol in _ETH_SYMBOLS:
             # 抵押品端
             if sup_raw > 0 and use_col:
                 eth_col_amount += sup_amt
-                eth_col_usd    += sup_amt * price
+                eth_col_usd += sup_amt * price
                 eth_col_theta_usd_sum += sup_amt * price * liq_thr
             # 负债端
             if st_raw + var_raw > 0:
@@ -94,7 +94,7 @@ def _calc_from_reserves(
                 d_fixed += debt_amt * price
 
     # weth_debt_amount：原始 wei → ETH 数量（WETH 系均 18 位）
-    weth_debt_amount = weth_debt_raw / Decimal(10 ** 18)
+    weth_debt_amount = weth_debt_raw / Decimal(10**18)
 
     # liq_price_rise
     if eth_debt_usd_sum == 0 or eth_price_usd == 0:
@@ -181,10 +181,16 @@ async def backfill(batch_size: int, dry_run: bool) -> None:
                         reserves, eth_price
                     )
 
-                    batch.append((
-                        ec_amt, ec_usd, wd_amt, wd_usd, lpr,
-                        row["id"],
-                    ))
+                    batch.append(
+                        (
+                            ec_amt,
+                            ec_usd,
+                            wd_amt,
+                            wd_usd,
+                            lpr,
+                            row["id"],
+                        )
+                    )
                     pbar.update(1)
 
                     if len(batch) >= batch_size:
@@ -214,7 +220,9 @@ async def backfill(batch_size: int, dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="回填 position_snapshot_cache 新字段")
-    parser.add_argument("--batch", type=int, default=200, help="每批 UPDATE 行数（默认 200）")
+    parser.add_argument(
+        "--batch", type=int, default=200, help="每批 UPDATE 行数（默认 200）"
+    )
     parser.add_argument("--dry-run", action="store_true", help="只计算，不写入数据库")
     args = parser.parse_args()
 

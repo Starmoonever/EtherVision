@@ -88,6 +88,7 @@ WHERE id = $2
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
+
 def _build_prices(
     reserves_json: list[dict] | str | None,
     eth_price_usd: Decimal | None = None,
@@ -108,9 +109,11 @@ def _build_prices(
         except Exception:
             return {}
     prices = {}
-    for r in reserves_json:
-        addr = r.get("token_address", "").lower()
-        price_raw = r.get("price_usd", "")
+    if reserves_json is None:  # type: ignore[redundant-expr]
+        return {}
+    for r in reserves_json:  # type: ignore[attr-defined]
+        addr = r.get("token_address", "").lower()  # type: ignore[attr-defined]
+        price_raw = r.get("price_usd", "")  # type: ignore[attr-defined]
         if addr and price_raw:
             try:
                 prices[addr] = Decimal(str(price_raw))
@@ -132,6 +135,7 @@ async def _parse_one(
 
 
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
+
 
 async def run(args: argparse.Namespace) -> None:
     cfg = load_config(args.config)
@@ -165,10 +169,16 @@ async def run(args: argparse.Namespace) -> None:
             for r in rows[:10]:
                 rv = r["reserves_json"]
                 eth_p = Decimal(str(r["eth_price_usd"])) if r["eth_price_usd"] else None
-                prices = _build_prices(rv if isinstance(rv, list) else (json.loads(rv) if rv else []), eth_p)
+                prices = _build_prices(
+                    rv if isinstance(rv, list) else (json.loads(rv) if rv else []),
+                    eth_p,
+                )
                 logger.info(
                     "  [dry-run] id=%s  tx=%s  protocol=%s  tokens=%d",
-                    r["id"], r["tx_hash"], r["protocol"], len(prices),
+                    r["id"],
+                    r["tx_hash"],
+                    r["protocol"],
+                    len(prices),
                 )
             if total > 10:
                 logger.info("  ... 共 %d 行（仅展示前 10 行）", total)
@@ -180,7 +190,7 @@ async def run(args: argparse.Namespace) -> None:
         failed = 0
 
         for batch_start in range(0, total, batch_size):
-            batch = rows[batch_start: batch_start + batch_size]
+            batch = rows[batch_start : batch_start + batch_size]
 
             briefs = await parse_briefs_from_metas(
                 pool,
@@ -190,7 +200,9 @@ async def run(args: argparse.Namespace) -> None:
                         "protocol": r["protocol"],
                         "prices": _build_prices(
                             r["reserves_json"],
-                            Decimal(str(r["eth_price_usd"])) if r["eth_price_usd"] else None,
+                            Decimal(str(r["eth_price_usd"]))
+                            if r["eth_price_usd"]
+                            else None,
                         ),
                     }
                     for r in batch
@@ -200,10 +212,7 @@ async def run(args: argparse.Namespace) -> None:
             # 3. 批量写回
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    pairs = [
-                        (brief, r["id"])
-                        for brief, r in zip(briefs, batch)
-                    ]
+                    pairs = [(brief, r["id"]) for brief, r in zip(briefs, batch)]
                     await conn.executemany(_SQL_UPDATE, pairs)
 
             batch_updated = sum(1 for b in briefs if b)
@@ -221,7 +230,9 @@ async def run(args: argparse.Namespace) -> None:
 
         logger.info(
             "回填完成：共处理 %d 行，解析成功 %d，空结果（不支持的方法等）%d",
-            total, updated, failed,
+            total,
+            updated,
+            failed,
         )
 
     finally:
@@ -230,20 +241,28 @@ async def run(args: argparse.Namespace) -> None:
 
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="回填 position_snapshot_cache.brief 字段（含 USD 价值描述）"
     )
-    parser.add_argument("--config", default="config.yaml",
-                        help="配置文件路径（默认 config.yaml）")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="仅打印待处理行，不修改数据库")
-    parser.add_argument("--batch", type=int, default=20,
-                        help="每批并发解析数量（默认 20）")
-    parser.add_argument("--limit", type=int, default=0,
-                        help="最多处理行数（0 = 全量，默认 0）")
-    parser.add_argument("--only-empty", action="store_true",
-                        help="仅处理 brief = '' 的行（默认全量重写）")
+    parser.add_argument(
+        "--config", default="config.yaml", help="配置文件路径（默认 config.yaml）"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="仅打印待处理行，不修改数据库"
+    )
+    parser.add_argument(
+        "--batch", type=int, default=20, help="每批并发解析数量（默认 20）"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="最多处理行数（0 = 全量，默认 0）"
+    )
+    parser.add_argument(
+        "--only-empty",
+        action="store_true",
+        help="仅处理 brief = '' 的行（默认全量重写）",
+    )
     args = parser.parse_args()
 
     asyncio.run(run(args))

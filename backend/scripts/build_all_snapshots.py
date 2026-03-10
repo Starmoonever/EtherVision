@@ -44,11 +44,15 @@ sys.path.insert(0, str(ROOT))
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.constants import WETH_ADDR as _WETH_ADDR  # noqa: E402
 from aave_crawler.db import ensure_snapshot_cache_table  # noqa: E402
-from aave_crawler.db import fetch_user_tx_history, upsert_snapshot_cache
+from aave_crawler.db import fetch_user_tx_history, upsert_snapshot_cache  # noqa: E402
 from aave_crawler.rpc import EMPTY_POSITION  # noqa: E402
-from aave_crawler.rpc import (build_web3, fetch_user_position_at_block,
-                              get_all_reserve_tokens, get_contracts,
-                              get_reserve_config)
+from aave_crawler.rpc import (  # noqa: E402
+    build_web3,
+    fetch_user_position_at_block,
+    get_all_reserve_tokens,
+    get_contracts,
+    get_reserve_config,
+)
 from aave_crawler.tx_parser import parse_briefs_from_metas  # noqa: E402
 
 logging.basicConfig(
@@ -145,7 +149,10 @@ async def process_user(
     if dry_run:
         logger.info(
             "[dry-run] %s  total=%d  miss=%d  cached=%d",
-            user_address[:12], len(deduped), len(miss_txs), len(cached_set),
+            user_address[:12],
+            len(deduped),
+            len(miss_txs),
+            len(cached_set),
         )
         return 0, 0
 
@@ -154,12 +161,17 @@ async def process_user(
 
     # 3. 分批 RPC + 写库（流水线：RPC 完成立刻写，不等下一批）
     for batch_start in range(0, len(miss_txs), batch_size):
-        batch = miss_txs[batch_start: batch_start + batch_size]
+        batch = miss_txs[batch_start : batch_start + batch_size]
 
         tasks = [
             fetch_user_position_at_block(
-                w3, user_address, reserve_tokens, reserve_configs,
-                t["block_number"], global_rpc_sem, contracts,
+                w3,
+                user_address,
+                reserve_tokens,
+                reserve_configs,
+                t["block_number"],
+                global_rpc_sem,
+                contracts,
             )
             for t in batch
         ]
@@ -171,7 +183,7 @@ async def process_user(
         for t, res in zip(batch, results):
             if res is None or res is EMPTY_POSITION:
                 continue
-            pos, eth_price_raw = res
+            pos, eth_price_raw = res  # type: ignore[misc]
             # 二道防线：ETH 价格合理范围 $1 ~ $100,000（raw = 8dec USD）
             # V2 ETH/USD 归一化失败时 eth_price_raw 会是 1e18（WETH V2 oracle 原始值），
             # rpc.py 已在首道拦截，此处兜底，防止历史缓存写入失真数据。
@@ -179,25 +191,29 @@ async def process_user(
             if eth_price_raw == 0 or eth_price_raw > _ETH_PRICE_RAW_MAX:
                 logger.warning(
                     "跳过异常 ETH 价格 raw=%d block=%d user=%s",
-                    eth_price_raw, t["block_number"], pos.user_address,
+                    eth_price_raw,
+                    t["block_number"],
+                    pos.user_address,
                 )
                 continue
-            eth_price_dec = Decimal(eth_price_raw) / Decimal(10 ** 8)
+            eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
             _prices = {
-                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10 ** 8)
+                r.token_address.lower(): Decimal(r.price_raw) / Decimal(10**8)
                 for r in pos.reserves
             }
             # WETH 可能因全额取出后余额为 0 而不在 reserves 里，
             # 天然用 eth_price_usd 作为 WETH / ETH 价格
             _prices.setdefault(_WETH_ADDR, eth_price_dec)
             positions.append(pos)
-            metas.append({
-                "tx_hash":         t["tx_hash"],
-                "block_timestamp": t["block_timestamp"],
-                "eth_price_usd":   eth_price_dec,
-                "protocol":        protocol,
-                "prices":          _prices,
-            })
+            metas.append(
+                {
+                    "tx_hash": t["tx_hash"],
+                    "block_timestamp": t["block_timestamp"],
+                    "eth_price_usd": eth_price_dec,
+                    "protocol": protocol,
+                    "prices": _prices,
+                }
+            )
 
         if not positions:
             continue
@@ -206,7 +222,7 @@ async def process_user(
         if no_brief:
             briefs = [""] * len(positions)
         else:
-            briefs = await parse_briefs_from_metas(metas)
+            briefs = await parse_briefs_from_metas(metas)  # type: ignore[arg-type]
 
         written = await upsert_snapshot_cache(pool, positions, metas, briefs=briefs)
         total_written += written
@@ -217,12 +233,12 @@ async def process_user(
 # ── 全局进度统计 ──────────────────────────────────────────────────────────────
 class _Stats:
     def __init__(self) -> None:
-        self.users_done   = 0
+        self.users_done = 0
         self.users_skipped = 0
-        self.users_failed  = 0
-        self.rpc_total    = 0
-        self.write_total  = 0
-        self.t_start      = time.monotonic()
+        self.users_failed = 0
+        self.rpc_total = 0
+        self.write_total = 0
+        self.t_start = time.monotonic()
 
     def report(self, total_users: int) -> None:
         elapsed = time.monotonic() - self.t_start
@@ -243,12 +259,13 @@ class _Stats:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def run(args: argparse.Namespace) -> None:
     cfg = load_config(args.config)
     dsn = cfg.postgres.dsn
 
     from_dt = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
-    to_dt   = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
+    to_dt = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
 
     # DB 连接池
     pool = await asyncpg.create_pool(
@@ -270,11 +287,10 @@ async def run(args: argparse.Namespace) -> None:
 
     for protocol in args.protocol:
         logger.info("═══ 开始处理 protocol=%s ═══", protocol)
-        pv = protocol[-1]  # '3' or '2'
 
         # ── 一次性加载 reserve_tokens / reserve_configs（全协议共用）─────────
         logger.info("[%s] 加载 reserve_tokens / configs ...", protocol)
-        contracts    = get_contracts(protocol)
+        contracts = get_contracts(protocol)
         reserve_tokens = await get_all_reserve_tokens(w3, contracts)
         reserve_configs: dict = {}
         for rt in reserve_tokens:
@@ -283,7 +299,9 @@ async def run(args: argparse.Namespace) -> None:
                 reserve_configs[rt.token_address] = cfg_item
         logger.info(
             "[%s] reserve_tokens=%d  reserve_configs=%d",
-            protocol, len(reserve_tokens), len(reserve_configs),
+            protocol,
+            len(reserve_tokens),
+            len(reserve_configs),
         )
 
         # ── 发现用户 ─────────────────────────────────────────────────────────
@@ -303,28 +321,30 @@ async def run(args: argparse.Namespace) -> None:
             async with user_sem:
                 try:
                     rpc_cnt, write_cnt = await process_user(
-                        pool      = pool,
-                        w3        = w3,
-                        user_address  = addr,
-                        protocol      = protocol,
-                        reserve_tokens= reserve_tokens,
+                        pool=pool,
+                        w3=w3,
+                        user_address=addr,
+                        protocol=protocol,
+                        reserve_tokens=reserve_tokens,
                         reserve_configs=reserve_configs,
-                        global_rpc_sem= global_rpc_sem,
-                        from_dt   = from_dt,
-                        to_dt     = to_dt,
-                        batch_size= args.batch,
-                        dry_run   = args.dry_run,
-                        no_brief  = args.no_brief,
+                        global_rpc_sem=global_rpc_sem,
+                        from_dt=from_dt,
+                        to_dt=to_dt,
+                        batch_size=args.batch,
+                        dry_run=args.dry_run,
+                        no_brief=args.no_brief,
                     )
                     if rpc_cnt == 0:
                         stats.users_skipped += 1
                     else:
-                        stats.users_done   += 1
-                        stats.rpc_total    += rpc_cnt
-                        stats.write_total  += write_cnt
+                        stats.users_done += 1
+                        stats.rpc_total += rpc_cnt
+                        stats.write_total += write_cnt
                 except Exception as exc:
                     stats.users_failed += 1
-                    logger.warning("[%s] 处理失败 user=%s: %s", protocol, addr[:12], exc)
+                    logger.warning(
+                        "[%s] 处理失败 user=%s: %s", protocol, addr[:12], exc
+                    )
 
         # 并发启动所有用户任务（user_sem 控制同时运行数）
         tasks = [asyncio.create_task(_handle_user(addr)) for addr in users]
@@ -346,34 +366,48 @@ async def run(args: argparse.Namespace) -> None:
 
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     parser = argparse.ArgumentParser(
         description="从 aave_history 全量构建 position_snapshot_cache"
     )
-    parser.add_argument("-p", "--protocol", action="append", default=[],
-                        choices=["v2", "v3"],
-                        help="协议版本（可多次指定，默认 v3）")
-    parser.add_argument("--workers",         type=int, default=3,
-                        help="同时处理的用户数（默认 3）")
-    parser.add_argument("--rpc-concurrency", type=int, default=10,
-                        help="全局 RPC 并发数（默认 10）")
-    parser.add_argument("--batch",           type=int, default=200,
-                        help="每用户每批 RPC gather 数（默认 200）")
-    parser.add_argument("--limit",           type=int, default=0,
-                        help="最多处理用户数（0 = 全量）")
-    parser.add_argument("--user",            type=str, default="",
-                        help="仅处理指定地址（调试）")
-    parser.add_argument("--dry-run",         action="store_true",
-                        help="不执行 RPC / 不写库")
-    parser.add_argument("--no-brief",        action="store_true",
-                        help="跳过 AI-ContractParser brief 解析")
-    parser.add_argument("--config",          default="config.yaml",
-                        help="配置文件路径（默认 config.yaml）")
-    parser.add_argument("--start",           default="2020-01-01",
-                        help="历史起始日期 YYYY-MM-DD（默认 2020-01-01）")
-    parser.add_argument("--end",             default=today,
-                        help=f"历史结束日期 YYYY-MM-DD（默认 {today}）")
+    parser.add_argument(
+        "-p",
+        "--protocol",
+        action="append",
+        default=[],
+        choices=["v2", "v3"],
+        help="协议版本（可多次指定，默认 v3）",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="同时处理的用户数（默认 3）"
+    )
+    parser.add_argument(
+        "--rpc-concurrency", type=int, default=10, help="全局 RPC 并发数（默认 10）"
+    )
+    parser.add_argument(
+        "--batch", type=int, default=200, help="每用户每批 RPC gather 数（默认 200）"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="最多处理用户数（0 = 全量）"
+    )
+    parser.add_argument("--user", type=str, default="", help="仅处理指定地址（调试）")
+    parser.add_argument("--dry-run", action="store_true", help="不执行 RPC / 不写库")
+    parser.add_argument(
+        "--no-brief", action="store_true", help="跳过 AI-ContractParser brief 解析"
+    )
+    parser.add_argument(
+        "--config", default="config.yaml", help="配置文件路径（默认 config.yaml）"
+    )
+    parser.add_argument(
+        "--start",
+        default="2020-01-01",
+        help="历史起始日期 YYYY-MM-DD（默认 2020-01-01）",
+    )
+    parser.add_argument(
+        "--end", default=today, help=f"历史结束日期 YYYY-MM-DD（默认 {today}）"
+    )
 
     args = parser.parse_args()
     if not args.protocol:

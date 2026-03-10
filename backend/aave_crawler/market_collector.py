@@ -26,8 +26,15 @@ from typing import Any
 import asyncpg
 from web3 import AsyncWeb3
 
-from .rpc import (CHAINLINK_ETH_USD, CHAINLINK_ETH_USD_ABI, CONTRACTS_V3,
-                  DATA_PROVIDER_ABI, ORACLE_ABI, WETH_ADDRESS, get_contracts)
+from .rpc import (
+    CHAINLINK_ETH_USD,
+    CHAINLINK_ETH_USD_ABI,
+    CONTRACTS_V3,
+    DATA_PROVIDER_ABI,
+    ORACLE_ABI,
+    WETH_ADDRESS,
+    get_contracts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -303,8 +310,9 @@ async def _block_at_timestamp(
     MERGE_TS = 1663224162
 
     latest_block = await w3.eth.get_block("latest")
-    latest_num: int = latest_block["number"]
-    latest_ts: int = latest_block["timestamp"]
+    # BlockData 中 number/timestamp 在 web3.py 中定义为可选，但在 latest 块中总是存在
+    latest_num: int = latest_block["number"]  # type: ignore[typeddict-item]
+    latest_ts: int = latest_block["timestamp"]  # type: ignore[typeddict-item]
 
     if target_ts >= latest_ts:
         return latest_num
@@ -331,12 +339,15 @@ async def _block_at_timestamp(
                 return lo
             logger.debug(
                 "DB 辅助缩界: target=%d  lo_block=%d  hi_block=%d  span=%d",
-                target_ts, lo, hi, hi - lo,
+                target_ts,
+                lo,
+                hi,
+                hi - lo,
             )
             # 区间已由数据库保证包含目标，直接二分即可
             while lo < hi:
                 mid = (lo + hi) // 2
-                mid_ts = (await w3.eth.get_block(mid))["timestamp"]
+                mid_ts: int = (await w3.eth.get_block(mid))["timestamp"]  # type: ignore[typeddict-item]
                 if mid_ts < target_ts:
                     lo = mid + 1
                 else:
@@ -354,8 +365,8 @@ async def _block_at_timestamp(
     hi = min(latest_num, est + 500)
 
     for _ in range(6):
-        lo_ts = (await w3.eth.get_block(lo))["timestamp"]
-        hi_ts = (await w3.eth.get_block(hi))["timestamp"]
+        lo_ts: int = (await w3.eth.get_block(lo))["timestamp"]  # type: ignore[typeddict-item]
+        hi_ts: int = (await w3.eth.get_block(hi))["timestamp"]  # type: ignore[typeddict-item]
         if lo_ts <= target_ts <= hi_ts:
             break
         if target_ts < lo_ts:
@@ -365,7 +376,7 @@ async def _block_at_timestamp(
 
     while lo < hi:
         mid = (lo + hi) // 2
-        mid_ts = (await w3.eth.get_block(mid))["timestamp"]
+        mid_ts: int = (await w3.eth.get_block(mid))["timestamp"]  # type: ignore[typeddict-item]
         if mid_ts < target_ts:
             lo = mid + 1
         else:
@@ -493,7 +504,7 @@ async def collect_block_snapshot(
     logger.info("[%s] 开始采集 block=%d", protocol, block)
 
     block_meta = await w3.eth.get_block(block)
-    block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)
+    block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)  # type: ignore[typeddict-item]
     collected_at = datetime.now(tz=timezone.utc)
 
     dp_contract = w3.eth.contract(
@@ -515,7 +526,7 @@ async def collect_block_snapshot(
     decimals_map: dict[str, int] = {}
     for (_sym, addr), cfg in zip(reserve_tokens, cfg_results):
         if not isinstance(cfg, Exception):
-            decimals_map[addr.lower()] = int(cfg[0])
+            decimals_map[addr.lower()] = int(cfg[0])  # type: ignore[index]
         else:
             decimals_map[addr.lower()] = 18
 

@@ -1,4 +1,5 @@
 """验证 position_snapshot_cache 表结构"""
+
 import asyncio
 from pathlib import Path
 

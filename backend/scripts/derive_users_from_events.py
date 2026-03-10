@@ -83,7 +83,7 @@ def load_dsn() -> str:
             pg = raw["postgres"]
             return (
                 f"postgresql://{pg['user']}:{pg['password']}"
-                f"@{pg.get('host','127.0.0.1')}:{pg.get('port',5432)}/{pg['database']}"
+                f"@{pg.get('host', '127.0.0.1')}:{pg.get('port', 5432)}/{pg['database']}"
             )
     raise FileNotFoundError("找不到 config.yaml")
 
@@ -141,7 +141,7 @@ async def fetch_borrow_candidates(
         return []
 
     n = len(eth_addrs)
-    ph = ", ".join(f"${i+1}" for i in range(n))  # $1,...,$N（可在 SQL 内重复引用）
+    ph = ", ".join(f"${i + 1}" for i in range(n))  # $1,...,$N（可在 SQL 内重复引用）
     th = f"${n + 1}"  # $N+1 = 阈值
 
     sql = f"""
@@ -217,7 +217,7 @@ async def fetch_collateral_candidates(
         return []
 
     n = len(eth_addrs)
-    ph = ", ".join(f"${i+1}" for i in range(n))
+    ph = ", ".join(f"${i + 1}" for i in range(n))
     th = f"${n + 1}"
 
     sql = f"""
@@ -277,7 +277,7 @@ async def fetch_all_borrowers_liberal(
     if not eth_addr_list:
         return []
     n = len(eth_addr_list)
-    ph = ", ".join(f"${i+1}" for i in range(n))
+    ph = ", ".join(f"${i + 1}" for i in range(n))
     sql = f"""
     SELECT
         lower(convert_from(borrower_address, 'UTF8')) AS user_address,
@@ -304,10 +304,9 @@ async def fetch_history_users_by_pv(
     注意：此方法是"所有历史用户"，包含已还清，用作候选供 RPC 验证。
     """
     sym_list = list(eth_symbols)
-    n = len(sym_list) + 1  # +1 for operation, +1 for pv = +2 extra params
-    ph = ", ".join(f"${i+1}" for i in range(len(sym_list)))
-    op_ph = f"${len(sym_list)+1}"
-    pv_ph = f"${len(sym_list)+2}"
+    ph = ", ".join(f"${i + 1}" for i in range(len(sym_list)))
+    op_ph = f"${len(sym_list) + 1}"
+    pv_ph = f"${len(sym_list) + 2}"
 
     sql = f"""
     SELECT DISTINCT

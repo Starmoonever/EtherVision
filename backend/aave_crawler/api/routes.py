@@ -6,20 +6,38 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool, DbSession
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
-from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
-                      HistoricalPositionResponse, LiquidationPeriodItem,
-                      LiquidationSimResponse, MarketReplayResponse,
-                      PositionReplayResponse, PositionResponse,
-                      PricePeriodResponse, PriceResponse, ShortLiqPeriodItem,
-                      ShortLiqSimResponse, TxHistoryResponse)
-from .service import (get_borrow_user_position, get_eth_price,
-                      get_market_replay, get_positions_history,
-                      get_price_period, get_sorted_borrow_positions,
-                      get_sorted_positions, get_user_position,
-                      get_user_position_history, get_user_position_replay,
-                      get_user_tx_history, simulate_liquidation,
-                      simulate_liquidation_period, simulate_short_liquidation,
-                      simulate_short_liquidation_period)
+from .schemas import (
+    BorrowPositionResponse,
+    BorrowUserPositionResponse,
+    HistoricalPositionResponse,
+    LiquidationPeriodItem,
+    LiquidationSimResponse,
+    MarketReplayResponse,
+    PositionReplayResponse,
+    PositionResponse,
+    PricePeriodResponse,
+    PriceResponse,
+    ShortLiqPeriodItem,
+    ShortLiqSimResponse,
+    TxHistoryResponse,
+)
+from .service import (
+    get_borrow_user_position,
+    get_eth_price,
+    get_market_replay,
+    get_positions_history,
+    get_price_period,
+    get_sorted_borrow_positions,
+    get_sorted_positions,
+    get_user_position,
+    get_user_position_history,
+    get_user_position_replay,
+    get_user_tx_history,
+    simulate_liquidation,
+    simulate_liquidation_period,
+    simulate_short_liquidation,
+    simulate_short_liquidation_period,
+)
 
 router = APIRouter(prefix="/api")
 

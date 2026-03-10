@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
 from aave_crawler.config import load_config
+
 # 导入 ORM models 以支持 autogenerate
 from aave_crawler.orm_models import Base
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -13,7 +14,9 @@ config = context.config
 # 从 config.yaml 加载数据库连接信息
 app_config = load_config()
 pg = app_config.postgres
-db_url = f"postgresql+asyncpg://{pg.user}:{pg.password}@{pg.host}:{pg.port}/{pg.database}"
+db_url = (
+    f"postgresql+asyncpg://{pg.user}:{pg.password}@{pg.host}:{pg.port}/{pg.database}"
+)
 config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging.
@@ -68,7 +71,7 @@ def run_migrations_online() -> None:
 
     # 创建异步引擎
     connectable = create_async_engine(
-        config.get_main_option("sqlalchemy.url"),
+        config.get_main_option("sqlalchemy.url") or "",  # type: ignore[arg-type]
         poolclass=pool.NullPool,
     )
 

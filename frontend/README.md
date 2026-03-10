@@ -63,7 +63,7 @@ pnpm preview --host   # 局域网访问
 
 `dist/` 为纯静态文件，可直接部署到任意静态托管服务：
 
-**Nginx 示例**
+### Nginx 示例
 
 ```nginx
 server {
@@ -117,7 +117,7 @@ server {
 
 ## 项目结构
 
-```
+```text
 frontend/
 ├── .env                     # 默认环境变量（VITE_API_BASE_URL）
 ├── config.yaml              # 本地配置（RPC 地址，由 vite.config.ts 注入为 VITE_RPC_URL）

@@ -21,13 +21,27 @@ import asyncpg
 from tqdm import tqdm
 
 from .config import AppConfig
-from .db import (ensure_snapshot_cache_table, ensure_tables, get_tables,
-                 upsert_positions, upsert_snapshot_cache)
+from .db import (
+    ensure_snapshot_cache_table,
+    ensure_tables,
+    get_tables,
+    upsert_positions,
+    upsert_snapshot_cache,
+)
 from .models import UserPosition
-from .rpc import (CONTRACTS_V3, EMPTY_POSITION, WETH_ADDRESS,
-                  ProtocolContracts, build_web3, fetch_user_position,
-                  fetch_user_position_at_block, get_all_reserve_tokens,
-                  get_assets_prices, get_contracts, get_reserve_config)
+from .rpc import (
+    CONTRACTS_V3,
+    EMPTY_POSITION,
+    WETH_ADDRESS,
+    ProtocolContracts,
+    build_web3,
+    fetch_user_position,
+    fetch_user_position_at_block,
+    get_all_reserve_tokens,
+    get_assets_prices,
+    get_contracts,
+    get_reserve_config,
+)
 from .tx_parser import parse_briefs_from_metas
 
 logger = logging.getLogger(__name__)
@@ -183,7 +197,7 @@ async def _sync_snapshot_cache(
     for t, res in zip(deduped, results):
         if res is None or res is EMPTY_POSITION:
             continue
-        pos, eth_price_raw = res
+        pos, eth_price_raw = res  # type: ignore[misc]
         eth_price_dec = Decimal(eth_price_raw) / Decimal(10**8)
         positions.append(pos)
         metas.append(
@@ -270,8 +284,10 @@ async def _process_round(
             if pos is None:
                 fail += 1
                 continue
+            from typing import cast
+
             ok += 1
-            pending.append(pos)
+            pending.append(cast(UserPosition, pos))
             if len(pending) >= batch_size:
                 if db_task is not None:
                     await db_task

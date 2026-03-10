@@ -1,4 +1,5 @@
 """临时脚本：检查 aave.aave_history 表结构"""
+
 import asyncio
 from pathlib import Path
 
@@ -44,5 +45,6 @@ async def main():
     print(f"\n总行数: {cnt:,}")
 
     await conn.close()
+
 
 asyncio.run(main())

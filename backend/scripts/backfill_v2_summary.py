@@ -41,11 +41,14 @@ sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.db import upsert_snapshot_cache  # noqa: E402
-from aave_crawler.rpc import (CONTRACTS_V2, EMPTY_POSITION,  # noqa: E402
-                              WETH_ADDRESS, build_web3,
-                              fetch_user_position_at_block,
-                              get_all_reserve_tokens, get_assets_prices,
-                              get_reserve_config)
+from aave_crawler.rpc import (  # noqa: E402
+    CONTRACTS_V2,
+    EMPTY_POSITION,
+    build_web3,
+    fetch_user_position_at_block,
+    get_all_reserve_tokens,
+    get_reserve_config,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +79,7 @@ LIMIT $1
 
 # ── 预取公共数据 ─────────────────────────────────────────────────────────────
 
+
 async def _load_v2_common_data(w3):
     """加载 V2 储备资产列表、配置，不加载价格（价格在 fetch_user_position_at_block 内查）。"""
     logger.info("加载 V2 储备资产列表和配置...")
@@ -87,14 +91,18 @@ async def _load_v2_common_data(w3):
         return_exceptions=True,
     )
     reserve_configs = {
-        a: c for a, c in zip(addresses, configs)
-        if not isinstance(c, Exception)
+        a: c for a, c in zip(addresses, configs) if not isinstance(c, Exception)
     }
-    logger.info("V2 储备资产数量: %d，成功加载配置: %d", len(reserve_tokens), len(reserve_configs))
+    logger.info(
+        "V2 储备资产数量: %d，成功加载配置: %d",
+        len(reserve_tokens),
+        len(reserve_configs),
+    )
     return reserve_tokens, reserve_configs
 
 
 # ── 主逻辑 ────────────────────────────────────────────────────────────────────
+
 
 async def run(args: argparse.Namespace) -> None:
     cfg = load_config(args.config)
@@ -118,7 +126,9 @@ async def run(args: argparse.Namespace) -> None:
             for r in rows[:20]:
                 logger.info(
                     "  [dry-run] user=%s block=%s tx=%s...",
-                    r["user_address"], r["block_number"], r["tx_hash"][:20],
+                    r["user_address"],
+                    r["block_number"],
+                    r["tx_hash"][:20],
                 )
             if total > 20:
                 logger.info("  ... （共 %d 行，仅显示前 20）", total)
@@ -141,7 +151,7 @@ async def run(args: argparse.Namespace) -> None:
                     w3,
                     r["user_address"],
                     reserve_tokens,
-                    reserve_configs,
+                    reserve_configs,  # type: ignore[arg-type]
                     r["block_number"],
                     semaphore,
                     CONTRACTS_V2,
@@ -158,26 +168,32 @@ async def run(args: argparse.Namespace) -> None:
                 if res is None:
                     logger.warning(
                         "RPC 重放失败，跳过 user=%s block=%s tx=%s...",
-                        r["user_address"], r["block_number"], r["tx_hash"][:20],
+                        r["user_address"],
+                        r["block_number"],
+                        r["tx_hash"][:20],
                     )
                     fail += 1
                     continue
                 if res is EMPTY_POSITION:
                     # block 上该用户无仓位（已平仓），保留原行不处理
                     logger.debug(
-                        "block %s 用户 %s 无仓位，跳过", r["block_number"], r["user_address"]
+                        "block %s 用户 %s 无仓位，跳过",
+                        r["block_number"],
+                        r["user_address"],
                     )
                     skip += 1
                     continue
 
-                pos, eth_price_raw = res
+                pos, eth_price_raw = res  # type: ignore[misc]
                 new_positions.append(pos)
-                new_metas.append({
-                    "tx_hash": r["tx_hash"],
-                    "block_timestamp": r["block_timestamp"],
-                    "eth_price_usd": Decimal(eth_price_raw) / Decimal(10**8),
-                    "protocol": "v2",
-                })
+                new_metas.append(
+                    {
+                        "tx_hash": r["tx_hash"],
+                        "block_timestamp": r["block_timestamp"],
+                        "eth_price_usd": Decimal(eth_price_raw) / Decimal(10**8),
+                        "protocol": "v2",
+                    }
+                )
                 new_briefs.append(r["brief"])  # 保留原 brief
                 ok += 1
 
@@ -190,13 +206,19 @@ async def run(args: argparse.Namespace) -> None:
                 )
                 logger.info(
                     "进度 %d/%d  本批写入 %d 条（本批失败 %d，跳过 %d）",
-                    min(batch_start + batch_size, total), total,
-                    written, fail, skip,
+                    min(batch_start + batch_size, total),
+                    total,
+                    written,
+                    fail,
+                    skip,
                 )
 
         logger.info(
             "完成。成功: %d  失败: %d  跳过（无仓位）: %d  共: %d",
-            ok, fail, skip, total,
+            ok,
+            fail,
+            skip,
+            total,
         )
 
     finally:
@@ -205,11 +227,16 @@ async def run(args: argparse.Namespace) -> None:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="回填 V2 AccountSummary 字段（ETH→USD 归一化修复）")
+    p = argparse.ArgumentParser(
+        description="回填 V2 AccountSummary 字段（ETH→USD 归一化修复）"
+    )
     p.add_argument("--config", default="config.yaml", help="配置文件路径")
     p.add_argument("--dry-run", action="store_true", help="仅打印待处理行，不写入 DB")
-    p.add_argument("--batch", type=int, default=10, help="每批并发 RPC 重放数量（默认 10）")
+    p.add_argument(
+        "--batch", type=int, default=10, help="每批并发 RPC 重放数量（默认 10）"
+    )
     p.add_argument("--limit", type=int, default=None, help="最多处理行数（默认全量）")
     return p.parse_args()
 

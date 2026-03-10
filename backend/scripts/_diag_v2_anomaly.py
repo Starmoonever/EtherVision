@@ -1,4 +1,5 @@
 """诊断 V2 liq_price_weth > eth_price_usd 异常行。"""
+
 import asyncio
 import os
 import sys
@@ -38,6 +39,7 @@ async def main():
            LIMIT 5"""
     )
     import json as _json
+
     for r in rows:
         reserves = _json.loads(r["reserves_json"])
         col_usd_col = sum(
@@ -60,9 +62,13 @@ async def main():
         hf_theta = float(col_theta / debt_usd_col) if debt_usd_col else 0
 
         print(f"\n  user: {r['user_address'][:10]}... eth={r['eth_price_usd']:.0f}")
-        print(f"  hf_db={hf_db:.4f}  hf_re(no_theta)={hf_re:.4f}  hf_re(with_theta)={hf_theta:.4f}")
-        print(f"  col_usd={col_usd_col:.2f}  debt_usd={debt_usd_col:.2f}  liq_price_weth={r['liq_price_weth']:.2f}")
-        print(f"  Reserves:")
+        print(
+            f"  hf_db={hf_db:.4f}  hf_re(no_theta)={hf_re:.4f}  hf_re(with_theta)={hf_theta:.4f}"
+        )
+        print(
+            f"  col_usd={col_usd_col:.2f}  debt_usd={debt_usd_col:.2f}  liq_price_weth={r['liq_price_weth']:.2f}"
+        )
+        print("  Reserves:")
         for x in reserves:
             sym = x.get("symbol", "?")
             sup_usd = Decimal(str(x.get("supply_usd", 0)))
@@ -70,7 +76,9 @@ async def main():
             theta = x.get("liquidation_threshold", 0)
             use_col = x.get("use_as_collateral", False)
             if sup_usd > 0 or debt_usd > 0:
-                print(f"    {sym}: col={sup_usd:.2f} debt={debt_usd:.2f} theta={theta} use_col={use_col}")
+                print(
+                    f"    {sym}: col={sup_usd:.2f} debt={debt_usd:.2f} theta={theta} use_col={use_col}"
+                )
 
     await pool.close()
 

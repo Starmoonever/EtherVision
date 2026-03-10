@@ -13,7 +13,7 @@ async def main():
         Path(__file__).parent.parent.joinpath("config.yaml").read_text()
     )
     pg = raw["postgres"]
-    dsn = f"postgresql://{pg['user']}:{pg['password']}@{pg.get('host','127.0.0.1')}:{pg.get('port',5432)}/{pg['database']}"
+    dsn = f"postgresql://{pg['user']}:{pg['password']}@{pg.get('host', '127.0.0.1')}:{pg.get('port', 5432)}/{pg['database']}"
     conn = await asyncpg.connect(dsn)
 
     def ulid_to_ts(u) -> datetime | None:

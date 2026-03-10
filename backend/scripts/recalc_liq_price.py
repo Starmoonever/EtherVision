@@ -36,10 +36,10 @@ sys.path.insert(0, str(ROOT))
 
 from aave_crawler.config import load_config  # noqa: E402
 from aave_crawler.constants import ETH_SYMBOLS as _ETH_SYMBOLS  # noqa: E402
-from aave_crawler.constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP
+from aave_crawler.constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP  # noqa: E402
 from aave_crawler.db import get_tables  # noqa: E402
 from aave_crawler.rpc import get_all_reserve_tokens  # noqa: E402
-from aave_crawler.rpc import build_web3, get_contracts, get_reserve_config
+from aave_crawler.rpc import build_web3, get_contracts, get_reserve_config  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,23 +47,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-# ETH 系资产（与 db.py / service.py 保持一致，统一大写用于 .upper() 比较）
-_ETH_SYMBOLS: frozenset[str] = frozenset(
-    {
-        "WETH",
-        "ETH",
-        "CBETH",
-        "WSTETH",
-        "RETH",
-        "WEETH",
-        "EZETH",
-        "RSETH",
-        "OSETH",
-        "ETHX",
-    }
-)
-_LIQ_PRICE_CAP = Decimal("9999999.99999999")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 核心计算
@@ -177,7 +160,7 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
             logger.warning("get_reserve_config 失败 %s: %s", addr, cfg_or_err)
             continue
         liq_thresholds[addr.lower()] = Decimal(
-            cfg_or_err.liquidation_threshold
+            cfg_or_err.liquidation_threshold  # type: ignore[attr-defined]
         ) / Decimal(10000)
 
     logger.info("成功获取 %d 个资产的 liq_threshold", len(liq_thresholds))

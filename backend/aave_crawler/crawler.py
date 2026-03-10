@@ -19,13 +19,20 @@ from tqdm import tqdm
 from web3 import AsyncWeb3
 
 from .config import AppConfig
-from .db import (ensure_tables, fetch_user_addresses, get_tables,
-                 upsert_positions)
+from .db import ensure_tables, fetch_user_addresses, get_tables, upsert_positions
 from .models import UserPosition
-from .rpc import (CONTRACTS_V3, EMPTY_POSITION, WETH_ADDRESS,
-                  ProtocolContracts, build_web3, fetch_user_position,
-                  get_all_reserve_tokens, get_assets_prices, get_contracts,
-                  get_reserve_config)
+from .rpc import (
+    CONTRACTS_V3,
+    EMPTY_POSITION,
+    WETH_ADDRESS,
+    ProtocolContracts,
+    build_web3,
+    fetch_user_position,
+    get_all_reserve_tokens,
+    get_assets_prices,
+    get_contracts,
+    get_reserve_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,8 +171,10 @@ async def run_crawler(
             if pos is None:
                 total_fail += 1
                 continue
+            from typing import cast
+
             total_ok += 1
-            pending_batch.append(pos)
+            pending_batch.append(cast(UserPosition, pos))
 
             if len(pending_batch) >= batch_size:
                 # 等待上一次 DB 写入完成，再发起新的写入
