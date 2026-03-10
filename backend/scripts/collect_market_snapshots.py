@@ -120,7 +120,7 @@ async def _ts_to_block(
             )
             return int(row["block_number"])
 
-    block = await _block_at_timestamp(w3, ts)
+    block = await _block_at_timestamp(w3, ts, pool)
     block_meta = await w3.eth.get_block(block)
     block_ts = datetime.fromtimestamp(int(block_meta["timestamp"]), tz=timezone.utc)
     logger.info(

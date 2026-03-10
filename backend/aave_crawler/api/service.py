@@ -1902,7 +1902,7 @@ async def get_market_replay(
                 # 取桶中心时间戳（不超过当前时间 -60s，防止越界最新区块）
                 target_ts = min(bk_anchor + interval_epoch // 2, now_unix - 60)
                 try:
-                    block = await _block_at_timestamp(w3, target_ts)
+                    block = await _block_at_timestamp(w3, target_ts, pool)
                     await _collect_block_snapshot(
                         w3, pool, protocol, block, collect_sem
                     )

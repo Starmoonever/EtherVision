@@ -12,7 +12,7 @@ Aave 大盘快照采集核心逻辑。
   refresh_market_totals(pool, protocol)
   ensure_block_timestamps_table(pool)
   upsert_block_timestamps(pool, pairs)
-  _block_at_timestamp(w3, target_ts)
+  _block_at_timestamp(w3, target_ts, pool=None)
 """
 
 from __future__ import annotations
@@ -286,13 +286,20 @@ async def upsert_block_timestamps(
 # ── 区块时间 → 区块号（二分搜索） ────────────────────────────────────────────
 
 
-async def _block_at_timestamp(w3: AsyncWeb3, target_ts: int) -> int:
+async def _block_at_timestamp(
+    w3: AsyncWeb3,
+    target_ts: int,
+    pool: asyncpg.Pool | None = None,
+) -> int:
     """
     二分搜索：返回时间戳 >= target_ts 的最小区块号。
-    以 post-Merge 约 12s/块、genesis 2015-07-30 为初始估算，之后快速收敛（~15 次 RPC）。
+
+    若提供 pool，优先从 eth_block_timestamps 查最近的上下界缩小搜索区间（
+    数据库里的记录越密集，lo/hi 越近，RPC 调用次数越少），找不到双侧界时
+    退回固定步长估算（post-Merge 约 12s/块，~15 次 RPC）。
     """
-    GENESIS_TS = 1438269988  # 以太坊 genesis 时间戳
-    MERGE_BLOCK = 15_537_393  # The Merge（2022-09-15）
+    GENESIS_TS = 1438269988
+    MERGE_BLOCK = 15_537_393
     MERGE_TS = 1663224162
 
     latest_block = await w3.eth.get_block("latest")
@@ -302,17 +309,50 @@ async def _block_at_timestamp(w3: AsyncWeb3, target_ts: int) -> int:
     if target_ts >= latest_ts:
         return latest_num
 
-    # 初始估算（clamp 到 latest_num，避免近期日期因出块时间略快/慢导致越界）
+    # ── DB 辅助缩界：用已知的最近上/下界区块代替常数估算器 ──────────────────
+    if pool is not None:
+        target_dt = datetime.fromtimestamp(target_ts, tz=timezone.utc)
+        lo_row, hi_row = await asyncio.gather(
+            pool.fetchrow(
+                "SELECT block_number FROM loan.eth_block_timestamps"
+                " WHERE block_timestamp <= $1 ORDER BY block_timestamp DESC LIMIT 1",
+                target_dt,
+            ),
+            pool.fetchrow(
+                "SELECT block_number FROM loan.eth_block_timestamps"
+                " WHERE block_timestamp >= $1 ORDER BY block_timestamp ASC LIMIT 1",
+                target_dt,
+            ),
+        )
+        if lo_row and hi_row:
+            lo = int(lo_row["block_number"])
+            hi = int(hi_row["block_number"])
+            if lo == hi:
+                return lo
+            logger.debug(
+                "DB 辅助缩界: target=%d  lo_block=%d  hi_block=%d  span=%d",
+                target_ts, lo, hi, hi - lo,
+            )
+            # 区间已由数据库保证包含目标，直接二分即可
+            while lo < hi:
+                mid = (lo + hi) // 2
+                mid_ts = (await w3.eth.get_block(mid))["timestamp"]
+                if mid_ts < target_ts:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            return lo
+
+    # ── 回退：常数估算器 + 区间扩展 ──────────────────────────────────────────
     if target_ts >= MERGE_TS:
         est = MERGE_BLOCK + (target_ts - MERGE_TS) // 12
     else:
-        est = max(1, (target_ts - GENESIS_TS) * 1000 // 13_500)  # pre-Merge ~13.5s
+        est = max(1, (target_ts - GENESIS_TS) * 1000 // 13_500)
     est = min(est, latest_num)
 
     lo = max(1, est - 500)
     hi = min(latest_num, est + 500)
 
-    # 扩展区间直到确实包含目标时间戳
     for _ in range(6):
         lo_ts = (await w3.eth.get_block(lo))["timestamp"]
         hi_ts = (await w3.eth.get_block(hi))["timestamp"]
@@ -323,7 +363,6 @@ async def _block_at_timestamp(w3: AsyncWeb3, target_ts: int) -> int:
         else:
             hi = min(latest_num, hi + (hi - lo))
 
-    # 标准二分
     while lo < hi:
         mid = (lo + hi) // 2
         mid_ts = (await w3.eth.get_block(mid))["timestamp"]
