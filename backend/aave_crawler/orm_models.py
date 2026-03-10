@@ -164,9 +164,7 @@ class AaveV2PositionBorrow(Base):
 
 class AaveV3ReservePositionCollateral(Base):
     __tablename__ = "aave_v3_eth_reserve_positions_collateral"
-    __table_args__ = (
-        {"schema": "loan"},
-    )
+    __table_args__ = ({"schema": "loan"},)
 
     user_address: Mapped[str] = mapped_column(Text, primary_key=True)
     token_address: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -187,9 +185,7 @@ class AaveV3ReservePositionCollateral(Base):
 
 class AaveV2ReservePositionCollateral(Base):
     __tablename__ = "aave_v2_eth_reserve_positions_collateral"
-    __table_args__ = (
-        {"schema": "loan"},
-    )
+    __table_args__ = ({"schema": "loan"},)
 
     user_address: Mapped[str] = mapped_column(Text, primary_key=True)
     token_address: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -210,9 +206,7 @@ class AaveV2ReservePositionCollateral(Base):
 
 class AaveV3ReservePositionBorrow(Base):
     __tablename__ = "aave_v3_eth_reserve_positions_borrow"
-    __table_args__ = (
-        {"schema": "loan"},
-    )
+    __table_args__ = ({"schema": "loan"},)
 
     user_address: Mapped[str] = mapped_column(Text, primary_key=True)
     token_address: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -233,9 +227,7 @@ class AaveV3ReservePositionBorrow(Base):
 
 class AaveV2ReservePositionBorrow(Base):
     __tablename__ = "aave_v2_eth_reserve_positions_borrow"
-    __table_args__ = (
-        {"schema": "loan"},
-    )
+    __table_args__ = ({"schema": "loan"},)
 
     user_address: Mapped[str] = mapped_column(Text, primary_key=True)
     token_address: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -263,9 +255,7 @@ class AaveV3WethCollateral(Base):
     __tablename__ = "aave_v3_eth_weth_collateral"
     __table_args__ = {"schema": "loan"}
 
-    wallet_address: Mapped[str] = mapped_column(
-        "walletAddress", Text, primary_key=True
-    )
+    wallet_address: Mapped[str] = mapped_column("walletAddress", Text, primary_key=True)
     weth_amount_eth: Mapped[Decimal] = mapped_column(
         "wethAmount_ETH", Numeric(30, 8), nullable=False, server_default="0"
     )
@@ -278,9 +268,7 @@ class AaveV2WethCollateral(Base):
     __tablename__ = "aave_v2_eth_weth_collateral"
     __table_args__ = {"schema": "loan"}
 
-    wallet_address: Mapped[str] = mapped_column(
-        "walletAddress", Text, primary_key=True
-    )
+    wallet_address: Mapped[str] = mapped_column("walletAddress", Text, primary_key=True)
     weth_amount_eth: Mapped[Decimal] = mapped_column(
         "wethAmount_ETH", Numeric(30, 8), nullable=False, server_default="0"
     )
@@ -293,9 +281,7 @@ class AaveV3WethBorrow(Base):
     __tablename__ = "aave_v3_eth_weth_borrow"
     __table_args__ = {"schema": "loan"}
 
-    wallet_address: Mapped[str] = mapped_column(
-        "walletAddress", Text, primary_key=True
-    )
+    wallet_address: Mapped[str] = mapped_column("walletAddress", Text, primary_key=True)
     borrowed_weth_eth: Mapped[Decimal] = mapped_column(
         "borrowedWeth_ETH", Numeric(30, 8), nullable=False, server_default="0"
     )
@@ -308,9 +294,7 @@ class AaveV2WethBorrow(Base):
     __tablename__ = "aave_v2_eth_weth_borrow"
     __table_args__ = {"schema": "loan"}
 
-    wallet_address: Mapped[str] = mapped_column(
-        "walletAddress", Text, primary_key=True
-    )
+    wallet_address: Mapped[str] = mapped_column("walletAddress", Text, primary_key=True)
     borrowed_weth_eth: Mapped[Decimal] = mapped_column(
         "borrowedWeth_ETH", Numeric(30, 8), nullable=False, server_default="0"
     )
@@ -359,9 +343,7 @@ class AaveV3MarketSnapshot(Base):
         Numeric(40, 0), nullable=False
     )
     utilization_rate: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
-    liquidity_index_ray: Mapped[Decimal] = mapped_column(
-        Numeric(40, 0), nullable=False
-    )
+    liquidity_index_ray: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
     variable_borrow_index_ray: Mapped[Decimal] = mapped_column(
         Numeric(40, 0), nullable=False
     )
@@ -403,9 +385,7 @@ class AaveV2MarketSnapshot(Base):
         Numeric(40, 0), nullable=False
     )
     utilization_rate: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
-    liquidity_index_ray: Mapped[Decimal] = mapped_column(
-        Numeric(40, 0), nullable=False
-    )
+    liquidity_index_ray: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
     variable_borrow_index_ray: Mapped[Decimal] = mapped_column(
         Numeric(40, 0), nullable=False
     )
@@ -431,12 +411,8 @@ class AaveV3MarketTotal(Base):
     weighted_utilization: Mapped[Decimal] = mapped_column(
         Numeric(10, 8), nullable=False
     )
-    weighted_supply_apy: Mapped[Decimal] = mapped_column(
-        Numeric(10, 8), nullable=False
-    )
-    weighted_borrow_apy: Mapped[Decimal] = mapped_column(
-        Numeric(10, 8), nullable=False
-    )
+    weighted_supply_apy: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
+    weighted_borrow_apy: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -456,12 +432,8 @@ class AaveV2MarketTotal(Base):
     weighted_utilization: Mapped[Decimal] = mapped_column(
         Numeric(10, 8), nullable=False
     )
-    weighted_supply_apy: Mapped[Decimal] = mapped_column(
-        Numeric(10, 8), nullable=False
-    )
-    weighted_borrow_apy: Mapped[Decimal] = mapped_column(
-        Numeric(10, 8), nullable=False
-    )
+    weighted_supply_apy: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
+    weighted_borrow_apy: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

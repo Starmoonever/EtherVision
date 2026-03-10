@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
+from eth_typing import ChecksumAddress
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
@@ -53,9 +54,9 @@ class ProtocolContracts:
     Aave V2 Ethereum Mainnet 的 oracle 返回 ETH 价格；V3 返回 USD 价格。
     """
 
-    pool: str  # LendingPool (V2) 或 Pool (V3)
-    data_provider: str  # ProtocolDataProvider
-    oracle: str  # AaveOracle
+    pool: ChecksumAddress  # LendingPool (V2) 或 Pool (V3)
+    data_provider: ChecksumAddress  # ProtocolDataProvider
+    oracle: ChecksumAddress  # AaveOracle
     oracle_price_in_eth: bool = False  # V2=True (ETH/18-dec), V3=False (USD/8-dec)
 
 
@@ -197,7 +198,9 @@ ORACLE_ABI: list[dict[str, Any]] = [
 ]
 
 # Chainlink ETH/USD 聚合器（主网，2019年起可用，比 Aave V3 oracle 更早）
-CHAINLINK_ETH_USD = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+CHAINLINK_ETH_USD = AsyncWeb3.to_checksum_address(
+    "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+)
 # latestRoundData() → (roundId, answer/8dec, startedAt, updatedAt, answeredInRound)
 CHAINLINK_ETH_USD_ABI: list[dict] = [
     {
@@ -412,11 +415,13 @@ async def fetch_user_position(
                         res,
                     )
                     continue
+                # Type narrowing: res 现在是 UserReserveData
+                user_reserve = cast(UserReserveData, res)
                 # 跳过未持有该资产的仓位（供给和借贷均为 0）
                 if (
-                    res.current_atoken_balance == 0
-                    and res.current_stable_debt == 0
-                    and res.current_variable_debt == 0
+                    user_reserve.current_atoken_balance == 0
+                    and user_reserve.current_stable_debt == 0
+                    and user_reserve.current_variable_debt == 0
                 ):
                     continue
                 cfg = reserve_configs.get(rt.token_address)
@@ -426,11 +431,11 @@ async def fetch_user_position(
                         token_address=rt.token_address,
                         decimals=cfg.decimals if cfg else 18,
                         price_raw=asset_prices.get(rt.token_address, 0),
-                        supply_raw=res.current_atoken_balance,
-                        usage_as_collateral_enabled=res.usage_as_collateral_enabled,
+                        supply_raw=user_reserve.current_atoken_balance,
+                        usage_as_collateral_enabled=user_reserve.usage_as_collateral_enabled,
                         liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
-                        stable_debt_raw=res.current_stable_debt,
-                        variable_debt_raw=res.current_variable_debt,
+                        stable_debt_raw=user_reserve.current_stable_debt,
+                        variable_debt_raw=user_reserve.current_variable_debt,
                     )
                 )
 
@@ -595,8 +600,14 @@ async def fetch_user_position_at_block(
             for rt, res in zip(reserve_tokens, reserve_results):
                 if isinstance(res, Exception):
                     continue
+                # Type narrowing: res 现在是 tuple (getUserReserveData 的返回值)
+                reserve_data = cast(tuple[int, ...], res)
                 # res: tuple from getUserReserveData
-                if res[0] == 0 and res[1] == 0 and res[2] == 0:
+                if (
+                    reserve_data[0] == 0
+                    and reserve_data[1] == 0
+                    and reserve_data[2] == 0
+                ):
                     continue
                 cfg = reserve_configs.get(rt.token_address)
                 reserves.append(
@@ -605,11 +616,11 @@ async def fetch_user_position_at_block(
                         token_address=rt.token_address,
                         decimals=cfg.decimals if cfg else 18,
                         price_raw=asset_prices.get(rt.token_address, 0),
-                        supply_raw=res[0],
-                        usage_as_collateral_enabled=res[8],
+                        supply_raw=reserve_data[0],
+                        usage_as_collateral_enabled=bool(reserve_data[8]),
                         liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
-                        stable_debt_raw=res[1],
-                        variable_debt_raw=res[2],
+                        stable_debt_raw=reserve_data[1],
+                        variable_debt_raw=reserve_data[2],
                     )
                 )
 

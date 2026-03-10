@@ -1,0 +1,9 @@
+{
+  "include": ["backend/aave_crawler", "backend/tests", "backend/scripts"],
+  "exclude": ["**/.*", "**/__pycache__", "**/.venv", "**/node_modules"],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "pythonVersion": "3.12",
+  "pythonPlatform": "All"
+}

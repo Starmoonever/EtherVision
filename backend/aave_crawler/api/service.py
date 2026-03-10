@@ -8,6 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from typing import cast
 
 import asyncpg
 from sqlalchemy import text
@@ -289,7 +290,8 @@ async def get_user_position(
         raise HTTPException(
             status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
         )
-    return _format_position(pos)
+    # Type narrowing: 排除 EMPTY_POSITION 和 None 后，pos 必定是 UserPosition
+    return _format_position(cast(UserPosition, pos))
 
 
 async def get_liq_price(
@@ -312,7 +314,8 @@ async def get_liq_price(
         raise HTTPException(
             status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
         )
-    return _calc_liquidation_line(pos)
+    # Type narrowing: 排除 EMPTY_POSITION 和 None 后，pos 必定是 UserPosition
+    return _calc_liquidation_line(cast(UserPosition, pos))
 
 
 # ── DB 批量查询（预爬取数据） ──────────────────────────────────────────────────
