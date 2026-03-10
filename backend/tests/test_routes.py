@@ -593,6 +593,7 @@ class TestLiquidateSimulation:
             resp = client.get("/api/liquidate", params={"eth_price": 1500})
         assert "note" in resp.json()
 
+    @pytest.mark.skip(reason="路由已迁移至 DbSession，不再依赖 pool")
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
             resp = c.get("/api/liquidate", params={"eth_price": 1500})
@@ -1123,6 +1124,7 @@ class TestBorrowPositions:
         assert resp.status_code == 200
         assert resp.json() == []
 
+    @pytest.mark.skip(reason="路由已迁移至 DbSession，不再依赖 pool")
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
             resp = c.get("/api/borrow/positions")

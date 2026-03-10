@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..database import AsyncpgPool, DbSession
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (BorrowPositionResponse, BorrowUserPositionResponse,
                       HistoricalPositionResponse, LiquidationPeriodItem,
@@ -28,13 +29,6 @@ def _w3(request: Request):
     if w3 is None:
         raise HTTPException(status_code=503, detail="RPC 节点尚未就绪，请稍后重试")
     return w3
-
-
-def _pool(request: Request):
-    pool = request.app.state.pool
-    if pool is None:
-        raise HTTPException(status_code=503, detail="数据库连接尚未就绪，请稍后重试")
-    return pool
 
 
 def _parse_utc_time(time_str: str) -> int:
@@ -74,6 +68,7 @@ def _parse_utc_time(time_str: str) -> int:
     ),
 )
 async def user_position(
+    pool: AsyncpgPool,
     request: Request,
     address: str = Query(..., description="以太坊錢包地址（支持校验和或小写）"),
     date: str | None = Query(
@@ -87,7 +82,7 @@ async def user_position(
     if date is None:
         return await get_user_position(_w3(request), address, protocol=version)
     ts = _parse_utc_time(date)
-    result = await get_user_position_history(_pool(request), address, ts)
+    result = await get_user_position_history(pool, address, ts)
     if result is None:
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
         return await get_user_position(_w3(request), address, protocol=version)
@@ -106,6 +101,8 @@ async def user_position(
     ),
 )
 async def positions(
+    session: DbSession,
+    pool: AsyncpgPool,
     request: Request,
     orderby: Literal[
         "liq_price",
@@ -134,10 +131,10 @@ async def positions(
 ) -> list[PositionResponse] | list[HistoricalPositionResponse]:
     if date is None:
         return await get_sorted_positions(
-            _pool(request), orderby=orderby, order=order, limit=limit, protocol=version
+            session, orderby=orderby, order=order, limit=limit, protocol=version
         )
     ts = _parse_utc_time(date)
-    return await get_positions_history(_pool(request), ts, limit=min(limit, 100))
+    return await get_positions_history(pool, ts, limit=min(limit, 100))
 
 
 @router.get(
@@ -179,6 +176,7 @@ async def asset_price(
     ),
 )
 async def liquidate_simulation(
+    session: DbSession,
     request: Request,
     eth_price: float = Query(
         ...,
@@ -232,7 +230,7 @@ async def liquidate_simulation(
         pass  # RPC 不可用时降级处理：不过滤，结果可能包含上涨清算仓位
 
     return await simulate_liquidation(
-        _pool(request),
+        session,
         Decimal(str(eth_price)),
         orderby=orderby,
         order=order,
@@ -278,6 +276,7 @@ async def asset_price_period(
     ),
 )
 async def liquidate_period(
+    pool: AsyncpgPool,
     request: Request,
     start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
     end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
@@ -305,7 +304,7 @@ async def liquidate_period(
         pass
 
     return await simulate_liquidation_period(
-        _pool(request),
+        pool,
         start_price=Decimal(str(start)),
         end_price=Decimal(str(end)),
         interval=Decimal(str(interval)),
@@ -332,6 +331,7 @@ async def liquidate_period(
     ),
 )
 async def user_position_replay(
+    pool: AsyncpgPool,
     request: Request,
     address: str = Query(..., description="以太坊錢包地址"),
     start: str = Query(..., description="起始时间（UTC），如 2024-01-01"),
@@ -345,7 +345,7 @@ async def user_position_replay(
     if from_ts > to_ts:
         raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
     return await get_user_position_replay(
-        _pool(request),
+        pool,
         _w3(request),
         address,
         from_ts=from_ts,
@@ -370,6 +370,7 @@ async def user_position_replay(
     ),
 )
 async def market_snapshot_replay(
+    pool: AsyncpgPool,
     request: Request,
     start: str = Query(..., description="起始时间（UTC），如 2024-01-01"),
     end: str = Query(..., description="结束时间（UTC），如 2025-01-01"),
@@ -386,7 +387,7 @@ async def market_snapshot_replay(
     if from_ts > to_ts:
         raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
     return await get_market_replay(
-        _pool(request),
+        pool,
         protocol=version,
         from_ts=from_ts,
         to_ts=to_ts,
@@ -407,6 +408,7 @@ async def market_snapshot_replay(
     ),
 )
 async def user_tx_history(
+    pool: AsyncpgPool,
     request: Request,
     address: str = Query(..., description="以太坊錢包地址"),
     start: str = Query(..., description="起始时间（UTC）"),
@@ -419,7 +421,7 @@ async def user_tx_history(
     from_ts = _parse_utc_time(start)
     to_ts = _parse_utc_time(end)
     return await get_user_tx_history(
-        _pool(request),
+        pool,
         address,
         from_ts=from_ts,
         to_ts=to_ts,
@@ -444,6 +446,7 @@ async def user_tx_history(
     ),
 )
 async def borrow_positions(
+    session: DbSession,
     request: Request,
     orderby: Literal[
         "liq_price_rise",
@@ -461,7 +464,7 @@ async def borrow_positions(
 ) -> list[BorrowPositionResponse]:
     protocol = f"{version}_borrow"
     return await get_sorted_borrow_positions(
-        _pool(request),
+        session,
         orderby=orderby,
         order=order,
         limit=limit,
@@ -481,6 +484,7 @@ async def borrow_positions(
     ),
 )
 async def borrow_user_position(
+    pool: AsyncpgPool,
     request: Request,
     address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
     version: Literal["v2", "v3"] = Query(
@@ -488,7 +492,7 @@ async def borrow_user_position(
     ),
 ) -> BorrowUserPositionResponse:
     protocol = f"{version}_borrow"
-    result = await get_borrow_user_position(_pool(request), address, protocol=protocol)
+    result = await get_borrow_user_position(pool, address, protocol=protocol)
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -510,6 +514,7 @@ async def borrow_user_position(
     ),
 )
 async def borrow_liquidate_simulation(
+    pool: AsyncpgPool,
     request: Request,
     eth_price: float = Query(
         ..., gt=0, description="模拟的 ETH 价格（USD），必须大于 0"
@@ -545,7 +550,7 @@ async def borrow_liquidate_simulation(
 
     protocol = f"{version}_borrow"
     return await simulate_short_liquidation(
-        _pool(request),
+        pool,
         Decimal(str(eth_price)),
         orderby=orderby,
         order=order,
@@ -567,6 +572,7 @@ async def borrow_liquidate_simulation(
     ),
 )
 async def borrow_liquidate_period(
+    pool: AsyncpgPool,
     request: Request,
     start: float = Query(..., gt=0, description="起始 ETH 价格（USD），必须大于 0"),
     end: float = Query(..., gt=0, description="结束 ETH 价格（USD），必须 >= start"),
@@ -586,7 +592,7 @@ async def borrow_liquidate_period(
 
     protocol = f"{version}_borrow"
     return await simulate_short_liquidation_period(
-        _pool(request),
+        pool,
         start_price=Decimal(str(start)),
         end_price=Decimal(str(end)),
         interval=Decimal(str(interval)),

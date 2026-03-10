@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.routes import router
 from .api.service import _cache
 from .config import load_config
+from .database import close_engine, init_engine
 from .db import (TABLES_V2, TABLES_V2_BORROW, TABLES_V3, TABLES_V3_BORROW,
                  create_pool, ensure_snapshot_cache_table, ensure_tables)
 from .rpc import build_web3
@@ -36,8 +37,11 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     application.state.w3 = w3
     application.state.cfg = cfg
     logger.info("正在连接数据库...")
+    # asyncpg 连接池：供爬虫批量写入 / tx_parser / market_collector 使用
     pool = await create_pool(cfg.postgres)
     application.state.pool = pool
+    # SQLAlchemy 异步引擎：供 API 查询层（service.py）使用
+    init_engine(cfg.postgres)
     # 确保所有协议表存在并应用 migration（幂等，开销极小）
     for _tables in (TABLES_V3, TABLES_V2, TABLES_V3_BORROW, TABLES_V2_BORROW):
         await ensure_tables(pool, _tables)
@@ -45,6 +49,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
     await pool.close()
+    await close_engine()
     _cache.clear()
     logger.info("API 服务关闭")
 

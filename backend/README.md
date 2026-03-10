@@ -9,6 +9,83 @@
 
 ---
 
+## 架构设计
+
+### 数据库访问模式（Dual-Access Pattern）
+
+本项目采用 **双数据库访问模式**，在性能和类型安全之间取得平衡：
+
+#### 1. SQLAlchemy AsyncSession（推荐用于 API 查询）
+
+- **用途**：API 层的读操作（`api/routes.py` 和 `api/service.py`）
+- **优势**：
+  - 类型安全：ORM 模型提供完整类型提示
+  - 迁移管理：Alembic 自动生成和追踪 schema 变更
+  - 可维护性：声明式模型清晰表达数据结构
+- **依赖注入**：通过 `DbSession = Annotated[AsyncSession, Depends(get_db)]` 注入路由
+
+#### 2. asyncpg Pool（用于高性能场景）
+
+- **用途**：
+  - 批量写入（`crawler.py`：`COPY` 协议批量插入仓位数据）
+  - 复杂事务（`get_borrow_user_position`：单连接多查询）
+  - 性能关键路径（`simulate_liquidation_period`：单次查询 + 内存计算）
+- **优势**：
+  - 原生 PostgreSQL `COPY` 支持（比 ORM 快 10-50 倍）
+  - 精细连接池控制（`pool.acquire()` 显式事务边界）
+- **依赖注入**：通过 `AsyncpgPool = Annotated[asyncpg.Pool, Depends(get_pool)]` 注入路由
+
+#### 何时使用哪种方式？
+
+| 场景               | 推荐方式     | 原因                  |
+| ------------------ | ------------ | --------------------- |
+| API Single SELECT  | AsyncSession | 类型安全，代码简洁    |
+| 批量 INSERT/UPDATE | asyncpg      | `COPY` 协议性能       |
+| 多表 JOIN 查询     | AsyncSession | ORM relationship 导航 |
+| 历史回放/缓存逻辑  | asyncpg      | 显式事务控制          |
+
+### 数据库迁移（Alembic）
+
+#### 初次设置（针对已有数据库）
+
+如果数据库已有 `loan` schema 和所有表（通过 `db.py` 创建），需要标记当前状态为初始迁移：
+
+```bash
+cd backend
+# 标记数据库已处于初始迁移状态（不执行实际迁移）
+uv run alembic stamp head
+```
+
+#### 日常开发流程
+
+1. **修改 ORM 模型**：编辑 `aave_crawler/orm_models.py`
+2. **生成迁移脚本**：
+
+   ```bash
+   uv run alembic revision --autogenerate -m "描述变更内容"
+   ```
+
+3. **审查生成的迁移文件**：检查 `alembic/versions/xxxx_描述.py`
+4. **应用迁移**：
+
+   ```bash
+   uv run alembic upgrade head
+   ```
+
+5. **回滚迁移**（如需）：
+
+   ```bash
+   uv run alembic downgrade -1  # 回退一个版本
+   ```
+
+#### 迁移注意事项
+
+- **ORM 模型仅覆盖 `loan` schema**：其他 schema 的表（如 `aave_history`）不在 ORM 管理范围内
+- **Autogenerate 不是完美的**：始终审查生成的迁移，手动调整复杂变更
+- **团队协作**：提交前运行 `uv run alembic upgrade head` 验证迁移可执行
+
+---
+
 ## 依赖
 
 | 组件                             | 版本要求 | 说明                                                            |
@@ -16,6 +93,8 @@
 | Python                           | 3.12+    |                                                                 |
 | [uv](https://docs.astral.sh/uv/) | 最新     | 包管理器                                                        |
 | PostgreSQL                       | 14+      | 需有 `aave.aave_history` 历史表（由 chain-data-collector 维护） |
+| SQLAlchemy                       | 2.0+     | 异步 ORM（已含在依赖中）                                        |
+| Alembic                          | 1.13+    | 数据库迁移工具（已含在依赖中）                                  |
 
 ---
 
@@ -37,14 +116,14 @@ cp config.yaml.example config.yaml
 编辑 `config.yaml`：
 
 ```yaml
-rpc_url: "http://your-rpc-node:port/" # 留空则自动使用公共以太主网节点
+rpc_url: 'http://your-rpc-node:port/' # 留空则自动使用公共以太主网节点
 
 postgres:
-  host: "127.0.0.1"
+  host: '127.0.0.1'
   port: 5432
-  user: "your_pg_user"
-  password: "your_pg_password"
-  database: "your_database"
+  user: 'your_pg_user'
+  password: 'your_pg_password'
+  database: 'your_database'
 
 crawler:
   concurrency: 20 # 并发用户数，建议 10~30
@@ -184,7 +263,7 @@ uv run aave-crawler crawl -p v3_borrow
 nohup uv run aave-crawler watch -p v3        > nohup_v3.log 2>&1 &
 nohup uv run aave-crawler watch -p v3_borrow > nohup_v3_borrow.log 2>&1 &
 
-# 4. 启动 API 
+# 4. 启动 API
 uv run aave-api
 ```
 

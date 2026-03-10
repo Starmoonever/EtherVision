@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 import asyncpg
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from web3 import AsyncWeb3
 
 from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
@@ -343,16 +345,16 @@ def _tables(protocol: str) -> tuple[str, str]:
 
 
 async def get_sorted_positions(
-    pool,
+    session: AsyncSession,
     orderby: str = "liq_price",
     order: str = "asc",
     limit: int = 10,
     protocol: str = "v3",
 ) -> list[PositionResponse]:
-    """\u4ece\u6570\u636e\u5e93\u8bfb\u53d6\u5df2\u722c\u53d6\u7684\u4ed3\u4f4d\uff0c\u6309\u6307\u5b9a\u5b57\u6bb5\u6392\u5e8f\u540e\u8fd4\u56de\u3002
+    """从数据库读取已爬取的仓位，按指定字段排序后返回。
 
     Args:
-        pool: asyncpg 连接池
+        session: SQLAlchemy AsyncSession
         orderby: 排序字段，``liquidation_price`` 或 ``health_factor``
         order: 方向，``asc`` 或 ``desc``
         limit: 最多返回多少条（上限 200）
@@ -363,7 +365,7 @@ async def get_sorted_positions(
     pos_table, res_table = _tables(protocol)
     eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
 
-    sql = f"""
+    sql_text = text(f"""
 WITH eth_cols AS (
     SELECT
         r.user_address,
@@ -380,7 +382,7 @@ latest_snaps AS (
         user_address,
         liq_price_weth
     FROM loan.position_snapshot_cache
-    WHERE protocol = '{protocol}'
+    WHERE protocol = :protocol
       AND liq_price_weth > 0
     ORDER BY user_address, block_timestamp DESC
 )
@@ -401,30 +403,31 @@ LEFT JOIN latest_snaps s ON s.user_address = p.user_address
 WHERE COALESCE(s.liq_price_weth, p.liq_price) > 0
   AND COALESCE(s.liq_price_weth, p.liq_price) < 9999999.99
 ORDER BY {order_col} {order_dir}
-LIMIT $1
-"""
+LIMIT :limit
+""")
 
-    rows = await pool.fetch(sql, limit)
+    result = await session.execute(sql_text, {"protocol": protocol, "limit": limit})
+    rows = result.fetchall()
 
     results: list[PositionResponse] = []
     for row in rows:
-        hf = Decimal(str(row["health_factor"]))
+        hf = Decimal(str(row.health_factor))
         hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
 
-        lp = Decimal(str(row["liq_price"]))
+        lp = Decimal(str(row.liq_price))
         results.append(
             PositionResponse(
-                address=row["address"],
+                address=row.address,
                 eth_collateral_amount=_fmt(
-                    Decimal(str(row["eth_collateral_amount"])), 6
+                    Decimal(str(row.eth_collateral_amount)), 6
                 ),
-                eth_collateral_usd=_fmt(Decimal(str(row["eth_collateral_usd"]))),
-                total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"]))),
-                available_borrows_usd=_fmt(Decimal(str(row["available_borrows_usd"]))),
-                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                eth_collateral_usd=_fmt(Decimal(str(row.eth_collateral_usd))),
+                total_collateral_usd=_fmt(Decimal(str(row.total_collateral_usd))),
+                available_borrows_usd=_fmt(Decimal(str(row.available_borrows_usd))),
+                total_debt_usd=_fmt(Decimal(str(row.total_debt_usd))),
                 health_factor=hf_str,
-                ltv=_fmt(Decimal(str(row["ltv"])), 4),
-                liq_threshold=_fmt(Decimal(str(row["liq_threshold"])), 4),
+                ltv=_fmt(Decimal(str(row.ltv)), 4),
+                liq_threshold=_fmt(Decimal(str(row.liq_threshold)), 4),
                 liq_price=_fmt(lp) if lp > 0 else "0",
             )
         )
@@ -453,12 +456,10 @@ def _build_simulate_sql(
     use_current_eth_price: bool = False,
 ) -> str:
     eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
-    next_param = 2
     current_price_filter = ""
     if use_current_eth_price:
-        current_price_filter = f"  AND liq_price <= ${next_param}::numeric"
-        next_param += 1
-    cap_filter = f"  AND liq_price < ${next_param}::numeric" if use_cap else ""
+        current_price_filter = "  AND liq_price <= :current_eth_price"
+    cap_filter = "  AND liq_price < :cap" if use_cap else ""
     return f"""
 WITH eth_cols AS (
     SELECT
@@ -484,7 +485,7 @@ base AS (
     SELECT
         p.user_address                                                AS address,
         COALESCE(e.eth_col_amount, 0)                                 AS eth_collateral_amount,
-        COALESCE(e.eth_col_amount, 0) * $1::numeric                   AS eth_collateral_usd,
+        COALESCE(e.eth_col_amount, 0) * :eth_price                    AS eth_collateral_usd,
         COALESCE(e.eth_col_usd, 0)                                    AS eth_supply_usd_stored,
         p.total_collateral_usd,
         p.total_debt_usd,
@@ -496,7 +497,7 @@ base AS (
 SELECT * FROM base
 WHERE liq_price > 0
   AND liq_price < 9999999.99
-  AND liq_price >= $1::numeric
+  AND liq_price >= :eth_price
 {current_price_filter}
 {cap_filter}
 ORDER BY {order_col} {order_dir}
@@ -504,7 +505,7 @@ ORDER BY {order_col} {order_dir}
 
 
 async def simulate_liquidation(
-    pool,
+    session: AsyncSession,
     eth_price: Decimal,
     orderby: str = "liq_price",
     order: str = "desc",
@@ -522,6 +523,7 @@ async def simulate_liquidation(
         因此 ``total_liquidation_usd`` = sum( min(debt × 1.05, eth_collateral_usd) )。
 
     Args:
+        session: SQLAlchemy AsyncSession
         current_eth_price: 实时 ETH 价格（用于过滤掉 liq_price > 当前价格的仓位，
             即那些只有在 ETH 上涨时才会被清算的做空仓位）。传入后只有
             liq_price <= current_eth_price 的仓位才会被纳入跌价清算模拟。
@@ -529,7 +531,7 @@ async def simulate_liquidation(
     order_col = _SIM_SORT_COLS.get(orderby, "liq_price")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
     pos_table, res_table = _tables(protocol)
-    sql = _build_simulate_sql(
+    sql_str = _build_simulate_sql(
         order_col,
         order_dir,
         pos_table,
@@ -539,12 +541,14 @@ async def simulate_liquidation(
         use_current_eth_price=current_eth_price is not None,
     )
     # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
-    fetch_args: list = [float(eth_price)]
+    params = {"eth_price": float(eth_price)}
     if current_eth_price is not None:
-        fetch_args.append(float(current_eth_price))
+        params["current_eth_price"] = float(current_eth_price)
     if cap is not None:
-        fetch_args.append(float(cap))
-    rows = await pool.fetch(sql, *fetch_args)
+        params["cap"] = float(cap)
+
+    result = await session.execute(text(sql_str), params)
+    rows = result.fetchall()
 
     total_eth_amount = Decimal("0")
     total_eth_usd = Decimal("0")
@@ -552,12 +556,12 @@ async def simulate_liquidation(
     all_items: list[LiquidationSimItem] = []
 
     for row in rows:
-        eth_amt = Decimal(str(row["eth_collateral_amount"]))
-        eth_usd = Decimal(str(row["eth_collateral_usd"]))
-        eth_usd_stored = Decimal(str(row["eth_supply_usd_stored"]))
-        total_col_usd = Decimal(str(row["total_collateral_usd"]))
-        debt_usd = Decimal(str(row["total_debt_usd"]))
-        liq_p = Decimal(str(row["liq_price"]))
+        eth_amt = Decimal(str(row.eth_collateral_amount))
+        eth_usd = Decimal(str(row.eth_collateral_usd))
+        eth_usd_stored = Decimal(str(row.eth_supply_usd_stored))
+        total_col_usd = Decimal(str(row.total_collateral_usd))
+        debt_usd = Decimal(str(row.total_debt_usd))
+        liq_p = Decimal(str(row.liq_price))
 
         # ETH 抵押品比例过滤：使用爬取时存储价值，避免模拟价格远低于爬取价格时比例失真
         if total_col_usd <= 0 or eth_usd_stored / total_col_usd < eth_ratio:
@@ -572,7 +576,7 @@ async def simulate_liquidation(
 
         all_items.append(
             LiquidationSimItem(
-                address=row["address"],
+                address=row.address,
                 liq_price=_fmt(liq_p),
                 eth_collateral_amount=_fmt(eth_amt, 6),
                 eth_collateral_usd=_fmt(eth_usd),
@@ -732,7 +736,7 @@ _BORROW_SORT_COLS = {
 
 
 async def get_sorted_borrow_positions(
-    pool,
+    session: AsyncSession,
     orderby: str = "liq_price_rise",
     order: str = "asc",
     limit: int = 10,
@@ -741,12 +745,14 @@ async def get_sorted_borrow_positions(
     """从数据库读取借贷端仓位（借入 WETH），按指定字段排序后返回。
 
     Args:
-        pool:    asyncpg 连接池
+        session: SQLAlchemy AsyncSession
         orderby: 排序字段，liq_price_rise / weth_debt_usd / total_debt_usd / health_factor
         order:   方向，asc 或 desc
         limit:   最多返回多少条
         protocol: v3_borrow 或 v2_borrow
     """
+    from sqlalchemy import text
+
     order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
     order_dir = _SORT_DIRS.get(order, "ASC")
     pos_table, _ = _tables(protocol)
@@ -765,23 +771,24 @@ FROM loan.{pos_table} p
 WHERE p.liq_price_rise > 0
   AND p.liq_price_rise < 9999999.99
 ORDER BY {order_col} {order_dir}
-LIMIT $1
+LIMIT :limit
 """
-    rows = await pool.fetch(sql, limit)
+    result = await session.execute(text(sql), {"limit": limit})
+    rows = result.fetchall()
 
     results: list[BorrowPositionResponse] = []
     for row in rows:
-        hf = Decimal(str(row["health_factor"]))
+        hf = Decimal(str(row.health_factor))
         hf_str = "inf" if hf >= _INF_HF_THRESHOLD else _fmt(hf, 4)
         results.append(
             BorrowPositionResponse(
-                address=row["address"],
-                weth_debt_amount=_fmt(Decimal(str(row["weth_debt_amount"])), 6),
-                weth_debt_usd=_fmt(Decimal(str(row["weth_debt_usd"]))),
-                total_collateral_usd=_fmt(Decimal(str(row["total_collateral_usd"]))),
-                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                address=row.address,
+                weth_debt_amount=_fmt(Decimal(str(row.weth_debt_amount)), 6),
+                weth_debt_usd=_fmt(Decimal(str(row.weth_debt_usd))),
+                total_collateral_usd=_fmt(Decimal(str(row.total_collateral_usd))),
+                total_debt_usd=_fmt(Decimal(str(row.total_debt_usd))),
                 health_factor=hf_str,
-                liq_price_rise=_fmt(Decimal(str(row["liq_price_rise"]))),
+                liq_price_rise=_fmt(Decimal(str(row.liq_price_rise))),
             )
         )
     return results
