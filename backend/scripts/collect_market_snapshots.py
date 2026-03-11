@@ -36,6 +36,7 @@ collect_market_snapshots.py
     --step-hours N      时间步长（小时，默认 1）
     --rpc-concurrency N RPC 并发上限（默认 12，archive 节点可适当提高）
     --dry-run           仅打印将要采集的区块/协议，不执行 RPC/写库
+    --skip-existing     跳过数据库中已有数据的区块（默认行为：UPSERT 覆盖写入）
     --config   PATH     配置文件路径（默认 config.yaml）
 """
 
@@ -196,6 +197,11 @@ def _parse_args() -> argparse.Namespace:
         help="仅打印将要采集的区块/协议，不执行 RPC/写库",
     )
     p.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="跳过数据库中已有数据的区块（默认：UPSERT 覆盖写入）",
+    )
+    p.add_argument(
         "--config", type=str, default="", help="配置文件路径（默认 config.yaml）"
     )
     return p.parse_args()
@@ -288,8 +294,24 @@ async def _main() -> None:
 
         # 逐区块、逐协议采集
         total_written = 0
+        total_skipped = 0
         for blk in target_blocks:
             for prot in protocols:
+                if args.skip_existing:
+                    table = f"loan.aave_{prot}_market_snapshots"
+                    existing = await pool.fetchval(
+                        f"SELECT COUNT(1) FROM {table} WHERE block_number = $1",
+                        blk,
+                    )
+                    if existing:
+                        logger.info(
+                            "[%s] block=%d 已有 %d 条记录，跳过（--skip-existing）",
+                            prot,
+                            blk,
+                            existing,
+                        )
+                        total_skipped += 1
+                        continue
                 written = await collect_block_snapshot(
                     w3, pool, prot, blk, semaphore, dry_run=False
                 )
@@ -299,6 +321,8 @@ async def _main() -> None:
         for prot in protocols:
             await refresh_market_totals(pool, prot)
 
+        if total_skipped:
+            logger.info("跳过已有区块：%d 个（--skip-existing）", total_skipped)
         logger.info("采集完成，共写入 %d 条 reserve 快照记录。", total_written)
     finally:
         await pool.close()  # type: ignore[union-attr]
