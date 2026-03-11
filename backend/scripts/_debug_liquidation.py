@@ -1,5 +1,5 @@
 """临时调试脚本：检查指定地址的 aave_history liquidation 记录
-与 position_snapshot_cache 的差异，以及 seen_blocks 去重逻辑的影响。
+与 aave_position_snapshots 的差异，以及 seen_blocks 去重逻辑的影响。
 """
 
 import asyncio
@@ -92,14 +92,14 @@ async def main():
     # 先查 cached_map（简化：用 tx_hash set 代替）
     cached_rows = await pool.fetch(
         """
-        SELECT tx_hash FROM loan.position_snapshot_cache
+        SELECT tx_hash FROM loan.aave_position_snapshots
         WHERE user_address = lower($1) AND protocol = $2
         """,
         ADDR.lower(),
         PROTOCOL,
     )
     cached_set = {r["tx_hash"] for r in cached_rows}
-    print(f"\nposition_snapshot_cache 已有 {len(cached_set)} 条")
+    print(f"\naave_position_snapshots 已有 {len(cached_set)} 条")
 
     # 模拟去重
     seen_blocks: dict[int, dict] = {}

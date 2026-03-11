@@ -241,7 +241,7 @@ class BorrowUserPositionResponse(BaseModel):
     )
 
 
-# ── 历史仓位回放（position_snapshot_cache）─────────────────────────────────────
+# ── 历史仓位回放（aave_position_snapshots）──────────────────────────────────────
 
 
 class SnapshotReserveDetail(BaseModel):

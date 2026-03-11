@@ -1,7 +1,7 @@
 """
 backfill_brief_usd.py
 ─────────────────────────────────────────────────────────────────────────────
-对 position_snapshot_cache 中已有数据，利用 reserves_json 中存储的 token 价格，
+对 aave_position_snapshots 中已有数据，利用 reserves_json 中存储的 token 价格，
 重新生成含「（价值 X.XX USD）」描述的 brief 并写回数据库。
 
 与 backfill_brief.py 的区别：
@@ -53,34 +53,34 @@ logger = logging.getLogger(__name__)
 
 _SQL_FETCH_ALL = """
 SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_ALL_LIMIT = """
 SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
 _SQL_FETCH_EMPTY = """
 SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief = ''
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_EMPTY_LIMIT = """
 SELECT id, tx_hash, protocol, reserves_json, eth_price_usd
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief = ''
 ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
 _SQL_UPDATE = """
-UPDATE loan.position_snapshot_cache
+UPDATE loan.aave_position_snapshots
 SET brief = $1
 WHERE id = $2
 """
@@ -244,7 +244,7 @@ async def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="回填 position_snapshot_cache.brief 字段（含 USD 价值描述）"
+        description="回填 aave_position_snapshots.brief 字段（含 USD 价值描述）"
     )
     parser.add_argument(
         "--config", default="config.yaml", help="配置文件路径（默认 config.yaml）"

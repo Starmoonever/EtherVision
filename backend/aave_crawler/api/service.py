@@ -19,7 +19,13 @@ from ..constants import ETH_SYMBOLS as _ETH_SYMBOLS
 from ..constants import MAX_HF
 from ..constants import MAX_UINT256 as _MAX_UINT256
 from ..constants import WETH_ADDR as _WETH_ADDR
-from ..db import fetch_user_tx_history, get_cached_snapshots, upsert_snapshot_cache
+from ..db import (
+    fetch_user_tx_history,
+    get_cached_snapshots,
+    upsert_snapshot_cache,
+    get_cached_eth_price,
+    upsert_eth_price_timestamp,
+)
 from ..models import ReservePosition, UserPosition
 from ..rpc import (
     EMPTY_POSITION,
@@ -402,7 +408,7 @@ latest_snaps AS (
     SELECT DISTINCT ON (user_address)
         user_address,
         liq_price_weth
-    FROM loan.position_snapshot_cache
+    FROM loan.aave_position_snapshots
     WHERE protocol = :protocol
       AND liq_price_weth > 0
     ORDER BY user_address, block_timestamp DESC
@@ -495,7 +501,7 @@ latest_snaps AS (
     SELECT DISTINCT ON (user_address)
         user_address,
         liq_price_weth
-    FROM loan.position_snapshot_cache
+    FROM loan.aave_position_snapshots
     WHERE protocol = '{protocol}'
       AND liq_price_weth > 0
     ORDER BY user_address, block_timestamp DESC
@@ -637,7 +643,7 @@ async def simulate_liquidation(
 def _sql_all_liq_positions(pos_table: str, res_table: str, protocol: str) -> str:
     """构建查询 SQL。
     - 通过 JOIN reserve_positions 表实时计算 eth_collateral_amount/usd（避免依赖可能为 0 的预计算列）。
-    - 优先使用 position_snapshot_cache 中经过修正的 liq_price_weth，回退到主表的 liq_price。
+    - 优先使用 aave_position_snapshots 中经过修正的 liq_price_weth，回退到主表的 liq_price。
     """
     eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
     return f"""
@@ -656,7 +662,7 @@ latest_snaps AS (
     SELECT DISTINCT ON (user_address)
         user_address,
         liq_price_weth
-    FROM loan.position_snapshot_cache
+    FROM loan.aave_position_snapshots
     WHERE protocol = '{protocol}'
       AND liq_price_weth > 0
     ORDER BY user_address, block_timestamp DESC
@@ -1070,7 +1076,10 @@ WHERE p.liq_price_rise > 0
 
 
 async def get_eth_price(
-    w3: AsyncWeb3, asset: str, timestamp: int | None = None
+    w3: AsyncWeb3,
+    asset: str,
+    timestamp: int | None = None,
+    pool: "asyncpg.Pool | None" = None,
 ) -> PriceResponse:
     """获取指定资产的 USD 价格。
 
@@ -1126,6 +1135,19 @@ async def get_eth_price(
         # https://coins.llama.fi/prices/historical/{timestamp}/ethereum:{address}
         coin_key = f"ethereum:{token_address.lower()}"
         url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
+
+        # ── 先查 DB 缓存（15 分钟桶命中即直接返回）──────────────────────
+        if pool is not None:
+            cached_price = await get_cached_eth_price(pool, timestamp, token_address)
+            if cached_price is not None:
+                return PriceResponse(
+                    asset=asset.upper(),
+                    price_usd=_fmt(cached_price, 2),
+                    token_address=token_address,
+                    timestamp=_ts_to_utc_str(timestamp),
+                    source="defillama",
+                )
+
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=10)
@@ -1151,6 +1173,19 @@ async def get_eth_price(
         entry = coins[coin_key]
         price = Decimal(str(entry["price"]))
         actual_ts = int(entry.get("timestamp", timestamp))
+
+        # ── 写回 DB 缓存 ───────────────────────────────────────────────
+        # 写入时使用请求时间桶而非 actual_ts，确保下次读缓存的 key 一致
+        if pool is not None:
+            try:
+                await upsert_eth_price_timestamp(
+                    pool, timestamp, token_address, target, price, source="defillama"
+                )
+            except Exception as _cache_exc:
+                logger.warning(
+                    "写入 eth_price_timestamp 缓存失败（不影响主流程）：%s", _cache_exc
+                )
+
         return PriceResponse(
             asset=asset.upper(),
             price_usd=_fmt(price, 2),
@@ -1166,6 +1201,7 @@ async def get_price_period(
     start_ts: int,
     end_ts: int,
     interval_minutes: int,
+    pool: "asyncpg.Pool | None" = None,
 ) -> PricePeriodResponse:
     """查询资产在指定时间段内按固定间隔的历史价格序列（来自 DeFiLlama）。
 
@@ -1216,7 +1252,7 @@ async def get_price_period(
 
     timeout = aiohttp.ClientTimeout(total=30)
 
-    # ── /chart/ 接口：支持任意间隔（1m、15m、1h、24h 等），单次请求 ─────────
+    # ── /chart/ 接口：支持任意间隔（1m、15m、1h、24h 等），单次请求 ───────
     # batchHistorical 已废弃，统一改用 /chart/
     step = interval_minutes * 60
     n_points = (end_ts - start_ts) // step + 1
@@ -1226,27 +1262,117 @@ async def get_price_period(
     else:
         period_str = f"{interval_minutes // 60}h"
 
-    url = (
-        f"https://coins.llama.fi/chart/{coin_key}"
-        f"?start={start_ts}&span={n_points}&period={period_str}"
-    )
+    # ── 分块策略：每块 ≤ _DEFILLAMA_MAX_SPAN 个点 ──────────────────────────
+    # DeFiLlama /chart/ 单次最多 500 个数据点；缓存也按块检查，避免"全量命中"
+    # 才跳过 HTTP 请求的 all-or-nothing 判断。
+    _DEFILLAMA_MAX_SPAN = 500
 
-    async with aiohttp.ClientSession(timeout=timeout) as sess:
-        try:
-            async with sess.get(url) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
+    expected_buckets = [(start_ts + i * step) // 900 * 900 for i in range(n_points)]
+
+    raw_prices: list[dict] = []
+    chunk_offset = 0
+
+    while chunk_offset < n_points:
+        chunk_n = min(_DEFILLAMA_MAX_SPAN, n_points - chunk_offset)
+        chunk_buckets = expected_buckets[chunk_offset : chunk_offset + chunk_n]
+        chunk_start = start_ts + chunk_offset * step
+
+        # 查本块缓存：单次范围查询 + 最近邻匹配（解决 DeFiLlama 时间戳漂移导致的 key 不对齐问题）
+        chunk_cached: dict[int, Decimal] = {}
+        if pool is not None:
+            import bisect
+
+            # 容差：最大 step/2，最大 2 小时（防止误用远离期望时间的缓存点）
+            _tolerance = min(step // 2, 7200)
+            rows = await pool.fetch(
+                "SELECT timestamp_bucket, price_usd "
+                "FROM loan.eth_price_timestamp "
+                "WHERE asset_address = lower($1) "
+                "AND timestamp_bucket >= $2 AND timestamp_bucket <= $3 "
+                "ORDER BY timestamp_bucket ASC",
+                token_address,
+                chunk_buckets[0] - _tolerance,
+                chunk_buckets[-1] + _tolerance,
+            )
+            _stored_bkts = [r["timestamp_bucket"] for r in rows]
+            _stored_map = {
+                r["timestamp_bucket"]: Decimal(str(r["price_usd"])) for r in rows
+            }
+            for expected_b in chunk_buckets:
+                idx = bisect.bisect_left(_stored_bkts, expected_b)
+                best_b, best_d = None, _tolerance + 1
+                for ci in (idx - 1, idx):
+                    if 0 <= ci < len(_stored_bkts):
+                        d = abs(_stored_bkts[ci] - expected_b)
+                        if d <= _tolerance and d < best_d:
+                            best_d, best_b = d, _stored_bkts[ci]
+                if best_b is not None:
+                    chunk_cached[expected_b] = _stored_map[best_b]
+
+        if len(chunk_cached) >= chunk_n:
+            # 本块全部命中缓存
+            raw_prices.extend(
+                {"timestamp": b, "price": str(chunk_cached[b])} for b in chunk_buckets
+            )
+        else:
+            # 本块有缺失，从 DeFiLlama 取整块
+            chunk_url = (
+                f"https://coins.llama.fi/chart/{coin_key}"
+                f"?start={chunk_start}&span={chunk_n}&period={period_str}"
+            )
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                try:
+                    async with sess.get(chunk_url) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
+                            )
+                        data = await resp.json()
+                except aiohttp.ClientError as exc:
                     raise HTTPException(
-                        status_code=502,
-                        detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
-                    )
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            raise HTTPException(
-                status_code=502, detail=f"请求 DeFiLlama 失败: {exc}"
-            ) from exc
+                        status_code=502, detail=f"请求 DeFiLlama 失败: {exc}"
+                    ) from exc
 
-    raw_prices: list[dict] = data.get("coins", {}).get(coin_key, {}).get("prices", [])
+            chunk_prices = data.get("coins", {}).get(coin_key, {}).get("prices", [])
+            raw_prices.extend(chunk_prices)
+
+            # 写回缓存：对齐到 expected_bucket 网格（不用 DeFiLlama 实际时间戳，避免下次读取时 key 不匹配）
+            if pool is not None:
+                _ei = 0  # chunk_buckets 指针
+                for p in chunk_prices:
+                    if "price" not in p or "timestamp" not in p:
+                        continue
+                    actual_ts = int(p["timestamp"])
+                    # 找最近的 expected bucket（chunk_buckets 已按时间升序）
+                    while _ei < chunk_n - 1 and abs(
+                        chunk_buckets[_ei + 1] - actual_ts
+                    ) < abs(chunk_buckets[_ei] - actual_ts):
+                        _ei += 1
+                    nearest_expected = chunk_buckets[_ei]
+                    if abs(nearest_expected - actual_ts) > step:
+                        continue  # 与期望时间相差超过一个间隔，跳过
+                    if nearest_expected in chunk_cached:
+                        continue  # 已在缓存中，跳过
+                    try:
+                        await upsert_eth_price_timestamp(
+                            pool,
+                            nearest_expected,  # 存在 expected_bucket，下次精确命中
+                            token_address,
+                            target,
+                            Decimal(str(p["price"])),
+                            source="defillama",
+                        )
+                    except Exception as _cache_exc:
+                        logger.warning(
+                            "写入 eth_price_timestamp 缓存失败（不影响主流程）：%s",
+                            _cache_exc,
+                        )
+                        break
+
+        chunk_offset += chunk_n
+
     items: list[PricePeriodItem] = [
         PricePeriodItem(
             price_usd=_fmt(Decimal(str(p["price"])), 2),
@@ -1664,7 +1790,7 @@ async def get_positions_history(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 历史仓位回放（基于 position_snapshot_cache + aave_history + RPC at block）
+# 历史仓位回放（基于 aave_position_snapshots + aave_history + RPC at block）
 # ══════════════════════════════════════════════════════════════════════════════
 
 _MAX_REPLAY_CONCURRENCY = 5  # 并发 RPC 重放上限（避免公共节点限流）
@@ -1691,7 +1817,7 @@ def _get_brief(row) -> str:
 
 
 def _format_snapshot_point(
-    row,  # asyncpg.Record from position_snapshot_cache
+    row,  # asyncpg.Record from aave_position_snapshots
     detail: bool = False,
     operation_type: str = "",
 ) -> PositionSnapshotPoint:
@@ -2035,7 +2161,7 @@ async def get_user_position_replay(
 
     流程：
     1. 从 aave_history 取用户的 tx 列表（已建索引，毫秒级）
-    2. 查 position_snapshot_cache 确认哪些 tx 已缓存
+    2. 查 aave_position_snapshots 确认哪些 tx 已缓存
     3. 对未缓存 tx 并发 RPC eth_call at block_number（真实链上值，无利息误差）
     4. 将新查询结果写入缓存（幂等 UPSERT）
     5. 合并 + 按 block_timestamp 升序返回

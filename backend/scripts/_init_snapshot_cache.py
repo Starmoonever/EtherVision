@@ -1,4 +1,4 @@
-"""创建 loan.position_snapshot_cache 表及索引"""
+"""创建 loan.aave_position_snapshots 表及索引"""
 
 import asyncio
 import sys

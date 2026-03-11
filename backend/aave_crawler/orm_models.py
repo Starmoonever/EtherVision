@@ -467,7 +467,7 @@ class EthBlockTimestamp(Base):
 
 
 class PositionSnapshotCache(Base):
-    __tablename__ = "position_snapshot_cache"
+    __tablename__ = "aave_position_snapshots"
     __table_args__ = (
         UniqueConstraint("user_address", "protocol", "tx_hash", name="uq_snapshot"),
         {"schema": "loan"},

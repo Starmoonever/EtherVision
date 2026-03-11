@@ -1,7 +1,7 @@
 """
 recalc_liq_price_snapshot.py
 ────────────────────────────
-修复 position_snapshot_cache 表中因旧公式（仅取第一个 ETH 系抵押品、
+修复 aave_position_snapshots 表中因旧公式（仅取第一个 ETH 系抑品、
 未考虑 ETH 系债务对冲）导致的错误 liq_price 值。
 
 旧公式问题：
@@ -167,7 +167,7 @@ async def recalc_all(
     fix_only_positive: bool,
 ) -> None:
     """
-    遍历 position_snapshot_cache 全部行，重新计算 liq_price 并 UPDATE。
+    遍历 aave_position_snapshots 全部行，重新计算 liq_price 并 UPDATE。
 
     --fix-only-positive：只更新当前 liq_price > 0 但新值 = 0 的行（最快速修复已知 bug）
     """
@@ -182,7 +182,7 @@ async def recalc_all(
         conditions.append(f"user_address = ${len(params)}")
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    count_q = f"SELECT COUNT(*) FROM loan.position_snapshot_cache {where}"
+    count_q = f"SELECT COUNT(*) FROM loan.aave_position_snapshots {where}"
     total: int = await pool.fetchval(count_q, *params)
     logger.info("待处理行数: %d  (protocol=%s, address=%s)", total, protocol, address)
 
@@ -195,7 +195,7 @@ async def recalc_all(
         fetch_q = (
             f"SELECT id, liq_price, eth_price_usd, reserves_json, "
             f"total_collateral_usd, liq_threshold "
-            f"FROM loan.position_snapshot_cache {where} "
+            f"FROM loan.aave_position_snapshots {where} "
             f"ORDER BY id LIMIT {batch_size} OFFSET {offset}"
         )
         rows = await pool.fetch(fetch_q, *params)
@@ -249,7 +249,7 @@ async def recalc_all(
         if update_args and not dry_run:
             async with pool.acquire() as conn:
                 await conn.executemany(
-                    "UPDATE loan.position_snapshot_cache "
+                    "UPDATE loan.aave_position_snapshots "
                     "SET liq_price = $1, liq_price_weth = $2 WHERE id = $3",
                     update_args,
                 )
@@ -281,7 +281,7 @@ async def recalc_all(
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="重新计算 position_snapshot_cache.liq_price"
+        description="重新计算 aave_position_snapshots.liq_price"
     )
     p.add_argument(
         "--protocol",

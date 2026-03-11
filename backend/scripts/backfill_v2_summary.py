@@ -1,7 +1,7 @@
 """
 backfill_v2_summary.py
 ──────────────────────────────────────────────────────────────────────────────
-修复 position_snapshot_cache 中 V2 旧数据的 total_collateral_usd /
+修复 aave_position_snapshots 中 V2 旧数据的 total_collateral_usd /
 total_debt_usd / available_borrows_usd 三个字段。
 
 根因：V2 的 getUserAccountData 返回 ETH 计价（18 位精度），而旧代码未对
@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 _SQL_FETCH_ALL = """
 SELECT id, user_address, block_number, tx_hash, block_timestamp,
        eth_price_usd, brief
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE protocol = 'v2'
 ORDER BY block_timestamp ASC
 """
@@ -70,7 +70,7 @@ ORDER BY block_timestamp ASC
 _SQL_FETCH_LIMIT = """
 SELECT id, user_address, block_number, tx_hash, block_timestamp,
        eth_price_usd, brief
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE protocol = 'v2'
 ORDER BY block_timestamp ASC
 LIMIT $1

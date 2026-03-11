@@ -168,6 +168,7 @@ async def positions(
 )
 async def asset_price(
     request: Request,
+    pool: AsyncpgPool,
     asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
     time: str = Query(
         "now",
@@ -177,7 +178,7 @@ async def asset_price(
     if time == "now":
         return await get_eth_price(_w3(request), asset)
     ts = _parse_utc_time(time)
-    return await get_eth_price(_w3(request), asset, timestamp=ts)
+    return await get_eth_price(_w3(request), asset, timestamp=ts, pool=pool)
 
 
 @router.get(
@@ -271,6 +272,7 @@ async def liquidate_simulation(
 )
 async def asset_price_period(
     request: Request,
+    pool: AsyncpgPool,
     asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
     start: str = Query(..., description="起始 UTC 时间，如 2024-01-01"),
     end: str = Query(..., description="结束 UTC 时间，如 2024-12-31"),
@@ -279,7 +281,12 @@ async def asset_price_period(
     start_ts = _parse_utc_time(start)
     end_ts = _parse_utc_time(end)
     return await get_price_period(
-        _w3(request), asset, start_ts=start_ts, end_ts=end_ts, interval_minutes=interval
+        _w3(request),
+        asset,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        interval_minutes=interval,
+        pool=pool,
     )
 
 

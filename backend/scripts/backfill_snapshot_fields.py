@@ -1,7 +1,7 @@
 """
 backfill_snapshot_fields.py
 ────────────────────────────────────────────────────────────────────────────
-为 loan.position_snapshot_cache 中旧行（缺少新字段的行）批量填充：
+为 loan.aave_position_snapshots 中旧行（缺少新字段的行）批量填充：
     - eth_collateral_amount  ETH 系抵押品合计数量
     - eth_collateral_usd     ETH 系抵押品合计 USD
     - weth_debt_amount       ETH 系负债合计数量
@@ -118,12 +118,12 @@ def _calc_from_reserves(
 
 _SQL_FETCH = """
 SELECT id, reserves_json, eth_price_usd
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 ORDER BY id
 """
 
 _SQL_UPDATE = """
-UPDATE loan.position_snapshot_cache SET
+UPDATE loan.aave_position_snapshots SET
     eth_collateral_amount = $1,
     eth_collateral_usd    = $2,
     weth_debt_amount      = $3,
@@ -147,7 +147,7 @@ async def backfill(batch_size: int, dry_run: bool) -> None:
 
     # 先统计总行数
     total: int = await pool.fetchval(
-        "SELECT COUNT(*) FROM loan.position_snapshot_cache"
+        "SELECT COUNT(*) FROM loan.aave_position_snapshots"
     )
     logger.info("共 %d 行需要回填", total)
 
@@ -219,7 +219,7 @@ async def backfill(batch_size: int, dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="回填 position_snapshot_cache 新字段")
+    parser = argparse.ArgumentParser(description="回填 aave_position_snapshots 新字段")
     parser.add_argument(
         "--batch", type=int, default=200, help="每批 UPDATE 行数（默认 200）"
     )

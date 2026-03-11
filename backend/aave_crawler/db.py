@@ -922,7 +922,7 @@ async def sync_addresses_from_history(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 仓位历史快照缓存（position_snapshot_cache）
+# 仓位历史快照缓存（aave_position_snapshots）
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # 以 transaction 为数据点：每条记录对应一笔改变用户仓位的 tx，
@@ -934,7 +934,7 @@ async def sync_addresses_from_history(
 #                                 WHERE target_user_address IS NOT NULL
 
 _DDL_SNAPSHOT_CACHE = """
-CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
+CREATE TABLE IF NOT EXISTS loan.aave_position_snapshots (
     id                    BIGSERIAL        PRIMARY KEY,
     user_address          TEXT             NOT NULL,          -- 小写
     protocol              TEXT             NOT NULL,          -- 'v2' | 'v3'
@@ -969,10 +969,10 @@ CREATE TABLE IF NOT EXISTS loan.position_snapshot_cache (
 
 _DDL_SNAPSHOT_CACHE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_psc_user_ts
-    ON loan.position_snapshot_cache (user_address, protocol, block_timestamp DESC);
+    ON loan.aave_position_snapshots (user_address, protocol, block_timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_psc_block
-    ON loan.position_snapshot_cache (block_number);
+    ON loan.aave_position_snapshots (block_number);
 """
 
 # ── 从 aave_history 查询用户的 tx 列表（按 block 升序）─────────────────────────
@@ -1015,7 +1015,7 @@ SELECT
     eth_collateral_amount, eth_collateral_usd,
     weth_debt_amount, weth_debt_usd,
     eth_price_usd, reserves_json, brief, cached_at
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE user_address = lower($1)
   AND protocol     = $2
   AND block_timestamp BETWEEN $3 AND $4
@@ -1024,7 +1024,7 @@ ORDER BY block_timestamp ASC
 
 # ── UPSERT 快照缓存 ─────────────────────────────────────────────────────────
 _SQL_UPSERT_SNAPSHOT = """
-INSERT INTO loan.position_snapshot_cache
+INSERT INTO loan.aave_position_snapshots
     (user_address, protocol, block_number, tx_hash, block_timestamp,
      total_collateral_usd, total_debt_usd, available_borrows_usd,
      health_factor, ltv, liq_threshold, liq_price, liq_price_rise, liq_price_weth,
@@ -1080,10 +1080,10 @@ _DDL_SNAPSHOT_CACHE_MIGRATE = """
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+        WHERE table_schema='loan' AND table_name='aave_position_snapshots'
           AND column_name='liq_price_rise'
     ) THEN
-        ALTER TABLE loan.position_snapshot_cache
+        ALTER TABLE loan.aave_position_snapshots
             ADD COLUMN liq_price_rise        NUMERIC(30,8) NOT NULL DEFAULT 0,
             ADD COLUMN eth_collateral_amount NUMERIC(30,8) NOT NULL DEFAULT 0,
             ADD COLUMN eth_collateral_usd    NUMERIC(30,8) NOT NULL DEFAULT 0,
@@ -1097,10 +1097,10 @@ _DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF = """
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+        WHERE table_schema='loan' AND table_name='aave_position_snapshots'
           AND column_name='brief'
     ) THEN
-        ALTER TABLE loan.position_snapshot_cache
+        ALTER TABLE loan.aave_position_snapshots
             ADD COLUMN brief TEXT NOT NULL DEFAULT '';
     END IF;
 END $$;
@@ -1110,11 +1110,26 @@ _DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH = """
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+        WHERE table_schema='loan' AND table_name='aave_position_snapshots'
           AND column_name='liq_price_weth'
     ) THEN
-        ALTER TABLE loan.position_snapshot_cache
+        ALTER TABLE loan.aave_position_snapshots
             ADD COLUMN liq_price_weth NUMERIC(30,8) NOT NULL DEFAULT 0;
+    END IF;
+END $$;
+"""
+
+
+_DDL_SNAPSHOT_CACHE_RENAME = """
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='loan' AND table_name='position_snapshot_cache'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='loan' AND table_name='aave_position_snapshots'
+    ) THEN
+        ALTER TABLE loan.position_snapshot_cache RENAME TO aave_position_snapshots;
     END IF;
 END $$;
 """
@@ -1123,12 +1138,14 @@ END $$;
 async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
     """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
     async with pool.acquire() as conn:
+        # 兼容旧表名：若旧表存在且新表不存在，则重命名
+        await conn.execute(_DDL_SNAPSHOT_CACHE_RENAME)
         await conn.execute(_DDL_SNAPSHOT_CACHE)
         await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF)
         await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH)
-    logger.info("快照缓存表已就绪：loan.position_snapshot_cache")
+    logger.info("快照缓存表已就绪：loan.aave_position_snapshots")
 
 
 async def fetch_user_tx_history(
@@ -1257,3 +1274,106 @@ async def upsert_snapshot_cache(
 
     logger.debug("快照缓存 UPSERT 完成：%d 条", len(rows))
     return len(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ETH 历史价格缓存（eth_price_timestamp）
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# 以 15 分钟为最小时间粒度，缓存从外部 API（DeFiLlama）查询到的资产历史价格。
+# timestamp_bucket = (unix_ts // 900) * 900，同一桶内只存一条记录。
+
+_DDL_ETH_PRICE_TIMESTAMP = """
+CREATE TABLE IF NOT EXISTS loan.eth_price_timestamp (
+    id               BIGSERIAL       PRIMARY KEY,
+    timestamp_bucket BIGINT          NOT NULL,  -- unix 秒，已按 15 分钟取整
+    asset_address    TEXT            NOT NULL,  -- 小写 token address
+    asset_symbol     TEXT            NOT NULL DEFAULT '',
+    price_usd        NUMERIC(30, 8)  NOT NULL,
+    source           TEXT            NOT NULL DEFAULT 'defillama',
+    fetched_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    UNIQUE (timestamp_bucket, asset_address)
+);
+"""
+
+_DDL_ETH_PRICE_TIMESTAMP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_eth_price_ts_bucket_addr
+    ON loan.eth_price_timestamp (timestamp_bucket, asset_address);
+"""
+
+_SQL_GET_ETH_PRICE_CACHED = """
+SELECT price_usd, source, fetched_at
+  FROM loan.eth_price_timestamp
+ WHERE timestamp_bucket = $1
+   AND asset_address    = lower($2)
+ LIMIT 1
+"""
+
+_SQL_UPSERT_ETH_PRICE = """
+INSERT INTO loan.eth_price_timestamp
+    (timestamp_bucket, asset_address, asset_symbol, price_usd, source)
+VALUES ($1, lower($2), $3, $4, $5)
+ON CONFLICT (timestamp_bucket, asset_address) DO UPDATE SET
+    price_usd  = EXCLUDED.price_usd,
+    source     = EXCLUDED.source,
+    fetched_at = NOW()
+"""
+
+
+def _eth_price_bucket(unix_ts: int) -> int:
+    """将 unix 时间戳（秒）对齐到最近的 15 分钟整点桶。"""
+    return (unix_ts // 900) * 900
+
+
+async def ensure_eth_price_timestamp_table(pool: asyncpg.Pool) -> None:
+    """若价格缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_ETH_PRICE_TIMESTAMP)
+        await conn.execute(_DDL_ETH_PRICE_TIMESTAMP_INDEX)
+    logger.info("ETH 价格缓存表已就绪：loan.eth_price_timestamp")
+
+
+async def get_cached_eth_price(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+) -> "Decimal | None":
+    """从缓存中查询 ETH/资产历史价格（15 分钟桶命中即返回）。
+
+    :param unix_ts:        请求时间点（unix 秒）
+    :param asset_address:  小写 token address
+    :returns: 价格 Decimal，或 None（未命中）
+    """
+    bucket = _eth_price_bucket(unix_ts)
+    row = await pool.fetchrow(_SQL_GET_ETH_PRICE_CACHED, bucket, asset_address)
+    if row:
+        return Decimal(str(row["price_usd"]))
+    return None
+
+
+async def upsert_eth_price_timestamp(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+    asset_symbol: str,
+    price_usd: "Decimal",
+    source: str = "defillama",
+) -> None:
+    """写入（或更新）价格缓存。
+
+    :param unix_ts:        实际价格对应时间点（unix 秒），函数内部自动取整到 15 分钟
+    :param asset_address:  token address（会自动转为小写）
+    :param asset_symbol:   资产符号，如 'WETH'
+    :param price_usd:      USD 价格
+    :param source:         来源标识，默认 'defillama'
+    """
+    bucket = _eth_price_bucket(unix_ts)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _SQL_UPSERT_ETH_PRICE,
+            bucket,
+            asset_address,
+            asset_symbol,
+            price_usd,
+            source,
+        )

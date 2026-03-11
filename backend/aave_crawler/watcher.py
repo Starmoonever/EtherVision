@@ -152,7 +152,7 @@ async def _sync_snapshot_cache(
     common_cache: dict,
     contracts: ProtocolContracts,
 ) -> None:
-    """将水位线以来的新 tx 写入 position_snapshot_cache（幂等 UPSERT）。
+    """将水位线以来的新 tx 写入 aave_position_snapshots（幂等 UPSERT）。
 
     每个 (user_address, block_number) 对只查一次 RPC；同一区块多条 tx 取首条 tx_hash。
     """

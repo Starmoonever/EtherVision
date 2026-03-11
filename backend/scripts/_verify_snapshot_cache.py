@@ -1,4 +1,4 @@
-"""验证 position_snapshot_cache 表结构"""
+"""验证 aave_position_snapshots 表结构"""
 
 import asyncio
 from pathlib import Path
@@ -16,16 +16,16 @@ async def main():
 
     cols = await conn.fetch(
         "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema='loan' AND table_name='position_snapshot_cache' "
+        "WHERE table_schema='loan' AND table_name='aave_position_snapshots' "
         "ORDER BY ordinal_position"
     )
-    print("loan.position_snapshot_cache 字段:")
+    print("loan.aave_position_snapshots 字段:")
     for c in cols:
         print(f"  {c['column_name']:25s} {c['data_type']}")
 
     idxs = await conn.fetch(
         "SELECT indexname FROM pg_indexes "
-        "WHERE schemaname='loan' AND tablename='position_snapshot_cache'"
+        "WHERE schemaname='loan' AND tablename='aave_position_snapshots'"
     )
     print("索引:", [r["indexname"] for r in idxs])
 

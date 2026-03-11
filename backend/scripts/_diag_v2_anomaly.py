@@ -18,7 +18,7 @@ async def main():
     print("=== 异常行统计（liq_price_weth > eth_price_usd AND hf > 1）===")
     for proto in ("v2", "v3"):
         cnt = await pool.fetchval(
-            """SELECT COUNT(*) FROM loan.position_snapshot_cache
+            """SELECT COUNT(*) FROM loan.aave_position_snapshots
                WHERE protocol=$1 AND health_factor > 1.0
                  AND liq_price_weth > eth_price_usd
                  AND eth_collateral_amount != 0""",
@@ -32,7 +32,7 @@ async def main():
         """SELECT user_address, eth_price_usd, health_factor,
                   total_collateral_usd, total_debt_usd, liq_price_weth,
                   reserves_json
-           FROM loan.position_snapshot_cache
+           FROM loan.aave_position_snapshots
            WHERE protocol='v2' AND health_factor > 1.0
              AND liq_price_weth > eth_price_usd
              AND eth_collateral_amount != 0

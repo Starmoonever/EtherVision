@@ -1,7 +1,7 @@
 """
 build_all_snapshots.py
 ──────────────────────────────────────────────────────────────────────────────
-从 aave.aave_history 全量构建 loan.position_snapshot_cache。
+从 aave.aave_history 全量构建 loan.aave_position_snapshots。
 
 每个用户-交易对应一次 eth_call@block_number RPC 调用，拿到真实链上快照后写库。
 已缓存的 tx 自动跳过（幂等），支持断点续跑。
@@ -79,7 +79,7 @@ ORDER BY 1
 # 已缓存的 tx_hash 集合（用于跳过已处理的 tx）
 _SQL_CACHED_TX_SET = """
 SELECT tx_hash
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE user_address = lower($1)
   AND protocol     = $2
 """
@@ -370,7 +370,7 @@ async def run(args: argparse.Namespace) -> None:
 def main() -> None:
     today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     parser = argparse.ArgumentParser(
-        description="从 aave_history 全量构建 position_snapshot_cache"
+        description="从 aave_history 全量构建 aave_position_snapshots"
     )
     parser.add_argument(
         "-p",

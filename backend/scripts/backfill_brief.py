@@ -1,7 +1,7 @@
 """
 backfill_brief.py
 ─────────────────────────────────────────────────────────────────────────────
-对 position_snapshot_cache 中 brief = '' 的旧数据，从 aave_history 读取操作
+对 aave_position_snapshots 中 brief = '' 的旧数据，从 aave_history 读取操作
 数据并回填 brief 字段。
 
 格式："{操作类型} {数量} {token符号} (价值 {value} usd)"
@@ -47,14 +47,14 @@ logger = logging.getLogger(__name__)
 
 _SQL_FETCH = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief = ''
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_LIMIT = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief = ''
 ORDER BY block_timestamp ASC
 LIMIT $1
@@ -62,34 +62,34 @@ LIMIT $1
 
 _SQL_FETCH_FORCE = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_FORCE_LIMIT = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 ORDER BY block_timestamp ASC
 LIMIT $1
 """
 
 _SQL_FETCH_PATTERN = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief LIKE '%' || $1 || '%'
 ORDER BY block_timestamp ASC
 """
 
 _SQL_FETCH_PATTERN_LIMIT = """
 SELECT id, tx_hash, protocol
-FROM loan.position_snapshot_cache
+FROM loan.aave_position_snapshots
 WHERE brief LIKE '%' || $1 || '%'
 ORDER BY block_timestamp ASC
 LIMIT $2
 """
 
 _SQL_UPDATE = """
-UPDATE loan.position_snapshot_cache
+UPDATE loan.aave_position_snapshots
 SET brief = $1
 WHERE id = $2
 """
@@ -208,7 +208,7 @@ async def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="回填 position_snapshot_cache.brief 字段"
+        description="回填 aave_position_snapshots.brief 字段"
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="仅打印待处理行，不修改数据库"
