@@ -216,18 +216,13 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
   return (
     <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-        <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
-          市场历史回顾板块
-        </span>
+        <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
       </div>
 
       {/* Chart 1: Market Size */}
       <div className="card">
-        <div
-          className="card-header"
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-        >
-          <span className="card-title">ETH 市场规模 （USD）</span>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="card-title">市场规模 （USD）</span>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {(['3M', '6M', '1Y'] as const).map((r) => (
               <button
@@ -260,7 +255,12 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
               />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any) => [`$${Number(value).toLocaleString()}`, '']}
+                formatter={(value: any, name: any) => {
+                  let label = name;
+                  if (name === '借出 ETH 总值') label = '借出 ETH 总值';
+                  else if (name === '剩余可借 ETH 总值') label = '剩余可借 ETH 总值';
+                  return [`$${Number(value).toLocaleString()}`, label];
+                }}
               />
               <Legend />
               <Line
@@ -286,11 +286,8 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
 
       {/* Chart 2: Rates */}
       <div className="card">
-        <div
-          className="card-header"
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-        >
-          <span className="card-title">ETH 抵押借贷利率</span>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="card-title">抵押借贷利率</span>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {(['3M', '6M', '1Y'] as const).map((r) => (
               <button
@@ -331,7 +328,7 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
               />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any) => [`${Number(value).toFixed(2)}%`, '']}
+                formatter={(value: any, name: any) => [`${Number(value).toFixed(2)}%`, name]}
               />
               <Legend />
               <Line

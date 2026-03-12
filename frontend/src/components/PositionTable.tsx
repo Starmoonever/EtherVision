@@ -1,4 +1,4 @@
-import type { UserPosition as PositionData } from '../api';
+import type { UserPosition, BorrowPosition } from '../api';
 
 // 定义用于渲染表格行的接口
 interface PositionRow {
@@ -7,13 +7,18 @@ interface PositionRow {
   priceUSD: number;
   balance: string;
   valueUSD: number;
+  isCollateral?: boolean;
 }
 
 interface PositionTableProps {
-  data: PositionData | null;
+  data: UserPosition | BorrowPosition | null;
   loading: boolean;
   notFound: boolean;
   version: 'v2' | 'v3';
+}
+
+function isBorrowPosition(data: UserPosition | BorrowPosition): data is BorrowPosition {
+  return (data as BorrowPosition).weth_debt_amount !== undefined;
 }
 
 export function PositionTable({ data: position, loading, notFound, version }: PositionTableProps) {
@@ -81,33 +86,68 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
 
   if (!position) return null;
 
-  // 解析数值
-  const ethAmount = parseFloat(position.eth_collateral_amount || '0');
-  const ethValue = parseFloat(position.eth_collateral_usd || '0');
-  const debtValue = parseFloat(position.total_debt_usd || '0');
+  let supplies: PositionRow[] = [];
+  let borrows: PositionRow[] = [];
 
-  // 构建供给列表 (仅 ETH)
-  const supplies: PositionRow[] = [];
-  if (ethAmount > 0) {
-    supplies.push({
-      tokenAddress: 'ETH',
-      symbol: 'ETH',
-      priceUSD: ethAmount > 0 ? ethValue / ethAmount : 0,
-      balance: position.eth_collateral_amount,
-      valueUSD: ethValue,
-    });
-  }
+  if (isBorrowPosition(position)) {
+    // 处理借贷端数据 (Detailed Reserves)
+    position.reserves.forEach(r => {
+        const supplyAmount = parseFloat(r.supply_amount || '0');
+        const debtAmount = parseFloat(r.total_debt_amount || '0');
+        
+        if (supplyAmount > 0) {
+            supplies.push({
+                tokenAddress: r.token_address,
+                symbol: r.symbol,
+                priceUSD: parseFloat(r.price_usd || '0'),
+                balance: r.supply_amount,
+                valueUSD: parseFloat(r.supply_usd || '0'),
+                isCollateral: r.use_as_collateral
+            });
+        }
 
-  // 构建借贷列表 (仅显示总债务)
-  const borrows: PositionRow[] = [];
-  if (debtValue > 0) {
-    borrows.push({
-      tokenAddress: 'TOTAL_DEBT',
-      symbol: 'Total Debt',
-      priceUSD: 1,
-      balance: position.total_debt_usd,
-      valueUSD: debtValue,
+        if (debtAmount > 0) {
+            borrows.push({
+                tokenAddress: r.token_address, // or use symbol as key if address not unique per row (unlikely)
+                symbol: r.symbol,
+                priceUSD: parseFloat(r.price_usd || '0'),
+                balance: r.total_debt_amount,
+                valueUSD: parseFloat(r.total_debt_usd || '0'),
+            });
+        }
     });
+  } else {
+    // 处理抵押端数据 (Simplified UserPosition)
+    // 解析数值
+    const ethAmount = parseFloat(position.eth_collateral_amount || '0');
+    const ethValue = parseFloat(position.eth_collateral_usd || '0');
+    const debtValue = parseFloat(position.total_debt_usd || '0');
+
+    // 构建供给列表 (仅 ETH)
+    if (ethAmount > 0) {
+      supplies.push({
+        tokenAddress: 'ETH',
+        symbol: 'ETH',
+        priceUSD: ethAmount > 0 ? ethValue / ethAmount : 0,
+        balance: position.eth_collateral_amount,
+        valueUSD: ethValue,
+        isCollateral: true // Assuming ETH is collateral in this view
+      });
+    }
+
+    // 构建借贷列表 (仅显示总债务)
+    if (debtValue > 0) {
+      borrows.push({
+        tokenAddress: 'TOTAL_DEBT',
+        symbol: 'Total Debt',
+        priceUSD: 1, // Placeholder
+        balance: position.total_debt_usd, // Showing value as balance for Total Debt row? Or maybe '0'? 
+        // Original code used total_debt_usd as balance? No, let's check.
+        // original: balance: position.total_debt_usd
+        // It seems in the simplified view, balance was used for value.
+        valueUSD: debtValue,
+      });
+    }
   }
 
   return (
@@ -163,7 +203,13 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                       })}
                     </td>
                     <td className="center">
-                      <span className="pill green-pill">是</span>
+                      {r.isCollateral !== undefined ? (
+                          <span className={`pill ${r.isCollateral ? 'green-pill' : 'gray-pill'}`}>
+                            {r.isCollateral ? '是' : '否'}
+                          </span>
+                      ) : (
+                          <span className="pill green-pill">是</span> // Default for old view
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -179,7 +225,11 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className="card-title">负债 (Borrowed)</span>
             {headerBadge_found}
-            {Number(position.available_borrows_usd) > 0 && (
+            {/* Show available borrows only for UserPosition or if we had it in BorrowPosition? 
+                BorrowPosition doesn't seem to have available_borrows_usd in JSON. 
+                So hide it if not present. 
+            */}
+            {!isBorrowPosition(position) && Number(position.available_borrows_usd) > 0 && (
               <span
                 className="badge"
                 style={{
