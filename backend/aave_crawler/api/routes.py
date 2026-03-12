@@ -8,10 +8,12 @@ from ..database import AsyncpgPool, DbSession
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (
     BorrowPositionResponse,
+    BorrowUserPositionResponse,
     HistoricalPositionResponse,
     LiquidationPeriodItem,
     LiquidationSimResponse,
     MarketReplayResponse,
+    PositionPeriodItem,
     PositionReplayResponse,
     PositionResponse,
     PricePeriodResponse,
@@ -21,9 +23,11 @@ from .schemas import (
     TxHistoryResponse,
 )
 from .service import (
+    get_borrow_user_position,
     get_eth_price,
     get_market_replay,
     get_positions_history,
+    get_positions_period,
     get_price_period,
     get_sorted_borrow_positions,
     get_sorted_positions,
@@ -421,6 +425,47 @@ async def market_snapshot_replay(
 
 
 @router.get(
+    "/positions/period",
+    response_model=list[PositionPeriodItem],
+    summary="查询日级 ETH 抵押仓位统计时序",
+    description=(
+        "按日粒度（或指定间隔天数）汇总全量仓位中 ETH/WETH 抵押品的统计数据。\n\n"
+        "- `interval`：采样间隔（天），默认 1（每日一个数据点），设 7 则每 7 天一个点\n"
+        "- `sim_eth_price_distance`：ETH 价格模拟偏移百分比（百分制），"
+        "正数=涨价，负数=跌价，默认 0（不模拟）\n"
+        "- `total_usd` = `total_eth_amount × sim_eth_price`\n\n"
+        "数据来源：`loan.aave_v{2|3}_eth_daily_positions`（需先运行 `aave-crawler collect-daily`）\n\n"
+        "支持时间格式：`2024-01-01` / `2024-11-14T12:00:00Z` / `2024-11-14 12:00:00`"
+    ),
+)
+async def positions_period(
+    pool: AsyncpgPool,
+    start: str = Query(..., description="起始日期（UTC），如 2024-01-01"),
+    end: str = Query(..., description="结束日期（UTC），如 2024-12-31"),
+    version: Literal["v2", "v3"] = Query(
+        "v3", description="Aave 协议版本：v2 或 v3（默认）"
+    ),
+    interval: int = Query(1, ge=1, description="采样间隔（天），默认 1（每日一点）"),
+    sim_eth_price_distance: float = Query(
+        0.0,
+        description="ETH 价格模拟偏移（百分制），正数=涨，负数=跌，默认 0",
+    ),
+) -> list[PositionPeriodItem]:
+    start_ts = _parse_utc_time(start)
+    end_ts = _parse_utc_time(end)
+    if start_ts > end_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+    return await get_positions_period(
+        pool,
+        protocol=version,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        interval_days=interval,
+        sim_eth_price_distance=sim_eth_price_distance,
+    )
+
+
+@router.get(
     "/txs",
     response_model=TxHistoryResponse,
     summary="查询用户 Aave 历史交易列表",
@@ -454,6 +499,29 @@ async def user_tx_history(
 
 
 # ── 借贷端（做空 ETH / borrow WETH）清算分析路由 ─────────────────────────────
+
+
+@router.get(
+    "/borrow/position",
+    response_model=BorrowUserPositionResponse,
+    summary="查询借贷端单用户仓位详情",
+    description=(
+        "查询指定地址在借贷端（借入 WETH）的仓位详情，包含各 reserve 资产明细。\n\n"
+        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl -p v3_borrow`）。"
+    ),
+)
+async def borrow_user_position(
+    pool: AsyncpgPool,
+    address: str = Query(..., description="以太坊钱包地址"),
+    version: Literal["v2", "v3"] = Query(
+        "v3", description="Aave 协议版本：v2 或 v3（默认）"
+    ),
+) -> BorrowUserPositionResponse:
+    protocol = f"{version}_borrow"
+    result = await get_borrow_user_position(pool, address, protocol=protocol)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"地址未找到: {address}")
+    return result
 
 
 @router.get(

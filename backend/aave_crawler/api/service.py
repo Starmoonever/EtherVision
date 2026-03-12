@@ -58,6 +58,7 @@ from .schemas import (
     LiquidationSimItem,
     LiquidationSimResponse,
     MarketReplayResponse,
+    PositionPeriodItem,
     PositionReplayResponse,
     PositionResponse,
     PositionSnapshotPoint,
@@ -2508,3 +2509,71 @@ async def get_user_position_replay(
         total_tx_count=total_tx_count,
         cache_hit_rate=cache_hit_rate,
     )
+
+
+# ── 日级仓位统计序列 ─────────────────────────────────────────────────────────
+
+
+def _daily_positions_table(protocol: str) -> str:
+    """返回日级仓位表名（不含 schema）。"""
+    ver = "v2" if protocol.lower().startswith("v2") else "v3"
+    return f"aave_{ver}_eth_daily_positions"
+
+
+async def get_positions_period(
+    pool: asyncpg.Pool,
+    protocol: str,
+    start_ts: int,
+    end_ts: int,
+    interval_days: int = 1,
+    sim_eth_price_distance: float = 0.0,
+) -> list[PositionPeriodItem]:
+    """查询日级仓位统计时序数据。
+
+    按 interval_days 间隔采样，计算每日有 ETH 抵押品的仓位数量、
+    ETH 抵押品合计，以及按模拟 ETH 价格换算的 USD 估值。
+
+    :param start_ts:               起始 Unix 时间戳（秒）
+    :param end_ts:                 结束 Unix 时间戳（秒）
+    :param interval_days:          采样间隔（天），≥ 1
+    :param sim_eth_price_distance: ETH 价格模拟偏移（百分制，如 -10 表示跌 10%）
+    """
+
+    start_date = datetime.fromtimestamp(start_ts, tz=timezone.utc).date()
+    end_date = datetime.fromtimestamp(end_ts, tz=timezone.utc).date()
+
+    table = _daily_positions_table(protocol)
+    sql = f"""
+        SELECT
+            snapshot_date,
+            COUNT(*) FILTER (WHERE eth_collateral_amount > 0)           AS cnt,
+            COALESCE(SUM(eth_collateral_amount) FILTER (WHERE eth_collateral_amount > 0), 0) AS total_eth,
+            COALESCE(AVG(eth_price_usd) FILTER (WHERE eth_price_usd > 0), 0)                AS eth_price
+        FROM loan."{table}"
+        WHERE snapshot_date >= $1
+          AND snapshot_date <= $2
+        GROUP BY snapshot_date
+        ORDER BY snapshot_date
+    """
+    rows = await pool.fetch(sql, start_date, end_date)
+
+    # 按 interval_days 采样：保留索引为 0, interval, 2*interval, … 的行
+    sampled = [r for i, r in enumerate(rows) if i % interval_days == 0]
+
+    sim_factor = Decimal(str(1 + sim_eth_price_distance / 100))
+    result: list[PositionPeriodItem] = []
+    for r in sampled:
+        eth_price = Decimal(str(r["eth_price"]))
+        sim_price = eth_price * sim_factor
+        total_eth = Decimal(str(r["total_eth"]))
+        result.append(
+            PositionPeriodItem(
+                snapshot_date=str(r["snapshot_date"]),
+                count=str(r["cnt"]),
+                total_eth_amount=_fmt(total_eth, 6),
+                total_usd=_fmt(total_eth * sim_price),
+                eth_price=_fmt(eth_price),
+                sim_eth_price=_fmt(sim_price),
+            )
+        )
+    return result

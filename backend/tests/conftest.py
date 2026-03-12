@@ -16,6 +16,7 @@ from aave_crawler.api.schemas import (
     LiquidationPeriodItem,
     LiquidationSimItem,
     LiquidationSimResponse,
+    PositionPeriodItem,
     PositionReplayResponse,
     PositionResponse,
     PositionSnapshotPoint,
@@ -325,6 +326,33 @@ MOCK_TX_HISTORY_RESPONSE = TxHistoryResponse(
         ),
     ],
 )
+
+MOCK_POSITIONS_PERIOD = [
+    PositionPeriodItem(
+        snapshot_date="2025-01-01",
+        count="120",
+        total_eth_amount="350.000000",
+        total_usd="1050000.00",
+        eth_price="3000.00",
+        sim_eth_price="3000.00",
+    ),
+    PositionPeriodItem(
+        snapshot_date="2025-01-02",
+        count="125",
+        total_eth_amount="360.000000",
+        total_usd="1080000.00",
+        eth_price="3000.00",
+        sim_eth_price="3000.00",
+    ),
+    PositionPeriodItem(
+        snapshot_date="2025-01-03",
+        count="118",
+        total_eth_amount="345.000000",
+        total_usd="931500.00",
+        eth_price="3000.00",
+        sim_eth_price="2700.00",
+    ),
+]
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 

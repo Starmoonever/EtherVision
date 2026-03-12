@@ -242,6 +242,19 @@ class ShortLiqPeriodItem(BaseModel):
     )
 
 
+class PositionPeriodItem(BaseModel):
+    """日级仓位统计序列的单个数据点。"""
+
+    snapshot_date: str = Field(description="快照日期（UTC，格式 YYYY-MM-DD）")
+    count: str = Field(description="当日有 ETH 抵押品的仓位数量")
+    total_eth_amount: str = Field(description="ETH/WETH 抵押品合计数量（ETH 单位）")
+    total_usd: str = Field(description="以模拟 ETH 价格计算的 USD 总估值")
+    eth_price: str = Field(description="当日实际 ETH/USD 价格")
+    sim_eth_price: str = Field(
+        description="模拟 ETH 价格（eth_price × (1 + sim_eth_price_distance / 100)）"
+    )
+
+
 class BorrowUserPositionResponse(BaseModel):
     """借贷端单用户仓位详情：仅返回借贷端专属字段，不与 /user/position 重叠。"""
 
