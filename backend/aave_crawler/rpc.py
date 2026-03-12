@@ -464,6 +464,7 @@ async def fetch_user_position_at_block(
     block_number: int,
     semaphore: asyncio.Semaphore,
     contracts: ProtocolContracts = CONTRACTS_V3,
+    block_prices: "dict[str, int] | None" = None,
 ) -> "tuple[UserPosition, int] | object | None":
     """RPC 重放：用 eth_call 查询用户在指定区块时刻的链上仓位（真实值，无利息误差）。
 
@@ -471,6 +472,9 @@ async def fetch_user_position_at_block(
     - (UserPosition, eth_price_raw) : 有效仓位，eth_price_raw 为 WETH 8 位 USD 原始值
     - EMPTY_POSITION               : 该区块用户无仓位（collateral == debt == 0）
     - None                         : RPC 调用失败
+
+    block_prices：可选的区块级预取价格（USD/8dec），由 fetch_block_prices() 提供。
+    传入后跳过每用户重复的 getAssetPrice 调用，可大幅减少 archive 节点 RPC 请求数。
     """
     async with semaphore:
         try:
@@ -497,7 +501,6 @@ async def fetch_user_position_at_block(
             )
             oracle_contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
 
-            # 并发：所有 reserve 明细 + 全量价格（均 at block_number）
             reserve_tasks = [
                 data_contract.functions.getUserReserveData(
                     AsyncWeb3.to_checksum_address(rt.token_address),
@@ -505,27 +508,35 @@ async def fetch_user_position_at_block(
                 ).call(block_identifier=block_number)
                 for rt in reserve_tokens
             ]
-            # 逐资产查询价格：历史块上新上线的 token 在老版 oracle 中不存在会 revert，
-            # 批量接口 getAssetsPrices 一旦有任意未知地址就整体失败；
-            # 改用单资产 getAssetPrice 并发 + return_exceptions，过滤失败项。
-            price_tasks = [
-                oracle_contract.functions.getAssetPrice(
-                    AsyncWeb3.to_checksum_address(a)
-                ).call(block_identifier=block_number)
-                for a in token_addresses
-            ]
 
-            all_results = await asyncio.gather(
-                *reserve_tasks, *price_tasks, return_exceptions=True
-            )
-            reserve_results = all_results[: len(reserve_tasks)]
-            price_results = all_results[len(reserve_tasks) :]
+            if block_prices is not None:
+                # 区块级价格已预取，只需拉取 per-user 的 reserve 余额数据
+                reserve_results = await asyncio.gather(
+                    *reserve_tasks, return_exceptions=True
+                )
+                asset_prices: dict[str, int] = block_prices
+            else:
+                # 逐资产查询价格：历史块上新上线的 token 在老版 oracle 中不存在会 revert，
+                # 批量接口 getAssetsPrices 一旦有任意未知地址就整体失败；
+                # 改用单资产 getAssetPrice 并发 + return_exceptions，过滤失败项。
+                price_tasks = [
+                    oracle_contract.functions.getAssetPrice(
+                        AsyncWeb3.to_checksum_address(a)
+                    ).call(block_identifier=block_number)
+                    for a in token_addresses
+                ]
 
-            asset_prices: dict[str, int] = {
-                addr: p
-                for addr, p in zip(token_addresses, price_results)
-                if not isinstance(p, Exception) and isinstance(p, int) and p > 0
-            }
+                all_results = await asyncio.gather(
+                    *reserve_tasks, *price_tasks, return_exceptions=True
+                )
+                reserve_results = all_results[: len(reserve_tasks)]
+                price_results = all_results[len(reserve_tasks) :]
+
+                asset_prices = {
+                    addr: p
+                    for addr, p in zip(token_addresses, price_results)
+                    if not isinstance(p, Exception) and isinstance(p, int) and p > 0
+                }
 
             if not asset_prices:
                 logger.warning(
@@ -540,54 +551,67 @@ async def fetch_user_position_at_block(
             # 优先使用 Chainlink ETH/USD 聚合器，因其从 2019 年起即可用；
             # V3 Aave oracle 于 2023-01 才部署，无法用于更早的历史块。
             if contracts.oracle_price_in_eth:
-                eth_usd_raw: int = 0
-
-                # 1️⃣ Chainlink ETH/USD（主备）
-                try:
-                    cl_feed = w3.eth.contract(
-                        address=CHAINLINK_ETH_USD, abi=CHAINLINK_ETH_USD_ABI
-                    )
-                    _round = await cl_feed.functions.latestRoundData().call(
-                        block_identifier=block_number
-                    )
-                    # answer 为 int256，正常情况 > 0
-                    if _round[1] > 0:
-                        eth_usd_raw = int(_round[1])
-                except Exception as _cl_exc:
-                    logger.debug(
-                        "Chainlink ETH/USD 查询失败 block=%d: %s", block_number, _cl_exc
-                    )
-
-                # 2️⃣ 若 Chainlink 失败，降级到 V3 Aave oracle
-                if eth_usd_raw == 0:
-                    try:
-                        v3_oracle = w3.eth.contract(
-                            address=CONTRACTS_V3.oracle, abi=ORACLE_ABI
-                        )
-                        eth_usd_raw = await v3_oracle.functions.getAssetPrice(
-                            WETH_ADDRESS
-                        ).call(block_identifier=block_number)
-                    except Exception as _v3_exc:
+                if block_prices is not None:
+                    # 价格已由 fetch_block_prices 归一化，直接取 WETH 价格作为 eth_usd_raw
+                    eth_usd_raw: int = block_prices.get(WETH_ADDRESS, 0)
+                    if eth_usd_raw == 0:
                         logger.warning(
-                            "V2 ETH/USD 归一化失败 block=%d (Chainlink+V3均失败): %s",
+                            "V2 ETH/USD 归一化失败 block=%d（预取价格中无 WETH），跳过本仓位",
                             block_number,
-                            _v3_exc,
+                        )
+                        return None
+                else:
+                    eth_usd_raw = 0
+
+                    # 1️⃣ Chainlink ETH/USD（主备）
+                    try:
+                        cl_feed = w3.eth.contract(
+                            address=CHAINLINK_ETH_USD, abi=CHAINLINK_ETH_USD_ABI
+                        )
+                        _round = await cl_feed.functions.latestRoundData().call(
+                            block_identifier=block_number
+                        )
+                        # answer 为 int256，正常情况 > 0
+                        if _round[1] > 0:
+                            eth_usd_raw = int(_round[1])
+                    except Exception as _cl_exc:
+                        logger.debug(
+                            "Chainlink ETH/USD 查询失败 block=%d: %s",
+                            block_number,
+                            _cl_exc,
                         )
 
-                if eth_usd_raw == 0:
-                    # 两个数据源均失败：V2 oracle 价格仍为 ETH/18dec 原始值，
-                    # 无法归一化为 USD，继续写入会产生严重失真（如 $100亿）。
-                    # 返回 None 让调用方跳过本 tx，等下次重试。
-                    logger.warning(
-                        "V2 ETH/USD 归一化失败 block=%d，跳过本仓位",
-                        block_number,
-                    )
-                    return None
+                    # 2️⃣ 若 Chainlink 失败，降级到 V3 Aave oracle
+                    if eth_usd_raw == 0:
+                        try:
+                            v3_oracle = w3.eth.contract(
+                                address=CONTRACTS_V3.oracle, abi=ORACLE_ABI
+                            )
+                            eth_usd_raw = await v3_oracle.functions.getAssetPrice(
+                                WETH_ADDRESS
+                            ).call(block_identifier=block_number)
+                        except Exception as _v3_exc:
+                            logger.warning(
+                                "V2 ETH/USD 归一化失败 block=%d (Chainlink+V3均失败): %s",
+                                block_number,
+                                _v3_exc,
+                            )
 
-                asset_prices = {
-                    addr: (price * eth_usd_raw) // (10**18)
-                    for addr, price in asset_prices.items()
-                }
+                    if eth_usd_raw == 0:
+                        # 两个数据源均失败：V2 oracle 价格仍为 ETH/18dec 原始值，
+                        # 无法归一化为 USD，继续写入会产生严重失真（如 $100亿）。
+                        # 返回 None 让调用方跳过本 tx，等下次重试。
+                        logger.warning(
+                            "V2 ETH/USD 归一化失败 block=%d，跳过本仓位",
+                            block_number,
+                        )
+                        return None
+
+                    asset_prices = {
+                        addr: (price * eth_usd_raw) // (10**18)
+                        for addr, price in asset_prices.items()
+                    }
+
                 # AccountSummary 三个 "base" 字段同步归一化为 USD/8dec
                 summary = AccountSummary(
                     total_collateral_base=(summary.total_collateral_base * eth_usd_raw)
@@ -658,3 +682,86 @@ async def fetch_user_position_at_block(
                 exc,
             )
             return None
+
+
+async def fetch_block_prices(
+    w3: AsyncWeb3,
+    contracts: ProtocolContracts,
+    token_addresses: list[str],
+    block_number: int,
+) -> dict[str, int]:
+    """预取指定区块所有资产的 USD 价格（8 位精度），供同一区块所有用户共用。
+
+    V3 oracle 直接返回 USD/8dec；V2 oracle 返回 ETH/18dec，通过 Chainlink ETH/USD
+    聚合器归一化。返回值中 WETH_ADDRESS 键存储 eth_usd_raw（8 位 USD），供
+    fetch_user_position_at_block 读取用于 AccountSummary 归一化。
+
+    若无法获取 ETH/USD 价格（仅 V2），返回空字典（调用方应跳过本块）。
+    """
+    oracle_contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
+
+    # 逐资产并发查询（批量接口在历史块可能因未知 token revert）
+    checksum_addresses = [AsyncWeb3.to_checksum_address(a) for a in token_addresses]
+    price_tasks = [
+        oracle_contract.functions.getAssetPrice(addr).call(
+            block_identifier=block_number
+        )
+        for addr in checksum_addresses
+    ]
+    price_results = await asyncio.gather(*price_tasks, return_exceptions=True)
+
+    raw_prices: dict[str, int] = {
+        addr: p
+        for addr, p in zip(token_addresses, price_results)
+        if not isinstance(p, Exception) and isinstance(p, int) and p > 0
+    }
+
+    if not contracts.oracle_price_in_eth:
+        # V3: prices already in USD/8dec
+        return raw_prices
+
+    # V2: prices in ETH/18dec → normalize via Chainlink ETH/USD
+    eth_usd_raw: int = 0
+
+    # 1️⃣ Chainlink ETH/USD（主备，2019 年起可用）
+    try:
+        cl_feed = w3.eth.contract(address=CHAINLINK_ETH_USD, abi=CHAINLINK_ETH_USD_ABI)
+        _round = await cl_feed.functions.latestRoundData().call(
+            block_identifier=block_number
+        )
+        if _round[1] > 0:
+            eth_usd_raw = int(_round[1])
+    except Exception as _cl_exc:
+        logger.debug(
+            "fetch_block_prices: Chainlink ETH/USD 查询失败 block=%d: %s",
+            block_number,
+            _cl_exc,
+        )
+
+    # 2️⃣ 降级到 V3 Aave oracle
+    if eth_usd_raw == 0:
+        try:
+            v3_oracle = w3.eth.contract(address=CONTRACTS_V3.oracle, abi=ORACLE_ABI)
+            eth_usd_raw = await v3_oracle.functions.getAssetPrice(WETH_ADDRESS).call(
+                block_identifier=block_number
+            )
+        except Exception as _v3_exc:
+            logger.warning(
+                "fetch_block_prices: V2 ETH/USD 归一化失败 block=%d (Chainlink+V3均失败): %s",
+                block_number,
+                _v3_exc,
+            )
+
+    if eth_usd_raw == 0:
+        logger.warning(
+            "fetch_block_prices: block=%d ETH/USD 价格不可用，跳过本块", block_number
+        )
+        return {}
+
+    # 归一化：price_usd = (price_eth * eth_usd_raw) // 10^18
+    normalized: dict[str, int] = {
+        addr: (price * eth_usd_raw) // (10**18) for addr, price in raw_prices.items()
+    }
+    # 存入 eth_usd_raw（WETH 键），供 fetch_user_position_at_block 读取以归一化 AccountSummary
+    normalized[WETH_ADDRESS] = eth_usd_raw
+    return normalized

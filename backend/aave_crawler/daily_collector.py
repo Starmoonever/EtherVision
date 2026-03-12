@@ -42,6 +42,7 @@ from .rpc import (
     EMPTY_POSITION,
     ProtocolContracts,
     build_web3,
+    fetch_block_prices,
     fetch_user_position_at_block,
     get_all_reserve_tokens,
     get_contracts,
@@ -190,13 +191,16 @@ async def fetch_daily_users(pool: asyncpg.Pool, protocol: str) -> list[str]:
 # ── 已完成日期 ─────────────────────────────────────────────────────────────────
 
 
-async def get_completed_dates(pool: asyncpg.Pool, protocol: str) -> set[date]:
-    """返回已采集的日期集合（用于 --skip-existing 断点续传）。"""
+async def get_collected_users(
+    pool: asyncpg.Pool, protocol: str, snapshot_date: date
+) -> set[str]:
+    """返回指定日期已采集的用户地址集合（用于用户粒度断点续传）。"""
     tables = get_daily_tables(protocol)
     rows = await pool.fetch(
-        f'SELECT DISTINCT snapshot_date FROM loan."{tables.positions}"'
+        f'SELECT user_address FROM loan."{tables.positions}" WHERE snapshot_date = $1',
+        snapshot_date,
     )
-    return {r["snapshot_date"] for r in rows}
+    return {r["user_address"] for r in rows}
 
 
 # ── UPSERT ────────────────────────────────────────────────────────────────────
@@ -448,14 +452,7 @@ async def run_daily_collector(
         cur += timedelta(days=1)
 
     if skip_existing:
-        done = await get_completed_dates(pool, protocol)
-        before = len(days)
-        days = [d for d in days if d not in done]
-        logger.info(
-            "--skip-existing：跳过 %d 个已有日期，剩余 %d 天待采集",
-            before - len(days),
-            len(days),
-        )
+        logger.info("--skip-existing：启用用户粒度断点续传，每天开始前查询已采集用户")
 
     if not days:
         logger.info("所有日期均已采集，退出")
@@ -471,13 +468,20 @@ async def run_daily_collector(
         "（dry-run）" if dry_run else "",
     )
 
-    for day in days:
-        target_ts = int(
-            datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp()
+    # 并发预取所有天的区块号（_block_at_timestamp 内部有 DB 缩界 + 二分搜索，IO 密集）
+    day_timestamps = [
+        int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+        for d in days
+    ]
+    block_numbers: list[int] = list(
+        await asyncio.gather(
+            *[_block_at_timestamp(w3, ts, pool) for ts in day_timestamps]
         )
+    )
 
-        # 找到当天 00:00 UTC 对应区块（_block_at_timestamp 用 DB 缩界加速二分搜索）
-        block_number = await _block_at_timestamp(w3, target_ts, pool)
+    token_addresses = [rt.token_address for rt in reserve_tokens]
+
+    for day, block_number in zip(days, block_numbers):
         raw_block = await w3.eth.get_block(block_number)
         block_ts_raw: int = raw_block["timestamp"]  # type: ignore[typeddict-item]
         block_ts = datetime.fromtimestamp(block_ts_raw, tz=timezone.utc)
@@ -488,6 +492,32 @@ async def run_daily_collector(
             block_number,
             block_ts.strftime("%Y-%m-%dT%H:%M:%S"),
         )
+
+        # 预取本块所有资产价格（每块只查一次，所有用户共用）
+        block_prices = await fetch_block_prices(
+            w3, contracts, token_addresses, block_number
+        )
+        if not block_prices:
+            logger.warning(
+                "日期 %s block #%d 价格预取失败，跳过本日", day, block_number
+            )
+            continue
+
+        # --skip-existing：排除当天已采集用户，避免重复 RPC 调用
+        day_users = users
+        if skip_existing:
+            collected = await get_collected_users(pool, protocol, day)
+            if collected:
+                day_users = [u for u in users if u not in collected]
+                logger.info(
+                    "日期 %s：已采集 %d 用户，本次跳过，剩余 %d 用户待采集",
+                    day,
+                    len(collected),
+                    len(day_users),
+                )
+                if not day_users:
+                    logger.info("日期 %s 已全部采集，跳过", day)
+                    continue
 
         semaphore = asyncio.Semaphore(cfg.crawler.concurrency)
         all_tasks = [
@@ -500,16 +530,17 @@ async def run_daily_collector(
                     block_number,
                     semaphore,
                     contracts,
+                    block_prices=block_prices,
                 )
             )
-            for addr in users
+            for addr in day_users
         ]
 
         pending: list[tuple[UserPosition, int]] = []
         ok = skip_count = fail = 0
         db_task: asyncio.Task | None = None
 
-        with tqdm(total=len(users), desc=str(day), unit="user") as pbar:
+        with tqdm(total=len(day_users), desc=str(day), unit="user") as pbar:
             for coro in asyncio.as_completed(all_tasks):
                 result = await coro
                 pbar.update(1)
