@@ -8,10 +8,6 @@ interface Props {
   version: 'v2' | 'v3';
 }
 
-// Type guard
-function isBorrowPosition(data: UserPosition | BorrowPosition): data is BorrowPosition {
-  return (data as BorrowPosition).weth_debt_amount !== undefined;
-}
 
 // 健康因子颜色逻辑保持不变
 function healthColor(hfStr: string): string {
@@ -66,68 +62,10 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
 
   const hfColor = healthColor(summary.health_factor);
 
-  // Render Borrow Position View
-  if (isBorrowPosition(summary)) {
-    return (
-      <div className="card summary-card">
-        <div className="card-header">
-          <span className="card-title">账户概览 (借贷端)</span>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <span
-              className="badge"
-              style={{
-                background: '#1e293b',
-                color: '#a78bfa',
-                border: '1px solid #4c1d95',
-                fontWeight: 700,
-              }}
-            >
-              {versionLabel}
-            </span>
-            <span className="address-badge" title={address}>
-              {address.slice(0, 6)}…{address.slice(-4)}
-            </span>
-          </div>
-        </div>
-  
-        <div className="summary-grid">
-          <div className="metric-box">
-            <span className="metric-label">借出 ETH 数量</span>
-            <span className="metric-value yellow">
-              {parseFloat(summary.weth_debt_amount).toLocaleString('en-US', {
-                minimumFractionDigits: 6,
-                maximumFractionDigits: 6,
-              })}
-            </span>
-          </div>
-  
-          <div className="metric-box">
-            <span className="metric-label">借出 ETH 价值 (USD)</span>
-            <span className="metric-value green">
-              $
-              {parseFloat(summary.weth_debt_usd).toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
-            </span>
-          </div>
-  
-          <div className="metric-box">
-            <span className="metric-label">健康因子</span>
-            <span className="metric-value" style={{ color: hfColor, fontSize: '1.6rem' }}>
-              {summary.health_factor}
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Render Collateral Position View (Default)
   return (
     <div className="card summary-card">
       <div className="card-header">
-        <span className="card-title">账户概览 (抵押端)</span>
+        <span className="card-title">账户概览</span>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <span
             className="badge"
@@ -148,17 +86,18 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
 
       <div className="summary-grid">
         <div className="metric-box">
-          <span className="metric-label">抵押ETH数量</span>
-          <span className="metric-value yellow">
-            {parseFloat(summary.eth_collateral_amount).toLocaleString('en-US', {
-              minimumFractionDigits: 6,
-              maximumFractionDigits: 6,
+          <span className="metric-label">总抵押资产价值 (USD)</span>
+          <span className="metric-value green">
+            $
+            {parseFloat(summary.total_collateral_usd).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
             })}
           </span>
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">抵押ETH价值 (USD)</span>
+          <span className="metric-label">抵押 ETH 价值 (USD)</span>
           <span className="metric-value green">
             $
             {parseFloat(summary.eth_collateral_usd).toLocaleString('en-US', {
@@ -169,10 +108,10 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">总抵押 (USD)</span>
-          <span className="metric-value green">
+          <span className="metric-label">总债务价值 (USD)</span>
+          <span className="metric-value red">
             $
-            {parseFloat(summary.total_collateral_usd).toLocaleString('en-US', {
+            {parseFloat(summary.total_debt_usd).toLocaleString('en-US', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })}
@@ -191,21 +130,10 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">总债务 (USD)</span>
+          <span className="metric-label">借出 ETH 价值 (USD)</span>
           <span className="metric-value red">
             $
-            {parseFloat(summary.total_debt_usd).toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">清算价格 (USD)</span>
-          <span className="metric-value blue">
-            $
-            {parseFloat(summary.liq_price).toLocaleString('en-US', {
+            {parseFloat(summary.weth_debt_usd || '0').toLocaleString('en-US', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })}
@@ -220,13 +148,14 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">当前 LTV</span>
-          <span className="metric-value">{summary.ltv}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">清算阈值</span>
-          <span className="metric-value">{summary.liq_threshold}</span>
+          <span className="metric-label">清算价格 (USD)</span>
+          <span className="metric-value blue">
+            $
+            {parseFloat(summary.liq_price).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </span>
         </div>
       </div>
     </div>

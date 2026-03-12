@@ -4,7 +4,7 @@ import { SummaryCard } from './components/SummaryCard';
 import { PositionTable } from './components/PositionTable';
 import { PositionReplayChart } from './components/PositionReplayChart';
 import { MarketAssessment } from './components/MarketAssessment';
-import { fetchUserPosition, fetchUserBorrowPosition } from './api';
+import { fetchUserPosition } from './api';
 import type { UserPosition, BorrowPosition } from './api';
 import './App.css';
 
@@ -23,7 +23,6 @@ export default function App() {
   const [marketVersion, setMarketVersion] = useState<'v2' | 'v3' | 'all'>('all'); // 宏观市场版本
   const [marketSide, setMarketSide] = useState<'collateral' | 'borrow'>('collateral'); // 宏观市场方向
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3'); // 个人账户分析版本
-  const [positionSide, setPositionSide] = useState<'collateral' | 'borrow'>('collateral'); // 个人账户分析方向
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
 
@@ -45,16 +44,11 @@ export default function App() {
 
   useEffect(() => {
     if (!queriedAddress) return;
-
+    
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
-      setState((prev) => ({ ...prev, loading: true, notFound: false }));
+      setState(prev => ({ ...prev, loading: true, notFound: false }));
       try {
-        let data;
-        if (positionSide === 'collateral') {
-          data = await fetchUserPosition(queriedAddress, version);
-        } else {
-          data = await fetchUserBorrowPosition(queriedAddress, version);
-        }
+        const data = await fetchUserPosition(queriedAddress, version);
         setState({ data, loading: false, notFound: false });
       } catch (err) {
         if (err instanceof Error && err.message.includes('404')) {
@@ -72,7 +66,7 @@ export default function App() {
     } else {
       load('v3', setV3State);
     }
-  }, [queriedAddress, personalVersion, positionSide]);
+  }, [queriedAddress, personalVersion]);
 
   return (
     <div className="app">
@@ -129,40 +123,6 @@ export default function App() {
 
           {activeTab === 'personal' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div className="side-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
-                <button
-                  onClick={() => setPositionSide('collateral')}
-                  style={{
-                    background: positionSide === 'collateral' ? '#3b82f6' : 'transparent',
-                    color: positionSide === 'collateral' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  抵押端
-                </button>
-                <button
-                  onClick={() => setPositionSide('borrow')}
-                  style={{
-                    background: positionSide === 'borrow' ? '#3b82f6' : 'transparent',
-                    color: positionSide === 'borrow' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  借贷端
-                </button>
-              </div>
               <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
                 <button
                   onClick={() => setPersonalVersion('v2')}

@@ -27,6 +27,7 @@ interface ReplayPoint {
   available_borrows_usd: number;
   health_factor: number;
   operation_type: string;
+  original_operation_type: string;
 }
 
 const CustomTooltip = ({ active, payload, label, onDetailsClick }: any) => {
@@ -48,6 +49,11 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick }: any) => {
         </p>
         <p style={{ color: '#fbbf24', fontSize: '0.8rem', marginBottom: '5px' }}>
           类型: {point.operation_type}
+          {point.original_operation_type && point.original_operation_type !== point.operation_type && point.original_operation_type !== 'unknown' && (
+             <span style={{ color: '#94a3b8', marginLeft: '4px' }}>
+               ({point.original_operation_type})
+             </span>
+          )}
         </p>
         {payload.map((entry: any, index: number) => (
           <p key={index} style={{ color: entry.color, margin: 0, fontSize: '0.9rem' }}>
@@ -229,7 +235,8 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             const pad = (n: number) => n.toString().padStart(2, '0');
             const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-            let operation_type = pt.operation_type || 'unknown';
+            const original_operation_type = pt.operation_type || 'unknown';
+            let operation_type = original_operation_type;
             let liq_price = parseFloat(pt.liq_price || '0');
             const eth_price_usd = parseFloat(pt.eth_price_usd || '0');
             const eth_collateral_usd = parseFloat(pt.eth_collateral_usd || '0');
@@ -259,6 +266,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
               available_borrows_usd: parseFloat(pt.available_borrows_usd || '0'),
               health_factor: parseFloat(pt.health_factor || '0'),
               operation_type,
+              original_operation_type,
             };
           })
           .sort(
@@ -321,7 +329,10 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
 
     // If a specific type is selected, filter by that type as well
     if (selectedType !== 'all') {
-        filtered = filtered.filter(pt => pt.operation_type === selectedType);
+        filtered = filtered.filter(pt => 
+          pt.operation_type === selectedType || 
+          pt.original_operation_type === selectedType
+        );
     }
 
     setData(filtered);
@@ -429,25 +440,68 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         </div>
       </div>
 
-      <div style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {['all', 'borrow', 'repay', 'deposit', 'withdraw', 'liquidate', 'flash loan', '杠杆质押(存入LST，借出WETH)'].map(type => (
-          <button
-            key={type}
-            onClick={() => setSelectedType(type)}
-            style={{
-              padding: '2px 8px',
-              fontSize: '0.75rem',
-              borderRadius: '4px',
-              border: '1px solid #334155',
-              background: selectedType === type ? '#3b82f6' : 'transparent',
-              color: selectedType === type ? '#fff' : '#94a3b8',
-              cursor: 'pointer',
-              textTransform: 'capitalize',
-            }}
-          >
-            {type}
-          </button>
-        ))}
+      <div style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+        
+        {/* Basic Types */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>基本交易类型:</span>
+            <button
+                onClick={() => setSelectedType('all')}
+                style={{
+                padding: '2px 8px',
+                fontSize: '0.75rem',
+                borderRadius: '4px',
+                border: '1px solid #334155',
+                background: selectedType === 'all' ? '#3b82f6' : 'transparent',
+                color: selectedType === 'all' ? '#fff' : '#94a3b8',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+                }}
+            >
+                All
+            </button>
+            {['borrow', 'repay', 'deposit', 'withdraw'].map(type => (
+            <button
+                key={type}
+                onClick={() => setSelectedType(type)}
+                style={{
+                padding: '2px 8px',
+                fontSize: '0.75rem',
+                borderRadius: '4px',
+                border: '1px solid #334155',
+                background: selectedType === type ? '#3b82f6' : 'transparent',
+                color: selectedType === type ? '#fff' : '#94a3b8',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+                }}
+            >
+                {type}
+            </button>
+            ))}
+        </div>
+
+        {/* Advanced Types */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>混合交易类型:</span>
+            {['liquidate', 'flash loan', '杠杆质押(存入LST，借出WETH)'].map(type => (
+            <button
+                key={type}
+                onClick={() => setSelectedType(type)}
+                style={{
+                padding: '2px 8px',
+                fontSize: '0.75rem',
+                borderRadius: '4px',
+                border: '1px solid #334155',
+                background: selectedType === type ? '#3b82f6' : 'transparent',
+                color: selectedType === type ? '#fff' : '#94a3b8',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+                }}
+            >
+                {type}
+            </button>
+            ))}
+        </div>
       </div>
 
       <div style={{ height: 550 }}>
@@ -521,21 +575,16 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 const { cx, cy, payload } = props;
                 
                 // If filtering by specific type, show prominent dots
-                if (selectedType !== 'all') {
-                    return (
-                        <circle 
-                            key={payload.timestamp} 
-                            cx={cx} 
-                            cy={cy} 
-                            r={3} 
-                            fill="#fff" 
-                            stroke="none"
-                        />
-                      );
-                }
-                
-                // Default: no dots for 'all' view to keep chart clean
-                return <circle r={0} cx={cx} cy={cy} />;
+                return (
+                    <circle 
+                        key={payload.timestamp} 
+                        cx={cx} 
+                        cy={cy} 
+                        r={3} 
+                        fill="#fff" 
+                        stroke="none"
+                    />
+                  );
               }}
               name={primaryMetric === 'eth_collateral_usd' ? '抵押ETH价值' : '贷出ETH价值'}
             />

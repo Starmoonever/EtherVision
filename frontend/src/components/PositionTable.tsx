@@ -17,9 +17,6 @@ interface PositionTableProps {
   version: 'v2' | 'v3';
 }
 
-function isBorrowPosition(data: UserPosition | BorrowPosition): data is BorrowPosition {
-  return (data as BorrowPosition).weth_debt_amount !== undefined;
-}
 
 export function PositionTable({ data: position, loading, notFound, version }: PositionTableProps) {
   const versionLabel = version.toUpperCase();
@@ -86,69 +83,28 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
 
   if (!position) return null;
 
-  let supplies: PositionRow[] = [];
-  let borrows: PositionRow[] = [];
+  // 筛选抵押资产: use_as_collateral 为 true
+  const supplies: PositionRow[] = position.reserves
+    .filter(r => r.use_as_collateral)
+    .map(r => ({
+      tokenAddress: r.token_address,
+      symbol: r.symbol,
+      priceUSD: parseFloat(r.price_usd || '0'),
+      balance: r.supply_amount,
+      valueUSD: parseFloat(r.supply_usd || '0'),
+      isCollateral: true
+    }));
 
-  if (isBorrowPosition(position)) {
-    // 处理借贷端数据 (Detailed Reserves)
-    position.reserves.forEach(r => {
-        const supplyAmount = parseFloat(r.supply_amount || '0');
-        const debtAmount = parseFloat(r.total_debt_amount || '0');
-        
-        if (supplyAmount > 0) {
-            supplies.push({
-                tokenAddress: r.token_address,
-                symbol: r.symbol,
-                priceUSD: parseFloat(r.price_usd || '0'),
-                balance: r.supply_amount,
-                valueUSD: parseFloat(r.supply_usd || '0'),
-                isCollateral: r.use_as_collateral
-            });
-        }
-
-        if (debtAmount > 0) {
-            borrows.push({
-                tokenAddress: r.token_address, // or use symbol as key if address not unique per row (unlikely)
-                symbol: r.symbol,
-                priceUSD: parseFloat(r.price_usd || '0'),
-                balance: r.total_debt_amount,
-                valueUSD: parseFloat(r.total_debt_usd || '0'),
-            });
-        }
-    });
-  } else {
-    // 处理抵押端数据 (Simplified UserPosition)
-    // 解析数值
-    const ethAmount = parseFloat(position.eth_collateral_amount || '0');
-    const ethValue = parseFloat(position.eth_collateral_usd || '0');
-    const debtValue = parseFloat(position.total_debt_usd || '0');
-
-    // 构建供给列表 (仅 ETH)
-    if (ethAmount > 0) {
-      supplies.push({
-        tokenAddress: 'ETH',
-        symbol: 'ETH',
-        priceUSD: ethAmount > 0 ? ethValue / ethAmount : 0,
-        balance: position.eth_collateral_amount,
-        valueUSD: ethValue,
-        isCollateral: true // Assuming ETH is collateral in this view
-      });
-    }
-
-    // 构建借贷列表 (仅显示总债务)
-    if (debtValue > 0) {
-      borrows.push({
-        tokenAddress: 'TOTAL_DEBT',
-        symbol: 'Total Debt',
-        priceUSD: 1, // Placeholder
-        balance: position.total_debt_usd, // Showing value as balance for Total Debt row? Or maybe '0'? 
-        // Original code used total_debt_usd as balance? No, let's check.
-        // original: balance: position.total_debt_usd
-        // It seems in the simplified view, balance was used for value.
-        valueUSD: debtValue,
-      });
-    }
-  }
+  // 筛选负债: total_debt_amount 不为 0
+  const borrows: PositionRow[] = position.reserves
+    .filter(r => parseFloat(r.total_debt_amount || '0') !== 0)
+    .map(r => ({
+      tokenAddress: r.token_address,
+      symbol: r.symbol,
+      priceUSD: parseFloat(r.price_usd || '0'),
+      balance: r.total_debt_amount,
+      valueUSD: parseFloat(r.total_debt_usd || '0')
+    }));
 
   return (
     <div className="positions-wrap">
@@ -171,9 +127,8 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                 <tr>
                   <th>资产</th>
                   <th className="right">单价 (USD)</th>
-                  <th className="right">余额</th>
-                  <th className="right">估值 (USD)</th>
-                  <th className="center">用作抵押品</th>
+                  <th className="right">抵押数量</th>
+                  <th className="right">抵押价值 (USD)</th>
                 </tr>
               </thead>
               <tbody>
@@ -202,15 +157,6 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                         maximumFractionDigits: 2,
                       })}
                     </td>
-                    <td className="center">
-                      {r.isCollateral !== undefined ? (
-                          <span className={`pill ${r.isCollateral ? 'green-pill' : 'gray-pill'}`}>
-                            {r.isCollateral ? '是' : '否'}
-                          </span>
-                      ) : (
-                          <span className="pill green-pill">是</span> // Default for old view
-                      )}
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -225,11 +171,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className="card-title">负债 (Borrowed)</span>
             {headerBadge_found}
-            {/* Show available borrows only for UserPosition or if we had it in BorrowPosition? 
-                BorrowPosition doesn't seem to have available_borrows_usd in JSON. 
-                So hide it if not present. 
-            */}
-            {!isBorrowPosition(position) && Number(position.available_borrows_usd) > 0 && (
+            {Number(position.available_borrows_usd) > 0 && (
               <span
                 className="badge"
                 style={{
@@ -259,8 +201,9 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
               <thead>
                 <tr>
                   <th>资产</th>
-                  <th className="right">合计借贷 (USD)</th>
-                  <th className="right">估值 (USD)</th>
+                  <th className="right">单价 (USD)</th>
+                  <th className="right">借出数量</th>
+                  <th className="right">借出价值 (USD)</th>
                 </tr>
               </thead>
               <tbody>
@@ -269,10 +212,17 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                     <td>
                       <span className="token-symbol">{r.symbol}</span>
                     </td>
-                    <td className="right mono bold">
-                      {parseFloat(r.balance).toLocaleString(undefined, {
+                    <td className="right mono">
+                      $
+                      {r.priceUSD.toLocaleString(undefined, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    <td className="right mono bold">
+                      {parseFloat(r.balance).toLocaleString(undefined, {
+                        minimumFractionDigits: 6,
+                        maximumFractionDigits: 6,
                       })}
                     </td>
                     <td className="right mono bold red-text">
