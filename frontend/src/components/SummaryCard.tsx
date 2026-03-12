@@ -1,12 +1,13 @@
-import type { UserPosition } from '../api';
+import type { UserPosition, BorrowPosition } from '../api';
 
 interface Props {
   address: string;
-  data: UserPosition | null;
+  data: UserPosition | BorrowPosition | null;
   loading: boolean;
   notFound: boolean;
   version: 'v2' | 'v3';
 }
+
 
 // 健康因子颜色逻辑保持不变
 function healthColor(hfStr: string): string {
@@ -85,17 +86,18 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
 
       <div className="summary-grid">
         <div className="metric-box">
-          <span className="metric-label">抵押ETH数量</span>
-          <span className="metric-value yellow">
-            {parseFloat(summary.eth_collateral_amount).toLocaleString('en-US', {
-              minimumFractionDigits: 6,
-              maximumFractionDigits: 6,
+          <span className="metric-label">总抵押资产价值 (USD)</span>
+          <span className="metric-value green">
+            $
+            {parseFloat(summary.total_collateral_usd).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
             })}
           </span>
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">抵押ETH价值 (USD)</span>
+          <span className="metric-label">抵押 ETH 价值 (USD)</span>
           <span className="metric-value green">
             $
             {parseFloat(summary.eth_collateral_usd).toLocaleString('en-US', {
@@ -106,10 +108,10 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">总抵押 (USD)</span>
-          <span className="metric-value green">
+          <span className="metric-label">总债务价值 (USD)</span>
+          <span className="metric-value red">
             $
-            {parseFloat(summary.total_collateral_usd).toLocaleString('en-US', {
+            {parseFloat(summary.total_debt_usd).toLocaleString('en-US', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })}
@@ -128,21 +130,10 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">总债务 (USD)</span>
+          <span className="metric-label">借出 ETH 价值 (USD)</span>
           <span className="metric-value red">
             $
-            {parseFloat(summary.total_debt_usd).toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">清算价格 (USD)</span>
-          <span className="metric-value blue">
-            $
-            {parseFloat(summary.liq_price).toLocaleString('en-US', {
+            {parseFloat(summary.weth_debt_usd || '0').toLocaleString('en-US', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })}
@@ -157,13 +148,14 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
 
         <div className="metric-box">
-          <span className="metric-label">当前 LTV</span>
-          <span className="metric-value">{summary.ltv}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">清算阈值</span>
-          <span className="metric-value">{summary.liq_threshold}</span>
+          <span className="metric-label">清算价格 (USD)</span>
+          <span className="metric-value blue">
+            $
+            {parseFloat(summary.liq_price).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </span>
         </div>
       </div>
     </div>

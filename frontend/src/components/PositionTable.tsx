@@ -1,4 +1,4 @@
-import type { UserPosition as PositionData } from '../api';
+import type { UserPosition, BorrowPosition } from '../api';
 
 // 定义用于渲染表格行的接口
 interface PositionRow {
@@ -7,14 +7,16 @@ interface PositionRow {
   priceUSD: number;
   balance: string;
   valueUSD: number;
+  isCollateral?: boolean;
 }
 
 interface PositionTableProps {
-  data: PositionData | null;
+  data: UserPosition | BorrowPosition | null;
   loading: boolean;
   notFound: boolean;
   version: 'v2' | 'v3';
 }
+
 
 export function PositionTable({ data: position, loading, notFound, version }: PositionTableProps) {
   const versionLabel = version.toUpperCase();
@@ -81,34 +83,28 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
 
   if (!position) return null;
 
-  // 解析数值
-  const ethAmount = parseFloat(position.eth_collateral_amount || '0');
-  const ethValue = parseFloat(position.eth_collateral_usd || '0');
-  const debtValue = parseFloat(position.total_debt_usd || '0');
+  // 筛选抵押资产: use_as_collateral 为 true
+  const supplies: PositionRow[] = position.reserves
+    .filter(r => r.use_as_collateral)
+    .map(r => ({
+      tokenAddress: r.token_address,
+      symbol: r.symbol,
+      priceUSD: parseFloat(r.price_usd || '0'),
+      balance: r.supply_amount,
+      valueUSD: parseFloat(r.supply_usd || '0'),
+      isCollateral: true
+    }));
 
-  // 构建供给列表 (仅 ETH)
-  const supplies: PositionRow[] = [];
-  if (ethAmount > 0) {
-    supplies.push({
-      tokenAddress: 'ETH',
-      symbol: 'ETH',
-      priceUSD: ethAmount > 0 ? ethValue / ethAmount : 0,
-      balance: position.eth_collateral_amount,
-      valueUSD: ethValue,
-    });
-  }
-
-  // 构建借贷列表 (仅显示总债务)
-  const borrows: PositionRow[] = [];
-  if (debtValue > 0) {
-    borrows.push({
-      tokenAddress: 'TOTAL_DEBT',
-      symbol: 'Total Debt',
-      priceUSD: 1,
-      balance: position.total_debt_usd,
-      valueUSD: debtValue,
-    });
-  }
+  // 筛选负债: total_debt_amount 不为 0
+  const borrows: PositionRow[] = position.reserves
+    .filter(r => parseFloat(r.total_debt_amount || '0') !== 0)
+    .map(r => ({
+      tokenAddress: r.token_address,
+      symbol: r.symbol,
+      priceUSD: parseFloat(r.price_usd || '0'),
+      balance: r.total_debt_amount,
+      valueUSD: parseFloat(r.total_debt_usd || '0')
+    }));
 
   return (
     <div className="positions-wrap">
@@ -131,9 +127,8 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                 <tr>
                   <th>资产</th>
                   <th className="right">单价 (USD)</th>
-                  <th className="right">余额</th>
-                  <th className="right">估值 (USD)</th>
-                  <th className="center">用作抵押品</th>
+                  <th className="right">抵押数量</th>
+                  <th className="right">抵押价值 (USD)</th>
                 </tr>
               </thead>
               <tbody>
@@ -161,9 +156,6 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
-                    </td>
-                    <td className="center">
-                      <span className="pill green-pill">是</span>
                     </td>
                   </tr>
                 ))}
@@ -209,8 +201,9 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
               <thead>
                 <tr>
                   <th>资产</th>
-                  <th className="right">合计借贷 (USD)</th>
-                  <th className="right">估值 (USD)</th>
+                  <th className="right">单价 (USD)</th>
+                  <th className="right">借出数量</th>
+                  <th className="right">借出价值 (USD)</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,10 +212,17 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                     <td>
                       <span className="token-symbol">{r.symbol}</span>
                     </td>
-                    <td className="right mono bold">
-                      {parseFloat(r.balance).toLocaleString(undefined, {
+                    <td className="right mono">
+                      $
+                      {r.priceUSD.toLocaleString(undefined, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
+                      })}
+                    </td>
+                    <td className="right mono bold">
+                      {parseFloat(r.balance).toLocaleString(undefined, {
+                        minimumFractionDigits: 6,
+                        maximumFractionDigits: 6,
                       })}
                     </td>
                     <td className="right mono bold red-text">
