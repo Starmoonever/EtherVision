@@ -40,6 +40,23 @@ class PositionResponse(BaseModel):
     liq_price: str = Field(
         description="ETH 跌至这个价格时触发清算风险；无借贷或无法计算时返回 '0'"
     )
+    weth_debt_amount: str = Field(
+        default="0",
+        description="ETH 系负债合计数量（换算 decimals 后）；无借 WETH 时返回 '0'",
+    )
+    weth_debt_usd: str = Field(
+        default="0",
+        description="ETH 系负债 USD 估值（链上 Oracle 价格）；无借 WETH 时返回 '0'",
+    )
+    liq_price_rise: str = Field(
+        default="0",
+        description="ETH 涨至该价格时健康系数将触碰 1.0（触发做空清算风险）；"
+        "0 表示无 ETH 上涨清算风险（如未借 WETH，或抵押品中含同比例 ETH 系资产）",
+    )
+    reserves: list[ReservePositionSchema] = Field(
+        default_factory=list,
+        description="各资产仓位明细，已过滤余额为 0 的资产（supply 和 debt 均为 0）",
+    )
 
 
 class LiqPriceResponse(BaseModel):

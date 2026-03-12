@@ -8,7 +8,6 @@ from ..database import AsyncpgPool, DbSession
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (
     BorrowPositionResponse,
-    BorrowUserPositionResponse,
     HistoricalPositionResponse,
     LiquidationPeriodItem,
     LiquidationSimResponse,
@@ -22,7 +21,6 @@ from .schemas import (
     TxHistoryResponse,
 )
 from .service import (
-    get_borrow_user_position,
     get_eth_price,
     get_market_replay,
     get_positions_history,
@@ -98,12 +96,12 @@ async def user_position(
     ),
 ) -> PositionResponse | HistoricalPositionResponse:
     if date is None:
-        return await get_user_position(_w3(request), address, protocol=version)
+        return await get_user_position(_w3(request), pool, address, protocol=version)
     ts = _parse_utc_time(date)
     result = await get_user_position_history(pool, address, ts)
     if result is None:
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
-        return await get_user_position(_w3(request), address, protocol=version)
+        return await get_user_position(_w3(request), pool, address, protocol=version)
     return result
 
 
@@ -495,35 +493,6 @@ async def borrow_positions(
         limit=limit,
         protocol=protocol,
     )
-
-
-@router.get(
-    "/borrow/position",
-    response_model=BorrowUserPositionResponse,
-    summary="查询单个地址的借贷端仓位详情",
-    description=(
-        "从数据库快照中读取指定地址的借贷端仓位（借入 WETH 场景）。\n\n"
-        "包含汇总信息（weth_debt、liq_price_rise、健康系数等）以及每个资产的 reserve 明细。\n\n"
-        "数据来源：数据库实时快照（需先运行 `aave-crawler crawl -p v3_borrow`）。\n\n"
-        "地址不存在时返回 404。"
-    ),
-)
-async def borrow_user_position(
-    pool: AsyncpgPool,
-    request: Request,
-    address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
-    version: Literal["v2", "v3"] = Query(
-        "v3", description="Aave 协议版本：v2 或 v3（默认）"
-    ),
-) -> BorrowUserPositionResponse:
-    protocol = f"{version}_borrow"
-    result = await get_borrow_user_position(pool, address, protocol=protocol)
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"地址 {address} 在 {protocol} 数据库中不存在，请先运行爬虫或确认地址正确",
-        )
-    return result
 
 
 @router.get(

@@ -20,11 +20,20 @@ from ..constants import MAX_HF
 from ..constants import MAX_UINT256 as _MAX_UINT256
 from ..constants import WETH_ADDR as _WETH_ADDR
 from ..db import (
+    TABLES_V2,
+    TABLES_V2_BORROW,
+    TABLES_V3,
+    TABLES_V3_BORROW,
+    _calc_eth_collateral,
+    _calc_liq_price_rise,
+    _calc_weth_debt,
+    _get_weth_price,
     fetch_user_tx_history,
-    get_cached_snapshots,
-    upsert_snapshot_cache,
     get_cached_eth_price,
+    get_cached_snapshots,
     upsert_eth_price_timestamp,
+    upsert_positions,
+    upsert_snapshot_cache,
 )
 from ..models import ReservePosition, UserPosition
 from ..rpc import (
@@ -173,6 +182,38 @@ def _format_position(pos: UserPosition) -> PositionResponse:
             else _fmt(numerator / (eth_amount * eth_liq_threshold))
         )
 
+    # 借贷端（做空 ETH）字段
+    weth_debt_raw_dec, weth_debt_usd_val = _calc_weth_debt(pos)
+    weth_price = _get_weth_price(pos)
+    liq_price_rise_val = (
+        _calc_liq_price_rise(pos, weth_price) if weth_price > 0 else Decimal("0")
+    )
+
+    # 各资产明细，过滤余额为 0 的资产
+    reserves: list[ReservePositionSchema] = []
+    for r in pos.reserves:
+        if r.supply_raw == 0 and r.stable_debt_raw == 0 and r.variable_debt_raw == 0:
+            continue
+        price = _raw_to_dec(r.price_raw, 8)
+        supply_amt = _raw_to_dec(r.supply_raw, r.decimals)
+        stable_amt = _raw_to_dec(r.stable_debt_raw, r.decimals)
+        variable_amt = _raw_to_dec(r.variable_debt_raw, r.decimals)
+        total_debt_amt = stable_amt + variable_amt
+        reserves.append(
+            ReservePositionSchema(
+                symbol=r.symbol,
+                token_address=r.token_address,
+                price_usd=_fmt(price),
+                supply_amount=_fmt(supply_amt, 6),
+                supply_usd=_fmt(supply_amt * price),
+                stable_debt_amount=_fmt(stable_amt, 6),
+                variable_debt_amount=_fmt(variable_amt, 6),
+                total_debt_amount=_fmt(total_debt_amt, 6),
+                total_debt_usd=_fmt(total_debt_amt * price),
+                use_as_collateral=r.usage_as_collateral_enabled,
+            )
+        )
+
     return PositionResponse(
         address=pos.user_address,
         eth_collateral_amount=eth_collateral_amount,
@@ -184,6 +225,10 @@ def _format_position(pos: UserPosition) -> PositionResponse:
         ltv=_fmt(Decimal(s.ltv) / Decimal(10000), 4),
         liq_threshold=_fmt(liq_threshold, 4),
         liq_price=liq_price_str,
+        weth_debt_amount=_fmt(weth_debt_raw_dec / Decimal("1e18"), 6),
+        weth_debt_usd=_fmt(weth_debt_usd_val),
+        liq_price_rise=_fmt(liq_price_rise_val) if liq_price_rise_val > 0 else "0",
+        reserves=reserves,
     )
 
 
@@ -295,7 +340,7 @@ def _calc_liquidation_line(pos: UserPosition) -> LiqPriceResponse:
 
 
 async def get_user_position(
-    w3: AsyncWeb3, address: str, protocol: str = "v3"
+    w3: AsyncWeb3, pool: asyncpg.Pool, address: str, protocol: str = "v3"
 ) -> PositionResponse:
     reserve_tokens, reserve_configs, asset_prices = await _get_common_data(w3, protocol)
     contracts = get_contracts(protocol)
@@ -315,7 +360,22 @@ async def get_user_position(
             status_code=502, detail=f"查询地址 {address} 时 RPC 调用失败，请稍后重试"
         )
     # Type narrowing: 排除 EMPTY_POSITION 和 None 后，pos 必定是 UserPosition
-    return _format_position(cast(UserPosition, pos))
+    user_pos = cast(UserPosition, pos)
+
+    # 写表缓存：链上数据获取后同步 upsert 到数据库
+    col_tables = TABLES_V3 if protocol == "v3" else TABLES_V2
+    borrow_tables = TABLES_V3_BORROW if protocol == "v3" else TABLES_V2_BORROW
+    try:
+        eth_col_amount, _ = _calc_eth_collateral(user_pos)
+        if eth_col_amount > 0:
+            await upsert_positions(pool, [user_pos], col_tables)
+        weth_raw, _ = _calc_weth_debt(user_pos)
+        if weth_raw > 0:
+            await upsert_positions(pool, [user_pos], borrow_tables)
+    except Exception as _upsert_exc:
+        logger.warning("写表缓存失败（不影响响应）: %s", _upsert_exc)
+
+    return _format_position(user_pos)
 
 
 async def get_liq_price(
