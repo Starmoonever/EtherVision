@@ -7,7 +7,7 @@ SQLAlchemy 2.0 ORM 声明模型 (loan schema)。
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -462,7 +462,146 @@ class EthBlockTimestamp(Base):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 仓位快照缓存表（TX 级别历史回放缓存）
+# 日级历史仓位表（collateral / borrow 两端合并为一张表）
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class AaveV3DailyPosition(Base):
+    __tablename__ = "aave_v3_eth_daily_positions"
+    __table_args__ = {"schema": "loan"}
+
+    snapshot_date: Mapped[date] = mapped_column(primary_key=True)
+    user_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    total_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    available_borrows_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    health_factor: Mapped[Decimal] = mapped_column(Numeric(40, 18), nullable=False)
+    ltv: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    liq_threshold: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    liq_price: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    liq_price_rise: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_collateral_amount: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    weth_debt_raw: Mapped[Decimal] = mapped_column(
+        Numeric(40, 0), nullable=False, server_default="0"
+    )
+    weth_debt_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_price_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class AaveV2DailyPosition(Base):
+    __tablename__ = "aave_v2_eth_daily_positions"
+    __table_args__ = {"schema": "loan"}
+
+    snapshot_date: Mapped[date] = mapped_column(primary_key=True)
+    user_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    total_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    available_borrows_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    health_factor: Mapped[Decimal] = mapped_column(Numeric(40, 18), nullable=False)
+    ltv: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    liq_threshold: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    liq_price: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    liq_price_rise: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_collateral_amount: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    weth_debt_raw: Mapped[Decimal] = mapped_column(
+        Numeric(40, 0), nullable=False, server_default="0"
+    )
+    weth_debt_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    eth_price_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False, server_default="0"
+    )
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class AaveV3DailyReservePosition(Base):
+    __tablename__ = "aave_v3_eth_daily_reserve_positions"
+    __table_args__ = ({"schema": "loan"},)
+
+    snapshot_date: Mapped[date] = mapped_column(primary_key=True)
+    user_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    token_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    decimals: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    supply_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    stable_debt_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    variable_debt_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    use_as_collateral: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class AaveV2DailyReservePosition(Base):
+    __tablename__ = "aave_v2_eth_daily_reserve_positions"
+    __table_args__ = ({"schema": "loan"},)
+
+    snapshot_date: Mapped[date] = mapped_column(primary_key=True)
+    user_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    token_address: Mapped[str] = mapped_column(Text, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    decimals: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    supply_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    stable_debt_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    variable_debt_raw: Mapped[Decimal] = mapped_column(Numeric(40, 0), nullable=False)
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    use_as_collateral: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 

@@ -9,6 +9,7 @@ import click
 
 from .config import load_config
 from .crawler import run_crawler
+from .daily_collector import run_daily_collector
 from .db import create_pool, get_tables, sync_addresses_from_history
 from .models import ReserveConfig, UserPosition
 from .watcher import run_watcher
@@ -201,6 +202,97 @@ def cmd_sync_addresses(
             verb = "预览" if dry_run else "写入"
             click.echo(
                 f"sync-addresses 完成：{verb} {total_written} 条（共 {len(protocols)} 张表）"
+            )
+        finally:
+            await pool.close()
+
+    asyncio.run(_run())
+
+
+@cli.command("collect-daily")
+@click.option("--config", "-c", default=None, help="config.yaml 路径")
+@click.option(
+    "--protocol",
+    "-p",
+    default="v3",
+    type=click.Choice(["v2", "v3"]),
+    show_default=True,
+    help="Aave 协议版本",
+)
+@click.option(
+    "--start",
+    required=True,
+    help="起始日期（UTC，含），格式 YYYY-MM-DD，如 2025-02-10",
+)
+@click.option(
+    "--end",
+    default=None,
+    help="结束日期（UTC，含），格式 YYYY-MM-DD；默认为昨日",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="只查询，不写入数据库")
+@click.option(
+    "--skip-existing",
+    is_flag=True,
+    default=False,
+    help="跳过已有数据的日期（断点续传）",
+)
+@click.option("--verbose", "-v", is_flag=True, default=False, help="输出 DEBUG 日志")
+def cmd_collect_daily(
+    config: str | None,
+    protocol: str,
+    start: str,
+    end: str | None,
+    dry_run: bool,
+    skip_existing: bool,
+    verbose: bool,
+) -> None:
+    """采集日级历史仓位快照并写入 aave_v{2|3}_eth_daily_positions。
+
+    \b
+    用户来源：positions_collateral ∪ positions_borrow（当前全量有仓位用户）
+    区块定位：UTC 00:00:00 对应的最近区块（需 archive 节点）
+    两端合并：collateral 风险（liq_price）和 borrow 风险（liq_price_rise）写入同一行
+
+    \b
+    示例：
+      aave-crawler collect-daily --start 2025-02-10             # v3，从 2/10 到昨日
+      aave-crawler collect-daily --start 2025-02-10 --end 2025-02-28
+      aave-crawler collect-daily --start 2025-02-10 --skip-existing  # 断点续传
+      aave-crawler collect-daily --start 2025-02-10 --dry-run         # 预览，不写入
+      aave-crawler collect-daily --start 2025-02-10 -p v2             # V2 协议
+    """
+    import datetime as _dt
+
+    _setup_logging(verbose)
+    cfg = load_config(config)
+
+    try:
+        start_date = _dt.date.fromisoformat(start)
+    except ValueError:
+        raise click.BadParameter(f"无法解析日期 {start!r}，请使用 YYYY-MM-DD 格式")
+
+    if end is not None:
+        try:
+            end_date = _dt.date.fromisoformat(end)
+        except ValueError:
+            raise click.BadParameter(f"无法解析日期 {end!r}，请使用 YYYY-MM-DD 格式")
+    else:
+        end_date = _dt.date.today() - _dt.timedelta(days=1)
+
+    if start_date > end_date:
+        raise click.UsageError(f"--start ({start_date}) 不能晚于 --end ({end_date})")
+
+    async def _run() -> None:
+        pool = await create_pool(cfg.postgres)
+        try:
+            await run_daily_collector(
+                cfg,
+                pool,
+                start_date=start_date,
+                end_date=end_date,
+                protocol=protocol,
+                dry_run=dry_run,
+                skip_existing=skip_existing,
             )
         finally:
             await pool.close()
