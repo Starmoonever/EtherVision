@@ -163,7 +163,8 @@ const DetailsModal = ({ point, onClose }: { point: ReplayPoint; onClose: () => v
 };
 
 export function PositionReplayChart({ address, version }: PositionReplayProps) {
-  const [data, setData] = useState<ReplayPoint[]>([]);
+  const [fullData, setFullData] = useState<ReplayPoint[]>([]); // Store full dataset 存储首次请求获取的完整历史数据
+  const [data, setData] = useState<ReplayPoint[]>([]); // Store filtered/displayed dataset
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [primaryMetric, setPrimaryMetric] = useState<'eth_collateral_usd' | 'weth_debt_usd'>(
@@ -262,7 +263,8 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           );
 
-        setData(formattedData);
+        setFullData(formattedData);
+        setData(formattedData); // Initialize display data with full data
       } catch (err) {
         console.error(err);
         setError('无法加载历史回放数据');
@@ -272,12 +274,62 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     };
 
     if (address) {
-      fetchData();
+      fetchFullHistory();
     }
-  }, [address, version, queryParams]);
+  }, [address, version]);
 
+  // Filter data locally when search/filter params change
+  useEffect(() => {
+    if (!fullData.length) return;
+
+    // Filter by time range
+    const startTs = new Date(startTime).getTime();
+    const endTs = new Date(endTime).getTime();
+
+    const filtered = fullData.filter(pt => {
+      const ptTs = new Date(pt.timestamp).getTime();
+      return ptTs >= startTs && ptTs <= endTs;
+    });
+
+    setData(filtered);
+    
+    // Reset tooltip on filter change
+    setActiveTooltip(null);
+    setSelectedPoint(null);
+
+  }, [startTime, endTime, fullData]);
+
+  const [appliedRange, setAppliedRange] = useState({ start: '2020-12-01 00:00:00', end: endTime });
+
+  // Update applied range on mount to match initial default
+  useEffect(() => {
+     setAppliedRange({ start: '2020-12-01 00:00:00', end: endTime });
+  }, []);
+
+  // The actual filtering effect depends on appliedRange
+  useEffect(() => {
+    if (!fullData.length) return;
+    const startTs = new Date(appliedRange.start).getTime();
+    const endTs = new Date(appliedRange.end).getTime();
+    
+    let filtered = fullData.filter(pt => {
+      const ptTs = new Date(pt.timestamp).getTime();
+      return ptTs >= startTs && ptTs <= endTs;
+    });
+
+    // If a specific type is selected, filter by that type as well
+    if (selectedType !== 'all') {
+        filtered = filtered.filter(pt => pt.operation_type === selectedType);
+    }
+
+    setData(filtered);
+    setActiveTooltip(null);
+    setSelectedPoint(null);
+  }, [appliedRange, fullData, selectedType]);
+
+  // Button click handler
   const handleSearch = () => {
-    setQueryParams({ start: startTime, end: endTime });
+      setAppliedRange({ start: startTime, end: endTime });
   };
 
   const handleChartClick = (e: any) => {
@@ -430,6 +482,11 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
       </div>
 
       <div style={{ height: 550 }}>
+        {!data.length ? (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+            暂无该时间段的交易数据
+          </div>
+        ) : (
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={data}
@@ -506,6 +563,8 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                     />
                   );
                 }
+                
+                // Default: no dots for 'all' view to keep chart clean
                 return <circle r={0} cx={cx} cy={cy} />;
               }}
               name={primaryMetric === 'eth_collateral_usd' ? '抵押ETH价值' : '贷出ETH价值'}
@@ -531,6 +590,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             />
           </LineChart>
         </ResponsiveContainer>
+        )}
       </div>
 
       {selectedPoint && (

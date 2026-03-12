@@ -15,6 +15,27 @@ export interface UserPosition {
   liq_price: string;
 }
 
+export interface BorrowPosition {
+  address: string;
+  scanned_at: string;
+  weth_debt_amount: string;
+  weth_debt_usd: string;
+  health_factor: string;
+  liq_price_rise: string;
+  reserves: {
+    symbol: string;
+    token_address: string;
+    price_usd: string;
+    supply_amount: string;
+    supply_usd: string;
+    stable_debt_amount: string;
+    variable_debt_amount: string;
+    total_debt_amount: string;
+    total_debt_usd: string;
+    use_as_collateral: boolean;
+  }[];
+}
+
 // ---------- API 函数 ----------
 
 /**
@@ -25,4 +46,13 @@ export interface UserPosition {
 export async function fetchUserPosition(address: string, version?: string): Promise<UserPosition> {
   const query = version ? `address=${address}&version=${version}` : `address=${address}`;
   return apiFetch<UserPosition>(`/position?${query}`);
+}
+
+/**
+ * 获取指定地址在 Aave 上的借贷仓位详情。
+ * @param address  以太坊地址
+ * @param version  协议版本（v2 / v3）
+ */
+export async function fetchUserBorrowPosition(address: string, version: string): Promise<BorrowPosition> {
+  return apiFetch<BorrowPosition>(`/borrow/position?address=${address}&version=${version}`);
 }

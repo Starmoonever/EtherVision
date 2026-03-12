@@ -260,7 +260,12 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
               />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any) => [`$${Number(value).toLocaleString()}`, '']}
+                formatter={(value: any, name: any) => {
+                  let label = name;
+                  if (name === '借出 ETH 总值') label = '借出 ETH 总值';
+                  else if (name === '剩余可借 ETH 总值') label = '剩余可借 ETH 总值';
+                  return [`$${Number(value).toLocaleString()}`, label];
+                }}
               />
               <Legend />
               <Line
@@ -331,7 +336,7 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
               />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any) => [`${Number(value).toFixed(2)}%`, '']}
+                formatter={(value: any, name: any) => [`${Number(value).toFixed(2)}%`, name]}
               />
               <Legend />
               <Line
