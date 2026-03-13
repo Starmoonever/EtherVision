@@ -15,12 +15,14 @@ class PostgresConfig:
     user: str = "postgres"
     password: str = ""
     database: str = "postgres"
+    ssl: str = "prefer"  # disable / allow / prefer / require
 
     @property
     def dsn(self) -> str:
         return (
             f"postgresql://{self.user}:{self.password}"
             f"@{self.host}:{self.port}/{self.database}"
+            f"?ssl={self.ssl}"
         )
 
 
