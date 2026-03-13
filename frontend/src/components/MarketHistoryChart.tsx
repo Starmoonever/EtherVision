@@ -215,33 +215,35 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
 
   return (
     <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-        <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {(['3M', '6M', '1Y'] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setTimeRange(r)}
+              style={{
+                background: timeRange === r ? '#3b82f6' : 'transparent',
+                color: timeRange === r ? '#fff' : '#94a3b8',
+                border: '1px solid #334155',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+              }}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Chart 1: Market Size */}
       <div className="card">
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span className="card-title">市场规模 （USD）</span>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {(['3M', '6M', '1Y'] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setTimeRange(r)}
-                style={{
-                  background: timeRange === r ? '#3b82f6' : 'transparent',
-                  color: timeRange === r ? '#fff' : '#94a3b8',
-                  border: '1px solid #334155',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                }}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
         </div>
         <div style={{ height: 400 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -288,25 +290,6 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
       <div className="card">
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span className="card-title">抵押借贷利率</span>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {(['3M', '6M', '1Y'] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setTimeRange(r)}
-                style={{
-                  background: timeRange === r ? '#3b82f6' : 'transparent',
-                  color: timeRange === r ? '#fff' : '#94a3b8',
-                  border: '1px solid #334155',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.75rem',
-                }}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
         </div>
         <div style={{ height: 400 }}>
           <ResponsiveContainer width="100%" height="100%">

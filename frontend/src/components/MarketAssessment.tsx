@@ -3,17 +3,28 @@ import { fetchEthPrice } from '../api';
 import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
 import { MarketHistoryChart } from './MarketHistoryChart';
+import { HistoricalLiquidationChart } from './HistoricalLiquidationChart';
 
-export function MarketAssessment() {
+export interface MarketAssessmentProps {
+  marketVersion: 'v2' | 'v3' | 'all';
+  marketSide: 'collateral' | 'borrow';
+}
+
+export function MarketAssessment({ marketVersion, marketSide }: MarketAssessmentProps) {
   const [ethPrice, setEthPrice] = useState<number | null>(null);
   const [priceChange, setPriceChange] = useState<number>(-10);
-  const [version, setVersion] = useState<'v2' | 'v3' | 'all'>('all');
-  const [side, setSide] = useState<'collateral' | 'borrow'>('collateral');
+  const [mode, setMode] = useState<'realtime' | 'history'>('realtime');
+  const [startDate, setStartDate] = useState('2026-02-10');
+  const [endDate, setEndDate] = useState('2026-02-12');
 
-  // Reset priceChange to sensible default when side switches
+  // Reset priceChange to sensible default when side/mode switches
   useEffect(() => {
-    setPriceChange(side === 'collateral' ? -10 : 10);
-  }, [side]);
+    if (mode === 'history') {
+        setPriceChange(0);
+    } else {
+        setPriceChange(marketSide === 'collateral' ? -10 : 10);
+    }
+  }, [marketSide, mode]);
 
   // Fetch real-time price from API
   useEffect(() => {
@@ -94,24 +105,43 @@ export function MarketAssessment() {
           {/* 标题 + 控制器 + 滑块 */}
           <div style={{ padding: '0 0 1.25rem 0' }}>
             <div className="card-header" style={{ marginBottom: '1rem' }}>
-              <span className="card-title">价格波动下清算模拟</span>
+              <span className="card-title">
+                  {mode === 'realtime' ? '实时价格波动下清算模拟' : '历史价格波动清算模拟'}
+              </span>
               {/* side / version 切换器 */}
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                {mode === 'history' && (
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <input 
+                            type="date" 
+                            value={startDate} 
+                            onChange={e => setStartDate(e.target.value)}
+                            style={{ background: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '4px', padding: '2px 4px', fontSize: '0.8rem' }}
+                        />
+                        <span style={{ color: '#64748b' }}>-</span>
+                        <input 
+                            type="date" 
+                            value={endDate} 
+                            onChange={e => setEndDate(e.target.value)}
+                            style={{ background: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '4px', padding: '2px 4px', fontSize: '0.8rem' }}
+                        />
+                    </div>
+                )}
                 <div
-                  style={{
+                    style={{
                     display: 'flex',
                     background: '#0f172a',
                     borderRadius: '6px',
                     padding: '2px',
-                  }}
+                    }}
                 >
-                  {(['collateral', 'borrow'] as const).map((s) => (
+                    {(['realtime', 'history'] as const).map((m) => (
                     <button
-                      key={s}
-                      onClick={() => setSide(s)}
-                      style={{
-                        background: side === s ? '#3b82f6' : 'transparent',
-                        color: side === s ? '#fff' : '#94a3b8',
+                        key={m}
+                        onClick={() => setMode(m)}
+                        style={{
+                        background: mode === m ? '#3b82f6' : 'transparent',
+                        color: mode === m ? '#fff' : '#94a3b8',
                         border: 'none',
                         padding: '3px 10px',
                         borderRadius: '4px',
@@ -119,39 +149,11 @@ export function MarketAssessment() {
                         fontSize: '0.8rem',
                         fontWeight: 600,
                         transition: 'all 0.2s',
-                      }}
+                        }}
                     >
-                      {s === 'collateral' ? '抵押端' : '借贷端'}
+                        {m === 'realtime' ? '实时' : '历史'}
                     </button>
-                  ))}
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    background: '#0f172a',
-                    borderRadius: '6px',
-                    padding: '2px',
-                  }}
-                >
-                  {(['v2', 'v3', 'all'] as const).map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setVersion(v)}
-                      style={{
-                        background: version === v ? '#7c3aed' : 'transparent',
-                        color: version === v ? '#fff' : '#94a3b8',
-                        border: 'none',
-                        padding: '3px 10px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        transition: 'all 0.2s',
-                      }}
-                    >
-                      {v.toUpperCase()}
-                    </button>
-                  ))}
+                    ))}
                 </div>
               </div>
             </div>
@@ -183,8 +185,8 @@ export function MarketAssessment() {
             </div>
             <input
               type="range"
-              min={side === 'collateral' ? -100 : 0}
-              max={side === 'collateral' ? 0 : 100}
+              min={marketSide === 'collateral' ? -100 : 0}
+              max={marketSide === 'collateral' ? 0 : (mode === 'history' ? 200 : 100)}
               value={priceChange}
               onChange={(e) => setPriceChange(Number(e.target.value))}
               style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
@@ -200,16 +202,25 @@ export function MarketAssessment() {
               border: '1px solid #1e293b',
             }}
           >
-            <LiquidationChart
-              currentEthPrice={ethPrice}
-              priceChange={priceChange}
-              version={version}
-              side={side}
-              onPriceChange={setPriceChange}
-            />
+            {mode === 'realtime' ? (
+                <LiquidationChart
+                currentEthPrice={ethPrice}
+                priceChange={priceChange}
+                version={marketVersion}
+                side={marketSide}
+                onPriceChange={setPriceChange}
+                />
+            ) : (
+                <HistoricalLiquidationChart
+                version={marketVersion}
+                startDate={startDate}
+                endDate={endDate}
+                priceChange={priceChange}
+                />
+            )}
           </div>
 
-          <MarketHistoryChart version={version} />
+          <MarketHistoryChart version={marketVersion} />
         </div>
       </div>
     </div>

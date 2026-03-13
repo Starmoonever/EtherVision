@@ -332,7 +332,7 @@ export default function App() {
               <h1 className="hero-title">宏观市场评估</h1>
               <p className="hero-sub">ETH 实时价格与清算模拟</p>
             </div>
-            <MarketAssessment />
+            <MarketAssessment marketVersion={marketVersion} marketSide={marketSide} />
           </>
         )}
       </main>
