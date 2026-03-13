@@ -31,6 +31,17 @@ export interface LiquidationDetailResponse {
   total_weth_debt_usd?: string;
 }
 
+export interface HistoricalLiquidationPoint {
+  snapshot_date: string;
+  liquidation_cnt: string;
+  total_eth_collateral_amount: string;
+  total_eth_collateral_usd: string;
+  total_weth_debt_amount: string;
+  total_weth_debt_usd: string;
+  eth_price: string;
+  sim_eth_price: string;
+}
+
 // ---------- API 函数 ----------
 
 // 模块级内存缓存，页面刷新后自动清空
@@ -96,4 +107,14 @@ export async function fetchLiquidationDetail(
   const data = (await response.json()) as LiquidationDetailResponse;
   _detailCache.set(key, { fetchedAt: Date.now(), data });
   return data;
+}
+
+export async function fetchHistoricalLiquidation(
+  start: string,
+  end: string,
+  version: string,
+  simEthPriceDistance: number,
+): Promise<HistoricalLiquidationPoint[]> {
+  const path = `/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
+  return apiFetch<HistoricalLiquidationPoint[]>(path);
 }

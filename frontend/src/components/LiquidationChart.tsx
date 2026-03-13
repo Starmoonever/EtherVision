@@ -363,6 +363,7 @@ export function LiquidationChart({
               tickFormatter={(value) =>
                 `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
               }
+              domain={[0, side === 'borrow' ? 6000 : 3000]}
             />
             <Tooltip
               cursor={{ fill: '#1e293b', opacity: 0.4 }}
