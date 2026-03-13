@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
@@ -2528,50 +2529,91 @@ async def get_positions_period(
     interval_days: int = 1,
     sim_eth_price_distance: float = 0.0,
 ) -> list[PositionPeriodItem]:
-    """查询日级仓位统计时序数据。
+    """查询日级仓位清算统计时序数据。
 
-    按 interval_days 间隔采样，计算每日有 ETH 抵押品的仓位数量、
-    ETH 抵押品合计，以及按模拟 ETH 价格换算的 USD 估值。
+    语义：在每个快照日，若 ETH 价格波动至 sim_eth_price，统计会被触发清算的仓位。
+    - 价格下跌（sim_eth_price < eth_price）：liq_price >= sim_eth_price 的仓位被清算（多头）
+    - 价格上涨（sim_eth_price > eth_price）：liq_price_rise > 0 且 liq_price_rise <= sim_eth_price 的仓位被清算（空头）
+    - 累积语义：跌20%包含跌10%的清算（liq_price 越高越先被清算）
 
     :param start_ts:               起始 Unix 时间戳（秒）
     :param end_ts:                 结束 Unix 时间戳（秒）
     :param interval_days:          采样间隔（天），≥ 1
     :param sim_eth_price_distance: ETH 价格模拟偏移（百分制，如 -10 表示跌 10%）
     """
-
     start_date = datetime.fromtimestamp(start_ts, tz=timezone.utc).date()
     end_date = datetime.fromtimestamp(end_ts, tz=timezone.utc).date()
 
     table = _daily_positions_table(protocol)
+    # 行级查询，在内存中聚合以支持按 sim_price 过滤清算仓位
     sql = f"""
         SELECT
             snapshot_date,
-            COUNT(*) FILTER (WHERE eth_collateral_amount > 0)           AS cnt,
-            COALESCE(SUM(eth_collateral_amount) FILTER (WHERE eth_collateral_amount > 0), 0) AS total_eth,
-            COALESCE(AVG(eth_price_usd) FILTER (WHERE eth_price_usd > 0), 0)                AS eth_price
+            eth_collateral_amount,
+            liq_price,
+            liq_price_rise,
+            weth_debt_raw,
+            eth_price_usd
         FROM loan."{table}"
         WHERE snapshot_date >= $1
           AND snapshot_date <= $2
-        GROUP BY snapshot_date
         ORDER BY snapshot_date
     """
     rows = await pool.fetch(sql, start_date, end_date)
 
-    # 按 interval_days 采样：保留索引为 0, interval, 2*interval, … 的行
-    sampled = [r for i, r in enumerate(rows) if i % interval_days == 0]
+    # 按日分组
+    by_date: dict = defaultdict(list)
+    for r in rows:
+        by_date[r["snapshot_date"]].append(r)
 
     sim_factor = Decimal(str(1 + sim_eth_price_distance / 100))
+    sampled_dates = [d for i, d in enumerate(sorted(by_date)) if i % interval_days == 0]
+
+    _WETH_DECIMALS = Decimal("1000000000000000000")  # 1e18
+
     result: list[PositionPeriodItem] = []
-    for r in sampled:
-        eth_price = Decimal(str(r["eth_price"]))
+    for d in sampled_dates:
+        day_rows = by_date[d]
+        eth_price = Decimal(
+            str(
+                next(
+                    (r["eth_price_usd"] for r in day_rows if r["eth_price_usd"] > 0), 0
+                )
+            )
+        )
         sim_price = eth_price * sim_factor
-        total_eth = Decimal(str(r["total_eth"]))
+        price_dropped = sim_price < eth_price
+        price_rose = sim_price > eth_price
+
+        total_eth_col = Decimal("0")
+        total_weth_debt = Decimal("0")
+        cnt = 0
+
+        for r in day_rows:
+            eth_col = Decimal(str(r["eth_collateral_amount"]))
+            if eth_col <= 0:
+                continue
+            liq_price = Decimal(str(r["liq_price"]))
+            liq_price_rise = Decimal(str(r["liq_price_rise"]))
+
+            liquidated = (
+                price_dropped and liq_price > 0 and liq_price >= sim_price
+            ) or (price_rose and liq_price_rise > 0 and liq_price_rise <= sim_price)
+            if not liquidated:
+                continue
+
+            cnt += 1
+            total_eth_col += eth_col
+            total_weth_debt += Decimal(str(r["weth_debt_raw"])) / _WETH_DECIMALS
+
         result.append(
             PositionPeriodItem(
-                snapshot_date=str(r["snapshot_date"]),
-                count=str(r["cnt"]),
-                total_eth_amount=_fmt(total_eth, 6),
-                total_usd=_fmt(total_eth * sim_price),
+                snapshot_date=str(d),
+                liquidation_cnt=str(cnt),
+                total_eth_collateral_amount=_fmt(total_eth_col, 6),
+                total_eth_collateral_usd=_fmt(total_eth_col * sim_price),
+                total_weth_debt_amount=_fmt(total_weth_debt, 6),
+                total_weth_debt_usd=_fmt(total_weth_debt * sim_price),
                 eth_price=_fmt(eth_price),
                 sim_eth_price=_fmt(sim_price),
             )

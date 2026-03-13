@@ -427,13 +427,15 @@ async def market_snapshot_replay(
 @router.get(
     "/positions/period",
     response_model=list[PositionPeriodItem],
-    summary="查询日级 ETH 抵押仓位统计时序",
+    summary="查询日级仓位清算统计时序",
     description=(
-        "按日粒度（或指定间隔天数）汇总全量仓位中 ETH/WETH 抵押品的统计数据。\n\n"
+        "按日粒度（或指定间隔天数）统计在模拟 ETH 价格下会被触发清算的仓位数量及规模。\n\n"
         "- `interval`：采样间隔（天），默认 1（每日一个数据点），设 7 则每 7 天一个点\n"
         "- `sim_eth_price_distance`：ETH 价格模拟偏移百分比（百分制），"
-        "正数=涨价，负数=跌价，默认 0（不模拟）\n"
-        "- `total_usd` = `total_eth_amount × sim_eth_price`\n\n"
+        "正数=涨价（触发空头清算），负数=跌价（触发多头清算），默认 0（返回空结果）\n\n"
+        "**清算语义（累积）**：\n"
+        "- 跌价时：统计 `liq_price >= sim_eth_price` 的仓位，跌 20% 包含跌 10% 的清算\n"
+        "- 涨价时：统计 `liq_price_rise > 0 且 liq_price_rise <= sim_eth_price` 的仓位\n\n"
         "数据来源：`loan.aave_v{2|3}_eth_daily_positions`（需先运行 `aave-crawler collect-daily`）\n\n"
         "支持时间格式：`2024-01-01` / `2024-11-14T12:00:00Z` / `2024-11-14 12:00:00`"
     ),

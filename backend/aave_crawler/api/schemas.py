@@ -243,12 +243,22 @@ class ShortLiqPeriodItem(BaseModel):
 
 
 class PositionPeriodItem(BaseModel):
-    """日级仓位统计序列的单个数据点。"""
+    """日级仓位清算统计序列的单个数据点。"""
 
     snapshot_date: str = Field(description="快照日期（UTC，格式 YYYY-MM-DD）")
-    count: str = Field(description="当日有 ETH 抵押品的仓位数量")
-    total_eth_amount: str = Field(description="ETH/WETH 抵押品合计数量（ETH 单位）")
-    total_usd: str = Field(description="以模拟 ETH 价格计算的 USD 总估值")
+    liquidation_cnt: str = Field(description="当日在模拟价格下触发清算的仓位数量")
+    total_eth_collateral_amount: str = Field(
+        description="触发清算的仓位的 ETH/WETH 抵押品合计数量（ETH 单位）"
+    )
+    total_eth_collateral_usd: str = Field(
+        description="触发清算的抵押品以模拟 ETH 价格计算的 USD 估值"
+    )
+    total_weth_debt_amount: str = Field(
+        description="触发清算的仓位的 WETH 负债合计数量（ETH 单位）"
+    )
+    total_weth_debt_usd: str = Field(
+        description="触发清算的 WETH 负债以模拟 ETH 价格计算的 USD 估值"
+    )
     eth_price: str = Field(description="当日实际 ETH/USD 价格")
     sim_eth_price: str = Field(
         description="模拟 ETH 价格（eth_price × (1 + sim_eth_price_distance / 100)）"
