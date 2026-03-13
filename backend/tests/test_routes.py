@@ -2118,9 +2118,11 @@ class TestPositionsPeriod:
         assert len(data) == 3
         item = data[0]
         assert "snapshot_date" in item
-        assert "count" in item
-        assert "total_eth_amount" in item
-        assert "total_usd" in item
+        assert "liquidation_cnt" in item
+        assert "total_eth_collateral_amount" in item
+        assert "total_eth_collateral_usd" in item
+        assert "total_weth_debt_amount" in item
+        assert "total_weth_debt_usd" in item
         assert "eth_price" in item
         assert "sim_eth_price" in item
 

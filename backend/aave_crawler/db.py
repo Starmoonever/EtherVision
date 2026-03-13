@@ -151,9 +151,19 @@ CREATE TABLE IF NOT EXISTS loan.{reserve_positions} (
 # ── 连接池 ────────────────────────────────────────────────────────────────────
 
 
-async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
+async def create_pool(pg: PostgresConfig, timeout: float = 10.0) -> asyncpg.Pool:
+    import asyncio
+
     ssl: bool | str = False if pg.ssl == "disable" else pg.ssl
-    pool = await asyncpg.create_pool(dsn=pg.dsn, ssl=ssl, min_size=2, max_size=10)
+    try:
+        pool = await asyncio.wait_for(
+            asyncpg.create_pool(dsn=pg.dsn, ssl=ssl, min_size=2, max_size=10),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"PostgreSQL 连接超时（>{timeout}s）：{pg.host}:{pg.port}/{pg.database}"
+        )
     logger.info("PostgreSQL 连接池已创建：%s:%d/%s", pg.host, pg.port, pg.database)
     return pool  # type: ignore[return-value]
 
