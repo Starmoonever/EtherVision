@@ -38,11 +38,12 @@ from .db import (
     _get_weth_price,
 )
 from .market_collector import _block_at_timestamp, upsert_block_timestamps
-from .models import UserPosition
+from .models import AccountSummary, UserPosition
 from .rpc import (
     EMPTY_POSITION,
     ProtocolContracts,
     build_web3,
+    fetch_batch_account_summaries,
     fetch_block_prices,
     fetch_user_position_at_block,
     get_all_reserve_tokens,
@@ -540,6 +541,60 @@ async def run_daily_collector(
                     logger.info("日期 %s 已全部采集，跳过", day)
                     continue
 
+        # ── Phase 1：Multicall3 批量筛选活跃用户 ──────────────────────────────
+        _PHASE1_BATCH_SIZE = 50
+        phase1_sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency // 5))
+
+        batches = [
+            day_users[i : i + _PHASE1_BATCH_SIZE]
+            for i in range(0, len(day_users), _PHASE1_BATCH_SIZE)
+        ]
+        logger.info(
+            "日期 %s Phase1：%d 用户分 %d 批（每批 %d）筛选活跃仓位...",
+            day,
+            len(day_users),
+            len(batches),
+            _PHASE1_BATCH_SIZE,
+        )
+
+        batch_results: list[list | BaseException] = list(
+            await asyncio.gather(
+                *[
+                    fetch_batch_account_summaries(
+                        w3, contracts, batch, block_number, phase1_sem
+                    )
+                    for batch in batches
+                ],
+                return_exceptions=True,
+            )
+        )
+
+        active_users: list[tuple[str, AccountSummary]] = []
+        phase1_skip = phase1_fail = 0
+        for batch, result in zip(batches, batch_results):
+            if isinstance(result, BaseException):
+                logger.warning("Phase1 batch 失败：%s", result)
+                phase1_fail += len(batch)
+                continue
+            for addr, summary in zip(batch, result):
+                if summary is None:
+                    phase1_fail += 1
+                elif (
+                    summary.total_collateral_base == 0 and summary.total_debt_base == 0
+                ):
+                    phase1_skip += 1
+                else:
+                    active_users.append((addr, summary))
+
+        logger.info(
+            "日期 %s Phase1 完成：活跃 %d，无仓位 %d，失败 %d",
+            day,
+            len(active_users),
+            phase1_skip,
+            phase1_fail,
+        )
+
+        # ── Phase 2：仅对活跃用户查 reserve 余额并写库 ────────────────────────
         semaphore = asyncio.Semaphore(cfg.crawler.concurrency)
         all_tasks = [
             asyncio.ensure_future(
@@ -552,23 +607,24 @@ async def run_daily_collector(
                     semaphore,
                     contracts,
                     block_prices=block_prices,
+                    account_summary=summary,
                 )
             )
-            for addr in day_users
+            for addr, summary in active_users
         ]
 
         pending: list[tuple[UserPosition, int]] = []
-        ok = skip_count = fail = 0
-        db_tasks: list[asyncio.Task] = []  # 双缓冲：最多同时 2 个写入任务在飞行
+        ok = fail = 0
+        db_tasks: list[asyncio.Task] = []
         _MAX_DB_TASKS = 2
 
-        with tqdm(total=len(day_users), desc=str(day), unit="user") as pbar:
+        with tqdm(total=len(active_users), desc=f"{day}[采]", unit="user") as pbar:
             for coro in asyncio.as_completed(all_tasks):
                 result = await coro
                 pbar.update(1)
 
                 if result is EMPTY_POSITION:
-                    skip_count += 1
+                    # Phase1 已过滤，防御性处理
                     continue
                 if result is None:
                     fail += 1
@@ -608,10 +664,12 @@ async def run_daily_collector(
                 )
 
         logger.info(
-            "日期 %s 采集完成：有仓位 %d，无仓位(已平仓) %d，RPC失败 %d",
+            "日期 %s 采集完成：有仓位 %d，无仓位(已平仓) %d，失败 %d（Phase1: %d，Phase2: %d）",
             day,
             ok,
-            skip_count,
+            phase1_skip,
+            phase1_fail + fail,
+            phase1_fail,
             fail,
         )
 

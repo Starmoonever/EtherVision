@@ -275,6 +275,16 @@ _RESERVE_DATA_OUTPUT_TYPES = [
     "bool",  # usageAsCollateralEnabled
 ]
 
+# getUserAccountData 返回值的 ABI 类型序列（用于 eth_abi.decode）
+_ACCOUNT_DATA_OUTPUT_TYPES = [
+    "uint256",  # totalCollateralBase
+    "uint256",  # totalDebtBase
+    "uint256",  # availableBorrowsBase
+    "uint256",  # currentLiquidationThreshold
+    "uint256",  # ltv
+    "uint256",  # healthFactor
+]
+
 
 # ── 客户端工厂 ────────────────────────────────────────────────────────────────
 
@@ -446,6 +456,99 @@ async def _multicall_user_reserve_data(
     return results
 
 
+async def _multicall_batch_account_data(
+    w3: AsyncWeb3,
+    contracts: ProtocolContracts,
+    user_addresses: list[str],
+    block_identifier: BlockIdentifier,
+) -> list[AccountSummary | None]:
+    """使用 Multicall3 将 N 个用户的 getUserAccountData 合并为 1 次 eth_call。
+
+    返回与 user_addresses 等长的列表：成功时为 AccountSummary，失败时为 None。
+    调用方须保证 block_identifier >= MULTICALL3_DEPLOY_BLOCK 或 "latest"。
+    """
+    pool_contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
+    mc_contract = w3.eth.contract(address=MULTICALL3_ADDRESS, abi=MULTICALL3_ABI)
+
+    calls = []
+    for addr in user_addresses:
+        calldata = pool_contract.encode_abi(
+            "getUserAccountData",
+            args=[AsyncWeb3.to_checksum_address(addr)],
+        )
+        calls.append((contracts.pool, True, calldata))  # allowFailure=True
+
+    raw_results: list[tuple[bool, bytes]] = await mc_contract.functions.aggregate3(
+        calls
+    ).call(block_identifier=block_identifier)
+
+    results: list[AccountSummary | None] = []
+    for success, return_data in raw_results:
+        if not success or not return_data:
+            results.append(None)
+        else:
+            try:
+                decoded = _abi_decode(_ACCOUNT_DATA_OUTPUT_TYPES, return_data)
+                results.append(
+                    AccountSummary(
+                        total_collateral_base=decoded[0],
+                        total_debt_base=decoded[1],
+                        available_borrows_base=decoded[2],
+                        current_liquidation_threshold=decoded[3],
+                        ltv=decoded[4],
+                        health_factor=decoded[5],
+                    )
+                )
+            except Exception:
+                results.append(None)
+    return results
+
+
+async def fetch_batch_account_summaries(
+    w3: AsyncWeb3,
+    contracts: ProtocolContracts,
+    user_addresses: list[str],
+    block_number: int,
+    semaphore: asyncio.Semaphore,
+) -> list[AccountSummary | None]:
+    """批量查询一组用户在指定区块的 AccountSummary（每批 1 次 RPC）。
+
+    block_number >= MULTICALL3_DEPLOY_BLOCK：使用 Multicall3 合并为 1 次 eth_call。
+    block_number < MULTICALL3_DEPLOY_BLOCK：asyncio.gather 并发个别查询（降级）。
+    """
+    async with semaphore:
+        if block_number >= MULTICALL3_DEPLOY_BLOCK:
+            return await _multicall_batch_account_data(
+                w3, contracts, user_addresses, block_number
+            )
+        # 降级：逐用户查询
+        pool_contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
+        tasks = [
+            pool_contract.functions.getUserAccountData(
+                AsyncWeb3.to_checksum_address(addr)
+            ).call(block_identifier=block_number)
+            for addr in user_addresses
+        ]
+        raw_list: list[Any] = list(await asyncio.gather(*tasks, return_exceptions=True))
+        out: list[AccountSummary | None] = []
+        for r in raw_list:
+            if isinstance(r, Exception):
+                out.append(None)
+            else:
+                raw = cast(tuple[int, ...], r)
+                out.append(
+                    AccountSummary(
+                        total_collateral_base=raw[0],
+                        total_debt_base=raw[1],
+                        available_borrows_base=raw[2],
+                        current_liquidation_threshold=raw[3],
+                        ltv=raw[4],
+                        health_factor=raw[5],
+                    )
+                )
+        return out
+
+
 # ── 高层查询（单用户完整仓位） ────────────────────────────────────────────────
 
 # 哨兵值：账户在 Aave 无任何仓位（totalCollateral==0 && totalDebt==0）
@@ -573,6 +676,7 @@ async def fetch_user_position_at_block(
     semaphore: asyncio.Semaphore,
     contracts: ProtocolContracts = CONTRACTS_V3,
     block_prices: "dict[str, int] | None" = None,
+    account_summary: "AccountSummary | None" = None,
 ) -> "tuple[UserPosition, int] | object | None":
     """RPC 重放：用 eth_call 查询用户在指定区块时刻的链上仓位（真实值，无利息误差）。
 
@@ -583,25 +687,31 @@ async def fetch_user_position_at_block(
 
     block_prices：可选的区块级预取价格（USD/8dec），由 fetch_block_prices() 提供。
     传入后跳过每用户重复的 getAssetPrice 调用，可大幅减少 archive 节点 RPC 请求数。
+
+    account_summary：可选的预取 AccountSummary（由 fetch_batch_account_summaries() 提供）。
+    传入后跳过 getUserAccountData RPC 调用，仅执行 reserve 余额查询。
     """
     async with semaphore:
         try:
-            pool_contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
-            raw = await pool_contract.functions.getUserAccountData(
-                AsyncWeb3.to_checksum_address(user_address)
-            ).call(block_identifier=block_number)
+            if account_summary is not None:
+                summary = account_summary
+            else:
+                pool_contract = w3.eth.contract(address=contracts.pool, abi=POOL_ABI)
+                raw = await pool_contract.functions.getUserAccountData(
+                    AsyncWeb3.to_checksum_address(user_address)
+                ).call(block_identifier=block_number)
 
-            summary = AccountSummary(
-                total_collateral_base=raw[0],
-                total_debt_base=raw[1],
-                available_borrows_base=raw[2],
-                current_liquidation_threshold=raw[3],
-                ltv=raw[4],
-                health_factor=raw[5],
-            )
+                summary = AccountSummary(
+                    total_collateral_base=raw[0],
+                    total_debt_base=raw[1],
+                    available_borrows_base=raw[2],
+                    current_liquidation_threshold=raw[3],
+                    ltv=raw[4],
+                    health_factor=raw[5],
+                )
 
-            if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
-                return EMPTY_POSITION
+                if summary.total_collateral_base == 0 and summary.total_debt_base == 0:
+                    return EMPTY_POSITION
 
             token_addresses = [rt.token_address for rt in reserve_tokens]
             oracle_contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
