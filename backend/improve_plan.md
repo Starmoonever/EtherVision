@@ -106,7 +106,7 @@ if len(pending) >= batch_size:
     pending.clear()
 ```
 
-**状态：** ⬜ 待实施
+**状态：** ✅ 已完成
 
 ---
 

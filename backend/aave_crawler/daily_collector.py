@@ -556,7 +556,8 @@ async def run_daily_collector(
 
         pending: list[tuple[UserPosition, int]] = []
         ok = skip_count = fail = 0
-        db_task: asyncio.Task | None = None
+        db_tasks: list[asyncio.Task] = []  # 双缓冲：最多同时 2 个写入任务在飞行
+        _MAX_DB_TASKS = 2
 
         with tqdm(total=len(day_users), desc=str(day), unit="user") as pbar:
             for coro in asyncio.as_completed(all_tasks):
@@ -575,23 +576,29 @@ async def run_daily_collector(
                 pending.append((pos, eth_price_raw))
 
                 if len(pending) >= cfg.crawler.batch_size:
-                    if db_task is not None:
-                        await db_task
                     if not dry_run:
-                        db_task = asyncio.ensure_future(
-                            upsert_daily_positions(
-                                pool,
-                                list(pending),
-                                day,
-                                block_number,
-                                block_ts,
-                                protocol,
+                        # 若已有 _MAX_DB_TASKS 个写入任务在飞行，等待最早的一个完成
+                        db_tasks = [t for t in db_tasks if not t.done()]
+                        if len(db_tasks) >= _MAX_DB_TASKS:
+                            await db_tasks[0]
+                            db_tasks.pop(0)
+                        db_tasks.append(
+                            asyncio.ensure_future(
+                                upsert_daily_positions(
+                                    pool,
+                                    list(pending),
+                                    day,
+                                    block_number,
+                                    block_ts,
+                                    protocol,
+                                )
                             )
                         )
                     pending.clear()
 
-            if db_task is not None:
-                await db_task
+            # 等待所有飞行中的写入任务完成，再提交最后一批
+            if db_tasks:
+                await asyncio.gather(*db_tasks)
             if pending and not dry_run:
                 await upsert_daily_positions(
                     pool, pending, day, block_number, block_ts, protocol
