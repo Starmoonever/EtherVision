@@ -38,7 +38,10 @@ from ..db import (
 )
 from ..models import ReservePosition, UserPosition
 from ..rpc import (
+    CONTRACTS_V3,
     EMPTY_POSITION,
+    ORACLE_ABI,
+    WETH_ADDRESS,
     fetch_user_position,
     fetch_user_position_at_block,
     get_all_reserve_tokens,
@@ -120,6 +123,19 @@ async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
     # 价格每次重新拉取
     prices = await get_assets_prices(w3, _cache[cache_key_addresses], contracts)
     asset_prices = dict(zip(_cache[cache_key_addresses], prices))
+
+    # V2 oracle 返回 ETH/18dec，需归一化为 USD/8dec（与 fetch_block_prices 逻辑一致）
+    if contracts.oracle_price_in_eth:
+        v3_oracle = w3.eth.contract(address=CONTRACTS_V3.oracle, abi=ORACLE_ABI)
+        eth_usd_raw: int = await v3_oracle.functions.getAssetPrice(WETH_ADDRESS).call()
+        if eth_usd_raw > 0:
+            asset_prices = {
+                addr: (p * eth_usd_raw) // (10**18) for addr, p in asset_prices.items()
+            }
+            # WETH 键存储 eth_usd_raw，供 fetch_user_position 归一化 AccountSummary
+            asset_prices[WETH_ADDRESS] = eth_usd_raw
+        else:
+            logger.warning("[v2] 无法获取实时 ETH/USD 价格，V2 仓位数值将不准确")
 
     return _cache[cache_key_tokens], _cache[cache_key_configs], asset_prices
 
