@@ -49,7 +49,10 @@ export async function fetchUserPosition(address: string, version?: string): Prom
  * 获取指定地址在 Aave 上的借贷仓位详情。
  * @deprecated 请使用 fetchUserPosition，后端接口已合并
  */
-export async function fetchUserBorrowPosition(address: string, version: string): Promise<UserPosition> {
+export async function fetchUserBorrowPosition(
+  address: string,
+  version: string,
+): Promise<UserPosition> {
   // 为了兼容旧代码调用，暂时保留函数签名，但内部逻辑可能需要调整或直接废弃
   // 根据用户需求，现在统一调用 /position 接口
   return fetchUserPosition(address, version);

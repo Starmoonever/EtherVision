@@ -215,9 +215,18 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
 
   return (
     <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.5rem',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
+          <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
+            历史数据回顾
+          </span>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {(['3M', '6M', '1Y'] as const).map((r) => (
@@ -242,7 +251,10 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
 
       {/* Chart 1: Market Size */}
       <div className="card">
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div
+          className="card-header"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
           <span className="card-title">市场规模 （USD）</span>
         </div>
         <div style={{ height: 400 }}>
@@ -288,7 +300,10 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
 
       {/* Chart 2: Rates */}
       <div className="card">
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div
+          className="card-header"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
           <span className="card-title">抵押借贷利率</span>
         </div>
         <div style={{ height: 400 }}>

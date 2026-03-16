@@ -44,9 +44,9 @@ export default function App() {
 
   useEffect(() => {
     if (!queriedAddress) return;
-    
+
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
-      setState(prev => ({ ...prev, loading: true, notFound: false }));
+      setState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         const data = await fetchUserPosition(queriedAddress, version);
         setState({ data, loading: false, notFound: false });
@@ -123,7 +123,15 @@ export default function App() {
 
           {activeTab === 'personal' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div className="version-switch" style={{ display: 'flex', background: '#1e293b', borderRadius: '8px', padding: '2px' }}>
+              <div
+                className="version-switch"
+                style={{
+                  display: 'flex',
+                  background: '#1e293b',
+                  borderRadius: '8px',
+                  padding: '2px',
+                }}
+              >
                 <button
                   onClick={() => setPersonalVersion('v2')}
                   style={{

@@ -8,7 +8,6 @@ interface Props {
   version: 'v2' | 'v3';
 }
 
-
 // 健康因子颜色逻辑保持不变
 function healthColor(hfStr: string): string {
   if (hfStr === '∞' || hfStr === 'Infinity') return '#22c55e';

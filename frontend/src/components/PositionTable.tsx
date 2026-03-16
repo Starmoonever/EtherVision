@@ -17,7 +17,6 @@ interface PositionTableProps {
   version: 'v2' | 'v3';
 }
 
-
 export function PositionTable({ data: position, loading, notFound, version }: PositionTableProps) {
   const versionLabel = version.toUpperCase();
 
@@ -85,25 +84,25 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
 
   // 筛选抵押资产: use_as_collateral 为 true
   const supplies: PositionRow[] = position.reserves
-    .filter(r => r.use_as_collateral)
-    .map(r => ({
+    .filter((r) => r.use_as_collateral)
+    .map((r) => ({
       tokenAddress: r.token_address,
       symbol: r.symbol,
       priceUSD: parseFloat(r.price_usd || '0'),
       balance: r.supply_amount,
       valueUSD: parseFloat(r.supply_usd || '0'),
-      isCollateral: true
+      isCollateral: true,
     }));
 
   // 筛选负债: total_debt_amount 不为 0
   const borrows: PositionRow[] = position.reserves
-    .filter(r => parseFloat(r.total_debt_amount || '0') !== 0)
-    .map(r => ({
+    .filter((r) => parseFloat(r.total_debt_amount || '0') !== 0)
+    .map((r) => ({
       tokenAddress: r.token_address,
       symbol: r.symbol,
       priceUSD: parseFloat(r.price_usd || '0'),
       balance: r.total_debt_amount,
-      valueUSD: parseFloat(r.total_debt_usd || '0')
+      valueUSD: parseFloat(r.total_debt_usd || '0'),
     }));
 
   return (

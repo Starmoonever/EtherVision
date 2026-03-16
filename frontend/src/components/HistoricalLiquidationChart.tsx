@@ -42,8 +42,8 @@ export function HistoricalLiquidationChart({
 
           // Aggregate by snapshot_date
           const map = new Map<string, HistoricalLiquidationPoint>();
-          
-          [...v2Data, ...v3Data].forEach(item => {
+
+          [...v2Data, ...v3Data].forEach((item) => {
             if (!map.has(item.snapshot_date)) {
               map.set(item.snapshot_date, {
                 snapshot_date: item.snapshot_date,
@@ -53,24 +53,40 @@ export function HistoricalLiquidationChart({
                 total_weth_debt_amount: '0',
                 total_weth_debt_usd: '0',
                 eth_price: item.eth_price, // Assuming eth_price is same for same date
-                sim_eth_price: item.sim_eth_price
+                sim_eth_price: item.sim_eth_price,
               });
             }
             const current = map.get(item.snapshot_date)!;
-            current.liquidation_cnt = (parseInt(current.liquidation_cnt) + parseInt(item.liquidation_cnt)).toString();
-            current.total_eth_collateral_amount = (parseFloat(current.total_eth_collateral_amount) + parseFloat(item.total_eth_collateral_amount)).toString();
-            current.total_eth_collateral_usd = (parseFloat(current.total_eth_collateral_usd) + parseFloat(item.total_eth_collateral_usd)).toString();
-            current.total_weth_debt_amount = (parseFloat(current.total_weth_debt_amount) + parseFloat(item.total_weth_debt_amount)).toString();
-            current.total_weth_debt_usd = (parseFloat(current.total_weth_debt_usd) + parseFloat(item.total_weth_debt_usd)).toString();
+            current.liquidation_cnt = (
+              parseInt(current.liquidation_cnt) + parseInt(item.liquidation_cnt)
+            ).toString();
+            current.total_eth_collateral_amount = (
+              parseFloat(current.total_eth_collateral_amount) +
+              parseFloat(item.total_eth_collateral_amount)
+            ).toString();
+            current.total_eth_collateral_usd = (
+              parseFloat(current.total_eth_collateral_usd) +
+              parseFloat(item.total_eth_collateral_usd)
+            ).toString();
+            current.total_weth_debt_amount = (
+              parseFloat(current.total_weth_debt_amount) + parseFloat(item.total_weth_debt_amount)
+            ).toString();
+            current.total_weth_debt_usd = (
+              parseFloat(current.total_weth_debt_usd) + parseFloat(item.total_weth_debt_usd)
+            ).toString();
           });
-          
-          const sorted = Array.from(map.values()).sort((a, b) => 
-            new Date(a.snapshot_date).getTime() - new Date(b.snapshot_date).getTime()
+
+          const sorted = Array.from(map.values()).sort(
+            (a, b) => new Date(a.snapshot_date).getTime() - new Date(b.snapshot_date).getTime(),
           );
           setData(sorted);
         } else {
           const res = await fetchHistoricalLiquidation(startDate, endDate, version, priceChange);
-          setData(res.sort((a, b) => new Date(a.snapshot_date).getTime() - new Date(b.snapshot_date).getTime()));
+          setData(
+            res.sort(
+              (a, b) => new Date(a.snapshot_date).getTime() - new Date(b.snapshot_date).getTime(),
+            ),
+          );
         }
       } catch (err) {
         console.error('Failed to fetch historical liquidation data', err);
@@ -93,21 +109,29 @@ export function HistoricalLiquidationChart({
 
   if (!data.length) {
     return (
-      <div style={{ height: 350, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+      <div
+        style={{
+          height: 350,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#64748b',
+        }}
+      >
         暂无数据
       </div>
     );
   }
 
   // Format data for chart
-  const chartData = data.map(d => ({
+  const chartData = data.map((d) => ({
     ...d,
     total_eth_collateral_usd_num: parseFloat(d.total_eth_collateral_usd),
     total_weth_debt_usd_num: parseFloat(d.total_weth_debt_usd),
     sim_eth_price_num: parseFloat(d.sim_eth_price),
     total_eth_collateral_amount_num: parseFloat(d.total_eth_collateral_amount),
     total_weth_debt_amount_num: parseFloat(d.total_weth_debt_amount),
-    liquidation_cnt_num: parseInt(d.liquidation_cnt)
+    liquidation_cnt_num: parseInt(d.liquidation_cnt),
   }));
 
   return (
@@ -115,97 +139,120 @@ export function HistoricalLiquidationChart({
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-          <XAxis 
-            dataKey="snapshot_date" 
-            stroke="#64748b" 
+          <XAxis
+            dataKey="snapshot_date"
+            stroke="#64748b"
             tickFormatter={(val) => {
-                const d = new Date(val);
-                return `${d.getMonth() + 1}-${d.getDate()}`;
+              const d = new Date(val);
+              return `${d.getMonth() + 1}-${d.getDate()}`;
             }}
             fontSize={12}
           />
           {/* Left Axis: Total USD (Bar) */}
-          <YAxis 
+          <YAxis
             yAxisId="left"
             stroke="#10b981"
-            tickFormatter={(val) => version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`}
+            tickFormatter={(val) =>
+              version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`
+            }
             domain={version === 'v2' ? undefined : [0, 12000000]}
           />
           {/* Right Axis: Simulated ETH Price (Line) */}
-          <YAxis 
+          <YAxis
             yAxisId="right"
             orientation="right"
             stroke="#3b82f6"
             tickFormatter={(val) => `$${val}`}
-            domain={[0, version === 'v2' ? 'auto' : (priceChange >= 0 ? 6000 : 3000)]}
+            domain={[0, version === 'v2' ? 'auto' : priceChange >= 0 ? 6000 : 3000]}
             allowDataOverflow={version !== 'v2'}
           />
           <Tooltip
             contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#e2e8f0' }}
             itemStyle={{ fontSize: '0.9rem' }}
             formatter={(value: any, name: any) => {
-                if (name === '模拟ETH价格' || name === 'sim_eth_price_num') return [`$${value}`, '模拟ETH价格'];
-                if (name === '该模拟价格下清算的抵押 ETH 总值' || name === 'total_eth_collateral_usd_num') return [`$${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, '该模拟价格下清算的抵押 ETH 总值'];
-                if (name === '该模拟价格下清算的 ETH 债务总值' || name === 'total_weth_debt_usd_num') return [`$${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, '该模拟价格下清算的 ETH 债务总值'];
-                if (name === '模拟价格下清算账户数' || name === 'liquidation_cnt_num') return [value, '模拟价格下清算账户数'];
-                if (name === '清算抵押ETH数量' || name === 'total_eth_collateral_amount_num') return [`${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`, '清算抵押ETH数量'];
-                if (name === '清算ETH债务总数量' || name === 'total_weth_debt_amount_num') return [`${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`, '清算ETH债务总数量'];
-                return [value, name];
+              if (name === '模拟ETH价格' || name === 'sim_eth_price_num')
+                return [`$${value}`, '模拟ETH价格'];
+              if (
+                name === '该模拟价格下清算的抵押 ETH 总值' ||
+                name === 'total_eth_collateral_usd_num'
+              )
+                return [
+                  `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  '该模拟价格下清算的抵押 ETH 总值',
+                ];
+              if (name === '该模拟价格下清算的 ETH 债务总值' || name === 'total_weth_debt_usd_num')
+                return [
+                  `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  '该模拟价格下清算的 ETH 债务总值',
+                ];
+              if (name === '模拟价格下清算账户数' || name === 'liquidation_cnt_num')
+                return [value, '模拟价格下清算账户数'];
+              if (name === '清算抵押ETH数量' || name === 'total_eth_collateral_amount_num')
+                return [
+                  `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  '清算抵押ETH数量',
+                ];
+              if (name === '清算ETH债务总数量' || name === 'total_weth_debt_amount_num')
+                return [
+                  `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  '清算ETH债务总数量',
+                ];
+              return [value, name];
             }}
             labelFormatter={(label) => `日期: ${label}`}
           />
           <Legend />
-          <Bar 
-            yAxisId="left" 
-            dataKey="total_eth_collateral_usd_num" 
-            name="该模拟价格下清算的抵押 ETH 总值" 
-            fill="#10b981" 
+          <Bar
+            yAxisId="left"
+            dataKey="total_eth_collateral_usd_num"
+            name="该模拟价格下清算的抵押 ETH 总值"
+            fill="#10b981"
             opacity={0.8}
             radius={[4, 4, 0, 0]}
           />
-          <Bar 
-            yAxisId="left" 
-            dataKey="total_weth_debt_usd_num" 
-            name="该模拟价格下清算的 ETH 债务总值" 
-            fill="#f59e0b" 
+          <Bar
+            yAxisId="left"
+            dataKey="total_weth_debt_usd_num"
+            name="该模拟价格下清算的 ETH 债务总值"
+            fill="#f59e0b"
             opacity={0.8}
             radius={[4, 4, 0, 0]}
           />
-          <Line 
-            yAxisId="right" 
-            type="monotone" 
-            dataKey="sim_eth_price_num" 
-            name="模拟ETH价格" 
-            stroke="#3b82f6" 
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="sim_eth_price_num"
+            name="模拟ETH价格"
+            stroke="#3b82f6"
             strokeWidth={2}
             dot={false}
           />
-          <Line 
-            yAxisId="right" 
-            type="monotone" 
-            dataKey="liquidation_cnt_num" 
-            name="模拟价格下清算账户数" 
-            stroke="none" 
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="liquidation_cnt_num"
+            name="模拟价格下清算账户数"
+            stroke="none"
             legendType="none"
             dot={false}
             activeDot={false}
           />
-          <Line 
-            yAxisId="right" 
-            type="monotone" 
-            dataKey="total_eth_collateral_amount_num" 
-            name="清算抵押ETH数量" 
-            stroke="none" 
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="total_eth_collateral_amount_num"
+            name="清算抵押ETH数量"
+            stroke="none"
             legendType="none"
             dot={false}
             activeDot={false}
           />
-          <Line 
-            yAxisId="right" 
-            type="monotone" 
-            dataKey="total_weth_debt_amount_num" 
-            name="清算ETH债务总数量" 
-            stroke="none" 
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="total_weth_debt_amount_num"
+            name="清算ETH债务总数量"
+            stroke="none"
             legendType="none"
             dot={false}
             activeDot={false}

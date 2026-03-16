@@ -49,11 +49,13 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick }: any) => {
         </p>
         <p style={{ color: '#fbbf24', fontSize: '0.8rem', marginBottom: '5px' }}>
           类型: {point.operation_type}
-          {point.original_operation_type && point.original_operation_type !== point.operation_type && point.original_operation_type !== 'unknown' && (
-             <span style={{ color: '#94a3b8', marginLeft: '4px' }}>
-               ({point.original_operation_type})
-             </span>
-          )}
+          {point.original_operation_type &&
+            point.original_operation_type !== point.operation_type &&
+            point.original_operation_type !== 'unknown' && (
+              <span style={{ color: '#94a3b8', marginLeft: '4px' }}>
+                ({point.original_operation_type})
+              </span>
+            )}
         </p>
         {payload.map((entry: any, index: number) => (
           <p key={index} style={{ color: entry.color, margin: 0, fontSize: '0.9rem' }}>
@@ -195,7 +197,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
   });
 
   const [selectedType, setSelectedType] = useState<string>('all');
-  
+
   // Fetch full history ONCE on mount/address change
   useEffect(() => {
     const fetchFullHistory = async () => {
@@ -203,7 +205,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
       setError('');
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        
+
         // Always fetch the full range initially
         const defaultStart = '2020-12-01 00:00:00';
         const now = new Date();
@@ -216,7 +218,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         const defaultEnd = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 
         const response = await fetch(
-          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(defaultStart)}&end=${encodeURIComponent(defaultEnd)}&version=${version}`
+          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(defaultStart)}&end=${encodeURIComponent(defaultEnd)}&version=${version}`,
         );
 
         if (!response.ok) {
@@ -244,15 +246,15 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             const weth_debt_usd = parseFloat(pt.weth_debt_usd || '0');
             const total_debt_usd = parseFloat(pt.total_debt_usd || '0');
 
-          // Check for "同类资产借贷" (Same asset borrowing)
-          const isSameAsset = 
-            Math.abs(total_collateral_usd - eth_collateral_usd) < 1 && 
-            Math.abs(total_debt_usd - weth_debt_usd) < 1;
+            // Check for "同类资产借贷" (Same asset borrowing)
+            const isSameAsset =
+              Math.abs(total_collateral_usd - eth_collateral_usd) < 1 &&
+              Math.abs(total_debt_usd - weth_debt_usd) < 1;
 
-          if (isSameAsset) {
-            operation_type = '杠杆质押(存入LST，借出WETH)';
-            liq_price = 0;
-          }
+            if (isSameAsset) {
+              operation_type = '杠杆质押(存入LST，借出WETH)';
+              liq_price = 0;
+            }
 
             return {
               timestamp: timeStr,
@@ -296,24 +298,23 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     const startTs = new Date(startTime).getTime();
     const endTs = new Date(endTime).getTime();
 
-    const filtered = fullData.filter(pt => {
+    const filtered = fullData.filter((pt) => {
       const ptTs = new Date(pt.timestamp).getTime();
       return ptTs >= startTs && ptTs <= endTs;
     });
 
     setData(filtered);
-    
+
     // Reset tooltip on filter change
     setActiveTooltip(null);
     setSelectedPoint(null);
-
   }, [startTime, endTime, fullData]);
 
   const [appliedRange, setAppliedRange] = useState({ start: '2020-12-01 00:00:00', end: endTime });
 
   // Update applied range on mount to match initial default
   useEffect(() => {
-     setAppliedRange({ start: '2020-12-01 00:00:00', end: endTime });
+    setAppliedRange({ start: '2020-12-01 00:00:00', end: endTime });
   }, []);
 
   // The actual filtering effect depends on appliedRange
@@ -321,18 +322,17 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     if (!fullData.length) return;
     const startTs = new Date(appliedRange.start).getTime();
     const endTs = new Date(appliedRange.end).getTime();
-    
-    let filtered = fullData.filter(pt => {
+
+    let filtered = fullData.filter((pt) => {
       const ptTs = new Date(pt.timestamp).getTime();
       return ptTs >= startTs && ptTs <= endTs;
     });
 
     // If a specific type is selected, filter by that type as well
     if (selectedType !== 'all') {
-        filtered = filtered.filter(pt => 
-          pt.operation_type === selectedType || 
-          pt.original_operation_type === selectedType
-        );
+      filtered = filtered.filter(
+        (pt) => pt.operation_type === selectedType || pt.original_operation_type === selectedType,
+      );
     }
 
     setData(filtered);
@@ -342,7 +342,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
 
   // Button click handler
   const handleSearch = () => {
-      setAppliedRange({ start: startTime, end: endTime });
+    setAppliedRange({ start: startTime, end: endTime });
   };
 
   const handleChartClick = (e: any) => {
@@ -362,8 +362,30 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     }
   };
 
-  if (loading) return <div className="card" style={{height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center'}}><div className="spinner"></div></div>;
-  if (error) return <div className="card" style={{height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171'}}>{error}</div>;
+  if (loading)
+    return (
+      <div
+        className="card"
+        style={{ height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
+        <div className="spinner"></div>
+      </div>
+    );
+  if (error)
+    return (
+      <div
+        className="card"
+        style={{
+          height: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#f87171',
+        }}
+      >
+        {error}
+      </div>
+    );
   // if (!data.length) return null; // Previously this would hide the whole chart if no data
 
   return (
@@ -440,31 +462,39 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         </div>
       </div>
 
-      <div style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-        
+      <div
+        style={{
+          padding: '0 1rem 0.5rem 1rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.8rem',
+        }}
+      >
         {/* Basic Types */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>基本交易类型:</span>
+          <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
+            基本交易类型:
+          </span>
+          <button
+            onClick={() => setSelectedType('all')}
+            style={{
+              padding: '2px 8px',
+              fontSize: '0.75rem',
+              borderRadius: '4px',
+              border: '1px solid #334155',
+              background: selectedType === 'all' ? '#3b82f6' : 'transparent',
+              color: selectedType === 'all' ? '#fff' : '#94a3b8',
+              cursor: 'pointer',
+              textTransform: 'capitalize',
+            }}
+          >
+            All
+          </button>
+          {['borrow', 'repay', 'deposit', 'withdraw'].map((type) => (
             <button
-                onClick={() => setSelectedType('all')}
-                style={{
-                padding: '2px 8px',
-                fontSize: '0.75rem',
-                borderRadius: '4px',
-                border: '1px solid #334155',
-                background: selectedType === 'all' ? '#3b82f6' : 'transparent',
-                color: selectedType === 'all' ? '#fff' : '#94a3b8',
-                cursor: 'pointer',
-                textTransform: 'capitalize',
-                }}
-            >
-                All
-            </button>
-            {['borrow', 'repay', 'deposit', 'withdraw'].map(type => (
-            <button
-                key={type}
-                onClick={() => setSelectedType(type)}
-                style={{
+              key={type}
+              onClick={() => setSelectedType(type)}
+              style={{
                 padding: '2px 8px',
                 fontSize: '0.75rem',
                 borderRadius: '4px',
@@ -473,21 +503,23 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 color: selectedType === type ? '#fff' : '#94a3b8',
                 cursor: 'pointer',
                 textTransform: 'capitalize',
-                }}
+              }}
             >
-                {type}
+              {type}
             </button>
-            ))}
+          ))}
         </div>
 
         {/* Advanced Types */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>混合交易类型:</span>
-            {['liquidate', 'flash loan', '杠杆质押(存入LST，借出WETH)'].map(type => (
+          <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
+            混合交易类型:
+          </span>
+          {['liquidate', 'flash loan', '杠杆质押(存入LST，借出WETH)'].map((type) => (
             <button
-                key={type}
-                onClick={() => setSelectedType(type)}
-                style={{
+              key={type}
+              onClick={() => setSelectedType(type)}
+              style={{
                 padding: '2px 8px',
                 fontSize: '0.75rem',
                 borderRadius: '4px',
@@ -496,52 +528,60 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 color: selectedType === type ? '#fff' : '#94a3b8',
                 cursor: 'pointer',
                 textTransform: 'capitalize',
-                }}
+              }}
             >
-                {type}
+              {type}
             </button>
-            ))}
+          ))}
         </div>
       </div>
 
       <div style={{ height: 550 }}>
         {!data.length ? (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+          <div
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#94a3b8',
+            }}
+          >
             暂无该时间段的交易数据
           </div>
         ) : (
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart
-            data={data}
-            margin={{ top: 10, right: 30, left: 10, bottom: 5 }}
-            onClick={handleChartClick}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={50} />
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={data}
+              margin={{ top: 10, right: 30, left: 10, bottom: 5 }}
+              onClick={handleChartClick}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={50} />
 
-            {/* 左轴：资产/债务价值 */}
-            <YAxis
-              yAxisId="left"
-              stroke="#10b981"
-              tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
-            />
+              {/* 左轴：资产/债务价值 */}
+              <YAxis
+                yAxisId="left"
+                stroke="#10b981"
+                tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
+              />
 
-            {/* 右轴：ETH价格 & 清算价格 */}
-            <YAxis
-              yAxisId="right"
-              orientation="right"
-              stroke="#3b82f6"
-              tickFormatter={(val) => `$${val}`}
-            />
+              {/* 右轴：ETH价格 & 清算价格 */}
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke="#3b82f6"
+                tickFormatter={(val) => `$${val}`}
+              />
 
-            <Tooltip
-              content={<CustomTooltip onDetailsClick={setSelectedPoint} />}
-              wrapperStyle={{ pointerEvents: 'auto', zIndex: 1000 }}
-              trigger="hover"
-              active={activeTooltip !== null ? true : undefined}
-              position={activeTooltip ? activeTooltip.coordinate : undefined}
-            />
-            {/*
+              <Tooltip
+                content={<CustomTooltip onDetailsClick={setSelectedPoint} />}
+                wrapperStyle={{ pointerEvents: 'auto', zIndex: 1000 }}
+                trigger="hover"
+                active={activeTooltip !== null ? true : undefined}
+                position={activeTooltip ? activeTooltip.coordinate : undefined}
+              />
+              {/*
               Workaround: Recharts onClick gives us the activeIndex.
               We can conditionally render a custom overlay OR try to force the Tooltip props.
               Actually, Recharts `Tooltip` has a `shared` and `defaultIndex` prop but not "force show at index".
@@ -563,52 +603,52 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
 
               Actually, `onClick` on Chart gives `activeCoordinate`. We can save that!
             */}
-            <Legend />
+              <Legend />
 
-            <Line
-              yAxisId="left"
-              type="monotone"
-              dataKey={primaryMetric}
-              stroke="#10b981"
-              strokeWidth={2}
-              dot={(props: any) => {
-                const { cx, cy, payload } = props;
-                
-                // If filtering by specific type, show prominent dots
-                return (
-                    <circle 
-                        key={payload.timestamp} 
-                        cx={cx} 
-                        cy={cy} 
-                        r={3} 
-                        fill="#fff" 
-                        stroke="none"
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey={primaryMetric}
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={(props: any) => {
+                  const { cx, cy, payload } = props;
+
+                  // If filtering by specific type, show prominent dots
+                  return (
+                    <circle
+                      key={payload.timestamp}
+                      cx={cx}
+                      cy={cy}
+                      r={3}
+                      fill="#fff"
+                      stroke="none"
                     />
                   );
-              }}
-              name={primaryMetric === 'eth_collateral_usd' ? '抵押ETH价值' : '贷出ETH价值'}
-            />
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="eth_price_usd"
-              stroke="#3b82f6"
-              strokeWidth={2}
-              dot={false}
-              name="ETH 价格"
-            />
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="liq_price"
-              stroke="#ef4444"
-              strokeWidth={2}
-              strokeDasharray="5 5"
-              dot={false}
-              name="ETH清算价格"
-            />
-          </LineChart>
-        </ResponsiveContainer>
+                }}
+                name={primaryMetric === 'eth_collateral_usd' ? '抵押ETH价值' : '贷出ETH价值'}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="eth_price_usd"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                dot={false}
+                name="ETH 价格"
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="liq_price"
+                stroke="#ef4444"
+                strokeWidth={2}
+                strokeDasharray="5 5"
+                dot={false}
+                name="ETH清算价格"
+              />
+            </LineChart>
+          </ResponsiveContainer>
         )}
       </div>
 

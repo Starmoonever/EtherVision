@@ -12,7 +12,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, cast
 
-from eth_typing import ChecksumAddress
+from eth_abi.abi import decode as _abi_decode
+from eth_typing import BlockIdentifier, ChecksumAddress
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
@@ -208,7 +209,7 @@ CHAINLINK_ETH_USD = AsyncWeb3.to_checksum_address(
     "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
 )
 # latestRoundData() → (roundId, answer/8dec, startedAt, updatedAt, answeredInRound)
-CHAINLINK_ETH_USD_ABI: list[dict] = [
+CHAINLINK_ETH_USD_ABI: list[dict] = [  # type: ignore[var-annotated]
     {
         "inputs": [],
         "name": "latestRoundData",
@@ -223,6 +224,57 @@ CHAINLINK_ETH_USD_ABI: list[dict] = [
         "type": "function",
     },
 ]
+
+# ── Multicall3 ────────────────────────────────────────────────────────────────
+# 部署于 Ethereum Mainnet block 14_353_601（2022-03-09）
+# 支持 block_identifier，可用于历史块 eth_call
+MULTICALL3_ADDRESS = AsyncWeb3.to_checksum_address(
+    "0xcA11bde05977b3631167028862bE2a173976CA11"
+)
+MULTICALL3_DEPLOY_BLOCK = 14_353_601
+
+MULTICALL3_ABI: list[dict[str, Any]] = [
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"name": "target", "type": "address"},
+                    {"name": "allowFailure", "type": "bool"},
+                    {"name": "callData", "type": "bytes"},
+                ],
+                "name": "calls",
+                "type": "tuple[]",
+            }
+        ],
+        "name": "aggregate3",
+        "outputs": [
+            {
+                "components": [
+                    {"name": "success", "type": "bool"},
+                    {"name": "returnData", "type": "bytes"},
+                ],
+                "name": "returnData",
+                "type": "tuple[]",
+            }
+        ],
+        "stateMutability": "payable",
+        "type": "function",
+    }
+]
+
+# getUserReserveData 返回值的 ABI 类型序列（用于 eth_abi.decode）
+_RESERVE_DATA_OUTPUT_TYPES = [
+    "uint256",  # currentATokenBalance
+    "uint256",  # currentStableDebt
+    "uint256",  # currentVariableDebt
+    "uint256",  # principalStableDebt
+    "uint256",  # scaledVariableDebt
+    "uint256",  # stableBorrowRate
+    "uint256",  # liquidityRate
+    "uint40",  # stableRateLastUpdated
+    "bool",  # usageAsCollateralEnabled
+]
+
 
 # ── 客户端工厂 ────────────────────────────────────────────────────────────────
 
@@ -348,6 +400,52 @@ async def get_assets_prices(
     return list(await contract.functions.getAssetsPrices(checksum_assets).call())
 
 
+async def _multicall_user_reserve_data(
+    w3: AsyncWeb3,
+    contracts: ProtocolContracts,
+    reserve_tokens: list[ReserveToken],
+    user_address: str,
+    block_identifier: BlockIdentifier = "latest",
+) -> list[tuple[int, ...] | Exception]:
+    """使用 Multicall3 的 aggregate3 将 N 次 getUserReserveData 合并为 1 次 eth_call。
+
+    返回与 `asyncio.gather(*[data_provider.getUserReserveData(...).call()])` 相同格式的列表：
+    每个元素是长度为 9 的 tuple（成功时）或 Exception（调用失败时）。
+
+    调用方需保证 block_identifier >= MULTICALL3_DEPLOY_BLOCK（14_353_601）或 "latest"。
+    """
+    data_contract = w3.eth.contract(
+        address=contracts.data_provider, abi=DATA_PROVIDER_ABI
+    )
+    mc_contract = w3.eth.contract(address=MULTICALL3_ADDRESS, abi=MULTICALL3_ABI)
+    checksum_user = AsyncWeb3.to_checksum_address(user_address)
+
+    # 编码每个 getUserReserveData(token, user) 调用
+    calls = []
+    for rt in reserve_tokens:
+        calldata = data_contract.encode_abi(
+            "getUserReserveData",
+            args=[AsyncWeb3.to_checksum_address(rt.token_address), checksum_user],
+        )
+        calls.append((contracts.data_provider, True, calldata))  # allowFailure=True
+
+    raw_results: list[tuple[bool, bytes]] = await mc_contract.functions.aggregate3(
+        calls
+    ).call(block_identifier=block_identifier)
+
+    results: list[tuple[int, ...] | Exception] = []
+    for success, return_data in raw_results:
+        if not success or not return_data:
+            results.append(Exception("Multicall3: call failed or empty return data"))
+        else:
+            try:
+                decoded = _abi_decode(_RESERVE_DATA_OUTPUT_TYPES, return_data)
+                results.append(tuple(decoded))
+            except Exception as exc:
+                results.append(exc)
+    return results
+
+
 # ── 高层查询（单用户完整仓位） ────────────────────────────────────────────────
 
 # 哨兵值：账户在 Aave 无任何仓位（totalCollateral==0 && totalDebt==0）
@@ -382,12 +480,22 @@ async def fetch_user_position(
 
             block = await w3.eth.block_number
 
-            # 并发查询该用户在所有资产的仓位
-            tasks = [
-                get_user_reserve_data(w3, rt.token_address, user_address, contracts)
-                for rt in reserve_tokens
+            # 使用 Multicall3 将 N 次 getUserReserveData 合并为 1 次 eth_call
+            # 当前块永远 >= MULTICALL3_DEPLOY_BLOCK（14_353_601），无需降级
+            raw_results: list[
+                tuple[int, ...] | Exception
+            ] = await _multicall_user_reserve_data(
+                w3, contracts, reserve_tokens, user_address
+            )
+            # 转换为 UserReserveData，保持后续处理代码不变
+            results: list[UserReserveData | Exception] = [
+                UserReserveData(
+                    r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], bool(r[8])
+                )
+                if not isinstance(r, Exception)
+                else r
+                for r in raw_results
             ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # V2 oracle 返回 ETH 计价（18 位）；调用方已将 asset_prices 归一化为 USD/8dec，
             # 其中 asset_prices[WETH_ADDRESS] 即 eth_usd_raw（8 位 USD）。
@@ -496,26 +604,37 @@ async def fetch_user_position_at_block(
                 return EMPTY_POSITION
 
             token_addresses = [rt.token_address for rt in reserve_tokens]
-            data_contract = w3.eth.contract(
-                address=contracts.data_provider, abi=DATA_PROVIDER_ABI
-            )
             oracle_contract = w3.eth.contract(address=contracts.oracle, abi=ORACLE_ABI)
 
-            reserve_tasks = [
-                data_contract.functions.getUserReserveData(
-                    AsyncWeb3.to_checksum_address(rt.token_address),
-                    AsyncWeb3.to_checksum_address(user_address),
-                ).call(block_identifier=block_number)
-                for rt in reserve_tokens
-            ]
+            # ── reserve 余额查询：优先 Multicall3，降级到 asyncio.gather ────────
+            # Multicall3 部署于 block 14_353_601（2022-03-09）；更早的历史块须用个别调用
+            use_multicall = block_number >= MULTICALL3_DEPLOY_BLOCK
 
             if block_prices is not None:
-                # 区块级价格已预取，只需拉取 per-user 的 reserve 余额数据
-                reserve_results = await asyncio.gather(
-                    *reserve_tasks, return_exceptions=True
-                )
+                # 区块级价格已预取，只需查 reserve 余额
                 asset_prices: dict[str, int] = block_prices
+                if use_multicall:
+                    reserve_results: list[Any] = await _multicall_user_reserve_data(
+                        w3, contracts, reserve_tokens, user_address, block_number
+                    )
+                else:
+                    data_contract = w3.eth.contract(
+                        address=contracts.data_provider, abi=DATA_PROVIDER_ABI
+                    )
+                    reserve_results = list(
+                        await asyncio.gather(
+                            *[
+                                data_contract.functions.getUserReserveData(
+                                    AsyncWeb3.to_checksum_address(rt.token_address),
+                                    AsyncWeb3.to_checksum_address(user_address),
+                                ).call(block_identifier=block_number)
+                                for rt in reserve_tokens
+                            ],
+                            return_exceptions=True,
+                        )
+                    )
             else:
+                # 需要同时获取价格：价格查询与余额查询并发
                 # 逐资产查询价格：历史块上新上线的 token 在老版 oracle 中不存在会 revert，
                 # 批量接口 getAssetsPrices 一旦有任意未知地址就整体失败；
                 # 改用单资产 getAssetPrice 并发 + return_exceptions，过滤失败项。
@@ -526,15 +645,33 @@ async def fetch_user_position_at_block(
                     for a in token_addresses
                 ]
 
-                all_results = await asyncio.gather(
-                    *reserve_tasks, *price_tasks, return_exceptions=True
-                )
-                reserve_results = all_results[: len(reserve_tasks)]
-                price_results = all_results[len(reserve_tasks) :]
+                if use_multicall:
+                    reserve_results, price_raw = await asyncio.gather(
+                        _multicall_user_reserve_data(
+                            w3, contracts, reserve_tokens, user_address, block_number
+                        ),
+                        asyncio.gather(*price_tasks, return_exceptions=True),
+                    )
+                else:
+                    data_contract = w3.eth.contract(
+                        address=contracts.data_provider, abi=DATA_PROVIDER_ABI
+                    )
+                    individual_reserve_tasks = [
+                        data_contract.functions.getUserReserveData(
+                            AsyncWeb3.to_checksum_address(rt.token_address),
+                            AsyncWeb3.to_checksum_address(user_address),
+                        ).call(block_identifier=block_number)
+                        for rt in reserve_tokens
+                    ]
+                    all_results = await asyncio.gather(
+                        *individual_reserve_tasks, *price_tasks, return_exceptions=True
+                    )
+                    reserve_results = list(all_results[: len(reserve_tokens)])
+                    price_raw = list(all_results[len(reserve_tokens) :])
 
                 asset_prices = {
                     addr: p
-                    for addr, p in zip(token_addresses, price_results)
+                    for addr, p in zip(token_addresses, price_raw)
                     if not isinstance(p, Exception) and isinstance(p, int) and p > 0
                 }
 

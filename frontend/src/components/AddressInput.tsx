@@ -53,7 +53,7 @@ export function AddressInput({ onSearch, loading }: Props) {
   }, []);
 
   const saveHistory = (address: string) => {
-    const newHistory = [address, ...history.filter(h => h !== address)].slice(0, MAX_HISTORY);
+    const newHistory = [address, ...history.filter((h) => h !== address)].slice(0, MAX_HISTORY);
     setHistory(newHistory);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
   };
@@ -91,10 +91,10 @@ export function AddressInput({ onSearch, loading }: Props) {
     }
     // 地址正确，则清空之前的错误提示
     setError('');
-    
+
     // 保存历史记录
     saveHistory(trimmed);
-    
+
     // 将合规地址传给 onSearch 函数，触发Aave 里 的API 调用
     onSearch(trimmed);
     setShowHistory(false);
@@ -106,49 +106,45 @@ export function AddressInput({ onSearch, loading }: Props) {
     <form onSubmit={handleSubmit} className="input-form">
       <div className="input-row">
         <div className="input-wrapper" ref={wrapperRef}>
-            {/* 输入框 ,用户输入时，实时更新 value 状态 */}
-            <input
-              type="text"
-              value={value}
-              onFocus={() => setShowHistory(true)}
-              onChange={(e) => {
-                setValue(e.target.value); /* 实时更新 value 内容 */
-                setError(''); /* 清空之前的错误提示 */
-              }}
-              placeholder="输入抵押ETH的钱包地址 (0x...)"
-              className="address-input"
-              spellCheck={false}
-              disabled={loading}
-            />
-            
-            {showHistory && history.length > 0 && (
-                <div className="history-dropdown">
-                    <div className="history-header">
-                        <span>搜索记录</span>
-                        <button 
-                            type="button" 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                clearHistory();
-                            }} 
-                            className="clear-history-btn"
-                        >
-                            清除记录
-                        </button>
-                    </div>
-                    <ul className="history-list">
-                        {history.map((addr) => (
-                            <li 
-                                key={addr} 
-                                className="history-item"
-                                onClick={() => handleHistoryClick(addr)}
-                            >
-                                {addr}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
+          {/* 输入框 ,用户输入时，实时更新 value 状态 */}
+          <input
+            type="text"
+            value={value}
+            onFocus={() => setShowHistory(true)}
+            onChange={(e) => {
+              setValue(e.target.value); /* 实时更新 value 内容 */
+              setError(''); /* 清空之前的错误提示 */
+            }}
+            placeholder="输入抵押ETH的钱包地址 (0x...)"
+            className="address-input"
+            spellCheck={false}
+            disabled={loading}
+          />
+
+          {showHistory && history.length > 0 && (
+            <div className="history-dropdown">
+              <div className="history-header">
+                <span>搜索记录</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearHistory();
+                  }}
+                  className="clear-history-btn"
+                >
+                  清除记录
+                </button>
+              </div>
+              <ul className="history-list">
+                {history.map((addr) => (
+                  <li key={addr} className="history-item" onClick={() => handleHistoryClick(addr)}>
+                    {addr}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <button type="submit" className="search-btn" disabled={loading}>

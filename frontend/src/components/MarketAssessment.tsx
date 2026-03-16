@@ -20,9 +20,9 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
   // Reset priceChange to sensible default when side/mode switches
   useEffect(() => {
     if (mode === 'history') {
-        setPriceChange(0);
+      setPriceChange(0);
     } else {
-        setPriceChange(marketSide === 'collateral' ? -10 : 10);
+      setPriceChange(marketSide === 'collateral' ? -10 : 10);
     }
   }, [marketSide, mode]);
 
@@ -106,40 +106,54 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
           <div style={{ padding: '0 0 1.25rem 0' }}>
             <div className="card-header" style={{ marginBottom: '1rem' }}>
               <span className="card-title">
-                  {mode === 'realtime' ? '实时价格波动下清算模拟' : '历史价格波动清算模拟'}
+                {mode === 'realtime' ? '实时价格波动下清算模拟' : '历史价格波动清算模拟'}
               </span>
               {/* side / version 切换器 */}
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 {mode === 'history' && (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <input 
-                            type="date" 
-                            value={startDate} 
-                            onChange={e => setStartDate(e.target.value)}
-                            style={{ background: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '4px', padding: '2px 4px', fontSize: '0.8rem' }}
-                        />
-                        <span style={{ color: '#64748b' }}>-</span>
-                        <input 
-                            type="date" 
-                            value={endDate} 
-                            onChange={e => setEndDate(e.target.value)}
-                            style={{ background: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '4px', padding: '2px 4px', fontSize: '0.8rem' }}
-                        />
-                    </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      style={{
+                        background: '#0f172a',
+                        border: '1px solid #334155',
+                        color: '#cbd5e1',
+                        borderRadius: '4px',
+                        padding: '2px 4px',
+                        fontSize: '0.8rem',
+                      }}
+                    />
+                    <span style={{ color: '#64748b' }}>-</span>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      style={{
+                        background: '#0f172a',
+                        border: '1px solid #334155',
+                        color: '#cbd5e1',
+                        borderRadius: '4px',
+                        padding: '2px 4px',
+                        fontSize: '0.8rem',
+                      }}
+                    />
+                  </div>
                 )}
                 <div
-                    style={{
+                  style={{
                     display: 'flex',
                     background: '#0f172a',
                     borderRadius: '6px',
                     padding: '2px',
-                    }}
+                  }}
                 >
-                    {(['realtime', 'history'] as const).map((m) => (
+                  {(['realtime', 'history'] as const).map((m) => (
                     <button
-                        key={m}
-                        onClick={() => setMode(m)}
-                        style={{
+                      key={m}
+                      onClick={() => setMode(m)}
+                      style={{
                         background: mode === m ? '#3b82f6' : 'transparent',
                         color: mode === m ? '#fff' : '#94a3b8',
                         border: 'none',
@@ -149,11 +163,11 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
                         fontSize: '0.8rem',
                         fontWeight: 600,
                         transition: 'all 0.2s',
-                        }}
+                      }}
                     >
-                        {m === 'realtime' ? '实时' : '历史'}
+                      {m === 'realtime' ? '实时' : '历史'}
                     </button>
-                    ))}
+                  ))}
                 </div>
               </div>
             </div>
@@ -186,7 +200,7 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
             <input
               type="range"
               min={marketSide === 'collateral' ? -100 : 0}
-              max={marketSide === 'collateral' ? 0 : (mode === 'history' ? 200 : 100)}
+              max={marketSide === 'collateral' ? 0 : mode === 'history' ? 200 : 100}
               value={priceChange}
               onChange={(e) => setPriceChange(Number(e.target.value))}
               style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
@@ -203,20 +217,20 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
             }}
           >
             {mode === 'realtime' ? (
-                <LiquidationChart
+              <LiquidationChart
                 currentEthPrice={ethPrice}
                 priceChange={priceChange}
                 version={marketVersion}
                 side={marketSide}
                 onPriceChange={setPriceChange}
-                />
+              />
             ) : (
-                <HistoricalLiquidationChart
+              <HistoricalLiquidationChart
                 version={marketVersion}
                 startDate={startDate}
                 endDate={endDate}
                 priceChange={priceChange}
-                />
+              />
             )}
           </div>
 
