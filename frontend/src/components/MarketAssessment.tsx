@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchEthPrice } from '../api';
 import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
@@ -7,24 +7,43 @@ import { HistoricalLiquidationChart } from './HistoricalLiquidationChart';
 
 export interface MarketAssessmentProps {
   marketVersion: 'v2' | 'v3' | 'all';
-  marketSide: 'collateral' | 'borrow';
 }
 
-export function MarketAssessment({ marketVersion, marketSide }: MarketAssessmentProps) {
+export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
+  const [marketSide, setMarketSide] = useState<'collateral' | 'borrow'>('collateral');
   const [ethPrice, setEthPrice] = useState<number | null>(null);
+  // priceChange: 滑块当前显示值（立即更新，驱动界面显示）
   const [priceChange, setPriceChange] = useState<number>(-10);
+  // committedPriceChange: 防抖后的值（停留 1s 才更新，传给图表触发请求）
+  const [committedPriceChange, setCommittedPriceChange] = useState<number>(-10);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [mode, setMode] = useState<'realtime' | 'history'>('realtime');
   const [startDate, setStartDate] = useState('2026-02-10');
-  const [endDate, setEndDate] = useState('2026-02-12');
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // Reset priceChange to sensible default when side/mode switches
+  // 切换 side / mode 时立即重置两个状态，并取消未触发的防抖
   useEffect(() => {
-    if (mode === 'history') {
-      setPriceChange(0);
-    } else {
-      setPriceChange(marketSide === 'collateral' ? -10 : 10);
-    }
+    const next = mode === 'history' ? 0 : marketSide === 'collateral' ? -10 : 10;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setPriceChange(next);
+    setCommittedPriceChange(next);
   }, [marketSide, mode]);
+
+  // 滑块拖动：立即更新显示值，1s 无操作后才提交给图表
+  const handlePriceChange = (val: number) => {
+    setPriceChange(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setCommittedPriceChange(val);
+    }, 1000);
+  };
+
+  // 组件卸载时清理未触发的防抖
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   // Fetch real-time price from API
   useEffect(() => {
@@ -169,6 +188,34 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
                     </button>
                   ))}
                 </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    background: '#0f172a',
+                    borderRadius: '6px',
+                    padding: '2px',
+                  }}
+                >
+                  {(['collateral', 'borrow'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setMarketSide(s)}
+                      style={{
+                        background: marketSide === s ? '#3b82f6' : 'transparent',
+                        color: marketSide === s ? '#fff' : '#94a3b8',
+                        border: 'none',
+                        padding: '3px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      {s === 'collateral' ? '抵押端' : '借贷端'}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div
@@ -202,7 +249,7 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
               min={marketSide === 'collateral' ? -100 : 0}
               max={marketSide === 'collateral' ? 0 : mode === 'history' ? 200 : 100}
               value={priceChange}
-              onChange={(e) => setPriceChange(Number(e.target.value))}
+              onChange={(e) => handlePriceChange(Number(e.target.value))}
               style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
             />
           </div>
@@ -219,17 +266,21 @@ export function MarketAssessment({ marketVersion, marketSide }: MarketAssessment
             {mode === 'realtime' ? (
               <LiquidationChart
                 currentEthPrice={ethPrice}
-                priceChange={priceChange}
+                priceChange={committedPriceChange}
                 version={marketVersion}
                 side={marketSide}
-                onPriceChange={setPriceChange}
+                onPriceChange={(val) => {
+                  setPriceChange(val);
+                  setCommittedPriceChange(val);
+                }}
               />
             ) : (
               <HistoricalLiquidationChart
                 version={marketVersion}
+                side={marketSide}
                 startDate={startDate}
                 endDate={endDate}
-                priceChange={priceChange}
+                priceChange={committedPriceChange}
               />
             )}
           </div>

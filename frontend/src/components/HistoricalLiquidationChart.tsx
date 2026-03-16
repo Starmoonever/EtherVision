@@ -15,6 +15,7 @@ import type { HistoricalLiquidationPoint } from '../api/liquidation';
 
 interface HistoricalLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
+  side: 'collateral' | 'borrow';
   startDate: string;
   endDate: string;
   priceChange: number;
@@ -22,6 +23,7 @@ interface HistoricalLiquidationChartProps {
 
 export function HistoricalLiquidationChart({
   version,
+  side,
   startDate,
   endDate,
   priceChange,
@@ -151,73 +153,73 @@ export function HistoricalLiquidationChart({
           {/* Left Axis: Total USD (Bar) */}
           <YAxis
             yAxisId="left"
-            stroke="#10b981"
-            tickFormatter={(val) =>
-              version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`
-            }
-            domain={version === 'v2' ? undefined : [0, 12000000]}
+            stroke={side === 'collateral' ? '#10b981' : '#f59e0b'}
+            tickFormatter={(val) => `$${(val / 1000000).toFixed(1)}M`}
+            domain={[0, 'auto']}
           />
-          {/* Right Axis: Simulated ETH Price (Line) */}
+          {/* Right Axis: Simulated ETH Price (Line) — only sim_eth_price_num, no other dataKeys */}
           <YAxis
             yAxisId="right"
             orientation="right"
             stroke="#3b82f6"
             tickFormatter={(val) => `$${val}`}
-            domain={[0, version === 'v2' ? 'auto' : priceChange >= 0 ? 6000 : 3000]}
-            allowDataOverflow={version !== 'v2'}
+            domain={[0, 'auto']}
           />
+          {/* Hidden Axis: hosts amount/count lines for tooltip only, never affects visible scales */}
+          <YAxis yAxisId="hidden" hide={true} width={0} />
           <Tooltip
             contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#e2e8f0' }}
             itemStyle={{ fontSize: '0.9rem' }}
-            formatter={(value: any, name: any) => {
-              if (name === '模拟ETH价格' || name === 'sim_eth_price_num')
-                return [`$${value}`, '模拟ETH价格'];
-              if (
-                name === '该模拟价格下清算的抵押 ETH 总值' ||
-                name === 'total_eth_collateral_usd_num'
-              )
+            formatter={(value: number | undefined, name: string | undefined): [string, string] => {
+              const v = value ?? 0;
+              const n = name ?? '';
+              if (n === '模拟ETH价格' || n === 'sim_eth_price_num') return [`$${v}`, '模拟ETH价格'];
+              if (n === '该模拟价格下清算的抵押 ETH 总值' || n === 'total_eth_collateral_usd_num')
                 return [
-                  `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
                   '该模拟价格下清算的抵押 ETH 总值',
                 ];
-              if (name === '该模拟价格下清算的 ETH 债务总值' || name === 'total_weth_debt_usd_num')
+              if (n === '该模拟价格下清算的 ETH 债务总值' || n === 'total_weth_debt_usd_num')
                 return [
-                  `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
                   '该模拟价格下清算的 ETH 债务总值',
                 ];
-              if (name === '模拟价格下清算账户数' || name === 'liquidation_cnt_num')
-                return [value, '模拟价格下清算账户数'];
-              if (name === '清算抵押ETH数量' || name === 'total_eth_collateral_amount_num')
+              if (n === '模拟价格下清算账户数' || n === 'liquidation_cnt_num')
+                return [String(v), '模拟价格下清算账户数'];
+              if (n === '清算抵押ETH数量' || n === 'total_eth_collateral_amount_num')
                 return [
-                  `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
                   '清算抵押ETH数量',
                 ];
-              if (name === '清算ETH债务总数量' || name === 'total_weth_debt_amount_num')
+              if (n === '清算ETH债务总数量' || n === 'total_weth_debt_amount_num')
                 return [
-                  `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
                   '清算ETH债务总数量',
                 ];
-              return [value, name];
+              return [String(v), n];
             }}
             labelFormatter={(label) => `日期: ${label}`}
           />
           <Legend />
-          <Bar
-            yAxisId="left"
-            dataKey="total_eth_collateral_usd_num"
-            name="该模拟价格下清算的抵押 ETH 总值"
-            fill="#10b981"
-            opacity={0.8}
-            radius={[4, 4, 0, 0]}
-          />
-          <Bar
-            yAxisId="left"
-            dataKey="total_weth_debt_usd_num"
-            name="该模拟价格下清算的 ETH 债务总值"
-            fill="#f59e0b"
-            opacity={0.8}
-            radius={[4, 4, 0, 0]}
-          />
+          {side === 'collateral' ? (
+            <Bar
+              yAxisId="left"
+              dataKey="total_eth_collateral_usd_num"
+              name="该模拟价格下清算的抵押 ETH 总值"
+              fill="#10b981"
+              opacity={0.8}
+              radius={[4, 4, 0, 0]}
+            />
+          ) : (
+            <Bar
+              yAxisId="left"
+              dataKey="total_weth_debt_usd_num"
+              name="该模拟价格下清算的 ETH 债务总值"
+              fill="#f59e0b"
+              opacity={0.8}
+              radius={[4, 4, 0, 0]}
+            />
+          )}
           <Line
             yAxisId="right"
             type="monotone"
@@ -228,7 +230,7 @@ export function HistoricalLiquidationChart({
             dot={false}
           />
           <Line
-            yAxisId="right"
+            yAxisId="hidden"
             type="monotone"
             dataKey="liquidation_cnt_num"
             name="模拟价格下清算账户数"
@@ -238,7 +240,7 @@ export function HistoricalLiquidationChart({
             activeDot={false}
           />
           <Line
-            yAxisId="right"
+            yAxisId="hidden"
             type="monotone"
             dataKey="total_eth_collateral_amount_num"
             name="清算抵押ETH数量"
@@ -248,7 +250,7 @@ export function HistoricalLiquidationChart({
             activeDot={false}
           />
           <Line
-            yAxisId="right"
+            yAxisId="hidden"
             type="monotone"
             dataKey="total_weth_debt_amount_num"
             name="清算ETH债务总数量"

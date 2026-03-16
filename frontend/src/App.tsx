@@ -21,7 +21,6 @@ export default function App() {
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
   const [marketVersion, setMarketVersion] = useState<'v2' | 'v3' | 'all'>('all'); // 宏观市场版本
-  const [marketSide, setMarketSide] = useState<'collateral' | 'borrow'>('collateral'); // 宏观市场方向
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3'); // 个人账户分析版本
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
@@ -171,48 +170,6 @@ export default function App() {
           {activeTab === 'market' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <div
-                className="side-switch"
-                style={{
-                  display: 'flex',
-                  background: '#1e293b',
-                  borderRadius: '8px',
-                  padding: '2px',
-                }}
-              >
-                <button
-                  onClick={() => setMarketSide('collateral')}
-                  style={{
-                    background: marketSide === 'collateral' ? '#3b82f6' : 'transparent',
-                    color: marketSide === 'collateral' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  抵押端
-                </button>
-                <button
-                  onClick={() => setMarketSide('borrow')}
-                  style={{
-                    background: marketSide === 'borrow' ? '#3b82f6' : 'transparent',
-                    color: marketSide === 'borrow' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  借贷端
-                </button>
-              </div>
-              <div
                 className="version-switch"
                 style={{
                   display: 'flex',
@@ -340,7 +297,7 @@ export default function App() {
               <h1 className="hero-title">宏观市场评估</h1>
               <p className="hero-sub">ETH 实时价格与清算模拟</p>
             </div>
-            <MarketAssessment marketVersion={marketVersion} marketSide={marketSide} />
+            <MarketAssessment marketVersion={marketVersion} />
           </>
         )}
       </main>
