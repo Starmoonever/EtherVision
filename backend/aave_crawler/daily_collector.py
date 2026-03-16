@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -36,7 +37,7 @@ from .db import (
     _calc_weth_debt,
     _get_weth_price,
 )
-from .market_collector import _block_at_timestamp
+from .market_collector import _block_at_timestamp, upsert_block_timestamps
 from .models import UserPosition
 from .rpc import (
     EMPTY_POSITION,
@@ -243,36 +244,6 @@ _DAILY_RES_COLUMNS = (
     "use_as_collateral",
 )
 
-_UPSERT_DAILY_POS_TMPL = """
-INSERT INTO loan."{table}" ({cols})
-VALUES ({placeholders})
-ON CONFLICT (snapshot_date, user_address) DO UPDATE SET
-    block_number          = EXCLUDED.block_number,
-    block_timestamp       = EXCLUDED.block_timestamp,
-    total_collateral_usd  = EXCLUDED.total_collateral_usd,
-    total_debt_usd        = EXCLUDED.total_debt_usd,
-    available_borrows_usd = EXCLUDED.available_borrows_usd,
-    health_factor         = EXCLUDED.health_factor,
-    ltv                   = EXCLUDED.ltv,
-    liq_threshold         = EXCLUDED.liq_threshold,
-    liq_price             = EXCLUDED.liq_price,
-    liq_price_rise        = EXCLUDED.liq_price_rise,
-    eth_collateral_amount = EXCLUDED.eth_collateral_amount,
-    eth_collateral_usd    = EXCLUDED.eth_collateral_usd,
-    weth_debt_raw         = EXCLUDED.weth_debt_raw,
-    weth_debt_usd         = EXCLUDED.weth_debt_usd,
-    eth_price_usd         = EXCLUDED.eth_price_usd,
-    collected_at          = EXCLUDED.collected_at
-"""
-
-
-def _build_upsert_sql(table: str) -> str:
-    cols = ", ".join(f'"{c}"' for c in _DAILY_POS_COLUMNS)
-    placeholders = ", ".join(f"${i + 1}" for i in range(len(_DAILY_POS_COLUMNS)))
-    return _UPSERT_DAILY_POS_TMPL.format(
-        table=table, cols=cols, placeholders=placeholders
-    )
-
 
 async def upsert_daily_positions(
     pool: asyncpg.Pool,
@@ -282,15 +253,17 @@ async def upsert_daily_positions(
     block_timestamp: datetime,
     protocol: str,
 ) -> None:
-    """批量 UPSERT 一天的仓位数据（汇总 + reserve 明细）。
+    """批量写入一天的仓位数据（汇总 + reserve 明细）。
 
-    明细写入策略：先 DELETE (snapshot_date, user_address) 旧行，再 COPY 新行。
-    与现有 upsert_positions 保持一致，避免陈旧 token 行残留。
+    汇总行和明细行均采用 DELETE + COPY 策略（COPY 协议比 executemany ON CONFLICT 快 10–50×）：
+      1. DELETE 本批用户当天旧汇总行
+      2. COPY 新汇总行
+      3. DELETE 本批用户当天旧 reserve 行
+      4. COPY 新 reserve 行
     整批在同一事务内完成，保证汇总与明细一致。
     """
     tables = get_daily_tables(protocol)
     now = datetime.now(tz=timezone.utc)
-    upsert_sql = _build_upsert_sql(tables.positions)
 
     summary_rows: list[tuple] = []
     all_user_addrs: list[str] = []
@@ -362,8 +335,21 @@ async def upsert_daily_positions(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # 1. UPSERT 汇总行
-            await conn.executemany(upsert_sql, summary_rows)
+            # 1. DELETE + COPY 汇总行（COPY 协议比 executemany ON CONFLICT 快 10–50×）
+            if all_user_addrs:
+                await conn.execute(
+                    f'DELETE FROM loan."{tables.positions}"'
+                    f" WHERE snapshot_date = $1 AND user_address = ANY($2)",
+                    snapshot_date,
+                    all_user_addrs,
+                )
+            if summary_rows:
+                await conn.copy_records_to_table(
+                    tables.positions,
+                    schema_name="loan",
+                    records=summary_rows,
+                    columns=list(_DAILY_POS_COLUMNS),
+                )
 
             # 2. DELETE 本批用户当天旧 reserve 行，再 COPY 新数据
             if all_user_addrs:
@@ -505,6 +491,23 @@ async def run_daily_collector(
         await asyncio.gather(*[_fetch_day_meta(bn) for bn in block_numbers])
     )
 
+    # Step 4：--skip-existing 批量预加载所有待处理天的已完成用户（一次 IN 查询）
+    collected_by_day: defaultdict[date, set[str]] = defaultdict(set)
+    if skip_existing:
+        tables = get_daily_tables(protocol)
+        rows = await pool.fetch(
+            f'SELECT snapshot_date, user_address FROM loan."{tables.positions}"'
+            f" WHERE snapshot_date = ANY($1::date[])",
+            days,
+        )
+        for r in rows:
+            collected_by_day[r["snapshot_date"]].add(r["user_address"])
+        logger.info(
+            "--skip-existing：预加载 %d 天的已采集用户（共 %d 条记录）",
+            len(collected_by_day),
+            len(rows),
+        )
+
     for day, block_number, (block_ts, block_prices) in zip(
         days, block_numbers, day_metas
     ):
@@ -521,10 +524,10 @@ async def run_daily_collector(
             block_ts.strftime("%Y-%m-%dT%H:%M:%S"),
         )
 
-        # --skip-existing：排除当天已采集用户，避免重复 RPC 调用
+        # --skip-existing：使用预加载字典，无需再查数据库
         day_users = users
         if skip_existing:
-            collected = await get_collected_users(pool, protocol, day)
+            collected = collected_by_day.get(day, set())
             if collected:
                 day_users = [u for u in users if u not in collected]
                 logger.info(
@@ -611,5 +614,16 @@ async def run_daily_collector(
             skip_count,
             fail,
         )
+
+    # Step 5：回写成功采集天的区块时间戳，缩小后续 _block_at_timestamp 二分搜索区间
+    if not dry_run:
+        valid_pairs = [
+            (bn, ts)
+            for bn, (ts, prices) in zip(block_numbers, day_metas)
+            if prices  # 仅写入价格预取成功（实际处理）的天
+        ]
+        if valid_pairs:
+            await upsert_block_timestamps(pool, valid_pairs)
+            logger.debug("回写区块时间戳缓存：%d 条", len(valid_pairs))
 
     logger.info("日级采集全部完成：%s → %s", start_date, end_date)
