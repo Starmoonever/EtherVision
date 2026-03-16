@@ -481,10 +481,38 @@ async def run_daily_collector(
 
     token_addresses = [rt.token_address for rt in reserve_tokens]
 
-    for day, block_number in zip(days, block_numbers):
-        raw_block = await w3.eth.get_block(block_number)
-        block_ts_raw: int = raw_block["timestamp"]  # type: ignore[typeddict-item]
-        block_ts = datetime.fromtimestamp(block_ts_raw, tz=timezone.utc)
+    # 并发预取所有天的区块时间戳和价格
+    # 用独立信号量限制预取阶段的并发度（fetch_block_prices 内部已并发 N 个 getAssetPrice）
+    _PREFETCH_CONCURRENCY = max(1, cfg.crawler.concurrency // 4)
+    _prefetch_sem = asyncio.Semaphore(_PREFETCH_CONCURRENCY)
+
+    async def _fetch_day_meta(block_num: int) -> tuple[datetime, dict[str, int]]:
+        async with _prefetch_sem:
+            raw_block = await w3.eth.get_block(block_num)
+            ts = datetime.fromtimestamp(
+                raw_block["timestamp"],  # type: ignore[typeddict-item]
+                tz=timezone.utc,
+            )
+            prices = await fetch_block_prices(w3, contracts, token_addresses, block_num)
+        return ts, prices
+
+    logger.info(
+        "并发预取 %d 天的区块时间戳和价格（预取并发度 %d）...",
+        len(days),
+        _PREFETCH_CONCURRENCY,
+    )
+    day_metas: list[tuple[datetime, dict[str, int]]] = list(
+        await asyncio.gather(*[_fetch_day_meta(bn) for bn in block_numbers])
+    )
+
+    for day, block_number, (block_ts, block_prices) in zip(
+        days, block_numbers, day_metas
+    ):
+        if not block_prices:
+            logger.warning(
+                "日期 %s block #%d 价格预取失败，跳过本日", day, block_number
+            )
+            continue
 
         logger.info(
             "日期 %s → block #%d（区块时间 %s UTC）",
@@ -492,16 +520,6 @@ async def run_daily_collector(
             block_number,
             block_ts.strftime("%Y-%m-%dT%H:%M:%S"),
         )
-
-        # 预取本块所有资产价格（每块只查一次，所有用户共用）
-        block_prices = await fetch_block_prices(
-            w3, contracts, token_addresses, block_number
-        )
-        if not block_prices:
-            logger.warning(
-                "日期 %s block #%d 价格预取失败，跳过本日", day, block_number
-            )
-            continue
 
         # --skip-existing：排除当天已采集用户，避免重复 RPC 调用
         day_users = users
