@@ -229,8 +229,6 @@ export default function App() {
               </div>
             </div>
           )}
-
-          <span className="network-badge">数据库版</span>
         </div>
       </header>
 
