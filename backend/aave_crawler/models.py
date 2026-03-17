@@ -76,6 +76,11 @@ class ReservePosition:
     # 借贷
     stable_debt_raw: int
     variable_debt_raw: int
+    # Scaled 字段（index 重算所需不变量；default=0 向后兼容）
+    scaled_supply_raw: int = 0  # 由 upsert 层从 supply_raw / liquidityIndex 推导
+    scaled_variable_debt_raw: int = 0  # getUserReserveData[4] scaledVariableDebt
+    principal_stable_debt_raw: int = 0  # getUserReserveData[3] principalStableDebt
+    stable_borrow_rate: int = 0  # getUserReserveData[5] stableBorrowRate（per-user）
 
 
 @dataclass

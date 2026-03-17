@@ -204,6 +204,77 @@ ORACLE_ABI: list[dict[str, Any]] = [
     },
 ]
 
+# ── DataProvider.getReserveData ABI ──────────────────────────────────────────
+# 用于拉取 liquidityIndex / variableBorrowIndex（供 fetch_reserve_indices 和 market_collector）
+# 字段顺序：V3[9]/V2[7] = liquidityIndex；V3[10]/V2[8] = variableBorrowIndex
+
+GET_RESERVE_DATA_ABI_V3: list[dict[str, Any]] = [
+    {
+        "inputs": [{"name": "asset", "type": "address"}],
+        "name": "getReserveData",
+        "outputs": [
+            {"name": "unbacked", "type": "uint256"},
+            {"name": "accruedToTreasuryScaled", "type": "uint256"},
+            {"name": "totalAToken", "type": "uint256"},
+            {"name": "totalStableDebt", "type": "uint256"},
+            {"name": "totalVariableDebt", "type": "uint256"},
+            {"name": "liquidityRate", "type": "uint256"},
+            {"name": "variableBorrowRate", "type": "uint256"},
+            {"name": "stableBorrowRate", "type": "uint256"},
+            {"name": "averageStableRate", "type": "uint256"},
+            {"name": "liquidityIndex", "type": "uint256"},  # [9]
+            {"name": "variableBorrowIndex", "type": "uint256"},  # [10]
+            {"name": "lastUpdateTimestamp", "type": "uint40"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+GET_RESERVE_DATA_ABI_V2: list[dict[str, Any]] = [
+    {
+        "inputs": [{"name": "asset", "type": "address"}],
+        "name": "getReserveData",
+        "outputs": [
+            {"name": "availableLiquidity", "type": "uint256"},
+            {"name": "totalStableDebt", "type": "uint256"},
+            {"name": "totalVariableDebt", "type": "uint256"},
+            {"name": "liquidityRate", "type": "uint256"},
+            {"name": "variableBorrowRate", "type": "uint256"},
+            {"name": "stableBorrowRate", "type": "uint256"},
+            {"name": "averageStableBorrowRate", "type": "uint256"},
+            {"name": "liquidityIndex", "type": "uint256"},  # [7]
+            {"name": "variableBorrowIndex", "type": "uint256"},  # [8]
+            {"name": "lastUpdateTimestamp", "type": "uint40"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+# ABI 解码类型序列（对应 _abi_decode 用）
+_RESERVE_DATA_V3_OUTPUT_TYPES = ["uint256"] * 11 + ["uint40"]
+_RESERVE_DATA_V2_OUTPUT_TYPES = ["uint256"] * 9 + ["uint40"]
+
+
+# ── ReserveIndex dataclass ────────────────────────────────────────────────────
+
+
+@dataclass
+class ReserveIndex:
+    """单个 reserve 的协议级利率指数（所有用户共享，日级更新）。
+
+    liquidity_index / variable_borrow_index 均为 Ray（1e27）精度整数，
+    对应 market_snapshots 表的 liquidity_index_ray / variable_borrow_index_ray 列。
+    """
+
+    token_address: str
+    liquidity_index: int  # Ray = 1e27
+    variable_borrow_index: int  # Ray = 1e27
+    liquidity_rate: int
+    variable_borrow_rate: int
+
+
 # Chainlink ETH/USD 聚合器（主网，2019年起可用，比 Aave V3 oracle 更早）
 CHAINLINK_ETH_USD = AsyncWeb3.to_checksum_address(
     "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
@@ -653,6 +724,9 @@ async def fetch_user_position(
                         liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
                         stable_debt_raw=user_reserve.current_stable_debt,
                         variable_debt_raw=user_reserve.current_variable_debt,
+                        scaled_variable_debt_raw=user_reserve.scaled_variable_debt,
+                        principal_stable_debt_raw=user_reserve.principal_stable_debt,
+                        stable_borrow_rate=user_reserve.stable_borrow_rate,
                     )
                 )
 
@@ -898,6 +972,9 @@ async def fetch_user_position_at_block(
                         liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
                         stable_debt_raw=reserve_data[1],
                         variable_debt_raw=reserve_data[2],
+                        scaled_variable_debt_raw=reserve_data[4],
+                        principal_stable_debt_raw=reserve_data[3],
+                        stable_borrow_rate=reserve_data[5],
                     )
                 )
 
@@ -1012,3 +1089,91 @@ async def fetch_block_prices(
     # 存入 eth_usd_raw（WETH 键），供 fetch_user_position_at_block 读取以归一化 AccountSummary
     normalized[WETH_ADDRESS] = eth_usd_raw
     return normalized
+
+
+async def fetch_reserve_indices(
+    w3: AsyncWeb3,
+    contracts: ProtocolContracts,
+    token_addresses: list[str],
+    block_number: int,
+) -> dict[str, ReserveIndex]:
+    """RPC 降级：通过 DataProvider.getReserveData 批量获取所有 reserve 的利率指数。
+
+    通常由 load_reserve_indices_from_db 从 market_snapshots 读取（0 次 RPC）；
+    仅在 market_collector 尚未写入当日 block 时调用本函数。
+
+    block_number >= MULTICALL3_DEPLOY_BLOCK：1 次 Multicall3 eth_call；
+    否则降级为 asyncio.gather 并发调用。
+    """
+    is_v2 = contracts.oracle_price_in_eth
+    rd_abi = GET_RESERVE_DATA_ABI_V2 if is_v2 else GET_RESERVE_DATA_ABI_V3
+    output_types = (
+        _RESERVE_DATA_V2_OUTPUT_TYPES if is_v2 else _RESERVE_DATA_V3_OUTPUT_TYPES
+    )
+    liq_idx_pos = 7 if is_v2 else 9
+    var_idx_pos = 8 if is_v2 else 10
+    liq_rate_pos = 3 if is_v2 else 5
+    var_rate_pos = 4 if is_v2 else 6
+
+    data_contract = w3.eth.contract(
+        address=contracts.data_provider, abi=DATA_PROVIDER_ABI + rd_abi
+    )
+
+    if block_number >= MULTICALL3_DEPLOY_BLOCK:
+        mc_contract = w3.eth.contract(address=MULTICALL3_ADDRESS, abi=MULTICALL3_ABI)
+        calls = [
+            (
+                contracts.data_provider,
+                True,
+                data_contract.encode_abi(
+                    "getReserveData",
+                    args=[AsyncWeb3.to_checksum_address(addr)],
+                ),
+            )
+            for addr in token_addresses
+        ]
+        raw_results: list[tuple[bool, bytes]] = await mc_contract.functions.aggregate3(
+            calls
+        ).call(block_identifier=block_number)
+
+        result: dict[str, ReserveIndex] = {}
+        for addr, (success, return_data) in zip(token_addresses, raw_results):
+            if not success or not return_data:
+                continue
+            try:
+                decoded = _abi_decode(output_types, return_data)
+                result[addr.lower()] = ReserveIndex(
+                    token_address=addr.lower(),
+                    liquidity_index=int(decoded[liq_idx_pos]),
+                    variable_borrow_index=int(decoded[var_idx_pos]),
+                    liquidity_rate=int(decoded[liq_rate_pos]),
+                    variable_borrow_rate=int(decoded[var_rate_pos]),
+                )
+            except Exception as exc:
+                logger.debug("fetch_reserve_indices decode 失败 %s: %s", addr, exc)
+        return result
+    else:
+        # Pre-Multicall3：asyncio.gather 并发
+        tasks = [
+            data_contract.functions.getReserveData(
+                AsyncWeb3.to_checksum_address(addr)
+            ).call(block_identifier=block_number)
+            for addr in token_addresses
+        ]
+        raw_list = await asyncio.gather(*tasks, return_exceptions=True)
+        result = {}
+        for addr, rd in zip(token_addresses, raw_list):
+            if isinstance(rd, BaseException):
+                logger.debug("fetch_reserve_indices pre-mc3 失败 %s: %s", addr, rd)
+                continue
+            try:
+                result[addr.lower()] = ReserveIndex(
+                    token_address=addr.lower(),
+                    liquidity_index=int(rd[liq_idx_pos]),
+                    variable_borrow_index=int(rd[var_idx_pos]),
+                    liquidity_rate=int(rd[liq_rate_pos]),
+                    variable_borrow_rate=int(rd[var_rate_pos]),
+                )
+            except Exception as exc:
+                logger.debug("fetch_reserve_indices 解码失败 %s: %s", addr, exc)
+        return result

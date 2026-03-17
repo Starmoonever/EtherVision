@@ -42,9 +42,11 @@ from .models import AccountSummary, UserPosition
 from .rpc import (
     EMPTY_POSITION,
     ProtocolContracts,
+    ReserveIndex,
     build_web3,
     fetch_batch_account_summaries,
     fetch_block_prices,
+    fetch_reserve_indices,
     fetch_user_position_at_block,
     get_all_reserve_tokens,
     get_contracts,
@@ -154,6 +156,43 @@ CREATE INDEX IF NOT EXISTS "{table}_date_symbol_idx"
 """
 
 
+# ── Reserve Indices（从 market_snapshots 读取） ───────────────────────────────
+
+
+async def load_reserve_indices_from_db(
+    pool: asyncpg.Pool,
+    block_number: int,
+    protocol: str,
+) -> dict[str, ReserveIndex]:
+    """从 market_snapshots 按 block_number 精确读取所有 reserve 的利率指数（0 次 RPC）。
+
+    返回 dict[token_address_lower, ReserveIndex]。
+    若 market_collector 尚未为该 block 写入快照，返回空字典（调用方应降级为 RPC）。
+    """
+    base = protocol.split("_")[0].lower()
+    table = f"aave_{base}_market_snapshots"
+    rows = await pool.fetch(
+        f"""
+        SELECT token_address, liquidity_index_ray, variable_borrow_index_ray,
+               liquidity_rate_ray, variable_borrow_rate_ray
+        FROM loan."{table}"
+        WHERE block_number = $1
+          AND liquidity_index_ray IS NOT NULL
+        """,
+        block_number,
+    )
+    return {
+        r["token_address"]: ReserveIndex(
+            token_address=r["token_address"],
+            liquidity_index=int(r["liquidity_index_ray"]),
+            variable_borrow_index=int(r["variable_borrow_index_ray"]),
+            liquidity_rate=int(r["liquidity_rate_ray"]),
+            variable_borrow_rate=int(r["variable_borrow_rate_ray"]),
+        )
+        for r in rows
+    }
+
+
 async def ensure_daily_tables(pool: asyncpg.Pool, protocol: str) -> None:
     """建日级快照表（幂等）。"""
     tables = get_daily_tables(protocol)
@@ -243,6 +282,10 @@ _DAILY_RES_COLUMNS = (
     "variable_debt_raw",
     "total_debt_usd",
     "use_as_collateral",
+    "scaled_supply_raw",
+    "scaled_variable_debt_raw",
+    "principal_stable_debt_raw",
+    "stable_borrow_rate_raw",
 )
 
 
@@ -253,6 +296,7 @@ async def upsert_daily_positions(
     block_number: int,
     block_timestamp: datetime,
     protocol: str,
+    reserve_indices: "dict[str, ReserveIndex] | None" = None,
 ) -> None:
     """批量写入一天的仓位数据（汇总 + reserve 明细）。
 
@@ -262,6 +306,10 @@ async def upsert_daily_positions(
       3. DELETE 本批用户当天旧 reserve 行
       4. COPY 新 reserve 行
     整批在同一事务内完成，保证汇总与明细一致。
+
+    reserve_indices: 当日 reserve 利率指数（来自 market_snapshots），
+    用于计算 scaled_supply_raw = supply_raw * 1e27 // liquidity_index。
+    传 None 时 scaled_supply_raw 写入 0（向后兼容旧调用路径）。
     """
     tables = get_daily_tables(protocol)
     now = datetime.now(tz=timezone.utc)
@@ -315,6 +363,18 @@ async def upsert_daily_positions(
             supply_dec = raw_to_decimal(r.supply_raw, r.decimals)
             stable_dec = raw_to_decimal(r.stable_debt_raw, r.decimals)
             variable_dec = raw_to_decimal(r.variable_debt_raw, r.decimals)
+
+            # scaled_supply_raw = supply_raw * 1e27 // liquidity_index
+            idx = (reserve_indices or {}).get(r.token_address.lower())
+            if idx and idx.liquidity_index > 0:
+                scaled_supply = (
+                    Decimal(r.supply_raw)
+                    * Decimal(10**27)
+                    // Decimal(idx.liquidity_index)
+                )
+            else:
+                scaled_supply = Decimal(0)
+
             all_reserve_rows.append(
                 (
                     snapshot_date,
@@ -331,6 +391,10 @@ async def upsert_daily_positions(
                     Decimal(r.variable_debt_raw),
                     (stable_dec + variable_dec) * price,
                     r.usage_as_collateral_enabled,
+                    scaled_supply,
+                    Decimal(r.scaled_variable_debt_raw),
+                    Decimal(r.principal_stable_debt_raw),
+                    Decimal(r.stable_borrow_rate),
                 )
             )
 
@@ -525,6 +589,32 @@ async def run_daily_collector(
             block_ts.strftime("%Y-%m-%dT%H:%M:%S"),
         )
 
+        # ── Step A：读取当日 reserve indices（优先 DB，降级 RPC）────────────────
+        reserve_indices = await load_reserve_indices_from_db(
+            pool, block_number, protocol
+        )
+        if reserve_indices:
+            logger.debug(
+                "日期 %s Step A：从 market_snapshots 加载 %d 个 reserve index（block=%d）",
+                day,
+                len(reserve_indices),
+                block_number,
+            )
+        else:
+            logger.info(
+                "日期 %s Step A：market_snapshots 无 block=%d 数据，降级为 RPC 获取 index",
+                day,
+                block_number,
+            )
+            reserve_indices = await fetch_reserve_indices(
+                w3, contracts, token_addresses, block_number
+            )
+            logger.info(
+                "日期 %s Step A RPC 降级：获取 %d 个 reserve index",
+                day,
+                len(reserve_indices),
+            )
+
         # --skip-existing：使用预加载字典，无需再查数据库
         day_users = users
         if skip_existing:
@@ -650,6 +740,7 @@ async def run_daily_collector(
                                     block_number,
                                     block_ts,
                                     protocol,
+                                    reserve_indices,
                                 )
                             )
                         )
@@ -660,7 +751,13 @@ async def run_daily_collector(
                 await asyncio.gather(*db_tasks)
             if pending and not dry_run:
                 await upsert_daily_positions(
-                    pool, pending, day, block_number, block_ts, protocol
+                    pool,
+                    pending,
+                    day,
+                    block_number,
+                    block_ts,
+                    protocol,
+                    reserve_indices,
                 )
 
         logger.info(

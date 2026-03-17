@@ -31,6 +31,8 @@ from .rpc import (
     CHAINLINK_ETH_USD_ABI,
     CONTRACTS_V3,
     DATA_PROVIDER_ABI,
+    GET_RESERVE_DATA_ABI_V2,
+    GET_RESERVE_DATA_ABI_V3,
     ORACLE_ABI,
     WETH_ADDRESS,
     get_contracts,
@@ -45,52 +47,11 @@ RAY_INT = 10**27
 
 
 # ── ABI 补充：getReserveData ──────────────────────────────────────────────────
+# 已移至 rpc.py（GET_RESERVE_DATA_ABI_V3 / GET_RESERVE_DATA_ABI_V2），从那里导入。
 
-# V3 返回 12 个字段（含 unbacked / accruedToTreasuryScaled）
-_GET_RESERVE_DATA_ABI_V3: list[dict[str, Any]] = [
-    {
-        "inputs": [{"name": "asset", "type": "address"}],
-        "name": "getReserveData",
-        "outputs": [
-            {"name": "unbacked", "type": "uint256"},
-            {"name": "accruedToTreasuryScaled", "type": "uint256"},
-            {"name": "totalAToken", "type": "uint256"},
-            {"name": "totalStableDebt", "type": "uint256"},
-            {"name": "totalVariableDebt", "type": "uint256"},
-            {"name": "liquidityRate", "type": "uint256"},
-            {"name": "variableBorrowRate", "type": "uint256"},
-            {"name": "stableBorrowRate", "type": "uint256"},
-            {"name": "averageStableRate", "type": "uint256"},
-            {"name": "liquidityIndex", "type": "uint256"},
-            {"name": "variableBorrowIndex", "type": "uint256"},
-            {"name": "lastUpdateTimestamp", "type": "uint40"},
-        ],
-        "stateMutability": "view",
-        "type": "function",
-    }
-]
-
-# V2 返回 10 个字段（无 unbacked；供给 = availableLiquidity + 两种债务之和）
-_GET_RESERVE_DATA_ABI_V2: list[dict[str, Any]] = [
-    {
-        "inputs": [{"name": "asset", "type": "address"}],
-        "name": "getReserveData",
-        "outputs": [
-            {"name": "availableLiquidity", "type": "uint256"},
-            {"name": "totalStableDebt", "type": "uint256"},
-            {"name": "totalVariableDebt", "type": "uint256"},
-            {"name": "liquidityRate", "type": "uint256"},
-            {"name": "variableBorrowRate", "type": "uint256"},
-            {"name": "stableBorrowRate", "type": "uint256"},
-            {"name": "averageStableBorrowRate", "type": "uint256"},
-            {"name": "liquidityIndex", "type": "uint256"},
-            {"name": "variableBorrowIndex", "type": "uint256"},
-            {"name": "lastUpdateTimestamp", "type": "uint40"},
-        ],
-        "stateMutability": "view",
-        "type": "function",
-    }
-]
+# V3 返回 12 个字段，V2 返回 10 个字段；字段索引见 rpc.py。
+_GET_RESERVE_DATA_ABI_V3 = GET_RESERVE_DATA_ABI_V3
+_GET_RESERVE_DATA_ABI_V2 = GET_RESERVE_DATA_ABI_V2
 
 
 # ── DDL ──────────────────────────────────────────────────────────────────────
