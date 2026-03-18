@@ -26,6 +26,15 @@ class PostgresConfig:
 
 
 @dataclass
+class ClickHouseConfig:
+    host: str = "127.0.0.1"
+    port: int = 9000
+    user: str = "default"
+    password: str = ""
+    database: str = "default"
+
+
+@dataclass
 class CrawlerConfig:
     concurrency: int = 20
     batch_size: int = 100
@@ -46,6 +55,7 @@ class AppConfig:
     protocol: str = "v3"  # aave 协议版本: v2 或 v3
     log_level: str = "info"  # 日志级别：debug / info / warning / error
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
+    clickhouse: ClickHouseConfig = field(default_factory=ClickHouseConfig)
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
@@ -68,6 +78,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         if candidate.exists():
             raw = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
             pg_raw = raw.get("postgres", {})
+            ch_raw = raw.get("clickhouse", {})
             cr_raw = raw.get("crawler", {})
             wt_raw = raw.get("watcher", {})
             return AppConfig(
@@ -78,6 +89,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                         k: v
                         for k, v in pg_raw.items()
                         if k in PostgresConfig.__dataclass_fields__
+                    }
+                ),
+                clickhouse=ClickHouseConfig(
+                    **{
+                        k: v
+                        for k, v in ch_raw.items()
+                        if k in ClickHouseConfig.__dataclass_fields__
                     }
                 ),
                 crawler=CrawlerConfig(

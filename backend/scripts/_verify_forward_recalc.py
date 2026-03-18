@@ -148,8 +148,8 @@ async def verify_one_pair(
                 token_address=r["token_address"],
                 liquidity_index=int(r["liquidity_index_ray"]),
                 variable_borrow_index=int(r["variable_borrow_index_ray"]),
-                liquidity_rate=0,
-                variable_borrow_rate=0,
+                liquidity_rate=int(r["liquidity_rate_ray"] or 0),
+                variable_borrow_rate=int(r["variable_borrow_rate_ray"] or 0),
             )
             for r in nn_rows
         }
@@ -163,7 +163,8 @@ async def verify_one_pair(
         nn = await pool.fetch(
             f"""
             SELECT DISTINCT ON (token_address)
-                token_address, liquidity_index_ray, variable_borrow_index_ray
+                token_address, liquidity_index_ray, variable_borrow_index_ray,
+                liquidity_rate_ray, variable_borrow_rate_ray
             FROM loan."{ms_table}"
             WHERE liquidity_index_ray IS NOT NULL
               AND liquidity_index_ray > 0
@@ -187,6 +188,10 @@ async def verify_one_pair(
         )
         return {}
 
+    # 阈值常量（与 run() 中的判定保持一致）
+    supply_threshold = 1e-3  # 0.1%
+    var_threshold = 1e-3  # 0.1%
+
     # token 活跃性判断：当日 stored_index 相比昨日是否变化，且变化幅度在合理日涨幅范围内
     # 「停滞 token」误差 = accumulated(normalizedDebt - stored_idx)，属 Phase 1 已记录的结构性偏差，
     # 不纳入 forward_recalc 精度阈值检查。
@@ -197,6 +202,19 @@ async def verify_one_pair(
     # 与真实链上不变量不同；将其归入停滞类，避免误计入活跃阈值检查。
     _MAX_DAILY_RATE = 1.05  # 单日 index 合理涨幅上限（5%，真实日利率远低于此）
 
+    # 利率预期误差过滤：market_snapshots 与 daily_positions 快照时刻之间约有 4 小时偏差
+    # （V2: market_collector ~UTC 20:xx，daily_positions ~UTC 00:00）。
+    # 对于利率极高的冷门 V2 token（DPI/ENJ 等可达 300-1000% APR），
+    # 仅这 4 小时内积累的利息就可超过 0.1% 阈值——误差源是快照时间偏移而非算法问题。
+    # 策略：若 token 当前利率 × 4h 窗口 ≥ var_threshold，归为结构性偏差，不计入活跃检查。
+    _SNAPSHOT_OFFSET_SECONDS = 4 * 3600  # ~4h，对应 ~1000 个以太坊区块
+
+    def _offset_error(rate_ray: int, threshold: float) -> bool:
+        """当前利率在快照偏移窗口内预期产生的误差是否已超阈值（即结构性不可达）。"""
+        return (
+            rate_ray / RAY * _SNAPSHOT_OFFSET_SECONDS / _SECONDS_PER_YEAR >= threshold
+        )
+
     active_liq_tokens: set[str] = {
         addr
         for addr, idx in reserve_indices.items()
@@ -204,6 +222,7 @@ async def verify_one_pair(
         and yi.liquidity_index > 0
         and idx.liquidity_index != yi.liquidity_index
         and idx.liquidity_index / yi.liquidity_index < _MAX_DAILY_RATE
+        and not _offset_error(idx.liquidity_rate, supply_threshold)
     }
     active_var_tokens: set[str] = {
         addr
@@ -212,6 +231,7 @@ async def verify_one_pair(
         and yi.variable_borrow_index > 0
         and idx.variable_borrow_index != yi.variable_borrow_index
         and idx.variable_borrow_index / yi.variable_borrow_index < _MAX_DAILY_RATE
+        and not _offset_error(idx.variable_borrow_rate, var_threshold)
     }
 
     # 3. 查询 (yesterday_block, today_block] 区间内的事件用户，后续排除
@@ -574,13 +594,10 @@ async def run(
                 total_gap_slips,
             )
 
-        # 阈值检查仅针对「活跃 token」：
-        # supply：理论误差机器精度级，0.1% 为宽松上限
-        # var_debt：单日利息 ≈ 0.005~0.1%，0.1% 为宽松上限（active token 当日有 updateState）
+        # 阈值常量（与 verify_one_pair 内部一致）
         supply_threshold = 1e-3  # 0.1%
-        var_threshold = (
-            1e-3  # 0.1%（活跃 token，当日 stored_index 已更新至接近 normalizedDebt）
-        )
+        var_threshold = 1e-3  # 0.1%
+        # 注：阈值常量在 verify_one_pair 内同步定义，用于活跃 token 过滤（利率预期误差检查）
         supply_pass = (
             not all_active_sup_max or max(all_active_sup_max) < supply_threshold
         )
