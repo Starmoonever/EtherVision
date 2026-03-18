@@ -304,7 +304,7 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
           className="card-header"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span className="card-title">抵押借贷利率</span>
+          <span className="card-title">抵押借贷利率与资金利用率</span>
         </div>
         <div style={{ height: 400 }}>
           <ResponsiveContainer width="100%" height="100%">
