@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -38,11 +39,12 @@ from .db import (
     _get_weth_price,
 )
 from .market_collector import _block_at_timestamp, upsert_block_timestamps
-from .models import AccountSummary, UserPosition
+from .models import AccountSummary, ReserveConfig, ReservePosition, UserPosition
 from .rpc import (
     EMPTY_POSITION,
     ProtocolContracts,
     ReserveIndex,
+    WETH_ADDRESS,
     build_web3,
     fetch_batch_account_summaries,
     fetch_block_prices,
@@ -439,6 +441,228 @@ async def upsert_daily_positions(
         snapshot_date,
         block_number,
     )
+
+
+# ── Index 重算（无 RPC） ──────────────────────────────────────────────────────
+
+# Aave 利率（Ray 单位，1e27）为年化利率；稳定债务复利公式：
+#   debt = principal × exp(annual_rate / 1e27 × seconds_elapsed / SECONDS_PER_YEAR)
+_SECONDS_PER_YEAR = 31_536_000
+
+
+async def forward_recalc_positions(
+    pool: asyncpg.Pool,
+    no_event_users: list[str],
+    snapshot_date: date,
+    yesterday: date,
+    block_number: int,
+    block_timestamp: datetime,
+    reserve_indices: dict[str, ReserveIndex],
+    reserve_configs: dict[str, ReserveConfig],
+    block_prices: dict[str, int],
+    protocol: str,
+    dry_run: bool = False,
+) -> int:
+    """对无链上事件用户，从昨日 DB scaled 字段 + 今日 index 推导今日仓位并写库。
+
+    无 RPC 调用。
+    - 有昨日快照且 scaled 字段非零 → index 重算今日余额，写入 daily_positions/daily_reserve_positions
+    - 无昨日快照（新用户首次出现）→ 跳过，应由调用方归入 RPC 路径
+    - scaled 全为 0 且仓位非空 → 跳过（历史数据未补全，应先运行 backfill_daily_scaled_fields.py）
+
+    Returns: 实际写入的用户数
+    """
+    if not no_event_users:
+        return 0
+
+    tables = get_daily_tables(protocol)
+
+    # reserve_configs 的 key 为 checksum address，DB 存储 lowercase；预先转换
+    lc_configs: dict[str, ReserveConfig] = {
+        k.lower(): v for k, v in reserve_configs.items()
+    }
+
+    # ── Step 1：读取昨日 reserve 明细（仅 scaled 字段非零的行）─────────────────
+    rows = await pool.fetch(
+        f"""
+        SELECT user_address, token_address, symbol, decimals, use_as_collateral,
+               scaled_supply_raw, scaled_variable_debt_raw,
+               principal_stable_debt_raw, stable_borrow_rate_raw,
+               block_timestamp AS prev_block_ts
+        FROM loan."{tables.reserve_positions}"
+        WHERE snapshot_date = $1
+          AND user_address = ANY($2)
+          AND (scaled_supply_raw > 0
+               OR scaled_variable_debt_raw > 0
+               OR principal_stable_debt_raw > 0)
+        """,
+        yesterday,
+        no_event_users,
+    )
+
+    if not rows:
+        logger.info(
+            "forward_recalc %s：昨日（%s）无可用 scaled 数据，跳过 %d 个用户",
+            snapshot_date,
+            yesterday,
+            len(no_event_users),
+        )
+        return 0
+
+    # ── Step 2：按用户分组，逐 token 重算今日余额 ─────────────────────────────
+    eth_price_raw: int = block_prices.get(WETH_ADDRESS, 0)
+    reserves_by_user: dict[str, list[ReservePosition]] = defaultdict(list)
+
+    for row in rows:
+        token_addr: str = row["token_address"]  # DB 中已 lowercase
+        idx = reserve_indices.get(token_addr)
+        if idx is None:
+            logger.debug("forward_recalc：token %s 无今日 index，跳过", token_addr)
+            continue
+
+        scaled_supply = int(row["scaled_supply_raw"])
+        scaled_var_debt = int(row["scaled_variable_debt_raw"])
+        principal_stable = int(row["principal_stable_debt_raw"])
+        stable_rate = int(row["stable_borrow_rate_raw"])
+
+        # supply / variable_debt：整数除法，与 Phase 1 backfill 保持一致
+        supply_raw = (
+            scaled_supply * idx.liquidity_index // (10**27) if scaled_supply > 0 else 0
+        )
+        variable_debt_raw = (
+            scaled_var_debt * idx.variable_borrow_index // (10**27)
+            if scaled_var_debt > 0
+            else 0
+        )
+
+        # 稳定债务：指数复利（精度 ~0.001%，与 Aave calculateCompoundedInterest 一致）
+        # 公式：principal × exp(annual_rate/1e27 × seconds / SECONDS_PER_YEAR)
+        if principal_stable > 0:
+            prev_ts: datetime = row["prev_block_ts"]
+            seconds_elapsed = (block_timestamp - prev_ts).total_seconds()
+            if stable_rate > 0 and seconds_elapsed > 0:
+                interest = math.exp(
+                    stable_rate / 1e27 * seconds_elapsed / _SECONDS_PER_YEAR
+                )
+                stable_debt_raw = int(principal_stable * interest)
+            else:
+                stable_debt_raw = principal_stable
+        else:
+            stable_debt_raw = 0
+
+        if supply_raw == 0 and variable_debt_raw == 0 and stable_debt_raw == 0:
+            continue  # 仓位已清零（理论上不应出现，防御性跳过）
+
+        cfg = lc_configs.get(token_addr)
+        price_raw = block_prices.get(token_addr, 0)
+
+        reserves_by_user[row["user_address"]].append(
+            ReservePosition(
+                symbol=row["symbol"],
+                token_address=token_addr,
+                decimals=row["decimals"],
+                price_raw=price_raw,
+                supply_raw=supply_raw,
+                usage_as_collateral_enabled=bool(row["use_as_collateral"]),
+                liquidation_threshold=cfg.liquidation_threshold if cfg else 0,
+                stable_debt_raw=stable_debt_raw,
+                variable_debt_raw=variable_debt_raw,
+                scaled_supply_raw=scaled_supply,  # 不变量，原样保留
+                scaled_variable_debt_raw=scaled_var_debt,
+                principal_stable_debt_raw=principal_stable,
+                stable_borrow_rate=stable_rate,
+            )
+        )
+
+    if not reserves_by_user:
+        return 0
+
+    # ── Step 3：聚合 AccountSummary（近似值，无 RPC） ─────────────────────────
+    batch: list[tuple[UserPosition, int]] = []
+
+    for user_addr, reserves in reserves_by_user.items():
+        total_col_usd = Decimal(0)
+        total_debt_usd = Decimal(0)
+        weighted_liq_sum = Decimal(0)  # Σ(supply_usd × liq_thr)，用于 HF 分子
+        weighted_ltv_sum = Decimal(0)  # Σ(supply_usd × ltv)，用于 available_borrows
+
+        for r in reserves:
+            price = Decimal(r.price_raw) / Decimal(10**8)
+            dec_factor = Decimal(10**r.decimals)
+            supply_usd = Decimal(r.supply_raw) / dec_factor * price
+            debt_usd = (
+                Decimal(r.stable_debt_raw + r.variable_debt_raw) / dec_factor * price
+            )
+
+            if r.usage_as_collateral_enabled and r.supply_raw > 0:
+                total_col_usd += supply_usd
+                weighted_liq_sum += supply_usd * r.liquidation_threshold
+                cfg2 = lc_configs.get(r.token_address)
+                if cfg2:
+                    weighted_ltv_sum += supply_usd * cfg2.ltv
+
+            total_debt_usd += debt_usd
+
+        # 加权清算阈值（basis points）
+        if total_col_usd > 0:
+            w_liq_thr = int(weighted_liq_sum / total_col_usd)
+            w_ltv = int(weighted_ltv_sum / total_col_usd)
+        else:
+            w_liq_thr = 0
+            w_ltv = 0
+
+        # health_factor = Σ(supply_usd × liq_thr/10000) / total_debt_usd × 1e18
+        if total_debt_usd > 0:
+            hf = int(
+                weighted_liq_sum / Decimal(10000) / total_debt_usd * Decimal(10**18)
+            )
+        else:
+            hf = MAX_UINT256
+
+        # available_borrows ≈ max(0, Σ(supply_usd × ltv/10000) - total_debt_usd)
+        credit_cap = weighted_ltv_sum / Decimal(10000)
+        avail_usd = max(Decimal(0), credit_cap - total_debt_usd)
+
+        summary = AccountSummary(
+            total_collateral_base=int(total_col_usd * Decimal(10**8)),
+            total_debt_base=int(total_debt_usd * Decimal(10**8)),
+            available_borrows_base=int(avail_usd * Decimal(10**8)),
+            current_liquidation_threshold=w_liq_thr,
+            ltv=w_ltv,
+            health_factor=hf,
+        )
+        pos = UserPosition(
+            user_address=user_addr,
+            block_number=block_number,
+            summary=summary,
+            reserves=reserves,
+        )
+        batch.append((pos, eth_price_raw))
+
+    if not batch:
+        return 0
+
+    logger.debug(
+        "forward_recalc %s：重算 %d 个用户（来自 %d 条昨日 reserve 行）%s",
+        snapshot_date,
+        len(batch),
+        len(rows),
+        "  [dry-run]" if dry_run else "",
+    )
+
+    # ── Step 4：写库（复用 upsert_daily_positions） ───────────────────────────
+    if not dry_run:
+        await upsert_daily_positions(
+            pool,
+            batch,
+            snapshot_date,
+            block_number,
+            block_timestamp,
+            protocol,
+            reserve_indices,
+        )
+
+    return len(batch)
 
 
 # ── 预取公共数据 ──────────────────────────────────────────────────────────────
