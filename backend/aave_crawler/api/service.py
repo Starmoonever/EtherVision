@@ -61,6 +61,8 @@ from .schemas import (
     LiquidationPeriodItem,
     LiquidationSimItem,
     LiquidationSimResponse,
+    LiquidationWaterfallResponse,
+    LiquidationWaterfallTurnItem,
     MarketReplayResponse,
     PositionPeriodItem,
     PositionReplayResponse,
@@ -470,7 +472,8 @@ async def get_sorted_positions(
     pos_table, res_table = _tables(protocol)
     eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
 
-    sql_text = text(f"""
+    sql_text = text(
+        f"""
 WITH eth_cols AS (
     SELECT
         r.user_address,
@@ -509,7 +512,8 @@ WHERE COALESCE(s.liq_price_weth, p.liq_price) > 0
   AND COALESCE(s.liq_price_weth, p.liq_price) < 9999999.99
 ORDER BY {order_col} {order_dir}
 LIMIT :limit
-""")
+"""
+    )
 
     result = await session.execute(sql_text, {"protocol": protocol, "limit": limit})
     rows = result.fetchall()
@@ -539,6 +543,8 @@ LIMIT :limit
 
 # Aave V3 WETH 默认清算奖励系数（liquidation_bonus = 5%，即 0.05 on top of debt）
 _WETH_LIQ_BONUS = Decimal("1.05")
+# Aave V3 单次清算最大可偿还债务比例（close factor）
+_V3_CLOSE_FACTOR = Decimal("0.5")
 
 # 清算模拟排序字段白名单
 _SIM_SORT_COLS = {
@@ -825,6 +831,268 @@ async def simulate_liquidation_period(
         )
         price += interval
     return result
+
+
+async def simulate_liquidation_waterfall(
+    pool: asyncpg.Pool,
+    protocol: str,
+    snapshot_date,
+    initial_price_shock_eth: Decimal,
+    impact_k: Decimal,
+    sell_partition_eth: Decimal,
+) -> LiquidationWaterfallResponse:
+    """清算瀑布模拟（第二阶段）。
+
+    逻辑：
+    1) 对参考价格施加初始冲击；
+    2) 在当前价格下识别可清算账户并执行部分清算（close factor=50%）；
+    3) 将本轮卖出 ETH 映射为价格冲击，进入下一轮；
+    4) 循环直至没有可清算账户或价格冲击趋近 0。
+
+    说明：仅考虑 ETH 价格变化，不联动 ETH 系资产价格。
+    """
+    from datetime import date as _date
+
+    def _fmt_fixed(value: Decimal, decimals: int) -> str:
+        quantize = Decimal(10) ** -decimals
+        return format(value.quantize(quantize, rounding=ROUND_HALF_UP), "f")
+
+    if protocol.lower() != "v3":
+        raise ValueError("waterfall 目前仅支持 v3")
+
+    day = snapshot_date or datetime.now(timezone.utc).date()
+    if not isinstance(day, _date):
+        raise ValueError("snapshot_date 必须是 date 或 None")
+
+    table = _daily_positions_table(protocol)
+    sql = f"""
+        SELECT
+            user_address,
+            total_debt_usd,
+            eth_collateral_amount,
+            liq_price,
+            health_factor,
+            eth_price_usd
+        FROM loan."{table}"
+        WHERE snapshot_date = $1
+          AND liq_price > 0
+          AND eth_collateral_amount > 0
+          AND total_debt_usd > 0
+    """
+    rows = await pool.fetch(sql, day)
+
+    if not rows:
+        return LiquidationWaterfallResponse(
+            total_liquidation_usd="0.00",
+            total_eth_sold_amount="0.000000",
+            total_eth_sold_value="0.00",
+            initial_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            cascade_decline="0.00000000",
+            total_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            total_liquidation_accounts="0",
+            max_hf="0",
+            liquidation_turns_cnt="0",
+            liquidation_turns=[],
+            note=(
+                f"{day} 无可用日级仓位数据；"
+                "liquidation_turns[*].eth_price_decline 仅表示每轮级联跌幅，不含 initial_decline"
+            ),
+        )
+
+    # eth_price_usd 在同一天理论上相同，按首个正值兜底读取。
+    ref_price = Decimal("0")
+    for r in rows:
+        p = Decimal(str(r["eth_price_usd"]))
+        if p > 0:
+            ref_price = p
+            break
+
+    if ref_price <= 0:
+        return LiquidationWaterfallResponse(
+            total_liquidation_usd="0.00",
+            total_eth_sold_amount="0.000000",
+            total_eth_sold_value="0.00",
+            initial_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            cascade_decline="0.00000000",
+            total_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            total_liquidation_accounts="0",
+            max_hf="0",
+            liquidation_turns_cnt="0",
+            liquidation_turns=[],
+            note=f"{day} 快照缺失 eth_price_usd；未执行级联迭代",
+        )
+
+    shocked_price = ref_price * (Decimal("1") - initial_price_shock_eth)
+    if shocked_price <= 0:
+        shocked_price = Decimal("0.00000001")
+
+    # 账户状态：债务/抵押在每轮清算后递减；liq_threshold 由初始状态推导并固定。
+    states: dict[str, dict[str, Decimal]] = {}
+    market_eth_amount = Decimal("0")
+    for row in rows:
+        addr = str(row["user_address"])
+        debt_usd = Decimal(str(row["total_debt_usd"]))
+        eth_col = Decimal(str(row["eth_collateral_amount"]))
+        liq_price = Decimal(str(row["liq_price"]))
+        hf = Decimal(str(row["health_factor"]))
+        if debt_usd <= 0 or eth_col <= 0 or liq_price <= 0:
+            continue
+
+        liq_threshold = debt_usd / (eth_col * liq_price)
+        if liq_threshold <= 0:
+            continue
+
+        states[addr] = {
+            "debt_usd": debt_usd,
+            "eth_col": eth_col,
+            "liq_threshold": liq_threshold,
+            "initial_hf": hf,
+        }
+        market_eth_amount += eth_col
+
+    if not states:
+        return LiquidationWaterfallResponse(
+            total_liquidation_usd="0.00",
+            total_eth_sold_amount="0.000000",
+            total_eth_sold_value="0.00",
+            initial_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            cascade_decline="0.00000000",
+            total_decline=_fmt_fixed(initial_price_shock_eth, 8),
+            total_liquidation_accounts="0",
+            max_hf="0",
+            liquidation_turns_cnt="0",
+            liquidation_turns=[],
+            note=f"{day} 无可模拟账户（债务/抵押/清算价不完整）",
+        )
+
+    total_liq_usd = Decimal("0")
+    total_eth_sold = Decimal("0")
+    total_eth_sold_value = Decimal("0")
+    liquidated_users: set[str] = set()
+    total_liq_accounts = 0
+
+    turns: list[LiquidationWaterfallTurnItem] = []
+    current_price = shocked_price
+    current_decline = initial_price_shock_eth
+    max_turns = 200
+    eps = Decimal("0.00000001")
+
+    for _ in range(max_turns):
+        round_liq_usd = Decimal("0")
+        round_sold_eth = Decimal("0")
+        round_sold_value = Decimal("0")
+        round_accounts = 0
+
+        for addr, st in states.items():
+            debt_usd = st["debt_usd"]
+            eth_col = st["eth_col"]
+            liq_threshold = st["liq_threshold"]
+
+            if debt_usd <= eps or eth_col <= eps or liq_threshold <= eps:
+                continue
+
+            # 当前价格下推导触发价：liq_price = debt / (eth_col * liq_threshold)
+            liq_price_now = debt_usd / (eth_col * liq_threshold)
+            if current_price > liq_price_now:
+                continue
+
+            max_repay_debt = debt_usd * _V3_CLOSE_FACTOR
+            max_seize_usd = eth_col * current_price
+            if max_repay_debt <= eps or max_seize_usd <= eps:
+                continue
+
+            repaid_debt = min(max_repay_debt, max_seize_usd / _WETH_LIQ_BONUS)
+            seized_usd = repaid_debt * _WETH_LIQ_BONUS
+            seized_eth = seized_usd / current_price
+            sold_eth = seized_eth * sell_partition_eth
+            sold_value = sold_eth * current_price
+
+            if repaid_debt <= eps or seized_eth <= eps:
+                continue
+
+            st["debt_usd"] = max(Decimal("0"), debt_usd - repaid_debt)
+            st["eth_col"] = max(Decimal("0"), eth_col - seized_eth)
+
+            round_liq_usd += seized_usd
+            round_sold_eth += sold_eth
+            round_sold_value += sold_value
+            round_accounts += 1
+            liquidated_users.add(addr)
+
+        if round_accounts == 0:
+            break
+
+        total_liq_usd += round_liq_usd
+        total_eth_sold += round_sold_eth
+        total_eth_sold_value += round_sold_value
+        total_liq_accounts += round_accounts
+
+        # 线性冲击：price_impact = k * (sell_volume / daily_volume)
+        # daily_volume 采用 (market_eth_amount + cumulative_sold_eth)。
+        daily_volume = market_eth_amount + total_eth_sold
+        price_impact = (
+            impact_k * (round_sold_eth / daily_volume)
+            if daily_volume > eps and round_sold_eth > eps
+            else Decimal("0")
+        )
+        if price_impact < 0:
+            price_impact = Decimal("0")
+
+        next_price = current_price * (Decimal("1") - price_impact)
+        if next_price <= eps:
+            next_price = eps
+
+        turns.append(
+            LiquidationWaterfallTurnItem(
+                eth_sold_amount=_fmt(round_sold_eth, 6),
+                eth_sold_value=_fmt(round_sold_value),
+                liquidation_accounts=str(round_accounts),
+                liquidation_volume_usd=_fmt(round_liq_usd),
+                # 当前轮在 current_price 上执行清算；turn[0] 对应 initial shock 后的第一轮。
+                eth_price=_fmt_fixed(current_price, 4),
+                eth_price_decline=_fmt_fixed(current_decline, 8),
+            )
+        )
+
+        current_price = next_price
+        current_decline = price_impact
+        if price_impact <= eps:
+            break
+
+    max_hf = Decimal("0")
+    for addr in liquidated_users:
+        hf = states[addr]["initial_hf"]
+        if hf > max_hf:
+            max_hf = hf
+
+    cascade_decline = (shocked_price - current_price) / ref_price
+    if cascade_decline < 0:
+        cascade_decline = Decimal("0")
+
+    total_decline = initial_price_shock_eth + cascade_decline
+    if total_decline < 0:
+        total_decline = Decimal("0")
+
+    hf_str = "inf" if max_hf >= MAX_HF else _fmt(max_hf, 4)
+    return LiquidationWaterfallResponse(
+        total_liquidation_usd=_fmt(total_liq_usd),
+        total_eth_sold_amount=_fmt(total_eth_sold, 6),
+        total_eth_sold_value=_fmt(total_eth_sold_value),
+        initial_decline=_fmt_fixed(initial_price_shock_eth, 8),
+        cascade_decline=_fmt_fixed(cascade_decline, 8),
+        total_decline=_fmt_fixed(total_decline, 8),
+        # 定义为累计清算账户次数，等于各轮 liquidation_accounts 求和。
+        total_liquidation_accounts=str(total_liq_accounts),
+        max_hf=hf_str,
+        liquidation_turns_cnt=str(len(turns)),
+        liquidation_turns=turns,
+        note=(
+            "第二阶段：已启用级联迭代（仅 ETH 价格变化，非 ETH 系资产价格固定）；"
+            f"impact_k={_fmt(impact_k, 6)}，sell_partition_eth={_fmt(sell_partition_eth, 6)}；"
+            "liquidation_turns[0] 对应 initial shock 触发的第一轮清算；"
+            "total_liquidation_accounts 为各轮 liquidation_accounts 求和"
+        ),
+    )
 
 
 # ── 借贷端（做空 ETH / borrow WETH）清算分析 ─────────────────────────────────

@@ -16,6 +16,8 @@ from aave_crawler.api.schemas import (
     LiquidationPeriodItem,
     LiquidationSimItem,
     LiquidationSimResponse,
+    LiquidationWaterfallResponse,
+    LiquidationWaterfallTurnItem,
     PositionPeriodItem,
     PositionReplayResponse,
     PositionResponse,
@@ -163,6 +165,29 @@ MOCK_LIQ_PERIOD = [
         total_liquidation_usd="2100.00",
     ),
 ]
+
+MOCK_WATERFALL_RESPONSE = LiquidationWaterfallResponse(
+    total_liquidation_usd="1050.00",
+    total_eth_sold_amount="0.350000",
+    total_eth_sold_value="840.00",
+    initial_decline="0.05000000",
+    cascade_decline="0.00000000",
+    total_decline="0.05000000",
+    total_liquidation_accounts="1",
+    max_hf="1.0200",
+    liquidation_turns_cnt="1",
+    liquidation_turns=[
+        LiquidationWaterfallTurnItem(
+            eth_sold_amount="0.350000",
+            eth_sold_value="840.00",
+            liquidation_accounts="1",
+            liquidation_volume_usd="1050.00",
+            eth_price="2400.0000",
+            eth_price_decline="0.05000000",
+        )
+    ],
+    note="第二阶段：已启用级联迭代",
+)
 
 
 # ── 借贷端 Mock 数据 ─────────────────────────────────────────────────

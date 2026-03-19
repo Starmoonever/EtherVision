@@ -40,6 +40,7 @@ from tests.conftest import (
     MOCK_SIM_EMPTY,
     MOCK_SIM_RESPONSE,
     MOCK_TX_HISTORY_RESPONSE,
+    MOCK_WATERFALL_RESPONSE,
 )
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
@@ -767,6 +768,86 @@ class TestLiquidateSimulation:
             "/api/liquidate", params={"eth_price": 1500, "eth_ratio": -0.1}
         )
         assert resp.status_code == 422
+
+
+class TestLiquidateWaterfall:
+    """GET /api/liquidate/waterfall — 日级仓位瀑布模拟（第二阶段）。"""
+
+    def test_missing_initial_shock_returns_422(self, client: TestClient):
+        resp = client.get("/api/liquidate/waterfall")
+        assert resp.status_code == 422
+
+    def test_ok_returns_response(self, client: TestClient):
+        with patch(
+            f"{_ROUTES}.simulate_liquidation_waterfall",
+            new_callable=AsyncMock,
+            return_value=MOCK_WATERFALL_RESPONSE,
+        ):
+            resp = client.get(
+                "/api/liquidate/waterfall",
+                params={"initial_price_shock_eth": 0.05},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["initial_decline"] == "0.05000000"
+        assert data["cascade_decline"] == "0.00000000"
+        assert data["liquidation_turns_cnt"] == "1"
+        assert isinstance(data["liquidation_turns"], list)
+        assert data["liquidation_turns"][0]["eth_price"] == "2400.0000"
+
+    def test_initial_shock_out_of_range_returns_422(self, client: TestClient):
+        resp = client.get(
+            "/api/liquidate/waterfall",
+            params={"initial_price_shock_eth": 1.0},
+        )
+        assert resp.status_code == 422
+
+    def test_impact_k_negative_returns_422(self, client: TestClient):
+        resp = client.get(
+            "/api/liquidate/waterfall",
+            params={"initial_price_shock_eth": 0.05, "impact_k": -0.1},
+        )
+        assert resp.status_code == 422
+
+    def test_sell_partition_out_of_range_returns_422(self, client: TestClient):
+        resp = client.get(
+            "/api/liquidate/waterfall",
+            params={"initial_price_shock_eth": 0.05, "sell_partition_eth": 1.1},
+        )
+        assert resp.status_code == 422
+
+    def test_date_invalid_returns_400(self, client: TestClient):
+        resp = client.get(
+            "/api/liquidate/waterfall",
+            params={"initial_price_shock_eth": 0.05, "date": "2026/01/01"},
+        )
+        assert resp.status_code == 400
+
+    def test_params_passed_to_service(self, client: TestClient):
+        from datetime import date
+        from decimal import Decimal
+
+        with patch(
+            f"{_ROUTES}.simulate_liquidation_waterfall",
+            new_callable=AsyncMock,
+            return_value=MOCK_WATERFALL_RESPONSE,
+        ) as mock_svc:
+            client.get(
+                "/api/liquidate/waterfall",
+                params={
+                    "version": "v3",
+                    "initial_price_shock_eth": 0.08,
+                    "date": "2026-03-19",
+                    "impact_k": 0.7,
+                    "sell_partition_eth": 0.4,
+                },
+            )
+        _, kwargs = mock_svc.call_args
+        assert kwargs["protocol"] == "v3"
+        assert kwargs["snapshot_date"] == date(2026, 3, 19)
+        assert kwargs["initial_price_shock_eth"] == Decimal("0.08")
+        assert kwargs["impact_k"] == Decimal("0.7")
+        assert kwargs["sell_partition_eth"] == Decimal("0.4")
 
 
 class TestPricePeriod:

@@ -143,6 +143,41 @@ class LiquidationPeriodItem(BaseModel):
     )
 
 
+class LiquidationWaterfallTurnItem(BaseModel):
+    eth_sold_amount: str = Field(description="本轮清算卖出的 ETH 数量")
+    eth_sold_value: str = Field(description="本轮卖出 ETH 的 USD 价值")
+    liquidation_accounts: str = Field(description="本轮触发清算的账户数")
+    liquidation_volume_usd: str = Field(
+        description="本轮实际清算规模（USD，按可清算债务上限与抵押品价值取最小）"
+    )
+    eth_price: str = Field(description="本轮执行清算时的 ETH 价格（USD）")
+    eth_price_decline: str = Field(
+        description="本轮级联价格冲击比例（0~1），仅包含 cascade 部分，不包含 initial_decline"
+    )
+
+
+class LiquidationWaterfallResponse(BaseModel):
+    total_liquidation_usd: str = Field(description="累计清算规模（USD）")
+    total_eth_sold_amount: str = Field(description="累计卖出 ETH 数量")
+    total_eth_sold_value: str = Field(description="累计卖出 ETH 的 USD 价值")
+    initial_decline: str = Field(description="初始冲击跌幅（0~1）")
+    cascade_decline: str = Field(description="级联卖压造成的额外跌幅（0~1）")
+    total_decline: str = Field(description="总跌幅（0~1，相对于冲击前 ETH 价格）")
+    total_liquidation_accounts: str = Field(
+        description="累计清算账户次数（等于各轮 liquidation_accounts 求和）"
+    )
+    max_hf: str = Field(description="被清算账户在冲击前的最大 health_factor")
+    liquidation_turns_cnt: str = Field(description="清算轮次数")
+    liquidation_turns: list[LiquidationWaterfallTurnItem] = Field(
+        default_factory=list,
+        description="逐轮清算明细",
+    )
+    note: str = Field(
+        default="",
+        description="模型假设与执行说明",
+    )
+
+
 class HistoricalReserveDetail(BaseModel):
     symbol: str
     token_address: str
