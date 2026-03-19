@@ -26,9 +26,9 @@ uv run aave-crawler watch -p v3                 # Watch mode (continuous)
 uv run aave-crawler check 0xAddress             # Debug single address
 
 # Start API server
-uv run aave-api                                 # Default: 0.0.0.0:8000
-uv run aave-api --reload                        # Dev mode with hot reload
-uv run aave-api --port 8080 --workers 4         # Production
+uv run api                                      # Default: 0.0.0.0:8000
+uv run api --reload                             # Dev mode with hot reload
+uv run api --port 8080 --workers 4              # Production
 
 # Database migrations (Alembic)
 uv run alembic revision --autogenerate -m "description"
@@ -245,7 +245,7 @@ Frontend has no test suite currently.
 
 ## Deployment Notes
 
-- Backend: Typical workflow is `sync-addresses` → `crawl` (all 4 sides) → `watch` (background) → `aave-api`
+- Backend: Typical workflow is `sync-addresses` → `crawl` (all 4 sides) → `watch` (background) → `api`
 - Frontend: Static build in `dist/`, requires `VITE_API_BASE_URL` set at build time
 - Database: Requires PostgreSQL with `aave.aave_history` table (maintained by external chain-data-collector)
 - ClickHouse: Optional, only needed for aToken transfer analysis (not core functionality)
