@@ -4,6 +4,7 @@ import { SummaryCard } from './components/SummaryCard';
 import { PositionTable } from './components/PositionTable';
 import { PositionReplayChart } from './components/PositionReplayChart';
 import { MarketAssessment } from './components/MarketAssessment';
+import { CompoundMarketAssessment } from './components/CompoundMarketAssessment';
 import { fetchUserPosition } from './api';
 import type { UserPosition, BorrowPosition } from './api';
 import './App.css';
@@ -17,6 +18,7 @@ interface VersionState {
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 
 export default function App() {
+  const [protocol, setProtocol] = useState<'aave' | 'compound'>('aave');
   const [queriedAddress, setQueriedAddress] = useState('');
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
@@ -71,9 +73,54 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="header-inner">
-          <div className="logo">
-            <span className="logo-icon">⚡</span>
-            <span className="logo-text">Aave ETH 市场清算风险监测</span>
+          <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span className="logo-icon">⚡</span>
+              <span className="logo-text"> ETH 市场清算风险监测</span>
+            </div>
+            
+            {/* Protocol Switch */}
+            <div
+              style={{
+                display: 'flex',
+                background: '#1e293b',
+                borderRadius: '8px',
+                padding: '2px',
+              }}
+            >
+              <button
+                onClick={() => setProtocol('aave')}
+                style={{
+                  background: protocol === 'aave' ? '#3b82f6' : 'transparent',
+                  color: protocol === 'aave' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s',
+                }}
+              >
+                Aave
+              </button>
+              <button
+                onClick={() => setProtocol('compound')}
+                style={{
+                  background: protocol === 'compound' ? '#3b82f6' : 'transparent',
+                  color: protocol === 'compound' ? '#fff' : '#94a3b8',
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  transition: 'all 0.2s',
+                }}
+              >
+                Compound
+              </button>
+            </div>
           </div>
 
           {/* 导航 Tab */}
@@ -234,69 +281,91 @@ export default function App() {
 
       <main className="app-main">
         {activeTab === 'personal' ? (
-          <>
-            <div className="hero">
-              <h1 className="hero-title">个人账户分析</h1>
-              <p className="hero-sub">账户头寸与清算预测</p>
-            </div>
-
-            <AddressInput onSearch={handleSearch} loading={false} />
-
-            {error && (
-              <div className="error-block">
-                <span className="error-icon">⚠️</span>
-                <p>{error}</p>
+          protocol === 'aave' ? (
+            <>
+              <div className="hero">
+                <h1 className="hero-title">个人账户分析</h1>
+                <p className="hero-sub">账户头寸与清算预测</p>
               </div>
-            )}
 
-            {queriedAddress && (
-              <div className="results-container" style={{ marginTop: '2rem' }}>
-                {personalVersion === 'v2' ? (
-                  <div
-                    style={{
-                      border: '1px solid #334155',
-                      borderRadius: '14px',
-                      padding: '1.25rem',
-                      background: '#0d1117',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1rem',
-                    }}
-                  >
-                    <SummaryCard address={queriedAddress} version="v2" {...v2State} />
-                    <PositionTable version="v2" {...v2State} />
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      border: '1px solid #334155',
-                      borderRadius: '14px',
-                      padding: '1.25rem',
-                      background: '#0d1117',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1rem',
-                    }}
-                  >
-                    <SummaryCard address={queriedAddress} version="v3" {...v3State} />
-                    <PositionTable version="v3" {...v3State} />
-                  </div>
-                )}
+              <AddressInput onSearch={handleSearch} loading={false} />
 
-                <div style={{ marginTop: '2rem' }}>
-                  <PositionReplayChart address={queriedAddress} version={personalVersion} />
+              {error && (
+                <div className="error-block">
+                  <span className="error-icon">⚠️</span>
+                  <p>{error}</p>
                 </div>
+              )}
+
+              {queriedAddress && (
+                <div className="results-container" style={{ marginTop: '2rem' }}>
+                  {personalVersion === 'v2' ? (
+                    <div
+                      style={{
+                        border: '1px solid #334155',
+                        borderRadius: '14px',
+                        padding: '1.25rem',
+                        background: '#0d1117',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1rem',
+                      }}
+                    >
+                      <SummaryCard address={queriedAddress} version="v2" {...v2State} />
+                      <PositionTable version="v2" {...v2State} />
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        border: '1px solid #334155',
+                        borderRadius: '14px',
+                        padding: '1.25rem',
+                        background: '#0d1117',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1rem',
+                      }}
+                    >
+                      <SummaryCard address={queriedAddress} version="v3" {...v3State} />
+                      <PositionTable version="v3" {...v3State} />
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: '2rem' }}>
+                    <PositionReplayChart address={queriedAddress} version={personalVersion} />
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="hero">
+                <h1 className="hero-title">Compound 个人账户分析</h1>
+                <p className="hero-sub">账户头寸与清算预测</p>
               </div>
-            )}
-          </>
+              <div style={{ textAlign: 'center', color: '#94a3b8', marginTop: '4rem' }}>
+                Compound 个人账户分析模块正在开发中...
+              </div>
+            </>
+          )
         ) : (
-          <>
-            <div className="hero">
-              <h1 className="hero-title">宏观市场评估</h1>
-              <p className="hero-sub">ETH 实时价格与清算模拟</p>
-            </div>
-            <MarketAssessment marketVersion={marketVersion} />
-          </>
+          protocol === 'aave' ? (
+            <>
+              <div className="hero">
+                <h1 className="hero-title">宏观市场评估</h1>
+                <p className="hero-sub">ETH 实时价格与清算模拟</p>
+              </div>
+              <MarketAssessment marketVersion={marketVersion} />
+            </>
+          ) : (
+            <>
+              <div className="hero">
+                <h1 className="hero-title">宏观借贷市场评估</h1>
+                <p className="hero-sub">Compound 借贷市场状态分析</p>
+              </div>
+              <CompoundMarketAssessment marketVersion={marketVersion} />
+            </>
+          )
         )}
       </main>
 

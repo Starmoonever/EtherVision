@@ -48,7 +48,7 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
         // Helper to fetch and process data for a specific version
         const fetchAndProcess = async (v: string) => {
           const res = await fetch(
-            `${baseUrl}/positions/replay?start=${start}&end=${end}&version=${v}&detail=true`,
+            `${baseUrl}/aave/positions/replay?start=${start}&end=${end}&version=${v}&detail=true`,
           );
           if (!res.ok) throw new Error(`Failed to fetch ${v} market history`);
           const json = await res.json();

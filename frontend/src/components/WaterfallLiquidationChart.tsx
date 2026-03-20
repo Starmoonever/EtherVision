@@ -25,7 +25,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
   // Sliders state
   const [initialShock, setInitialShock] = useState<number>(5); // 0% - 100%
   const [impactK, setImpactK] = useState<number>(2.5); // 1.0 - 6.0
-  const [sellPartition, setSellPartition] = useState<number>(0.5); // 0.3 - 1.0
+  const [sellPartition, setSellPartition] = useState<number>(0.5); // 0.05 - 1.0
   const [date, setDate] = useState<string>('2026-02-10'); // 2026-01-01 to 2026-03-20
 
   useEffect(() => {
@@ -161,7 +161,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
               <div style={{ display: 'flex', position: 'absolute', top: '22px', width: '100%', fontSize: '0.7rem', color: '#64748b' }}>
                 <span title="ETH 市场抗风险能力强，大额卖单对价格冲击微弱，模拟牛市" style={{ flex: 1, textAlign: 'left', cursor: 'help' }}>高流动</span>
                 <span title="ETH 市场抗风险能力常规，模拟标准交易期" style={{ flex: 1, textAlign: 'center', cursor: 'help' }}>标准水平</span>
-                <span title="ETH市场抗风险能力差，易触发连环爆仓导致价格进入死亡螺旋，模拟市场恐慌期" style={{ flex: 1, textAlign: 'right', cursor: 'help' }}>流动性枯竭</span>
+                <span title="ETH市场抗风险能力差，易触发连环爆仓、价格进一步下跌，进入死亡螺旋。模拟市场恐慌期" style={{ flex: 1, textAlign: 'right', cursor: 'help' }}>流动性枯竭</span>
               </div>
             </div>
           </div>
@@ -180,7 +180,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
             <div style={{ position: 'relative', paddingBottom: '1.2rem' }}>
               <input
                 type="range"
-                min={0.3}
+                min={0.05}
                 max={1.0}
                 step={0.05}
                 value={sellPartition}
@@ -188,13 +188,13 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                 style={{ width: '100%', accentColor: getSellPartitionColor(sellPartition), position: 'relative', zIndex: 2 }}
               />
               {/* Markers for Sell Partition */}
-              <div style={{ position: 'absolute', top: '15px', left: '0%', width: '1px', height: '6px', background: '#64748b', zIndex: 1 }} /> {/* 0.3 (0%) */}
-              <div style={{ position: 'absolute', top: '15px', left: '42.8%', width: '1px', height: '6px', background: '#64748b', zIndex: 1 }} /> {/* 0.6 ( (0.6-0.3)/(1.0-0.3) ≈ 42.8% ) */}
+              <div style={{ position: 'absolute', top: '15px', left: '26.3%', width: '1px', height: '6px', background: '#64748b', zIndex: 1 }} /> {/* 0.3 ( (0.3-0.05)/(1.0-0.05) ≈ 26.3% ) */}
+              <div style={{ position: 'absolute', top: '15px', left: '57.9%', width: '1px', height: '6px', background: '#64748b', zIndex: 1 }} /> {/* 0.6 ( (0.6-0.05)/(1.0-0.05) ≈ 57.9% ) */}
               
               <div style={{ display: 'flex', position: 'absolute', top: '22px', width: '100%', fontSize: '0.7rem', color: '#64748b' }}>
-                <span title="模拟清算人看涨ETH，倾向长期持有清算获得资产。此时清算仅发生资产转移，几乎不影响价格" style={{ width: '42.8%', textAlign: 'left', cursor: 'help' }}>长期持有</span>
+                <span title="模拟清算人看涨ETH，倾向长期持有清算获得资产。此时清算仅发生资产转移，几乎不影响价格" style={{ width: '26.3%', textAlign: 'left', cursor: 'help' }}>长期持有</span>
                 <span title="模拟 ETH 存在价格波动风险，部分清算人为规避风险卖出部分清算所得 ETH" style={{ flex: 1, textAlign: 'center', cursor: 'help' }}>规避风险</span>
-                <span title="模拟极端行情下，清算人看空 ETH，为规避 ETH价格进一步下降，卖出大部分清算所得 ETH" style={{ width: '42.8%', textAlign: 'right', cursor: 'help' }}>极度恐慌</span>
+                <span title="模拟极端行情下，清算人看空 ETH，为规避 ETH价格进一步下降，卖出大部分清算所得 ETH" style={{ width: '42.1%', textAlign: 'right', cursor: 'help' }}>极度恐慌</span>
               </div>
             </div>
           </div>

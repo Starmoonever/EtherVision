@@ -227,7 +227,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         const defaultEnd = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 
         const response = await fetch(
-          `${baseUrl}/position/replay?address=${address}&start=${encodeURIComponent(defaultStart)}&end=${encodeURIComponent(defaultEnd)}&version=${version}`,
+          `${baseUrl}/aave/position/replay?address=${address}&start=${encodeURIComponent(defaultStart)}&end=${encodeURIComponent(defaultEnd)}&version=${version}`,
         );
 
         if (!response.ok) {
