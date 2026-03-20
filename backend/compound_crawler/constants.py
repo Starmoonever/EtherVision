@@ -10,8 +10,16 @@ COMPOUND_V3_MARKETS: list[str] = [
     "0xA17581A9E3356d9A858b789D68B4d866e593aE94",  # WETH Comet
 ]
 
+COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
+    "0xc3d688b66703497daa19211eedff47f25384cdc3": "USDC",
+    "0x3afdc9bca9213a35503b077a6072f3d0d5ab0840": "USDT",
+    "0xa17581a9e3356d9a858b789d68b4d866e593ae94": "WETH",
+}
+
 # Compound V2 defaults are intentionally empty for now.
 COMPOUND_V2_MARKETS: list[str] = []
+
+COMPOUND_V2_MARKET_NAMES: dict[str, str] = {}
 
 COMET_ABI = [
     {

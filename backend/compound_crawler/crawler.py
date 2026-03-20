@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from aave_crawler.market_collector import _block_at_timestamp
+import asyncpg
 from web3 import AsyncHTTPProvider, AsyncWeb3
 
 from .config import AppConfig
@@ -17,7 +18,9 @@ from .constants import (
     CHAINLINK_AGGREGATOR_V3_ABI,
     COMET_ABI,
     COMPOUND_V2_MARKETS,
+    COMPOUND_V2_MARKET_NAMES,
     COMPOUND_V3_MARKETS,
+    COMPOUND_V3_MARKET_NAMES,
     ERC20_METADATA_ABI,
     ERC20_SYMBOL_BYTES32_ABI,
 )
@@ -26,7 +29,6 @@ from .db import (
     ReserveSnapshotRow,
     ensure_market_state_tables,
     market_table_name,
-    reserve_table_name,
     upsert_market_snapshots,
     upsert_reserve_snapshots,
 )
@@ -115,6 +117,19 @@ def _scale_to_decimals(scale: int) -> int:
     return d
 
 
+def _market_name_map(protocol: str) -> dict[str, str]:
+    if protocol == "v3":
+        return COMPOUND_V3_MARKET_NAMES
+    return COMPOUND_V2_MARKET_NAMES
+
+
+def _resolve_market_name(protocol: str, market_address: str) -> str:
+    name = _market_name_map(protocol).get(market_address.lower())
+    if name:
+        return name
+    return "MARKET"
+
+
 async def _price_from_feed(
     w3: AsyncWeb3,
     price_feed: str,
@@ -194,6 +209,7 @@ async def _token_metadata(
 
 async def _collect_v3_market_at_block(
     w3: AsyncWeb3,
+    protocol: str,
     market_address: str,
     point_ts: datetime,
     block_number: int,
@@ -262,7 +278,7 @@ async def _collect_v3_market_at_block(
             timestamp=point_ts,
             market=_to_bytes(market_address),
             reserve=_to_bytes(base_token),
-            symbol=base_symbol or "BASE",
+            symbol=base_symbol or _resolve_market_name(protocol, market_address),
             decimals=(
                 base_decimals_meta
                 if base_decimals_meta is not None
@@ -332,12 +348,91 @@ async def _collect_v3_market_at_block(
     return market_row, reserve_rows
 
 
+async def _collect_v3_markets_at_block(
+    cfg: AppConfig,
+    w3: AsyncWeb3,
+    point_ts: datetime,
+    block_number: int,
+    markets: Sequence[str],
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
+    sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency))
+
+    async def _one_market(
+        market: str,
+    ) -> tuple[MarketSnapshotRow | None, list[ReserveSnapshotRow]]:
+        async with sem:
+            try:
+                return await _collect_v3_market_at_block(
+                    w3,
+                    protocol=cfg.protocol,
+                    market_address=market,
+                    point_ts=point_ts,
+                    block_number=block_number,
+                    metadata_cache=metadata_cache,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to collect v3 market=%s ts=%s block=%s: %s",
+                    market,
+                    point_ts.isoformat(),
+                    block_number,
+                    exc,
+                )
+                return None, []
+
+    results = await asyncio.gather(*(_one_market(market) for market in markets))
+    market_rows: list[MarketSnapshotRow] = []
+    reserve_rows: list[ReserveSnapshotRow] = []
+    for market_row, rows in results:
+        if market_row is not None:
+            market_rows.append(market_row)
+            reserve_rows.extend(rows)
+    return market_rows, reserve_rows
+
+
+async def _filter_pending_markets(
+    pool: asyncpg.Pool,
+    protocol: str,
+    point_ts: datetime,
+    markets: Sequence[str],
+) -> tuple[list[str], int]:
+    if not markets:
+        return [], 0
+
+    market_table = market_table_name(protocol)
+    market_keys = [_to_bytes(market) for market in markets if market.startswith("0x")]
+    if not market_keys:
+        return list(markets), 0
+
+    async with pool.acquire() as conn:
+        existing_rows = await conn.fetch(
+            f"""
+            SELECT market
+            FROM loan.{market_table}
+            WHERE "timestamp" = $1
+              AND market = ANY($2::bytea[])
+            """,
+            point_ts,
+            market_keys,
+        )
+    existing_market_set = {row["market"] for row in existing_rows}
+
+    pending: list[str] = []
+    skipped = 0
+    for market in markets:
+        if market.startswith("0x") and _to_bytes(market) in existing_market_set:
+            skipped += 1
+            continue
+        pending.append(market)
+    return pending, skipped
+
+
 async def _collect_rows_for_point(
     cfg: AppConfig,
     w3: AsyncWeb3 | None,
     point_ts: datetime,
     markets: Sequence[str],
-    dry_run: bool,
     pool,
     metadata_cache: dict[str, tuple[str | None, int | None]],
 ) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
@@ -345,30 +440,14 @@ async def _collect_rows_for_point(
         return _build_rows_for_point(point_ts, list(markets))
 
     block_number = await _block_at_timestamp(w3, int(point_ts.timestamp()), pool=pool)
-    market_rows: list[MarketSnapshotRow] = []
-    reserve_rows: list[ReserveSnapshotRow] = []
-    for market in markets:
-        try:
-            m_row, r_rows = await _collect_v3_market_at_block(
-                w3,
-                market_address=market,
-                point_ts=point_ts,
-                block_number=block_number,
-                metadata_cache=metadata_cache,
-            )
-            market_rows.append(m_row)
-            reserve_rows.extend(r_rows)
-        except Exception as exc:
-            logger.warning(
-                "Failed to collect v3 market=%s ts=%s block=%s: %s",
-                market,
-                point_ts.isoformat(),
-                block_number,
-                exc,
-            )
-            if dry_run:
-                continue
-    return market_rows, reserve_rows
+    return await _collect_v3_markets_at_block(
+        cfg,
+        w3,
+        point_ts=point_ts,
+        block_number=block_number,
+        markets=markets,
+        metadata_cache=metadata_cache,
+    )
 
 
 def _build_rows_for_point(
@@ -402,7 +481,7 @@ def _build_rows_for_point(
                 timestamp=ts,
                 market=market_bytes,
                 reserve=market_bytes,
-                symbol="MARKET",
+                symbol=_resolve_market_name("v2", market),
                 decimals=18,
                 total_supply=zero,
                 total_borrow=zero,
@@ -414,6 +493,38 @@ def _build_rows_for_point(
             )
         )
     return market_rows, reserve_rows
+
+
+async def _writer_loop(
+    cfg: AppConfig,
+    pool: asyncpg.Pool,
+    queue: asyncio.Queue[
+        tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]] | None
+    ],
+    totals: dict[str, int],
+    dry_run: bool,
+) -> None:
+    while True:
+        item = await queue.get()
+        try:
+            if item is None:
+                return
+            market_rows, reserve_rows = item
+            if dry_run:
+                totals["market"] += len(market_rows)
+                totals["reserve"] += len(reserve_rows)
+                continue
+
+            inserted_market = await upsert_market_snapshots(
+                pool, cfg.protocol, market_rows
+            )
+            inserted_reserve = await upsert_reserve_snapshots(
+                pool, cfg.protocol, reserve_rows
+            )
+            totals["market"] += inserted_market
+            totals["reserve"] += inserted_reserve
+        finally:
+            queue.task_done()
 
 
 async def run_crawler(
@@ -467,8 +578,7 @@ async def run_crawler(
     )
 
     markets = _market_addresses(cfg)
-    total_market_rows = 0
-    total_reserve_rows = 0
+    totals: dict[str, int] = {"market": 0, "reserve": 0}
     w3: AsyncWeb3 | None = None
     if cfg.protocol == "v3":
         w3 = await _build_web3(cfg)
@@ -479,87 +589,58 @@ async def run_crawler(
 
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
 
-    for ts in points:
-        logger.debug("market_state point scheduled: %s", ts.isoformat())
-        market_rows, reserve_rows = await _collect_rows_for_point(
-            cfg,
-            w3,
-            point_ts=ts,
-            markets=markets,
-            dry_run=dry_run,
-            pool=pool,
-            metadata_cache=metadata_cache,
-        )
+    write_queue: asyncio.Queue[
+        tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]] | None
+    ] = asyncio.Queue(maxsize=max(1, cfg.crawler.batch_size))
+    writer_task = asyncio.create_task(
+        _writer_loop(cfg, pool, write_queue, totals=totals, dry_run=dry_run)
+    )
 
-        if skip_existing and reserve_rows:
-            ts = reserve_rows[0].timestamp
-            market_bytes = list({row.market for row in reserve_rows})
-            market_table = market_table_name(cfg.protocol)
-            reserve_table = reserve_table_name(cfg.protocol)
+    point_sem = asyncio.Semaphore(max(1, min(4, cfg.crawler.concurrency // 2 or 1)))
 
-            async with pool.acquire() as conn:
-                existing_markets = await conn.fetch(
-                    f"""
-                    SELECT market
-                    FROM loan.{market_table}
-                    WHERE "timestamp" = $1
-                      AND market = ANY($2::bytea[])
-                    """,
-                    ts,
-                    market_bytes,
+    async def _process_point(ts: datetime) -> None:
+        async with point_sem:
+            logger.debug("market_state point scheduled: %s", ts.isoformat())
+            point_markets = list(markets)
+            if skip_existing:
+                point_markets, skipped_market = await _filter_pending_markets(
+                    pool,
+                    cfg.protocol,
+                    point_ts=ts,
+                    markets=point_markets,
                 )
-                existing_market_set = {r["market"] for r in existing_markets}
+                if skipped_market:
+                    logger.info(
+                        "Skipped existing market snapshots before RPC at %s: market=%s",
+                        ts.isoformat(),
+                        skipped_market,
+                    )
+            if not point_markets:
+                return
 
-                existing_reserves = await conn.fetch(
-                    f"""
-                    SELECT market, reserve
-                    FROM loan.{reserve_table}
-                    WHERE "timestamp" = $1
-                      AND market = ANY($2::bytea[])
-                    """,
-                    ts,
-                    market_bytes,
-                )
-                existing_reserve_set = {
-                    (r["market"], r["reserve"]) for r in existing_reserves
-                }
+            market_rows, reserve_rows = await _collect_rows_for_point(
+                cfg,
+                w3,
+                point_ts=ts,
+                markets=point_markets,
+                pool=pool,
+                metadata_cache=metadata_cache,
+            )
+            if not market_rows and not reserve_rows:
+                return
+            await write_queue.put((market_rows, reserve_rows))
 
-            before_market = len(market_rows)
-            before_reserve = len(reserve_rows)
-            market_rows = [
-                r for r in market_rows if (r.market not in existing_market_set)
-            ]
-            reserve_rows = [
-                r
-                for r in reserve_rows
-                if (r.market, r.reserve) not in existing_reserve_set
-            ]
-            skipped_market = before_market - len(market_rows)
-            skipped_reserve = before_reserve - len(reserve_rows)
-            if skipped_market or skipped_reserve:
-                logger.info(
-                    "Skipped existing rows at %s: market=%s reserve=%s",
-                    ts.isoformat(),
-                    skipped_market,
-                    skipped_reserve,
-                )
-
-        if dry_run:
-            total_market_rows += len(market_rows)
-            total_reserve_rows += len(reserve_rows)
-            continue
-
-        inserted_market = await upsert_market_snapshots(pool, cfg.protocol, market_rows)
-        inserted_reserve = await upsert_reserve_snapshots(
-            pool, cfg.protocol, reserve_rows
-        )
-        total_market_rows += inserted_market
-        total_reserve_rows += inserted_reserve
+    try:
+        await asyncio.gather(*(_process_point(ts) for ts in points))
+    finally:
+        await write_queue.put(None)
+        await write_queue.join()
+        await writer_task
 
     logger.info(
         "Compound market_state crawl done: protocol=%s dry_run=%s market_rows=%s reserve_rows=%s",
         cfg.protocol,
         dry_run,
-        total_market_rows,
-        total_reserve_rows,
+        totals["market"],
+        totals["reserve"],
     )
