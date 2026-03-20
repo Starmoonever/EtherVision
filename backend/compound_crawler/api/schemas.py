@@ -41,3 +41,7 @@ class MarketStateResponse(BaseModel):
     supply_usd: str
     borrow_usd: str
     reserves: list[MarketStateReserveResponse] | None = None
+
+
+class MarketStatePeriodResponse(BaseModel):
+    points: list[MarketStateResponse]
