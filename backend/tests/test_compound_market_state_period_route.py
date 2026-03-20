@@ -62,21 +62,29 @@ def test_market_state_period_ok_without_detail() -> None:
     rows = [
         {
             "timestamp": ts1,
+            "market": bytes.fromhex("c3d688b66703497daa19211eedff47f25384cdc3"),
+            "symbol": "USDC",
             "total_supply": "100",
             "total_borrow": "20",
+            "collateral_usd": "80000",
             "utilization": "0.2",
             "borrow_rate": "0.01",
             "supply_rate": "0.005",
+            "price_usd": "1000",
             "supply_usd": "100000",
             "borrow_usd": "20000",
         },
         {
             "timestamp": ts2,
+            "market": bytes.fromhex("c3d688b66703497daa19211eedff47f25384cdc3"),
+            "symbol": "USDC",
             "total_supply": "110",
             "total_borrow": "22",
+            "collateral_usd": "85000",
             "utilization": "0.2",
             "borrow_rate": "0.01",
             "supply_rate": "0.005",
+            "price_usd": "1000",
             "supply_usd": "110000",
             "borrow_usd": "22000",
         },
@@ -97,7 +105,10 @@ def test_market_state_period_ok_without_detail() -> None:
     data = resp.json()
     assert isinstance(data["points"], list)
     assert len(data["points"]) == 2
-    assert data["points"][0]["market"] == "USDC"
+    assert data["points"][0]["market"] == "0xc3d688b66703497daa19211eedff47f25384cdc3"
+    assert data["points"][0]["symbol"] == "USDC"
+    assert data["points"][0]["collateral_usd"] == "80000"
+    assert data["points"][0]["price_usd"] == "1000"
     assert data["points"][1]["total_supply"] == "110"
     assert data["points"][0]["reserves"] is None
 
@@ -107,11 +118,15 @@ def test_market_state_period_ok_with_detail() -> None:
     rows = [
         {
             "timestamp": ts1,
+            "market": bytes.fromhex("c3d688b66703497daa19211eedff47f25384cdc3"),
+            "symbol": "USDC",
             "total_supply": "100",
             "total_borrow": "20",
+            "collateral_usd": "80000",
             "utilization": "0.2",
             "borrow_rate": "0.01",
             "supply_rate": "0.005",
+            "price_usd": "1000",
             "supply_usd": "100000",
             "borrow_usd": "20000",
         }
@@ -127,6 +142,8 @@ def test_market_state_period_ok_with_detail() -> None:
             "utilization": "0.25",
             "borrow_rate": "0.02",
             "supply_rate": "0.01",
+            "price_in_base": "0.8",
+            "price_usd": "1000",
             "supply_usd": "80000",
             "borrow_usd": "20000",
         }
@@ -147,7 +164,8 @@ def test_market_state_period_ok_with_detail() -> None:
     data = resp.json()
     assert len(data["points"]) == 1
     assert isinstance(data["points"][0]["reserves"], list)
-    assert data["points"][0]["reserves"][0]["symbol"] == "USDC"
+    assert data["points"][0]["reserves"][0]["price_in_base"] == "0.8"
+    assert data["points"][0]["reserves"][0]["price_usd"] == "1000"
 
 
 def test_market_state_period_invalid_interval() -> None:

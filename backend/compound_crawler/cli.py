@@ -143,7 +143,7 @@ def cmd_watch(
     asyncio.run(_run())
 
 
-@cli.command("init-market-state")
+@cli.command("init_market_state")
 @click.option("--config", "-c", default=None, help="config.yaml path")
 @click.option(
     "--protocol",

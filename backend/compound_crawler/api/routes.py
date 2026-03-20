@@ -3,9 +3,8 @@
 from __future__ import annotations
 from typing import Literal
 from fastapi import APIRouter, Query
-from .constants import DEFAULT_LIMIT, MAX_LIMIT
-from .schemas import MarketStatePeriodResponse, MarketStateResponse, PositionResponse
-from .service import get_market_state_period, get_market_state, get_sorted_positions
+from .schemas import MarketStatePeriodResponse, MarketStateResponse
+from .service import get_market_state_period, get_market_state
 from ..database import AsyncpgPool
 
 
@@ -44,17 +43,6 @@ async def market_state_period(
         interval=interval,
         detail=detail,
     )
-
-
-@router.get(
-    "/positions",
-    response_model=list[PositionResponse],
-    summary="Query Compound positions (scaffold)",
-)
-async def positions(
-    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT, description="Result size"),
-) -> list[PositionResponse]:
-    return await get_sorted_positions(limit)
 
 
 @router.get(

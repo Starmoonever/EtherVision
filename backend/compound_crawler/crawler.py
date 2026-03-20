@@ -36,6 +36,10 @@ from .db import (
 logger = logging.getLogger(__name__)
 
 ETH_CHAIN_ID = 1
+COMET_PRICE_SCALE = Decimal(10**8)
+ONE = Decimal("1")
+WETH_MAINNET = "0xc02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+ETH_USD_PRICE_FEED = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
 PUBLIC_RPCS = [
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
@@ -130,7 +134,7 @@ def _resolve_market_name(protocol: str, market_address: str) -> str:
     return "MARKET"
 
 
-async def _price_from_feed(
+async def _price_from_feed_direct(
     w3: AsyncWeb3,
     price_feed: str,
     block_number: int,
@@ -147,6 +151,49 @@ async def _price_from_feed(
     if answer <= 0:
         return Decimal("0")
     return Decimal(answer) / (Decimal(10) ** int(decimals))
+
+
+async def _price_from_comet(
+    comet: Any,
+    price_feed: str,
+    block_number: int,
+) -> Decimal:
+    price_raw = await comet.functions.getPrice(
+        AsyncWeb3.to_checksum_address(price_feed)
+    ).call(block_identifier=block_number)
+    if int(price_raw) <= 0:
+        return Decimal("0")
+    return Decimal(int(price_raw)) / COMET_PRICE_SCALE
+
+
+async def _price_from_oracle(
+    w3: AsyncWeb3,
+    comet: Any,
+    price_feed: str,
+    block_number: int,
+) -> Decimal:
+    try:
+        return await _price_from_comet(comet, price_feed, block_number)
+    except Exception as exc:
+        logger.debug(
+            "Comet.getPrice failed for feed=%s block=%s, fallback to latestRoundData: %s",
+            price_feed,
+            block_number,
+            exc,
+        )
+        return await _price_from_feed_direct(w3, price_feed, block_number)
+
+
+async def _base_token_usd_price(
+    w3: AsyncWeb3,
+    comet: Any,
+    base_token: str,
+    base_token_feed: str,
+    block_number: int,
+) -> Decimal:
+    if base_token.lower() == WETH_MAINNET.lower():
+        return await _price_from_feed_direct(w3, ETH_USD_PRICE_FEED, block_number)
+    return await _price_from_oracle(w3, comet, base_token_feed, block_number)
 
 
 def _decode_symbol_bytes32(value: Any) -> str | None:
@@ -220,6 +267,8 @@ async def _collect_v3_market_at_block(
         abi=COMET_ABI,
     )
 
+    market_symbol = _resolve_market_name(protocol, market_address)
+
     (
         base_scale,
         base_token,
@@ -247,7 +296,9 @@ async def _collect_v3_market_at_block(
         ),
     )
 
-    base_price_usd = await _price_from_feed(w3, base_token_feed, block_number)
+    base_price_usd = await _base_token_usd_price(
+        w3, comet, base_token, base_token_feed, block_number
+    )
     base_symbol, base_decimals_meta = await _token_metadata(
         w3, base_token, block_number, metadata_cache
     )
@@ -260,15 +311,19 @@ async def _collect_v3_market_at_block(
     borrow_rate = Decimal(int(borrow_rate_raw)) / Decimal(10**18)
     supply_usd = total_supply * base_price_usd
     borrow_usd = total_borrow * base_price_usd
+    collateral_usd = Decimal("0")
 
     market_row = MarketSnapshotRow(
         timestamp=point_ts,
         market=_to_bytes(market_address),
+        symbol=market_symbol,
         total_supply=total_supply,
         total_borrow=total_borrow,
+        collateral_usd=collateral_usd,
         utilization=utilization,
         borrow_rate=borrow_rate,
         supply_rate=supply_rate,
+        price_usd=base_price_usd,
         supply_usd=supply_usd,
         borrow_usd=borrow_usd,
     )
@@ -278,7 +333,7 @@ async def _collect_v3_market_at_block(
             timestamp=point_ts,
             market=_to_bytes(market_address),
             reserve=_to_bytes(base_token),
-            symbol=base_symbol or _resolve_market_name(protocol, market_address),
+            symbol=base_symbol or market_symbol,
             decimals=(
                 base_decimals_meta
                 if base_decimals_meta is not None
@@ -289,6 +344,8 @@ async def _collect_v3_market_at_block(
             utilization=utilization,
             borrow_rate=borrow_rate,
             supply_rate=supply_rate,
+            price_in_base=ONE,
+            price_usd=base_price_usd,
             supply_usd=supply_usd,
             borrow_usd=borrow_usd,
         )
@@ -299,52 +356,74 @@ async def _collect_v3_market_at_block(
             asset_info = await comet.functions.getAssetInfo(i).call(
                 block_identifier=block_number
             )
-            # tuple: (offset, asset, priceFeed, scale, ...)
-            asset_address = asset_info[1]
-            asset_price_feed = asset_info[2]
-            asset_scale = int(asset_info[3])
-
-            asset_symbol, asset_decimals_meta = await _token_metadata(
-                w3, asset_address, block_number, metadata_cache
-            )
-
-            totals_collateral = await comet.functions.totalsCollateral(
-                AsyncWeb3.to_checksum_address(asset_address)
-            ).call(block_identifier=block_number)
-            total_supply_asset_raw = int(totals_collateral[0])
-            asset_price_usd = await _price_from_feed(w3, asset_price_feed, block_number)
-            asset_supply = Decimal(total_supply_asset_raw) / Decimal(asset_scale)
-            asset_supply_usd = asset_supply * asset_price_usd
-
-            reserve_rows.append(
-                ReserveSnapshotRow(
-                    timestamp=point_ts,
-                    market=_to_bytes(market_address),
-                    reserve=_to_bytes(asset_address),
-                    symbol=asset_symbol,
-                    decimals=(
-                        asset_decimals_meta
-                        if asset_decimals_meta is not None
-                        else _scale_to_decimals(asset_scale)
-                    ),
-                    total_supply=asset_supply,
-                    total_borrow=Decimal("0"),
-                    utilization=Decimal("0"),
-                    borrow_rate=Decimal("0"),
-                    supply_rate=Decimal("0"),
-                    supply_usd=asset_supply_usd,
-                    borrow_usd=Decimal("0"),
-                )
-            )
         except Exception as exc:
             logger.warning(
-                "Failed to collect v3 collateral asset i=%s market=%s block=%s: %s",
+                "Failed to fetch v3 asset info i=%s market=%s block=%s: %s",
                 i,
                 market_address,
                 block_number,
                 exc,
             )
+            continue
 
+        # tuple: (offset, asset, priceFeed, scale, ...)
+        asset_address = asset_info[1]
+        asset_price_feed = asset_info[2]
+        asset_scale = int(asset_info[3])
+
+        asset_symbol, asset_decimals_meta = await _token_metadata(
+            w3, asset_address, block_number, metadata_cache
+        )
+
+        try:
+            totals_collateral = await comet.functions.totalsCollateral(
+                AsyncWeb3.to_checksum_address(asset_address)
+            ).call(block_identifier=block_number)
+            total_supply_asset_raw = int(totals_collateral[0])
+            asset_price_in_base = await _price_from_oracle(
+                w3, comet, asset_price_feed, block_number
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to price v3 collateral asset i=%s asset=%s feed=%s market=%s block=%s: %s",
+                i,
+                asset_address,
+                asset_price_feed,
+                market_address,
+                block_number,
+                exc,
+            )
+            continue
+
+        asset_supply = Decimal(total_supply_asset_raw) / Decimal(asset_scale)
+        asset_price_usd = asset_price_in_base * base_price_usd
+        asset_supply_usd = asset_supply * asset_price_usd
+        collateral_usd += asset_supply_usd
+
+        reserve_rows.append(
+            ReserveSnapshotRow(
+                timestamp=point_ts,
+                market=_to_bytes(market_address),
+                reserve=_to_bytes(asset_address),
+                symbol=asset_symbol,
+                decimals=(
+                    asset_decimals_meta
+                    if asset_decimals_meta is not None
+                    else _scale_to_decimals(asset_scale)
+                ),
+                total_supply=asset_supply,
+                total_borrow=Decimal("0"),
+                utilization=Decimal("0"),
+                borrow_rate=Decimal("0"),
+                supply_rate=Decimal("0"),
+                price_in_base=asset_price_in_base,
+                price_usd=asset_price_usd,
+                supply_usd=asset_supply_usd,
+                borrow_usd=Decimal("0"),
+            )
+        )
+
+    market_row.collateral_usd = collateral_usd
     return market_row, reserve_rows
 
 
@@ -466,11 +545,14 @@ def _build_rows_for_point(
             MarketSnapshotRow(
                 timestamp=ts,
                 market=market_bytes,
+                symbol="MARKET",
                 total_supply=zero,
                 total_borrow=zero,
+                collateral_usd=zero,
                 utilization=zero,
                 borrow_rate=zero,
                 supply_rate=zero,
+                price_usd=zero,
                 supply_usd=zero,
                 borrow_usd=zero,
             )
@@ -488,6 +570,8 @@ def _build_rows_for_point(
                 utilization=zero,
                 borrow_rate=zero,
                 supply_rate=zero,
+                price_in_base=zero,
+                price_usd=zero,
                 supply_usd=zero,
                 borrow_usd=zero,
             )

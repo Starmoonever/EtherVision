@@ -33,11 +33,14 @@ _RESERVE_TABLES = {
 class MarketSnapshotRow:
     timestamp: datetime
     market: bytes
+    symbol: str | None
     total_supply: Decimal
     total_borrow: Decimal
+    collateral_usd: Decimal
     utilization: Decimal
     borrow_rate: Decimal
     supply_rate: Decimal
+    price_usd: Decimal
     supply_usd: Decimal
     borrow_usd: Decimal
 
@@ -54,6 +57,8 @@ class ReserveSnapshotRow:
     utilization: Decimal
     borrow_rate: Decimal
     supply_rate: Decimal
+    price_in_base: Decimal
+    price_usd: Decimal
     supply_usd: Decimal
     borrow_usd: Decimal
 
@@ -62,11 +67,14 @@ _DDL_MARKET = """
 CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"    TIMESTAMPTZ     NOT NULL,
     market         BYTEA           NOT NULL,
+    symbol         TEXT            NULL,
     total_supply   NUMERIC(38, 18) NOT NULL,
     total_borrow   NUMERIC(38, 18) NOT NULL,
+    collateral_usd NUMERIC(30, 8)  NOT NULL,
     utilization    NUMERIC(20, 18) NOT NULL,
     borrow_rate    NUMERIC(38, 18) NOT NULL,
     supply_rate    NUMERIC(38, 18) NOT NULL,
+    price_usd      NUMERIC(30, 8)  NOT NULL,
     supply_usd     NUMERIC(30, 8)  NOT NULL,
     borrow_usd     NUMERIC(30, 8)  NOT NULL,
     created_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
@@ -99,6 +107,8 @@ CREATE TABLE IF NOT EXISTS loan.{table_name} (
     utilization    NUMERIC(20, 18) NOT NULL,
     borrow_rate    NUMERIC(38, 18) NOT NULL,
     supply_rate    NUMERIC(38, 18) NOT NULL,
+    price_in_base  NUMERIC(30, 8)  NOT NULL,
+    price_usd      NUMERIC(30, 8)  NOT NULL,
     supply_usd     NUMERIC(30, 8)  NOT NULL,
     borrow_usd     NUMERIC(30, 8)  NOT NULL,
     created_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
@@ -122,21 +132,24 @@ CREATE INDEX IF NOT EXISTS {index_name}
 _UPSERT_MARKET = """
 INSERT INTO loan.{table_name} (
     "timestamp", market,
-    total_supply, total_borrow, utilization,
-    borrow_rate, supply_rate,
+    symbol, total_supply, total_borrow, collateral_usd, utilization,
+    borrow_rate, supply_rate, price_usd,
     supply_usd, borrow_usd
 ) VALUES (
     $1, $2,
-    $3, $4, $5,
-    $6, $7,
-    $8, $9
+    $3, $4, $5, $6, $7,
+    $8, $9, $10,
+    $11, $12
 )
 ON CONFLICT ("timestamp", market) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
     total_supply = EXCLUDED.total_supply,
     total_borrow = EXCLUDED.total_borrow,
+    collateral_usd = EXCLUDED.collateral_usd,
     utilization = EXCLUDED.utilization,
     borrow_rate = EXCLUDED.borrow_rate,
     supply_rate = EXCLUDED.supply_rate,
+    price_usd = EXCLUDED.price_usd,
     supply_usd = EXCLUDED.supply_usd,
     borrow_usd = EXCLUDED.borrow_usd,
     created_at = NOW();
@@ -148,14 +161,14 @@ INSERT INTO loan.{table_name} (
     "timestamp", market, reserve,
     symbol, decimals,
     total_supply, total_borrow, utilization,
-    borrow_rate, supply_rate,
+    borrow_rate, supply_rate, price_in_base, price_usd,
     supply_usd, borrow_usd
 ) VALUES (
     $1, $2, $3,
     $4, $5,
     $6, $7, $8,
-    $9, $10,
-    $11, $12
+    $9, $10, $11, $12,
+    $13, $14
 )
 ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
     symbol = EXCLUDED.symbol,
@@ -165,6 +178,8 @@ ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
     utilization = EXCLUDED.utilization,
     borrow_rate = EXCLUDED.borrow_rate,
     supply_rate = EXCLUDED.supply_rate,
+    price_in_base = EXCLUDED.price_in_base,
+    price_usd = EXCLUDED.price_usd,
     supply_usd = EXCLUDED.supply_usd,
     borrow_usd = EXCLUDED.borrow_usd,
     created_at = NOW();
@@ -203,6 +218,109 @@ async def _try_enable_hypertable(conn: Any, table_name: str) -> None:
     )
 
 
+async def _ensure_market_columns(conn: Any, table_name: str) -> None:
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ADD COLUMN IF NOT EXISTS symbol TEXT;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ADD COLUMN IF NOT EXISTS collateral_usd NUMERIC(30, 8);
+        """
+    )
+    await conn.execute(
+        f"""
+        UPDATE loan.{table_name}
+        SET collateral_usd = 0
+        WHERE collateral_usd IS NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ALTER COLUMN collateral_usd SET NOT NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        DROP COLUMN IF EXISTS price_in_base;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ADD COLUMN IF NOT EXISTS price_usd NUMERIC(30, 8);
+        """
+    )
+    await conn.execute(
+        f"""
+        UPDATE loan.{table_name}
+        SET price_usd = CASE
+            WHEN total_supply <> 0 THEN ROUND(supply_usd / total_supply, 8)
+            WHEN total_borrow <> 0 THEN ROUND(borrow_usd / total_borrow, 8)
+            ELSE 0
+        END
+        WHERE price_usd IS NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ALTER COLUMN price_usd SET NOT NULL;
+        """
+    )
+
+
+async def _ensure_reserve_columns(conn: Any, table_name: str) -> None:
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ADD COLUMN IF NOT EXISTS price_in_base NUMERIC(30, 8);
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ADD COLUMN IF NOT EXISTS price_usd NUMERIC(30, 8);
+        """
+    )
+    await conn.execute(
+        f"""
+        UPDATE loan.{table_name}
+        SET price_in_base = price_usd
+        WHERE price_in_base IS NULL
+          AND price_usd IS NOT NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        UPDATE loan.{table_name}
+        SET price_usd = CASE
+            WHEN total_supply <> 0 THEN ROUND(supply_usd / total_supply, 8)
+            WHEN total_borrow <> 0 THEN ROUND(borrow_usd / total_borrow, 8)
+            ELSE 0
+        END
+        WHERE price_usd IS NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ALTER COLUMN price_in_base SET NOT NULL;
+        """
+    )
+    await conn.execute(
+        f"""
+        ALTER TABLE loan.{table_name}
+        ALTER COLUMN price_usd SET NOT NULL;
+        """
+    )
+
+
 async def ensure_market_state_tables(
     pool: asyncpg.Pool,
     protocol: str | None = None,
@@ -223,6 +341,7 @@ async def ensure_market_state_tables(
             reserve_table = _RESERVE_TABLES[p]
 
             await conn.execute(_DDL_MARKET.format(table_name=market_table))
+            await _ensure_market_columns(conn, market_table)
             await conn.execute(
                 _DDL_MARKET_INDEX_TS.format(
                     index_name=f"idx_{market_table}_ts",
@@ -237,6 +356,7 @@ async def ensure_market_state_tables(
             )
 
             await conn.execute(_DDL_RESERVE.format(table_name=reserve_table))
+            await _ensure_reserve_columns(conn, reserve_table)
             await conn.execute(
                 _DDL_RESERVE_INDEX_MARKET_TS.format(
                     index_name=f"idx_{reserve_table}_market_ts",
@@ -289,11 +409,14 @@ async def upsert_market_snapshots(
         (
             r.timestamp,
             r.market,
+            r.symbol,
             r.total_supply,
             r.total_borrow,
+            r.collateral_usd,
             r.utilization,
             r.borrow_rate,
             r.supply_rate,
+            r.price_usd,
             r.supply_usd,
             r.borrow_usd,
         )
@@ -325,6 +448,8 @@ async def upsert_reserve_snapshots(
             r.utilization,
             r.borrow_rate,
             r.supply_rate,
+            r.price_in_base,
+            r.price_usd,
             r.supply_usd,
             r.borrow_usd,
         )

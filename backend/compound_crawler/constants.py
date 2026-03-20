@@ -125,6 +125,13 @@ COMET_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"internalType": "address", "name": "priceFeed", "type": "address"}],
+        "name": "getPrice",
+        "outputs": [{"internalType": "uint128", "name": "", "type": "uint128"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [{"internalType": "address", "name": "asset", "type": "address"}],
         "name": "totalsCollateral",
         "outputs": [

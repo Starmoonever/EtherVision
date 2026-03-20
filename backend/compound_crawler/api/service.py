@@ -13,6 +13,10 @@ from .schemas import (
 )
 
 
+def _bytea_to_address(value: bytes | bytearray | memoryview) -> str:
+    return "0x" + bytes(value).hex()
+
+
 async def get_market_state_period(
     pool,
     version: str,
@@ -54,11 +58,15 @@ async def get_market_state_period(
             f"""
             SELECT
                 "timestamp",
+                market,
+                symbol,
                 total_supply,
                 total_borrow,
+                collateral_usd,
                 utilization,
                 borrow_rate,
                 supply_rate,
+                price_usd,
                 supply_usd,
                 borrow_usd
             FROM loan.{market_table}
@@ -88,6 +96,8 @@ async def get_market_state_period(
                     utilization,
                     borrow_rate,
                     supply_rate,
+                    price_in_base,
+                    price_usd,
                     supply_usd,
                     borrow_usd
                 FROM loan.{reserve_table}
@@ -110,6 +120,8 @@ async def get_market_state_period(
                         utilization=_fmt(r["utilization"]),
                         borrow_rate=_fmt(r["borrow_rate"]),
                         supply_rate=_fmt(r["supply_rate"]),
+                        price_in_base=_fmt(r["price_in_base"]),
+                        price_usd=_fmt(r["price_usd"]),
                         supply_usd=_fmt(r["supply_usd"]),
                         borrow_usd=_fmt(r["borrow_usd"]),
                     )
@@ -124,15 +136,18 @@ async def get_market_state_period(
         result.append(
             MarketStateResponse(
                 version=version,
-                market=market.strip().upper(),
+                market=_bytea_to_address(row["market"]),
+                symbol=row["symbol"],
                 timestamp=row["timestamp"]
                 .astimezone(timezone.utc)
                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 total_supply=_fmt(row["total_supply"]),
                 total_borrow=_fmt(row["total_borrow"]),
+                collateral_usd=_fmt(row["collateral_usd"]),
                 utilization=_fmt(row["utilization"]),
                 borrow_rate=_fmt(row["borrow_rate"]),
                 supply_rate=_fmt(row["supply_rate"]),
+                price_usd=_fmt(row["price_usd"]),
                 supply_usd=_fmt(row["supply_usd"]),
                 borrow_usd=_fmt(row["borrow_usd"]),
                 reserves=reserves,
@@ -219,11 +234,15 @@ async def get_market_state(
             f"""
             SELECT
                 "timestamp",
+                market,
+                symbol,
                 total_supply,
                 total_borrow,
+                collateral_usd,
                 utilization,
                 borrow_rate,
                 supply_rate,
+                price_usd,
                 supply_usd,
                 borrow_usd
             FROM loan.{market_table}
@@ -254,6 +273,8 @@ async def get_market_state(
                     utilization,
                     borrow_rate,
                     supply_rate,
+                    price_in_base,
+                    price_usd,
                     supply_usd,
                     borrow_usd
                 FROM loan.{reserve_table}
@@ -274,6 +295,8 @@ async def get_market_state(
                     utilization=_fmt(r["utilization"]),
                     borrow_rate=_fmt(r["borrow_rate"]),
                     supply_rate=_fmt(r["supply_rate"]),
+                    price_in_base=_fmt(r["price_in_base"]),
+                    price_usd=_fmt(r["price_usd"]),
                     supply_usd=_fmt(r["supply_usd"]),
                     borrow_usd=_fmt(r["borrow_usd"]),
                 )
@@ -282,15 +305,18 @@ async def get_market_state(
 
     return MarketStateResponse(
         version=version,
-        market=market.strip().upper(),
+        market=_bytea_to_address(row["market"]),
+        symbol=row["symbol"],
         timestamp=row["timestamp"]
         .astimezone(timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         total_supply=_fmt(row["total_supply"]),
         total_borrow=_fmt(row["total_borrow"]),
+        collateral_usd=_fmt(row["collateral_usd"]),
         utilization=_fmt(row["utilization"]),
         borrow_rate=_fmt(row["borrow_rate"]),
         supply_rate=_fmt(row["supply_rate"]),
+        price_usd=_fmt(row["price_usd"]),
         supply_usd=_fmt(row["supply_usd"]),
         borrow_usd=_fmt(row["borrow_usd"]),
         reserves=reserves,

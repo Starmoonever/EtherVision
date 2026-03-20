@@ -25,6 +25,8 @@ class MarketStateReserveResponse(BaseModel):
     utilization: str
     borrow_rate: str
     supply_rate: str
+    price_in_base: str
+    price_usd: str
     supply_usd: str
     borrow_usd: str
 
@@ -32,12 +34,15 @@ class MarketStateReserveResponse(BaseModel):
 class MarketStateResponse(BaseModel):
     version: str
     market: str
+    symbol: str | None
     timestamp: str
     total_supply: str
     total_borrow: str
+    collateral_usd: str
     utilization: str
     borrow_rate: str
     supply_rate: str
+    price_usd: str
     supply_usd: str
     borrow_usd: str
     reserves: list[MarketStateReserveResponse] | None = None

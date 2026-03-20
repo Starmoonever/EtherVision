@@ -18,11 +18,9 @@ dependencies = [
 ]
 
 [project.scripts]
-aave-crawler = "aave_crawler.cli:cli"
 api = "aave_crawler.server:main"
-aave-api = "aave_crawler.server:main"
+aave-crawler = "aave_crawler.cli:cli"
 compound-crawler = "compound_crawler.cli:cli"
-compound-api = "aave_crawler.server:main"
 
 [build-system]
 requires = ["hatchling"]
