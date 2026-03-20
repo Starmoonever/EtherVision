@@ -20,7 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -443,6 +443,97 @@ class AaveV2MarketTotal(Base):
     weighted_borrow_apy: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Compound 市场状态（小时级 market / reserve 快照）
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class CompoundV2MarketSnapshot(Base):
+    __tablename__ = "compound_v2_market_snapshots"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    total_supply: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    total_borrow: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    utilization: Mapped[Decimal] = mapped_column(Numeric(20, 18), nullable=False)
+    borrow_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    borrow_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV3MarketSnapshot(Base):
+    __tablename__ = "compound_v3_market_snapshots"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    total_supply: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    total_borrow: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    utilization: Mapped[Decimal] = mapped_column(Numeric(20, 18), nullable=False)
+    borrow_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    borrow_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV2MarketSnapshotReserve(Base):
+    __tablename__ = "compound_v2_market_snapshot_reserves"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    reserve: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decimals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_supply: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    total_borrow: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    utilization: Mapped[Decimal] = mapped_column(Numeric(20, 18), nullable=False)
+    borrow_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    borrow_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV3MarketSnapshotReserve(Base):
+    __tablename__ = "compound_v3_market_snapshot_reserves"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    reserve: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decimals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_supply: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    total_borrow: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    utilization: Mapped[Decimal] = mapped_column(Numeric(20, 18), nullable=False)
+    borrow_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    supply_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    borrow_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
     )
 
 

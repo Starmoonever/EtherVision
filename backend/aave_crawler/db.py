@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import asyncpg
+from crawler_shared.config import PostgresConfig
+from crawler_shared.postgres import create_pool as create_asyncpg_pool
 
-from .config import PostgresConfig
 from .constants import ETH_SYMBOLS as _ETH_SYMBOLS
 from .constants import LIQ_PRICE_CAP as _LIQ_PRICE_CAP
 from .constants import MAX_HF as _MAX_HF
@@ -152,20 +153,7 @@ CREATE TABLE IF NOT EXISTS loan.{reserve_positions} (
 
 
 async def create_pool(pg: PostgresConfig, timeout: float = 10.0) -> asyncpg.Pool:
-    import asyncio
-
-    ssl: bool | str = False if pg.ssl == "disable" else pg.ssl
-    try:
-        pool = await asyncio.wait_for(
-            asyncpg.create_pool(dsn=pg.dsn, ssl=ssl, min_size=2, max_size=10),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        raise RuntimeError(
-            f"PostgreSQL 连接超时（>{timeout}s）：{pg.host}:{pg.port}/{pg.database}"
-        )
-    logger.info("PostgreSQL 连接池已创建：%s:%d/%s", pg.host, pg.port, pg.database)
-    return pool  # type: ignore[return-value]
+    return await create_asyncpg_pool(pg, timeout=timeout, min_size=2, max_size=10)
 
 
 async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) -> None:
