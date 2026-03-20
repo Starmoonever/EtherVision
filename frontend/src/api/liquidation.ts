@@ -42,6 +42,29 @@ export interface HistoricalLiquidationPoint {
   sim_eth_price: string;
 }
 
+export interface WaterfallTurn {
+  eth_sold_amount: string;
+  eth_sold_value: string;
+  liquidation_accounts: string;
+  liquidation_volume_usd: string;
+  eth_price: string;
+  eth_price_decline: string;
+}
+
+export interface WaterfallResponse {
+  total_liquidation_usd: string;
+  total_eth_sold_amount: string;
+  total_eth_sold_value: string;
+  initial_decline: string;
+  cascade_decline: string;
+  total_decline: string;
+  total_liquidation_accounts: string;
+  max_hf: string;
+  liquidation_turns_cnt: string;
+  liquidation_turns: WaterfallTurn[];
+  note: string;
+}
+
 // ---------- API 函数 ----------
 
 // 模块级内存缓存，页面刷新后自动清空
@@ -70,8 +93,8 @@ export async function fetchLiquidationPeriod(
 
   const path =
     side === 'borrow'
-      ? `/borrow/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`
-      : `/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`;
+      ? `/aave/borrow/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`
+      : `/aave/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`;
   const data = await apiFetch<LiqPeriodItem[]>(path);
   _periodCache.set(key, { fetchedAt: Date.now(), data });
   return data;
@@ -95,8 +118,8 @@ export async function fetchLiquidationDetail(
   const cap = ethPrice * 0.01;
   const path =
     side === 'borrow'
-      ? `/borrow/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`
-      : `/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`;
+      ? `/aave/borrow/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`
+      : `/aave/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`;
 
   const response = await apiFetchRaw(path);
   if (response.status === 422) {
@@ -115,6 +138,17 @@ export async function fetchHistoricalLiquidation(
   version: string,
   simEthPriceDistance: number,
 ): Promise<HistoricalLiquidationPoint[]> {
-  const path = `/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
+  const path = `/aave/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
   return apiFetch<HistoricalLiquidationPoint[]>(path);
+}
+
+export async function fetchWaterfallLiquidation(
+  version: string,
+  initialPriceShockEth: number,
+  date: string,
+  impactK: number,
+  sellPartitionEth: number,
+): Promise<WaterfallResponse> {
+  const path = `/aave/liquidate/waterfall?version=${version}&initial_price_shock_eth=${initialPriceShockEth}&date=${date}&impact_k=${impactK}&sell_partition_eth=${sellPartitionEth}`;
+  return apiFetch<WaterfallResponse>(path);
 }

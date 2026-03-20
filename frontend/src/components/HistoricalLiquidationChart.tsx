@@ -154,7 +154,7 @@ export function HistoricalLiquidationChart({
           <YAxis
             yAxisId="left"
             stroke={side === 'collateral' ? '#10b981' : '#f59e0b'}
-            tickFormatter={(val) => `$${(val / 1000000).toFixed(1)}M`}
+            tickFormatter={(val) => version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`}
             domain={[0, 'auto']}
           />
           {/* Right Axis: Simulated ETH Price (Line) — only sim_eth_price_num, no other dataKeys */}
@@ -163,7 +163,8 @@ export function HistoricalLiquidationChart({
             orientation="right"
             stroke="#3b82f6"
             tickFormatter={(val) => `$${val}`}
-            domain={[0, 'auto']}
+            domain={[0, side === 'borrow' ? 6000 : 3000]}
+            allowDataOverflow={true}
           />
           {/* Hidden Axis: hosts amount/count lines for tooltip only, never affects visible scales */}
           <YAxis yAxisId="hidden" hide={true} width={0} />
