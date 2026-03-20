@@ -42,6 +42,29 @@ export interface HistoricalLiquidationPoint {
   sim_eth_price: string;
 }
 
+export interface WaterfallTurn {
+  eth_sold_amount: string;
+  eth_sold_value: string;
+  liquidation_accounts: string;
+  liquidation_volume_usd: string;
+  eth_price: string;
+  eth_price_decline: string;
+}
+
+export interface WaterfallResponse {
+  total_liquidation_usd: string;
+  total_eth_sold_amount: string;
+  total_eth_sold_value: string;
+  initial_decline: string;
+  cascade_decline: string;
+  total_decline: string;
+  total_liquidation_accounts: string;
+  max_hf: string;
+  liquidation_turns_cnt: string;
+  liquidation_turns: WaterfallTurn[];
+  note: string;
+}
+
 // ---------- API 函数 ----------
 
 // 模块级内存缓存，页面刷新后自动清空
@@ -117,4 +140,15 @@ export async function fetchHistoricalLiquidation(
 ): Promise<HistoricalLiquidationPoint[]> {
   const path = `/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
   return apiFetch<HistoricalLiquidationPoint[]>(path);
+}
+
+export async function fetchWaterfallLiquidation(
+  version: string,
+  initialPriceShockEth: number,
+  date: string,
+  impactK: number,
+  sellPartitionEth: number,
+): Promise<WaterfallResponse> {
+  const path = `/liquidate/waterfall?version=${version}&initial_price_shock_eth=${initialPriceShockEth}&date=${date}&impact_k=${impactK}&sell_partition_eth=${sellPartitionEth}`;
+  return apiFetch<WaterfallResponse>(path);
 }
