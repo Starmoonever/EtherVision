@@ -42,7 +42,7 @@ export type BorrowPosition = UserPosition; // 统一使用 UserPosition
  */
 export async function fetchUserPosition(address: string, version?: string): Promise<UserPosition> {
   const query = version ? `address=${address}&version=${version}` : `address=${address}`;
-  return apiFetch<UserPosition>(`/position?${query}`);
+  return apiFetch<UserPosition>(`/aave/position?${query}`);
 }
 
 /**

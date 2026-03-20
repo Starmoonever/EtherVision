@@ -4,6 +4,7 @@ import { LiquidationChart } from './LiquidationChart';
 import { EthPriceTrend } from './EthPriceTrend';
 import { MarketHistoryChart } from './MarketHistoryChart';
 import { HistoricalLiquidationChart } from './HistoricalLiquidationChart';
+import { WaterfallLiquidationChart } from './WaterfallLiquidationChart';
 
 export interface MarketAssessmentProps {
   marketVersion: 'v2' | 'v3' | 'all';
@@ -284,6 +285,9 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
               />
             )}
           </div>
+
+          {/* 清算瀑布图 */}
+          <WaterfallLiquidationChart version={marketVersion} />
 
           <MarketHistoryChart version={marketVersion} />
         </div>
