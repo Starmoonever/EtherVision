@@ -63,6 +63,60 @@ class ReserveSnapshotRow:
     borrow_usd: Decimal
 
 
+@dataclass
+class UserPositionSnapshotRow:
+    timestamp: datetime
+    block_number: int
+    market: bytes
+    symbol: str | None
+    user_address: bytes
+    has_open_position: bool
+    is_liquidatable: bool
+    base_token: bytes
+    base_symbol: str | None
+    base_price_usd: Decimal
+    eth_price_usd: Decimal
+    total_collateral_usd: Decimal
+    total_debt_usd: Decimal
+    discounted_collateral_usd: Decimal
+    liquidation_buffer_usd: Decimal
+    health_factor: Decimal
+    eth_sensitive_collateral_usd: Decimal
+    eth_sensitive_debt_usd: Decimal
+    net_eth_exposure_usd: Decimal
+    non_eth_collateral_usd: Decimal
+    non_eth_debt_usd: Decimal
+    basis_risk_collateral_usd: Decimal
+    eth_down_liq_price_usd: Decimal | None
+    eth_up_liq_price_usd: Decimal | None
+    eth_liq_mode: str
+    dominant_risk: str
+    assets_jsonb: list[dict[str, Any]]
+
+
+@dataclass
+class UserPositionAssetRow:
+    timestamp: datetime
+    block_number: int
+    market: bytes
+    user_address: bytes
+    asset: bytes
+    symbol: str | None
+    side: str
+    decimals: int | None
+    amount: Decimal
+    price_in_base: Decimal | None
+    price_usd: Decimal
+    value_usd: Decimal
+    discounted_value_usd: Decimal
+    borrow_collateral_factor: Decimal | None
+    liquidate_collateral_factor: Decimal | None
+    liquidation_factor: Decimal | None
+    beta_to_eth: Decimal
+    is_eth_correlated: bool
+    is_basis_risk_asset: bool
+
+
 _DDL_MARKET = """
 CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"    TIMESTAMPTZ     NOT NULL,
@@ -182,6 +236,170 @@ ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
     price_usd = EXCLUDED.price_usd,
     supply_usd = EXCLUDED.supply_usd,
     borrow_usd = EXCLUDED.borrow_usd,
+    created_at = NOW();
+"""
+
+
+_USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
+_USER_POSITION_ASSET_TABLE = "compound_v3_user_position_snapshot_assets"
+
+_DDL_USER_POSITION = f"""
+CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_TABLE} (
+    "timestamp"                  TIMESTAMPTZ     NOT NULL,
+    block_number                 BIGINT          NOT NULL,
+    market                       BYTEA           NOT NULL,
+    symbol                       TEXT            NULL,
+    user_address                 BYTEA           NOT NULL,
+    has_open_position            BOOLEAN         NOT NULL,
+    is_liquidatable              BOOLEAN         NOT NULL,
+    base_token                   BYTEA           NOT NULL,
+    base_symbol                  TEXT            NULL,
+    base_price_usd               NUMERIC(30, 8)  NOT NULL,
+    eth_price_usd                NUMERIC(30, 8)  NOT NULL,
+    total_collateral_usd         NUMERIC(30, 8)  NOT NULL,
+    total_debt_usd               NUMERIC(30, 8)  NOT NULL,
+    discounted_collateral_usd    NUMERIC(30, 8)  NOT NULL,
+    liquidation_buffer_usd       NUMERIC(30, 8)  NOT NULL,
+    health_factor                NUMERIC(40, 18) NOT NULL,
+    eth_sensitive_collateral_usd NUMERIC(30, 8)  NOT NULL,
+    eth_sensitive_debt_usd       NUMERIC(30, 8)  NOT NULL,
+    net_eth_exposure_usd         NUMERIC(30, 8)  NOT NULL,
+    non_eth_collateral_usd       NUMERIC(30, 8)  NOT NULL,
+    non_eth_debt_usd             NUMERIC(30, 8)  NOT NULL,
+    basis_risk_collateral_usd    NUMERIC(30, 8)  NOT NULL,
+    eth_down_liq_price_usd       NUMERIC(30, 8)  NULL,
+    eth_up_liq_price_usd         NUMERIC(30, 8)  NULL,
+    eth_liq_mode                 TEXT            NOT NULL,
+    dominant_risk                TEXT            NOT NULL,
+    assets_jsonb                 JSONB           NOT NULL,
+    created_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    PRIMARY KEY ("timestamp", market, user_address)
+);
+"""
+
+_DDL_USER_POSITION_INDEX_MARKET_TS = f"""
+CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_TABLE}_market_ts
+    ON loan.{_USER_POSITION_TABLE} (market, "timestamp" DESC);
+"""
+
+_DDL_USER_POSITION_INDEX_USER_TS = f"""
+CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_TABLE}_user_ts
+    ON loan.{_USER_POSITION_TABLE} (user_address, "timestamp" DESC);
+"""
+
+_DDL_USER_POSITION_ASSET = f"""
+CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_ASSET_TABLE} (
+    "timestamp"                  TIMESTAMPTZ     NOT NULL,
+    block_number                 BIGINT          NOT NULL,
+    market                       BYTEA           NOT NULL,
+    user_address                 BYTEA           NOT NULL,
+    asset                        BYTEA           NOT NULL,
+    symbol                       TEXT            NULL,
+    side                         TEXT            NOT NULL,
+    decimals                     INTEGER         NULL,
+    amount                       NUMERIC(38, 18) NOT NULL,
+    price_in_base                NUMERIC(30, 8)  NULL,
+    price_usd                    NUMERIC(30, 8)  NOT NULL,
+    value_usd                    NUMERIC(30, 8)  NOT NULL,
+    discounted_value_usd         NUMERIC(30, 8)  NOT NULL,
+    borrow_collateral_factor     NUMERIC(20, 18) NULL,
+    liquidate_collateral_factor  NUMERIC(20, 18) NULL,
+    liquidation_factor           NUMERIC(20, 18) NULL,
+    beta_to_eth                  NUMERIC(20, 8)  NOT NULL,
+    is_eth_correlated            BOOLEAN         NOT NULL,
+    is_basis_risk_asset          BOOLEAN         NOT NULL,
+    created_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    PRIMARY KEY ("timestamp", market, user_address, asset, side)
+);
+"""
+
+_DDL_USER_POSITION_ASSET_INDEX_USER_TS = f"""
+CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_ASSET_TABLE}_user_ts
+    ON loan.{_USER_POSITION_ASSET_TABLE} (user_address, "timestamp" DESC);
+"""
+
+_DDL_USER_POSITION_ASSET_INDEX_MARKET_TS = f"""
+CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_ASSET_TABLE}_market_ts
+    ON loan.{_USER_POSITION_ASSET_TABLE} (market, "timestamp" DESC);
+"""
+
+_UPSERT_USER_POSITION = f"""
+INSERT INTO loan.{_USER_POSITION_TABLE} (
+    "timestamp", block_number, market, symbol, user_address,
+    has_open_position, is_liquidatable,
+    base_token, base_symbol, base_price_usd, eth_price_usd,
+    total_collateral_usd, total_debt_usd, discounted_collateral_usd,
+    liquidation_buffer_usd, health_factor,
+    eth_sensitive_collateral_usd, eth_sensitive_debt_usd, net_eth_exposure_usd,
+    non_eth_collateral_usd, non_eth_debt_usd, basis_risk_collateral_usd,
+    eth_down_liq_price_usd, eth_up_liq_price_usd,
+    eth_liq_mode, dominant_risk, assets_jsonb
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7,
+    $8, $9, $10, $11,
+    $12, $13, $14,
+    $15, $16,
+    $17, $18, $19,
+    $20, $21, $22,
+    $23, $24,
+    $25, $26, $27
+)
+ON CONFLICT ("timestamp", market, user_address) DO UPDATE SET
+    block_number = EXCLUDED.block_number,
+    symbol = EXCLUDED.symbol,
+    has_open_position = EXCLUDED.has_open_position,
+    is_liquidatable = EXCLUDED.is_liquidatable,
+    base_token = EXCLUDED.base_token,
+    base_symbol = EXCLUDED.base_symbol,
+    base_price_usd = EXCLUDED.base_price_usd,
+    eth_price_usd = EXCLUDED.eth_price_usd,
+    total_collateral_usd = EXCLUDED.total_collateral_usd,
+    total_debt_usd = EXCLUDED.total_debt_usd,
+    discounted_collateral_usd = EXCLUDED.discounted_collateral_usd,
+    liquidation_buffer_usd = EXCLUDED.liquidation_buffer_usd,
+    health_factor = EXCLUDED.health_factor,
+    eth_sensitive_collateral_usd = EXCLUDED.eth_sensitive_collateral_usd,
+    eth_sensitive_debt_usd = EXCLUDED.eth_sensitive_debt_usd,
+    net_eth_exposure_usd = EXCLUDED.net_eth_exposure_usd,
+    non_eth_collateral_usd = EXCLUDED.non_eth_collateral_usd,
+    non_eth_debt_usd = EXCLUDED.non_eth_debt_usd,
+    basis_risk_collateral_usd = EXCLUDED.basis_risk_collateral_usd,
+    eth_down_liq_price_usd = EXCLUDED.eth_down_liq_price_usd,
+    eth_up_liq_price_usd = EXCLUDED.eth_up_liq_price_usd,
+    eth_liq_mode = EXCLUDED.eth_liq_mode,
+    dominant_risk = EXCLUDED.dominant_risk,
+    assets_jsonb = EXCLUDED.assets_jsonb,
+    created_at = NOW();
+"""
+
+_UPSERT_USER_POSITION_ASSET = f"""
+INSERT INTO loan.{_USER_POSITION_ASSET_TABLE} (
+    "timestamp", block_number, market, user_address, asset, symbol, side, decimals,
+    amount, price_in_base, price_usd, value_usd, discounted_value_usd,
+    borrow_collateral_factor, liquidate_collateral_factor, liquidation_factor,
+    beta_to_eth, is_eth_correlated, is_basis_risk_asset
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8,
+    $9, $10, $11, $12, $13,
+    $14, $15, $16,
+    $17, $18, $19
+)
+ON CONFLICT ("timestamp", market, user_address, asset, side) DO UPDATE SET
+    block_number = EXCLUDED.block_number,
+    symbol = EXCLUDED.symbol,
+    decimals = EXCLUDED.decimals,
+    amount = EXCLUDED.amount,
+    price_in_base = EXCLUDED.price_in_base,
+    price_usd = EXCLUDED.price_usd,
+    value_usd = EXCLUDED.value_usd,
+    discounted_value_usd = EXCLUDED.discounted_value_usd,
+    borrow_collateral_factor = EXCLUDED.borrow_collateral_factor,
+    liquidate_collateral_factor = EXCLUDED.liquidate_collateral_factor,
+    liquidation_factor = EXCLUDED.liquidation_factor,
+    beta_to_eth = EXCLUDED.beta_to_eth,
+    is_eth_correlated = EXCLUDED.is_eth_correlated,
+    is_basis_risk_asset = EXCLUDED.is_basis_risk_asset,
     created_at = NOW();
 """
 
@@ -457,6 +675,133 @@ async def upsert_reserve_snapshots(
     ]
     async with pool.acquire() as conn:
         await conn.executemany(sql, values)
+    return len(rows)
+
+
+async def ensure_user_position_snapshot_tables(
+    pool: asyncpg.Pool,
+    use_timescaledb: bool = False,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_USER_POSITION)
+        await conn.execute(_DDL_USER_POSITION_INDEX_MARKET_TS)
+        await conn.execute(_DDL_USER_POSITION_INDEX_USER_TS)
+
+        await conn.execute(_DDL_USER_POSITION_ASSET)
+        await conn.execute(_DDL_USER_POSITION_ASSET_INDEX_USER_TS)
+        await conn.execute(_DDL_USER_POSITION_ASSET_INDEX_MARKET_TS)
+
+        if use_timescaledb:
+            await _try_enable_hypertable(conn, _USER_POSITION_TABLE)
+            await _try_enable_hypertable(conn, _USER_POSITION_ASSET_TABLE)
+
+    logger.info(
+        "Compound user position snapshot tables ready: %s, %s (timescaledb=%s)",
+        _USER_POSITION_TABLE,
+        _USER_POSITION_ASSET_TABLE,
+        use_timescaledb,
+    )
+
+
+async def fetch_existing_user_position_addresses(
+    pool: asyncpg.Pool,
+    point_ts: datetime,
+    market: bytes,
+    user_addresses: list[bytes],
+) -> set[bytes]:
+    if not user_addresses:
+        return set()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT user_address
+            FROM loan.{_USER_POSITION_TABLE}
+            WHERE "timestamp" = $1
+              AND market = $2
+              AND user_address = ANY($3::bytea[])
+            """,
+            point_ts,
+            market,
+            user_addresses,
+        )
+    return {bytes(row["user_address"]) for row in rows}
+
+
+async def upsert_user_position_snapshots(
+    pool: asyncpg.Pool,
+    rows: list[UserPositionSnapshotRow],
+) -> int:
+    if not rows:
+        return 0
+    values = [
+        (
+            r.timestamp,
+            r.block_number,
+            r.market,
+            r.symbol,
+            r.user_address,
+            r.has_open_position,
+            r.is_liquidatable,
+            r.base_token,
+            r.base_symbol,
+            r.base_price_usd,
+            r.eth_price_usd,
+            r.total_collateral_usd,
+            r.total_debt_usd,
+            r.discounted_collateral_usd,
+            r.liquidation_buffer_usd,
+            r.health_factor,
+            r.eth_sensitive_collateral_usd,
+            r.eth_sensitive_debt_usd,
+            r.net_eth_exposure_usd,
+            r.non_eth_collateral_usd,
+            r.non_eth_debt_usd,
+            r.basis_risk_collateral_usd,
+            r.eth_down_liq_price_usd,
+            r.eth_up_liq_price_usd,
+            r.eth_liq_mode,
+            r.dominant_risk,
+            r.assets_jsonb,
+        )
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_USER_POSITION, values)
+    return len(rows)
+
+
+async def upsert_user_position_asset_rows(
+    pool: asyncpg.Pool,
+    rows: list[UserPositionAssetRow],
+) -> int:
+    if not rows:
+        return 0
+    values = [
+        (
+            r.timestamp,
+            r.block_number,
+            r.market,
+            r.user_address,
+            r.asset,
+            r.symbol,
+            r.side,
+            r.decimals,
+            r.amount,
+            r.price_in_base,
+            r.price_usd,
+            r.value_usd,
+            r.discounted_value_usd,
+            r.borrow_collateral_factor,
+            r.liquidate_collateral_factor,
+            r.liquidation_factor,
+            r.beta_to_eth,
+            r.is_eth_correlated,
+            r.is_basis_risk_asset,
+        )
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_USER_POSITION_ASSET, values)
     return len(rows)
 
 

@@ -41,6 +41,20 @@ COMET_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "borrowBalanceOf",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [],
         "name": "baseTokenPriceFeed",
         "outputs": [{"internalType": "address", "name": "", "type": "address"}],
@@ -132,6 +146,19 @@ COMET_ABI = [
         "inputs": [{"internalType": "address", "name": "priceFeed", "type": "address"}],
         "name": "getPrice",
         "outputs": [{"internalType": "uint128", "name": "", "type": "uint128"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "account", "type": "address"},
+            {"internalType": "address", "name": "asset", "type": "address"},
+        ],
+        "name": "userCollateral",
+        "outputs": [
+            {"internalType": "uint128", "name": "balance", "type": "uint128"},
+            {"internalType": "uint128", "name": "_reserved", "type": "uint128"},
+        ],
         "stateMutability": "view",
         "type": "function",
     },
