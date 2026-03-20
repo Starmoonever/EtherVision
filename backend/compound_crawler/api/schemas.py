@@ -14,3 +14,30 @@ class PositionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class MarketStateReserveResponse(BaseModel):
+    reserve: str
+    symbol: str | None
+    decimals: int | None
+    total_supply: str
+    total_borrow: str
+    utilization: str
+    borrow_rate: str
+    supply_rate: str
+    supply_usd: str
+    borrow_usd: str
+
+
+class MarketStateResponse(BaseModel):
+    version: str
+    market: str
+    timestamp: str
+    total_supply: str
+    total_borrow: str
+    utilization: str
+    borrow_rate: str
+    supply_rate: str
+    supply_usd: str
+    borrow_usd: str
+    reserves: list[MarketStateReserveResponse] | None = None
