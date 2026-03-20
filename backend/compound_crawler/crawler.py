@@ -134,6 +134,36 @@ def _resolve_market_name(protocol: str, market_address: str) -> str:
     return "MARKET"
 
 
+async def _is_contract_deployed_at_block(
+    w3: AsyncWeb3,
+    address: str,
+    block_number: int,
+    cache: dict[str, dict[str, int]],
+) -> bool:
+    key = address.lower()
+    state = cache.setdefault(key, {})
+
+    deployed_from = state.get("deployed_from")
+    if deployed_from is not None and block_number >= deployed_from:
+        return True
+
+    missing_through = state.get("missing_through")
+    if missing_through is not None and block_number <= missing_through:
+        return False
+
+    code = await w3.eth.get_code(
+        AsyncWeb3.to_checksum_address(address), block_identifier=block_number
+    )
+    has_code = bytes(code) != b""
+    if has_code:
+        if deployed_from is None or block_number < deployed_from:
+            state["deployed_from"] = block_number
+    else:
+        if missing_through is None or block_number > missing_through:
+            state["missing_through"] = block_number
+    return has_code
+
+
 async def _price_from_feed_direct(
     w3: AsyncWeb3,
     price_feed: str,
@@ -434,6 +464,7 @@ async def _collect_v3_markets_at_block(
     block_number: int,
     markets: Sequence[str],
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]],
 ) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
     sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency))
 
@@ -442,6 +473,16 @@ async def _collect_v3_markets_at_block(
     ) -> tuple[MarketSnapshotRow | None, list[ReserveSnapshotRow]]:
         async with sem:
             try:
+                if market.startswith("0x") and not await _is_contract_deployed_at_block(
+                    w3, market, block_number, deployment_cache
+                ):
+                    logger.info(
+                        "Skip undeployed v3 market=%s ts=%s block=%s",
+                        market,
+                        point_ts.isoformat(),
+                        block_number,
+                    )
+                    return None, []
                 return await _collect_v3_market_at_block(
                     w3,
                     protocol=cfg.protocol,
@@ -514,6 +555,7 @@ async def _collect_rows_for_point(
     markets: Sequence[str],
     pool,
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]],
 ) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
     if cfg.protocol != "v3" or w3 is None:
         return _build_rows_for_point(point_ts, list(markets))
@@ -526,6 +568,7 @@ async def _collect_rows_for_point(
         block_number=block_number,
         markets=markets,
         metadata_cache=metadata_cache,
+        deployment_cache=deployment_cache,
     )
 
 
@@ -672,6 +715,7 @@ async def run_crawler(
         )
 
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    deployment_cache: dict[str, dict[str, int]] = {}
 
     write_queue: asyncio.Queue[
         tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]] | None
@@ -709,6 +753,7 @@ async def run_crawler(
                 markets=point_markets,
                 pool=pool,
                 metadata_cache=metadata_cache,
+                deployment_cache=deployment_cache,
             )
             if not market_rows and not reserve_rows:
                 return

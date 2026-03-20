@@ -85,6 +85,10 @@ def test_market_state_ok_without_detail() -> None:
     assert data["symbol"] == "USDC"
     assert data["timestamp"] == "2026-03-19T12:00:00Z"
     assert data["collateral_usd"] == "80000"
+    assert data["borrow_apr"] == "315360.00"
+    assert data["supply_apr"] == "157680.000"
+    assert "borrow_rate" not in data
+    assert "supply_rate" not in data
     assert data["price_usd"] == "1000"
     assert data["reserves"] is None
 
@@ -135,6 +139,10 @@ def test_market_state_ok_with_detail() -> None:
     assert isinstance(data["reserves"], list)
     assert len(data["reserves"]) == 1
     assert data["reserves"][0]["reserve"].startswith("0x")
+    assert data["reserves"][0]["borrow_apr"] == "630720.00"
+    assert data["reserves"][0]["supply_apr"] == "315360.00"
+    assert "borrow_rate" not in data["reserves"][0]
+    assert "supply_rate" not in data["reserves"][0]
     assert data["reserves"][0]["price_in_base"] == "0.8"
     assert data["reserves"][0]["price_usd"] == "1000"
 

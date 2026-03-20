@@ -2,15 +2,19 @@
 
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+
 from fastapi import HTTPException
+
 from ..constants import COMPOUND_V3_MARKET_NAMES
 from ..db import market_table_name, reserve_table_name
 from .schemas import (
     MarketStateReserveResponse,
+    MarketStatePeriodResponse,
     MarketStateResponse,
     PositionResponse,
-    MarketStatePeriodResponse,
 )
+
+_SECONDS_PER_YEAR = Decimal("31536000")
 
 
 def _bytea_to_address(value: bytes | bytearray | memoryview) -> str:
@@ -118,8 +122,8 @@ async def get_market_state_period(
                         total_supply=_fmt(r["total_supply"]),
                         total_borrow=_fmt(r["total_borrow"]),
                         utilization=_fmt(r["utilization"]),
-                        borrow_rate=_fmt(r["borrow_rate"]),
-                        supply_rate=_fmt(r["supply_rate"]),
+                        borrow_apr=_annualize_rate(r["borrow_rate"]),
+                        supply_apr=_annualize_rate(r["supply_rate"]),
                         price_in_base=_fmt(r["price_in_base"]),
                         price_usd=_fmt(r["price_usd"]),
                         supply_usd=_fmt(r["supply_usd"]),
@@ -145,8 +149,8 @@ async def get_market_state_period(
                 total_borrow=_fmt(row["total_borrow"]),
                 collateral_usd=_fmt(row["collateral_usd"]),
                 utilization=_fmt(row["utilization"]),
-                borrow_rate=_fmt(row["borrow_rate"]),
-                supply_rate=_fmt(row["supply_rate"]),
+                borrow_apr=_annualize_rate(row["borrow_rate"]),
+                supply_apr=_annualize_rate(row["supply_rate"]),
                 price_usd=_fmt(row["price_usd"]),
                 supply_usd=_fmt(row["supply_usd"]),
                 borrow_usd=_fmt(row["borrow_usd"]),
@@ -189,6 +193,12 @@ def _fmt(value: Decimal | float | int | None) -> str:
     if value is None:
         return "0"
     return str(value)
+
+
+def _annualize_rate(value: Decimal | float | int | None) -> str:
+    if value is None:
+        return "0"
+    return _fmt(Decimal(str(value)) * _SECONDS_PER_YEAR)
 
 
 def _market_name_to_address(market: str) -> str:
@@ -293,8 +303,8 @@ async def get_market_state(
                     total_supply=_fmt(r["total_supply"]),
                     total_borrow=_fmt(r["total_borrow"]),
                     utilization=_fmt(r["utilization"]),
-                    borrow_rate=_fmt(r["borrow_rate"]),
-                    supply_rate=_fmt(r["supply_rate"]),
+                    borrow_apr=_annualize_rate(r["borrow_rate"]),
+                    supply_apr=_annualize_rate(r["supply_rate"]),
                     price_in_base=_fmt(r["price_in_base"]),
                     price_usd=_fmt(r["price_usd"]),
                     supply_usd=_fmt(r["supply_usd"]),
@@ -314,8 +324,8 @@ async def get_market_state(
         total_borrow=_fmt(row["total_borrow"]),
         collateral_usd=_fmt(row["collateral_usd"]),
         utilization=_fmt(row["utilization"]),
-        borrow_rate=_fmt(row["borrow_rate"]),
-        supply_rate=_fmt(row["supply_rate"]),
+        borrow_apr=_annualize_rate(row["borrow_rate"]),
+        supply_apr=_annualize_rate(row["supply_rate"]),
         price_usd=_fmt(row["price_usd"]),
         supply_usd=_fmt(row["supply_usd"]),
         borrow_usd=_fmt(row["borrow_usd"]),

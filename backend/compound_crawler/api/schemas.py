@@ -23,8 +23,8 @@ class MarketStateReserveResponse(BaseModel):
     total_supply: str
     total_borrow: str
     utilization: str
-    borrow_rate: str
-    supply_rate: str
+    borrow_apr: str
+    supply_apr: str
     price_in_base: str
     price_usd: str
     supply_usd: str
@@ -40,8 +40,8 @@ class MarketStateResponse(BaseModel):
     total_borrow: str
     collateral_usd: str
     utilization: str
-    borrow_rate: str
-    supply_rate: str
+    borrow_apr: str
+    supply_apr: str
     price_usd: str
     supply_usd: str
     borrow_usd: str

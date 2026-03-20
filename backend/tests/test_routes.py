@@ -358,6 +358,7 @@ class TestPrice:
         # 确认调用时 timestamp 参数未传（即为 None）
         _, kwargs = mock_svc.call_args
         assert kwargs.get("timestamp") is None
+        assert kwargs.get("pool") is not None
 
     def test_time_now_explicit(self, client: TestClient):
         with patch(

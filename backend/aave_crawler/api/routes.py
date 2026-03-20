@@ -181,7 +181,7 @@ async def asset_price(
     ),
 ) -> PriceResponse:
     if time == "now":
-        return await get_eth_price(_w3(request), asset)
+        return await get_eth_price(_w3(request), asset, pool=pool)
     ts = _parse_utc_time(time)
     return await get_eth_price(_w3(request), asset, timestamp=ts, pool=pool)
 

@@ -108,6 +108,10 @@ def test_market_state_period_ok_without_detail() -> None:
     assert data["points"][0]["market"] == "0xc3d688b66703497daa19211eedff47f25384cdc3"
     assert data["points"][0]["symbol"] == "USDC"
     assert data["points"][0]["collateral_usd"] == "80000"
+    assert data["points"][0]["borrow_apr"] == "315360.00"
+    assert data["points"][0]["supply_apr"] == "157680.000"
+    assert "borrow_rate" not in data["points"][0]
+    assert "supply_rate" not in data["points"][0]
     assert data["points"][0]["price_usd"] == "1000"
     assert data["points"][1]["total_supply"] == "110"
     assert data["points"][0]["reserves"] is None
@@ -164,6 +168,12 @@ def test_market_state_period_ok_with_detail() -> None:
     data = resp.json()
     assert len(data["points"]) == 1
     assert isinstance(data["points"][0]["reserves"], list)
+    assert data["points"][0]["borrow_apr"] == "315360.00"
+    assert data["points"][0]["supply_apr"] == "157680.000"
+    assert data["points"][0]["reserves"][0]["borrow_apr"] == "630720.00"
+    assert data["points"][0]["reserves"][0]["supply_apr"] == "315360.00"
+    assert "borrow_rate" not in data["points"][0]["reserves"][0]
+    assert "supply_rate" not in data["points"][0]["reserves"][0]
     assert data["points"][0]["reserves"][0]["price_in_base"] == "0.8"
     assert data["points"][0]["reserves"][0]["price_usd"] == "1000"
 
