@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 
 from aave_crawler.market_collector import _block_at_timestamp
 from web3 import AsyncHTTPProvider, AsyncWeb3
@@ -17,11 +18,15 @@ from .constants import (
     COMET_ABI,
     COMPOUND_V2_MARKETS,
     COMPOUND_V3_MARKETS,
+    ERC20_METADATA_ABI,
+    ERC20_SYMBOL_BYTES32_ABI,
 )
 from .db import (
     MarketSnapshotRow,
     ReserveSnapshotRow,
     ensure_market_state_tables,
+    market_table_name,
+    reserve_table_name,
     upsert_market_snapshots,
     upsert_reserve_snapshots,
 )
@@ -129,11 +134,70 @@ async def _price_from_feed(
     return Decimal(answer) / (Decimal(10) ** int(decimals))
 
 
+def _decode_symbol_bytes32(value: Any) -> str | None:
+    if not isinstance(value, (bytes, bytearray)):
+        return None
+    raw = bytes(value).rstrip(b"\x00")
+    if not raw:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except Exception:
+        return None
+
+
+async def _token_metadata(
+    w3: AsyncWeb3,
+    token_address: str,
+    block_number: int,
+    cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[str | None, int | None]:
+    key = token_address.lower()
+    if key in cache:
+        return cache[key]
+
+    checksum = AsyncWeb3.to_checksum_address(token_address)
+    symbol: str | None = None
+    decimals: int | None = None
+
+    try:
+        token = w3.eth.contract(address=checksum, abi=ERC20_METADATA_ABI)
+        symbol_res, decimals_res = await asyncio.gather(
+            token.functions.symbol().call(block_identifier=block_number),
+            token.functions.decimals().call(block_identifier=block_number),
+        )
+        symbol = str(symbol_res) if symbol_res is not None else None
+        decimals = int(decimals_res) if decimals_res is not None else None
+    except Exception:
+        try:
+            token_dec = w3.eth.contract(address=checksum, abi=ERC20_METADATA_ABI)
+            decimals_res = await token_dec.functions.decimals().call(
+                block_identifier=block_number
+            )
+            decimals = int(decimals_res)
+        except Exception:
+            decimals = None
+        try:
+            token_sym32 = w3.eth.contract(
+                address=checksum, abi=ERC20_SYMBOL_BYTES32_ABI
+            )
+            sym32 = await token_sym32.functions.symbol().call(
+                block_identifier=block_number
+            )
+            symbol = _decode_symbol_bytes32(sym32)
+        except Exception:
+            symbol = None
+
+    cache[key] = (symbol, decimals)
+    return cache[key]
+
+
 async def _collect_v3_market_at_block(
     w3: AsyncWeb3,
     market_address: str,
     point_ts: datetime,
     block_number: int,
+    metadata_cache: dict[str, tuple[str | None, int | None]],
 ) -> tuple[MarketSnapshotRow, list[ReserveSnapshotRow]]:
     comet = w3.eth.contract(
         address=AsyncWeb3.to_checksum_address(market_address),
@@ -168,6 +232,9 @@ async def _collect_v3_market_at_block(
     )
 
     base_price_usd = await _price_from_feed(w3, base_token_feed, block_number)
+    base_symbol, base_decimals_meta = await _token_metadata(
+        w3, base_token, block_number, metadata_cache
+    )
 
     base_scale_dec = Decimal(int(base_scale))
     total_supply = Decimal(int(total_supply_raw)) / base_scale_dec
@@ -195,8 +262,12 @@ async def _collect_v3_market_at_block(
             timestamp=point_ts,
             market=_to_bytes(market_address),
             reserve=_to_bytes(base_token),
-            symbol="BASE",
-            decimals=_scale_to_decimals(int(base_scale)),
+            symbol=base_symbol or "BASE",
+            decimals=(
+                base_decimals_meta
+                if base_decimals_meta is not None
+                else _scale_to_decimals(int(base_scale))
+            ),
             total_supply=total_supply,
             total_borrow=total_borrow,
             utilization=utilization,
@@ -217,6 +288,10 @@ async def _collect_v3_market_at_block(
             asset_price_feed = asset_info[2]
             asset_scale = int(asset_info[3])
 
+            asset_symbol, asset_decimals_meta = await _token_metadata(
+                w3, asset_address, block_number, metadata_cache
+            )
+
             totals_collateral = await comet.functions.totalsCollateral(
                 AsyncWeb3.to_checksum_address(asset_address)
             ).call(block_identifier=block_number)
@@ -230,8 +305,12 @@ async def _collect_v3_market_at_block(
                     timestamp=point_ts,
                     market=_to_bytes(market_address),
                     reserve=_to_bytes(asset_address),
-                    symbol=None,
-                    decimals=_scale_to_decimals(asset_scale),
+                    symbol=asset_symbol,
+                    decimals=(
+                        asset_decimals_meta
+                        if asset_decimals_meta is not None
+                        else _scale_to_decimals(asset_scale)
+                    ),
                     total_supply=asset_supply,
                     total_borrow=Decimal("0"),
                     utilization=Decimal("0"),
@@ -260,6 +339,7 @@ async def _collect_rows_for_point(
     markets: Sequence[str],
     dry_run: bool,
     pool,
+    metadata_cache: dict[str, tuple[str | None, int | None]],
 ) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
     if cfg.protocol != "v3" or w3 is None:
         return _build_rows_for_point(point_ts, list(markets))
@@ -274,6 +354,7 @@ async def _collect_rows_for_point(
                 market_address=market,
                 point_ts=point_ts,
                 block_number=block_number,
+                metadata_cache=metadata_cache,
             )
             market_rows.append(m_row)
             reserve_rows.extend(r_rows)
@@ -340,6 +421,8 @@ async def run_crawler(
     pool,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
+    interval_hours: int = 1,
+    skip_existing: bool = False,
     dry_run: bool = False,
 ) -> None:
     await ensure_market_state_tables(
@@ -350,7 +433,7 @@ async def run_crawler(
 
     # 默认采集当前小时；若传入区间，则按配置间隔逐点采集。
     now_utc = datetime.now(timezone.utc)
-    interval = timedelta(minutes=cfg.market_state.snapshot_interval_minutes)
+    interval = timedelta(hours=interval_hours)
 
     if start_at is None and end_at is None:
         start = now_utc.replace(minute=0, second=0, microsecond=0)
@@ -373,12 +456,13 @@ async def run_crawler(
         cursor = cursor + interval
 
     logger.info(
-        "Compound market_state crawl invoked: protocol=%s dry_run=%s start=%s end=%s interval_minutes=%s points=%s",
+        "Compound market_state crawl invoked: protocol=%s dry_run=%s skip_existing=%s start=%s end=%s interval_hours=%s points=%s",
         cfg.protocol,
         dry_run,
+        skip_existing,
         start.isoformat(),
         end.isoformat(),
-        cfg.market_state.snapshot_interval_minutes,
+        interval_hours,
         len(points),
     )
 
@@ -393,6 +477,8 @@ async def run_crawler(
             "v2 real collection is not implemented yet, fallback to placeholder rows"
         )
 
+    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+
     for ts in points:
         logger.debug("market_state point scheduled: %s", ts.isoformat())
         market_rows, reserve_rows = await _collect_rows_for_point(
@@ -402,7 +488,61 @@ async def run_crawler(
             markets=markets,
             dry_run=dry_run,
             pool=pool,
+            metadata_cache=metadata_cache,
         )
+
+        if skip_existing and reserve_rows:
+            ts = reserve_rows[0].timestamp
+            market_bytes = list({row.market for row in reserve_rows})
+            market_table = market_table_name(cfg.protocol)
+            reserve_table = reserve_table_name(cfg.protocol)
+
+            async with pool.acquire() as conn:
+                existing_markets = await conn.fetch(
+                    f"""
+                    SELECT market
+                    FROM loan.{market_table}
+                    WHERE "timestamp" = $1
+                      AND market = ANY($2::bytea[])
+                    """,
+                    ts,
+                    market_bytes,
+                )
+                existing_market_set = {r["market"] for r in existing_markets}
+
+                existing_reserves = await conn.fetch(
+                    f"""
+                    SELECT market, reserve
+                    FROM loan.{reserve_table}
+                    WHERE "timestamp" = $1
+                      AND market = ANY($2::bytea[])
+                    """,
+                    ts,
+                    market_bytes,
+                )
+                existing_reserve_set = {
+                    (r["market"], r["reserve"]) for r in existing_reserves
+                }
+
+            before_market = len(market_rows)
+            before_reserve = len(reserve_rows)
+            market_rows = [
+                r for r in market_rows if (r.market not in existing_market_set)
+            ]
+            reserve_rows = [
+                r
+                for r in reserve_rows
+                if (r.market, r.reserve) not in existing_reserve_set
+            ]
+            skipped_market = before_market - len(market_rows)
+            skipped_reserve = before_reserve - len(reserve_rows)
+            if skipped_market or skipped_reserve:
+                logger.info(
+                    "Skipped existing rows at %s: market=%s reserve=%s",
+                    ts.isoformat(),
+                    skipped_market,
+                    skipped_reserve,
+                )
 
         if dry_run:
             total_market_rows += len(market_rows)

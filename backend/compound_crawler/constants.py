@@ -6,6 +6,8 @@ from __future__ import annotations
 # These are used as defaults when config does not provide market lists.
 COMPOUND_V3_MARKETS: list[str] = [
     "0xc3d688B66703497DAA19211EEdff47f25384cdc3",  # USDC Comet
+    "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",  # USDT Comet
+    "0xA17581A9E3356d9A858b789D68B4d866e593aE94",  # WETH Comet
 ]
 
 # Compound V2 defaults are intentionally empty for now.
@@ -158,4 +160,39 @@ CHAINLINK_AGGREGATOR_V3_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+]
+
+
+ERC20_METADATA_ABI = [
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
+ERC20_SYMBOL_BYTES32_ABI = [
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "bytes32"}],
+        "payable": False,
+        "stateMutability": "view",
+        "type": "function",
+    }
 ]

@@ -50,6 +50,20 @@ def cli() -> None:
     default=None,
     help="Range end in UTC (inclusive)",
 )
+@click.option(
+    "--interval",
+    "-i",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Sampling interval in hours",
+)
+@click.option(
+    "--skip-existing",
+    is_flag=True,
+    default=False,
+    help="Skip existing rows by (timestamp, market, reserve)",
+)
 @click.option("--dry-run", is_flag=True, default=False, help="Do not write to database")
 @click.option(
     "--verbose", "-v", is_flag=True, default=False, help="Enable DEBUG logging"
@@ -59,6 +73,8 @@ def cmd_crawl_market_state(
     protocol: str,
     start: datetime | None,
     end: datetime | None,
+    interval: int,
+    skip_existing: bool,
     dry_run: bool,
     verbose: bool,
 ) -> None:
@@ -82,6 +98,8 @@ def cmd_crawl_market_state(
                 pool,
                 start_at=start_at,
                 end_at=end_at,
+                interval_hours=interval,
+                skip_existing=skip_existing,
                 dry_run=dry_run,
             )
         finally:
