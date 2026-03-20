@@ -2,12 +2,12 @@
 API 路由单元测试。
 
 覆盖所有端点的所有参数组合：
-  - GET /api/position
-  - GET /api/positions
+  - GET /api/aave/position
+  - GET /api/aave/positions
   - GET /api/price
   - GET /api/price/period
-  - GET /api/position/replay
-  - GET /api/txs
+  - GET /api/aave/position/replay
+  - GET /api/aave/txs
 
 使用 starlette.testclient.TestClient（同步），mock 所有 service 函数，
 无需真实 RPC 或数据库连接。
@@ -51,15 +51,15 @@ _502 = HTTPException(status_code=502, detail="RPC失败")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/position
+# GET /api/aave/position
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestUserPosition:
-    """GET /api/position — 必须参数 address，可选参数 date。"""
+    """GET /api/aave/position — 必须参数 address，可选参数 date。"""
 
     def test_missing_address_returns_422(self, client: TestClient):
-        resp = client.get("/api/position")
+        resp = client.get("/api/aave/position")
         assert resp.status_code == 422
 
     # ── 实时模式（无 date）────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ class TestUserPosition:
             new_callable=AsyncMock,
             return_value=MOCK_POSITION,
         ):
-            resp = client.get("/api/position", params={"address": ADDR})
+            resp = client.get("/api/aave/position", params={"address": ADDR})
         assert resp.status_code == 200
         data = resp.json()
         assert data["address"] == ADDR
@@ -84,19 +84,19 @@ class TestUserPosition:
         with patch(
             f"{_ROUTES}.get_user_position", new_callable=AsyncMock, side_effect=_404
         ):
-            resp = client.get("/api/position", params={"address": ADDR})
+            resp = client.get("/api/aave/position", params={"address": ADDR})
         assert resp.status_code == 404
 
     def test_realtime_rpc_failure_returns_502(self, client: TestClient):
         with patch(
             f"{_ROUTES}.get_user_position", new_callable=AsyncMock, side_effect=_502
         ):
-            resp = client.get("/api/position", params={"address": ADDR})
+            resp = client.get("/api/aave/position", params={"address": ADDR})
         assert resp.status_code == 502
 
     def test_realtime_no_w3_returns_503(self, app_no_w3):
         with TestClient(app_no_w3) as c:
-            resp = c.get("/api/position", params={"address": ADDR})
+            resp = c.get("/api/aave/position", params={"address": ADDR})
         assert resp.status_code == 503
 
     # ── 历史模式（带 date）────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ class TestUserPosition:
             return_value=MOCK_HIST_POSITION,
         ):
             resp = client.get(
-                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/aave/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -130,7 +130,7 @@ class TestUserPosition:
             ),
         ):
             resp = client.get(
-                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/aave/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -155,7 +155,7 @@ class TestUserPosition:
             return_value=MOCK_HIST_POSITION,
         ):
             resp = client.get(
-                "/api/position", params={"address": ADDR, "date": date_str}
+                "/api/aave/position", params={"address": ADDR, "date": date_str}
             )
         assert resp.status_code == 200
 
@@ -169,24 +169,26 @@ class TestUserPosition:
         ],
     )
     def test_invalid_date_returns_400(self, client: TestClient, bad_date: str):
-        resp = client.get("/api/position", params={"address": ADDR, "date": bad_date})
+        resp = client.get(
+            "/api/aave/position", params={"address": ADDR, "date": bad_date}
+        )
         assert resp.status_code == 400
 
     def test_historical_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
             resp = c.get(
-                "/api/position", params={"address": ADDR, "date": "2025-01-01"}
+                "/api/aave/position", params={"address": ADDR, "date": "2025-01-01"}
             )
         assert resp.status_code == 503
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/positions
+# GET /api/aave/positions
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestPositions:
-    """GET /api/positions — 可选 orderby / order / limit / date。"""
+    """GET /api/aave/positions — 可选 orderby / order / limit / date。"""
 
     # ── 实时模式（无 date）────────────────────────────────────────────────────
 
@@ -196,7 +198,7 @@ class TestPositions:
             new_callable=AsyncMock,
             return_value=MOCK_POSITIONS_LIST,
         ) as mock_svc:
-            resp = client.get("/api/positions")
+            resp = client.get("/api/aave/positions")
         assert resp.status_code == 200
         mock_svc.assert_awaited_once()
         _, kwargs = mock_svc.call_args
@@ -228,7 +230,7 @@ class TestPositions:
             new_callable=AsyncMock,
             return_value=MOCK_POSITIONS_LIST,
         ):
-            resp = client.get("/api/positions", params={"orderby": orderby})
+            resp = client.get("/api/aave/positions", params={"orderby": orderby})
         assert resp.status_code == 200
 
     @pytest.mark.parametrize("order", ["asc", "desc"])
@@ -238,7 +240,7 @@ class TestPositions:
             new_callable=AsyncMock,
             return_value=MOCK_POSITIONS_LIST,
         ):
-            resp = client.get("/api/positions", params={"order": order})
+            resp = client.get("/api/aave/positions", params={"order": order})
         assert resp.status_code == 200
 
     @pytest.mark.parametrize("limit", [1, 10, 100, 200])
@@ -248,28 +250,28 @@ class TestPositions:
             new_callable=AsyncMock,
             return_value=MOCK_POSITIONS_LIST,
         ):
-            resp = client.get("/api/positions", params={"limit": limit})
+            resp = client.get("/api/aave/positions", params={"limit": limit})
         assert resp.status_code == 200
 
     def test_invalid_orderby_returns_422(self, client: TestClient):
-        resp = client.get("/api/positions", params={"orderby": "invalid_field"})
+        resp = client.get("/api/aave/positions", params={"orderby": "invalid_field"})
         assert resp.status_code == 422
 
     def test_invalid_order_returns_422(self, client: TestClient):
-        resp = client.get("/api/positions", params={"order": "random"})
+        resp = client.get("/api/aave/positions", params={"order": "random"})
         assert resp.status_code == 422
 
     def test_limit_zero_returns_422(self, client: TestClient):
-        resp = client.get("/api/positions", params={"limit": 0})
+        resp = client.get("/api/aave/positions", params={"limit": 0})
         assert resp.status_code == 422
 
     def test_limit_over_max_returns_422(self, client: TestClient):
-        resp = client.get("/api/positions", params={"limit": 201})
+        resp = client.get("/api/aave/positions", params={"limit": 201})
         assert resp.status_code == 422
 
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/positions")
+            resp = c.get("/api/aave/positions")
         assert resp.status_code == 503
 
     # ── 历史模式（带 date）────────────────────────────────────────────────────
@@ -281,7 +283,7 @@ class TestPositions:
             return_value=MOCK_HIST_POSITIONS_LIST,
         ):
             resp = client.get(
-                "/api/positions", params={"date": "2025-01-01", "limit": 10}
+                "/api/aave/positions", params={"date": "2025-01-01", "limit": 10}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -296,7 +298,7 @@ class TestPositions:
             return_value=MOCK_HIST_POSITIONS_LIST,
         ) as mock_svc:
             resp = client.get(
-                "/api/positions", params={"date": "2025-01-01", "limit": 150}
+                "/api/aave/positions", params={"date": "2025-01-01", "limit": 150}
             )
         assert resp.status_code == 200
         # 验证传递给 service 的 limit 不超过 100
@@ -319,16 +321,16 @@ class TestPositions:
             new_callable=AsyncMock,
             return_value=MOCK_HIST_POSITIONS_LIST,
         ):
-            resp = client.get("/api/positions", params={"date": date_str})
+            resp = client.get("/api/aave/positions", params={"date": date_str})
         assert resp.status_code == 200
 
     def test_historical_invalid_date_returns_400(self, client: TestClient):
-        resp = client.get("/api/positions", params={"date": "march-2025"})
+        resp = client.get("/api/aave/positions", params={"date": "march-2025"})
         assert resp.status_code == 400
 
     def test_historical_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/positions", params={"date": "2025-01-01"})
+            resp = c.get("/api/aave/positions", params={"date": "2025-01-01"})
         assert resp.status_code == 503
 
 
@@ -356,6 +358,7 @@ class TestPrice:
         # 确认调用时 timestamp 参数未传（即为 None）
         _, kwargs = mock_svc.call_args
         assert kwargs.get("timestamp") is None
+        assert kwargs.get("pool") is not None
 
     def test_time_now_explicit(self, client: TestClient):
         with patch(
@@ -512,28 +515,28 @@ class TestParseUtcTime:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/liquidate
+# GET /api/aave/liquidate
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestLiquidateSimulation:
-    """GET /api/liquidate — 必须参数 eth_price，返回模拟清算结果。"""
+    """GET /api/aave/liquidate — 必须参数 eth_price，返回模拟清算结果。"""
 
     def test_missing_eth_price_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate")
+        resp = client.get("/api/aave/liquidate")
         assert resp.status_code == 422
 
     def test_eth_price_zero_returns_422(self, client: TestClient):
         """gt=0 验证：eth_price 必须 > 0。"""
-        resp = client.get("/api/liquidate", params={"eth_price": 0})
+        resp = client.get("/api/aave/liquidate", params={"eth_price": 0})
         assert resp.status_code == 422
 
     def test_eth_price_negative_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate", params={"eth_price": -100})
+        resp = client.get("/api/aave/liquidate", params={"eth_price": -100})
         assert resp.status_code == 422
 
     def test_eth_price_string_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate", params={"eth_price": "abc"})
+        resp = client.get("/api/aave/liquidate", params={"eth_price": "abc"})
         assert resp.status_code == 422
 
     def test_normal_ok_with_positions(self, client: TestClient):
@@ -542,7 +545,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_RESPONSE,
         ):
-            resp = client.get("/api/liquidate", params={"eth_price": 1500})
+            resp = client.get("/api/aave/liquidate", params={"eth_price": 1500})
         assert resp.status_code == 200
         data = resp.json()
         assert data["simulated_eth_price"] == "1500.00"
@@ -564,7 +567,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ):
-            resp = client.get("/api/liquidate", params={"eth_price": 100})
+            resp = client.get("/api/aave/liquidate", params={"eth_price": 100})
         assert resp.status_code == 200
         data = resp.json()
         assert data["positions"] == []
@@ -578,7 +581,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ):
-            resp = client.get("/api/liquidate", params={"eth_price": eth_price})
+            resp = client.get("/api/aave/liquidate", params={"eth_price": eth_price})
         assert resp.status_code == 200
 
     def test_total_liquidation_lte_total_collateral(self, client: TestClient):
@@ -588,7 +591,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_RESPONSE,
         ):
-            resp = client.get("/api/liquidate", params={"eth_price": 1500})
+            resp = client.get("/api/aave/liquidate", params={"eth_price": 1500})
         data = resp.json()
         total_liq = float(data["total_liquidation_usd"])
         total_col = float(data["total_eth_collateral_usd"])
@@ -603,13 +606,13 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_RESPONSE,
         ):
-            resp = client.get("/api/liquidate", params={"eth_price": 1500})
+            resp = client.get("/api/aave/liquidate", params={"eth_price": 1500})
         assert "note" in resp.json()
 
     @pytest.mark.skip(reason="路由已迁移至 DbSession，不再依赖 pool")
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/liquidate", params={"eth_price": 1500})
+            resp = c.get("/api/aave/liquidate", params={"eth_price": 1500})
         assert resp.status_code == 503
 
     # ── limit ──────────────────────────────────────────────────────────────
@@ -622,16 +625,18 @@ class TestLiquidateSimulation:
             return_value=MOCK_SIM_EMPTY,
         ):
             resp = client.get(
-                "/api/liquidate", params={"eth_price": 1500, "limit": limit}
+                "/api/aave/liquidate", params={"eth_price": 1500, "limit": limit}
             )
         assert resp.status_code == 200
 
     def test_limit_zero_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate", params={"eth_price": 1500, "limit": 0})
+        resp = client.get("/api/aave/liquidate", params={"eth_price": 1500, "limit": 0})
         assert resp.status_code == 422
 
     def test_limit_over_max_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate", params={"eth_price": 1500, "limit": 1001})
+        resp = client.get(
+            "/api/aave/liquidate", params={"eth_price": 1500, "limit": 1001}
+        )
         assert resp.status_code == 422
 
     def test_limit_passed_to_service(self, client: TestClient):
@@ -641,7 +646,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
-            client.get("/api/liquidate", params={"eth_price": 1500, "limit": 42})
+            client.get("/api/aave/liquidate", params={"eth_price": 1500, "limit": 42})
         _, kwargs = mock_svc.call_args
         assert kwargs["limit"] == 42
 
@@ -663,13 +668,13 @@ class TestLiquidateSimulation:
             return_value=MOCK_SIM_EMPTY,
         ):
             resp = client.get(
-                "/api/liquidate", params={"eth_price": 1500, "orderby": orderby}
+                "/api/aave/liquidate", params={"eth_price": 1500, "orderby": orderby}
             )
         assert resp.status_code == 200
 
     def test_orderby_invalid_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate", params={"eth_price": 1500, "orderby": "address"}
+            "/api/aave/liquidate", params={"eth_price": 1500, "orderby": "address"}
         )
         assert resp.status_code == 422
 
@@ -680,7 +685,7 @@ class TestLiquidateSimulation:
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
             client.get(
-                "/api/liquidate",
+                "/api/aave/liquidate",
                 params={"eth_price": 1500, "orderby": "total_debt_usd"},
             )
         _, kwargs = mock_svc.call_args
@@ -696,13 +701,13 @@ class TestLiquidateSimulation:
             return_value=MOCK_SIM_EMPTY,
         ):
             resp = client.get(
-                "/api/liquidate", params={"eth_price": 1500, "order": order}
+                "/api/aave/liquidate", params={"eth_price": 1500, "order": order}
             )
         assert resp.status_code == 200
 
     def test_order_invalid_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate", params={"eth_price": 1500, "order": "random"}
+            "/api/aave/liquidate", params={"eth_price": 1500, "order": "random"}
         )
         assert resp.status_code == 422
 
@@ -712,7 +717,9 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
-            client.get("/api/liquidate", params={"eth_price": 1500, "order": "asc"})
+            client.get(
+                "/api/aave/liquidate", params={"eth_price": 1500, "order": "asc"}
+            )
         _, kwargs = mock_svc.call_args
         assert kwargs["order"] == "asc"
 
@@ -723,7 +730,7 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
-            client.get("/api/liquidate", params={"eth_price": 1500})
+            client.get("/api/aave/liquidate", params={"eth_price": 1500})
         _, kwargs = mock_svc.call_args
         assert kwargs["orderby"] == "liq_price"
         assert kwargs["order"] == "desc"
@@ -738,7 +745,9 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
-            client.get("/api/liquidate", params={"eth_price": 1500, "eth_ratio": 0.9})
+            client.get(
+                "/api/aave/liquidate", params={"eth_price": 1500, "eth_ratio": 0.9}
+            )
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal("0.9")
 
@@ -753,28 +762,28 @@ class TestLiquidateSimulation:
             new_callable=AsyncMock,
             return_value=MOCK_SIM_EMPTY,
         ) as mock_svc:
-            client.get("/api/liquidate", params={"eth_price": 1500})
+            client.get("/api/aave/liquidate", params={"eth_price": 1500})
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal(str(ETH_COLLATERAL_RATIO_MIN))
 
     def test_eth_ratio_out_of_range_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate", params={"eth_price": 1500, "eth_ratio": 1.5}
+            "/api/aave/liquidate", params={"eth_price": 1500, "eth_ratio": 1.5}
         )
         assert resp.status_code == 422
 
     def test_eth_ratio_negative_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate", params={"eth_price": 1500, "eth_ratio": -0.1}
+            "/api/aave/liquidate", params={"eth_price": 1500, "eth_ratio": -0.1}
         )
         assert resp.status_code == 422
 
 
 class TestLiquidateWaterfall:
-    """GET /api/liquidate/waterfall — 日级仓位瀑布模拟（第二阶段）。"""
+    """GET /api/aave/liquidate/waterfall — 日级仓位瀑布模拟（第二阶段）。"""
 
     def test_missing_initial_shock_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate/waterfall")
+        resp = client.get("/api/aave/liquidate/waterfall")
         assert resp.status_code == 422
 
     def test_ok_returns_response(self, client: TestClient):
@@ -784,7 +793,7 @@ class TestLiquidateWaterfall:
             return_value=MOCK_WATERFALL_RESPONSE,
         ):
             resp = client.get(
-                "/api/liquidate/waterfall",
+                "/api/aave/liquidate/waterfall",
                 params={"initial_price_shock_eth": 0.05},
             )
         assert resp.status_code == 200
@@ -797,28 +806,28 @@ class TestLiquidateWaterfall:
 
     def test_initial_shock_out_of_range_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/waterfall",
+            "/api/aave/liquidate/waterfall",
             params={"initial_price_shock_eth": 1.0},
         )
         assert resp.status_code == 422
 
     def test_impact_k_negative_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/waterfall",
+            "/api/aave/liquidate/waterfall",
             params={"initial_price_shock_eth": 0.05, "impact_k": -0.1},
         )
         assert resp.status_code == 422
 
     def test_sell_partition_out_of_range_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/waterfall",
+            "/api/aave/liquidate/waterfall",
             params={"initial_price_shock_eth": 0.05, "sell_partition_eth": 1.1},
         )
         assert resp.status_code == 422
 
     def test_date_invalid_returns_400(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/waterfall",
+            "/api/aave/liquidate/waterfall",
             params={"initial_price_shock_eth": 0.05, "date": "2026/01/01"},
         )
         assert resp.status_code == 400
@@ -833,7 +842,7 @@ class TestLiquidateWaterfall:
             return_value=MOCK_WATERFALL_RESPONSE,
         ) as mock_svc:
             client.get(
-                "/api/liquidate/waterfall",
+                "/api/aave/liquidate/waterfall",
                 params={
                     "version": "v3",
                     "initial_price_shock_eth": 0.08,
@@ -1024,7 +1033,7 @@ class TestPricePeriod:
 
 
 class TestLiquidatePeriod:
-    """GET /api/liquidate/period — ETH 价格区间清算汇总序列。"""
+    """GET /api/aave/liquidate/period — ETH 价格区间清算汇总序列。"""
 
     _BASE_PARAMS = {"start": 1000, "end": 2000, "interval": 500}
 
@@ -1035,7 +1044,7 @@ class TestLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_LIQ_PERIOD,
         ):
-            resp = client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+            resp = client.get("/api/aave/liquidate/period", params=self._BASE_PARAMS)
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -1056,7 +1065,7 @@ class TestLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_LIQ_PERIOD,
         ) as mock_svc:
-            client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+            client.get("/api/aave/liquidate/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
         assert kwargs["start_price"] == Decimal("1000")
         assert kwargs["end_price"] == Decimal("2000")
@@ -1064,29 +1073,33 @@ class TestLiquidatePeriod:
 
     def test_missing_start_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period", params={"end": 2000, "interval": 500}
+            "/api/aave/liquidate/period", params={"end": 2000, "interval": 500}
         )
         assert resp.status_code == 422
 
     def test_missing_end_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period", params={"start": 1000, "interval": 500}
+            "/api/aave/liquidate/period", params={"start": 1000, "interval": 500}
         )
         assert resp.status_code == 422
 
     def test_missing_interval_returns_422(self, client: TestClient):
-        resp = client.get("/api/liquidate/period", params={"start": 1000, "end": 2000})
+        resp = client.get(
+            "/api/aave/liquidate/period", params={"start": 1000, "end": 2000}
+        )
         assert resp.status_code == 422
 
     def test_start_zero_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period", params={"start": 0, "end": 2000, "interval": 500}
+            "/api/aave/liquidate/period",
+            params={"start": 0, "end": 2000, "interval": 500},
         )
         assert resp.status_code == 422
 
     def test_interval_zero_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period", params={"start": 1000, "end": 2000, "interval": 0}
+            "/api/aave/liquidate/period",
+            params={"start": 1000, "end": 2000, "interval": 0},
         )
         assert resp.status_code == 422
 
@@ -1100,14 +1113,14 @@ class TestLiquidatePeriod:
             side_effect=HTTPException(status_code=400, detail="start 必须 <= end"),
         ):
             resp = client.get(
-                "/api/liquidate/period",
+                "/api/aave/liquidate/period",
                 params={"start": 3000, "end": 1000, "interval": 500},
             )
         assert resp.status_code == 400
 
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/liquidate/period", params=self._BASE_PARAMS)
+            resp = c.get("/api/aave/liquidate/period", params=self._BASE_PARAMS)
         assert resp.status_code == 503
 
     def test_empty_result_returns_empty_list(self, client: TestClient):
@@ -1116,7 +1129,7 @@ class TestLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            resp = client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+            resp = client.get("/api/aave/liquidate/period", params=self._BASE_PARAMS)
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -1128,7 +1141,7 @@ class TestLiquidatePeriod:
             return_value=MOCK_LIQ_PERIOD,
         ):
             resp = client.get(
-                "/api/liquidate/period",
+                "/api/aave/liquidate/period",
                 params={"start": 500, "end": 3000, "interval": interval},
             )
         assert resp.status_code == 200
@@ -1143,7 +1156,7 @@ class TestLiquidatePeriod:
             return_value=MOCK_LIQ_PERIOD,
         ) as mock_svc:
             client.get(
-                "/api/liquidate/period",
+                "/api/aave/liquidate/period",
                 params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": 0.6},
             )
         _, kwargs = mock_svc.call_args
@@ -1160,32 +1173,32 @@ class TestLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_LIQ_PERIOD,
         ) as mock_svc:
-            client.get("/api/liquidate/period", params=self._BASE_PARAMS)
+            client.get("/api/aave/liquidate/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal(str(ETH_COLLATERAL_RATIO_MIN))
 
     def test_eth_ratio_out_of_range_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period",
+            "/api/aave/liquidate/period",
             params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": 1.5},
         )
         assert resp.status_code == 422
 
     def test_eth_ratio_negative_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/liquidate/period",
+            "/api/aave/liquidate/period",
             params={"start": 1000, "end": 2000, "interval": 500, "eth_ratio": -0.1},
         )
         assert resp.status_code == 422
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/borrow/positions
+# GET /api/aave/borrow/positions
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestBorrowPositions:
-    """GET /api/borrow/positions — 借贷端仓位列表（借入 WETH / 做空 ETH）。"""
+    """GET /api/aave/borrow/positions — 借贷端仓位列表（借入 WETH / 做空 ETH）。"""
 
     def test_default_ok(self, client: TestClient):
         with patch(
@@ -1193,7 +1206,7 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ):
-            resp = client.get("/api/borrow/positions")
+            resp = client.get("/api/aave/borrow/positions")
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -1213,14 +1226,14 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            resp = client.get("/api/borrow/positions")
+            resp = client.get("/api/aave/borrow/positions")
         assert resp.status_code == 200
         assert resp.json() == []
 
     @pytest.mark.skip(reason="路由已迁移至 DbSession，不再依赖 pool")
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/borrow/positions")
+            resp = c.get("/api/aave/borrow/positions")
         assert resp.status_code == 503
 
     @pytest.mark.parametrize(
@@ -1233,12 +1246,12 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ):
-            resp = client.get("/api/borrow/positions", params={"orderby": orderby})
+            resp = client.get("/api/aave/borrow/positions", params={"orderby": orderby})
         assert resp.status_code == 200
 
     def test_invalid_orderby_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/positions", params={"orderby": "nonexistent_col"}
+            "/api/aave/borrow/positions", params={"orderby": "nonexistent_col"}
         )
         assert resp.status_code == 422
 
@@ -1249,11 +1262,11 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ):
-            resp = client.get("/api/borrow/positions", params={"order": order})
+            resp = client.get("/api/aave/borrow/positions", params={"order": order})
         assert resp.status_code == 200
 
     def test_invalid_order_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/positions", params={"order": "random"})
+        resp = client.get("/api/aave/borrow/positions", params={"order": "random"})
         assert resp.status_code == 422
 
     @pytest.mark.parametrize("limit", [1, 50, 200])
@@ -1263,15 +1276,15 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ):
-            resp = client.get("/api/borrow/positions", params={"limit": limit})
+            resp = client.get("/api/aave/borrow/positions", params={"limit": limit})
         assert resp.status_code == 200
 
     def test_limit_too_large_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/positions", params={"limit": 201})
+        resp = client.get("/api/aave/borrow/positions", params={"limit": 201})
         assert resp.status_code == 422
 
     def test_limit_zero_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/positions", params={"limit": 0})
+        resp = client.get("/api/aave/borrow/positions", params={"limit": 0})
         assert resp.status_code == 422
 
     @pytest.mark.parametrize(
@@ -1289,7 +1302,7 @@ class TestBorrowPositions:
             new_callable=AsyncMock,
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ) as mock_svc:
-            client.get("/api/borrow/positions", params={"version": version})
+            client.get("/api/aave/borrow/positions", params={"version": version})
         _, kwargs = mock_svc.call_args
         assert kwargs["protocol"] == expected_protocol
 
@@ -1300,7 +1313,7 @@ class TestBorrowPositions:
             return_value=MOCK_BORROW_POSITIONS_LIST,
         ) as mock_svc:
             client.get(
-                "/api/borrow/positions",
+                "/api/aave/borrow/positions",
                 params={"orderby": "weth_debt_usd", "order": "desc", "limit": 50},
             )
         _, kwargs = mock_svc.call_args
@@ -1310,23 +1323,23 @@ class TestBorrowPositions:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/borrow/liquidate
+# GET /api/aave/borrow/liquidate
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestBorrowLiquidate:
-    """GET /api/borrow/liquidate — 模拟 ETH 上涨时的做空清算情况。"""
+    """GET /api/aave/borrow/liquidate — 模拟 ETH 上涨时的做空清算情况。"""
 
     def test_missing_eth_price_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/liquidate")
+        resp = client.get("/api/aave/borrow/liquidate")
         assert resp.status_code == 422
 
     def test_eth_price_zero_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/liquidate", params={"eth_price": 0})
+        resp = client.get("/api/aave/borrow/liquidate", params={"eth_price": 0})
         assert resp.status_code == 422
 
     def test_eth_price_negative_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/liquidate", params={"eth_price": -100})
+        resp = client.get("/api/aave/borrow/liquidate", params={"eth_price": -100})
         assert resp.status_code == 422
 
     def test_ok_with_results(self, client: TestClient):
@@ -1335,7 +1348,7 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ):
-            resp = client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+            resp = client.get("/api/aave/borrow/liquidate", params={"eth_price": 2700})
         assert resp.status_code == 200
         data = resp.json()
         assert "simulated_eth_price" in data
@@ -1358,7 +1371,7 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_EMPTY,
         ):
-            resp = client.get("/api/borrow/liquidate", params={"eth_price": 1000})
+            resp = client.get("/api/aave/borrow/liquidate", params={"eth_price": 1000})
         assert resp.status_code == 200
         data = resp.json()
         assert data["positions_cnt"] == "0"
@@ -1366,7 +1379,7 @@ class TestBorrowLiquidate:
 
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/borrow/liquidate", params={"eth_price": 2700})
+            resp = c.get("/api/aave/borrow/liquidate", params={"eth_price": 2700})
         assert resp.status_code == 503
 
     def test_service_receives_decimal_eth_price(self, client: TestClient):
@@ -1377,7 +1390,7 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate", params={"eth_price": 2700.5})
+            client.get("/api/aave/borrow/liquidate", params={"eth_price": 2700.5})
         args, _ = mock_svc.call_args
         assert args[1] == Decimal("2700.5")
 
@@ -1391,13 +1404,15 @@ class TestBorrowLiquidate:
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ):
             resp = client.get(
-                "/api/borrow/liquidate", params={"eth_price": 2700, "orderby": orderby}
+                "/api/aave/borrow/liquidate",
+                params={"eth_price": 2700, "orderby": orderby},
             )
         assert resp.status_code == 200
 
     def test_invalid_orderby_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate", params={"eth_price": 2700, "orderby": "bad_col"}
+            "/api/aave/borrow/liquidate",
+            params={"eth_price": 2700, "orderby": "bad_col"},
         )
         assert resp.status_code == 422
 
@@ -1409,13 +1424,13 @@ class TestBorrowLiquidate:
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ):
             resp = client.get(
-                "/api/borrow/liquidate", params={"eth_price": 2700, "limit": limit}
+                "/api/aave/borrow/liquidate", params={"eth_price": 2700, "limit": limit}
             )
         assert resp.status_code == 200
 
     def test_limit_too_large_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate", params={"eth_price": 2700, "limit": 1001}
+            "/api/aave/borrow/liquidate", params={"eth_price": 2700, "limit": 1001}
         )
         assert resp.status_code == 422
 
@@ -1427,7 +1442,9 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate", params={"eth_price": 2700, "cap": 3000})
+            client.get(
+                "/api/aave/borrow/liquidate", params={"eth_price": 2700, "cap": 3000}
+            )
         _, kwargs = mock_svc.call_args
         assert kwargs["cap"] == Decimal("3000")
 
@@ -1437,12 +1454,14 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+            client.get("/api/aave/borrow/liquidate", params={"eth_price": 2700})
         _, kwargs = mock_svc.call_args
         assert kwargs["cap"] is None
 
     def test_cap_zero_returns_422(self, client: TestClient):
-        resp = client.get("/api/borrow/liquidate", params={"eth_price": 2700, "cap": 0})
+        resp = client.get(
+            "/api/aave/borrow/liquidate", params={"eth_price": 2700, "cap": 0}
+        )
         assert resp.status_code == 422
 
     @pytest.mark.parametrize(
@@ -1461,7 +1480,8 @@ class TestBorrowLiquidate:
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate", params={"eth_price": 2700, "version": version}
+                "/api/aave/borrow/liquidate",
+                params={"eth_price": 2700, "version": version},
             )
         _, kwargs = mock_svc.call_args
         assert kwargs["protocol"] == expected_protocol
@@ -1474,7 +1494,7 @@ class TestBorrowLiquidate:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate", params={"eth_price": 2700})
+            client.get("/api/aave/borrow/liquidate", params={"eth_price": 2700})
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal("0.45")
 
@@ -1487,7 +1507,8 @@ class TestBorrowLiquidate:
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": 0.8}
+                "/api/aave/borrow/liquidate",
+                params={"eth_price": 2700, "eth_ratio": 0.8},
             )
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal("0.8")
@@ -1501,20 +1522,20 @@ class TestBorrowLiquidate:
             return_value=MOCK_SHORT_SIM_RESPONSE,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": 0}
+                "/api/aave/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": 0}
             )
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal("0")
 
     def test_eth_ratio_greater_than_1_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": 1.1}
+            "/api/aave/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": 1.1}
         )
         assert resp.status_code == 422
 
     def test_eth_ratio_negative_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": -0.1}
+            "/api/aave/borrow/liquidate", params={"eth_price": 2700, "eth_ratio": -0.1}
         )
         assert resp.status_code == 422
 
@@ -1523,7 +1544,7 @@ class TestBorrowLiquidate:
 
 
 class TestBorrowLiquidatePeriod:
-    """GET /api/borrow/liquidate/period — ETH 上涨区间内的做空清算分布。"""
+    """GET /api/aave/borrow/liquidate/period — ETH 上涨区间内的做空清算分布。"""
 
     _BASE_PARAMS = {"start": 2000, "end": 3000, "interval": 500}
 
@@ -1533,7 +1554,9 @@ class TestBorrowLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ):
-            resp = client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+            resp = client.get(
+                "/api/aave/borrow/liquidate/period", params=self._BASE_PARAMS
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -1551,43 +1574,45 @@ class TestBorrowLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            resp = client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+            resp = client.get(
+                "/api/aave/borrow/liquidate/period", params=self._BASE_PARAMS
+            )
         assert resp.status_code == 200
         assert resp.json() == []
 
     def test_no_pool_returns_503(self, app_no_pool):
         with TestClient(app_no_pool) as c:
-            resp = c.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+            resp = c.get("/api/aave/borrow/liquidate/period", params=self._BASE_PARAMS)
         assert resp.status_code == 503
 
     def test_missing_start_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period", params={"end": 3000, "interval": 500}
+            "/api/aave/borrow/liquidate/period", params={"end": 3000, "interval": 500}
         )
         assert resp.status_code == 422
 
     def test_missing_end_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period", params={"start": 2000, "interval": 500}
+            "/api/aave/borrow/liquidate/period", params={"start": 2000, "interval": 500}
         )
         assert resp.status_code == 422
 
     def test_missing_interval_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period", params={"start": 2000, "end": 3000}
+            "/api/aave/borrow/liquidate/period", params={"start": 2000, "end": 3000}
         )
         assert resp.status_code == 422
 
     def test_start_zero_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period",
+            "/api/aave/borrow/liquidate/period",
             params={"start": 0, "end": 3000, "interval": 500},
         )
         assert resp.status_code == 422
 
     def test_interval_zero_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period",
+            "/api/aave/borrow/liquidate/period",
             params={"start": 2000, "end": 3000, "interval": 0},
         )
         assert resp.status_code == 422
@@ -1599,7 +1624,7 @@ class TestBorrowLiquidatePeriod:
             side_effect=HTTPException(status_code=400, detail="start 必须 <= end"),
         ):
             resp = client.get(
-                "/api/borrow/liquidate/period",
+                "/api/aave/borrow/liquidate/period",
                 params={"start": 4000, "end": 2000, "interval": 500},
             )
         assert resp.status_code == 400
@@ -1612,7 +1637,7 @@ class TestBorrowLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+            client.get("/api/aave/borrow/liquidate/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
         assert kwargs["start_price"] == Decimal("2000")
         assert kwargs["end_price"] == Decimal("3000")
@@ -1634,7 +1659,7 @@ class TestBorrowLiquidatePeriod:
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate/period",
+                "/api/aave/borrow/liquidate/period",
                 params={**self._BASE_PARAMS, "version": version},
             )
         _, kwargs = mock_svc.call_args
@@ -1642,7 +1667,7 @@ class TestBorrowLiquidatePeriod:
 
     def test_invalid_version_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period",
+            "/api/aave/borrow/liquidate/period",
             params={**self._BASE_PARAMS, "version": "v4"},
         )
         assert resp.status_code == 422
@@ -1655,7 +1680,7 @@ class TestBorrowLiquidatePeriod:
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ):
             resp = client.get(
-                "/api/borrow/liquidate/period",
+                "/api/aave/borrow/liquidate/period",
                 params={"start": 2000, "end": 3000, "interval": interval},
             )
         assert resp.status_code == 200
@@ -1668,7 +1693,7 @@ class TestBorrowLiquidatePeriod:
             new_callable=AsyncMock,
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ) as mock_svc:
-            client.get("/api/borrow/liquidate/period", params=self._BASE_PARAMS)
+            client.get("/api/aave/borrow/liquidate/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
         assert kwargs["eth_ratio"] == Decimal("0.45")
 
@@ -1681,7 +1706,7 @@ class TestBorrowLiquidatePeriod:
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate/period",
+                "/api/aave/borrow/liquidate/period",
                 params={**self._BASE_PARAMS, "eth_ratio": 0.7},
             )
         _, kwargs = mock_svc.call_args
@@ -1696,7 +1721,7 @@ class TestBorrowLiquidatePeriod:
             return_value=MOCK_SHORT_LIQ_PERIOD,
         ) as mock_svc:
             client.get(
-                "/api/borrow/liquidate/period",
+                "/api/aave/borrow/liquidate/period",
                 params={**self._BASE_PARAMS, "eth_ratio": 0},
             )
         _, kwargs = mock_svc.call_args
@@ -1704,14 +1729,14 @@ class TestBorrowLiquidatePeriod:
 
     def test_eth_ratio_greater_than_1_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period",
+            "/api/aave/borrow/liquidate/period",
             params={**self._BASE_PARAMS, "eth_ratio": 1.5},
         )
         assert resp.status_code == 422
 
     def test_eth_ratio_negative_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/borrow/liquidate/period",
+            "/api/aave/borrow/liquidate/period",
             params={**self._BASE_PARAMS, "eth_ratio": -0.1},
         )
         assert resp.status_code == 422
@@ -1721,9 +1746,9 @@ class TestBorrowLiquidatePeriod:
 
 
 class TestBorrowUserPosition:
-    """测试 GET /api/borrow/position。"""
+    """测试 GET /api/aave/borrow/position。"""
 
-    _URL = "/api/borrow/position"
+    _URL = "/api/aave/borrow/position"
 
     def test_ok_returns_200_with_all_fields(self, client: TestClient):
         with patch(
@@ -1870,14 +1895,14 @@ class TestBorrowUserPosition:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/position/replay
+# GET /api/aave/position/replay
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestPositionReplay:
-    """GET /api/position/replay — 必须参数 address / start / end。"""
+    """GET /api/aave/position/replay — 必须参数 address / start / end。"""
 
-    _URL = "/api/position/replay"
+    _URL = "/api/aave/position/replay"
     _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
 
     def test_missing_address_returns_422(self, client: TestClient):
@@ -2040,14 +2065,14 @@ class TestPositionReplay:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/txs
+# GET /api/aave/txs
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestTxHistory:
-    """GET /api/txs — 必须参数 address / start / end。"""
+    """GET /api/aave/txs — 必须参数 address / start / end。"""
 
-    _URL = "/api/txs"
+    _URL = "/api/aave/txs"
     _BASE = {"address": ADDR, "start": "2025-01-01", "end": "2026-01-01"}
 
     def test_missing_address_returns_422(self, client: TestClient):
@@ -2175,14 +2200,14 @@ class TestTxHistory:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /api/positions/period
+# GET /api/aave/positions/period
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestPositionsPeriod:
-    """GET /api/positions/period — 日级 ETH 抵押仓位统计时序。"""
+    """GET /api/aave/positions/period — 日级 ETH 抵押仓位统计时序。"""
 
-    _URL = "/api/positions/period"
+    _URL = "/api/aave/positions/period"
     _BASE = {"start": "2025-01-01", "end": "2025-01-03"}
 
     def test_ok_returns_list(self, client: TestClient):

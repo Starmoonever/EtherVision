@@ -6,7 +6,7 @@ from typing import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aave_crawler.api.routes import router
+from aave_crawler.api.routes import common_router, router
 from aave_crawler.api.schemas import (
     BorrowPositionResponse,
     BorrowUserPositionResponse,
@@ -392,6 +392,7 @@ def _make_app(w3=..., pool=...) -> FastAPI:
     """创建含路由的测试 FastAPI 实例；使用 ... 表示使用默认 MagicMock。"""
     _app = FastAPI()
     _app.include_router(router)
+    _app.include_router(common_router)
     _app.state.w3 = MagicMock() if w3 is ... else w3
     _app.state.pool = MagicMock() if pool is ... else pool
 

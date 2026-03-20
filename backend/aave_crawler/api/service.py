@@ -95,6 +95,27 @@ _cache: dict = {}
 # 单次 API 触发最多在线补采区块数，防止长时阻塞
 _MAX_MARKET_ONLINE_COLLECT = 15
 
+_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL = """
+SELECT
+    symbol,
+    CONCAT('0x', encode(reserve, 'hex')) AS token_address
+FROM loan.compound_v3_market_snapshot_reserves
+WHERE symbol IS NOT NULL
+  AND UPPER(symbol) = $1
+ORDER BY "timestamp" DESC
+LIMIT 1
+"""
+
+_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE = """
+SELECT
+    price_usd,
+    "timestamp"
+FROM loan.compound_v3_market_snapshot_reserves
+WHERE reserve = decode(replace(lower($1), '0x', ''), 'hex')
+ORDER BY "timestamp" DESC
+LIMIT 1
+"""
+
 
 async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
     """缓存当次进程内的储备资产列表 / 配置（按协议版本分别缓存，不缓存价格）"""
@@ -140,6 +161,47 @@ async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
             logger.warning("[v2] 无法获取实时 ETH/USD 价格，V2 仓位数值将不准确")
 
     return _cache[cache_key_tokens], _cache[cache_key_configs], asset_prices
+
+
+def _normalize_price_asset(asset: str) -> str:
+    target = asset.upper()
+    if target == "ETH":
+        return "WETH"
+    return target
+
+
+async def _resolve_price_asset(
+    w3: AsyncWeb3,
+    asset: str,
+    pool: "asyncpg.Pool | None" = None,
+) -> tuple[str, str, bool]:
+    from fastapi import HTTPException
+
+    await _get_common_data(w3, "v3")
+
+    target = _normalize_price_asset(asset)
+    reserve_tokens = _cache["reserve_tokens_v3"]
+    for rt in reserve_tokens:
+        if rt.symbol.upper() == target:
+            return target, rt.token_address, False
+
+    if pool is not None:
+        row = await pool.fetchrow(_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL, target)
+        if row is not None and row["token_address"]:
+            return target, str(row["token_address"]), True
+
+    raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
+
+
+async def _get_latest_compound_v3_reserve_price(
+    pool: "asyncpg.Pool",
+    token_address: str,
+) -> tuple[Decimal, int] | None:
+    row = await pool.fetchrow(_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE, token_address)
+    if row is None or row["price_usd"] is None or row["timestamp"] is None:
+        return None
+
+    return Decimal(str(row["price_usd"])), int(row["timestamp"].timestamp())
 
 
 def _format_position(pos: UserPosition) -> PositionResponse:
@@ -1448,33 +1510,50 @@ async def get_eth_price(
             "%Y-%m-%dT%H:%M:%SZ"
         )
 
-    # 预热缓存，确保 reserve_tokens 已加载（价格查询只需 v3 的 token 列表，两版本共用同一 Oracle）
-    await _get_common_data(w3, "v3")
-
-    # "eth" 在 Aave 中以 WETH 表示
-    target = asset.upper()
-    if target == "ETH":
-        target = "WETH"
-
-    reserve_tokens = _cache["reserve_tokens_v3"]
-    matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
-    if not matching:
-        raise HTTPException(
-            status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确"
-        )
-
-    token_address = matching[0].token_address
+    target, token_address, compound_only = await _resolve_price_asset(
+        w3, asset, pool=pool
+    )
 
     if timestamp is None:
         # ── 实时价格：链上 Oracle ─────────────────────────────────────────
-        prices = await get_assets_prices(w3, [token_address])
-        price = _raw_to_dec(prices[0], 8)
-        return PriceResponse(
-            asset=asset.upper(),
-            price_usd=_fmt(price, 2),
-            token_address=token_address,
-            timestamp=_ts_to_utc_str(int(_time.time())),
-            source="on-chain",
+        oracle_exc: Exception | None = None
+        try:
+            prices = await get_assets_prices(w3, [token_address])
+        except Exception as exc:
+            prices = []
+            oracle_exc = exc
+
+        if prices and prices[0] > 0:
+            price = _raw_to_dec(prices[0], 8)
+            return PriceResponse(
+                asset=asset.upper(),
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(int(_time.time())),
+                source="on-chain",
+            )
+
+        if compound_only and pool is not None:
+            snapshot = await _get_latest_compound_v3_reserve_price(pool, token_address)
+            if snapshot is not None:
+                price, snapshot_ts = snapshot
+                return PriceResponse(
+                    asset=asset.upper(),
+                    price_usd=_fmt(price, 2),
+                    token_address=token_address,
+                    timestamp=_ts_to_utc_str(snapshot_ts),
+                    source="compound-snapshot",
+                )
+
+        if oracle_exc is not None:
+            logger.warning(
+                "获取实时价格失败 asset=%s token=%s: %s",
+                asset,
+                token_address,
+                oracle_exc,
+            )
+        raise HTTPException(
+            status_code=502, detail=f"无法获取资产 '{asset}' 的实时价格"
         )
     else:
         # ── 历史价格：DeFiLlama Coins API ────────────────────────────────
@@ -1582,18 +1661,7 @@ async def get_price_period(
     if interval_minutes < 1:
         raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
 
-    # 解析 token_address（复用 _get_common_data 缓存）
-    await _get_common_data(w3, "v3")
-    target = asset.upper()
-    if target == "ETH":
-        target = "WETH"
-    reserve_tokens = _cache["reserve_tokens_v3"]
-    matching = [rt for rt in reserve_tokens if rt.symbol.upper() == target]
-    if not matching:
-        raise HTTPException(
-            status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确"
-        )
-    token_address = matching[0].token_address
+    target, token_address, _ = await _resolve_price_asset(w3, asset, pool=pool)
     coin_key = f"ethereum:{token_address.lower()}"
 
     timeout = aiohttp.ClientTimeout(total=30)

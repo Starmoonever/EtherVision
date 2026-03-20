@@ -5,24 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
-
-@dataclass
-class PostgresConfig:
-    host: str = "127.0.0.1"
-    port: int = 5432
-    user: str = "postgres"
-    password: str = ""
-    database: str = "postgres"
-    ssl: str = "prefer"  # disable / allow / prefer / require
-
-    @property
-    def dsn(self) -> str:
-        return (
-            f"postgresql://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.database}"
-        )
+from crawler_shared.config import CrawlerConfig
+from crawler_shared.config import PostgresConfig
+from crawler_shared.config import WatcherConfig as BaseWatcherConfig
+from crawler_shared.config import build_dataclass, load_yaml_config
 
 
 @dataclass
@@ -35,17 +21,7 @@ class ClickHouseConfig:
 
 
 @dataclass
-class CrawlerConfig:
-    concurrency: int = 20
-    batch_size: int = 100
-    rpc_timeout: int = 20
-    retry_count: int = 3
-
-
-@dataclass
-class WatcherConfig:
-    interval: int = 60  # 轮询间隔（秒）
-    lookback_minutes: int = 10  # 首次启动时水位线回退多少分钟
+class WatcherConfig(BaseWatcherConfig):
     history_schema: str = "aave"  # aave_history 所在 schema
 
 
@@ -61,57 +37,16 @@ class AppConfig:
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
-    """
-    加载 config.yaml。
-    默认查找顺序：
-      1. 传入的 path
-      2. 当前工作目录 config.yaml
-      3. 本文件所在目录的父目录（backend/）config.yaml
-    """
-    candidates: list[Path] = []
-    if path:
-        candidates.append(Path(path))
-    candidates.append(Path.cwd() / "config.yaml")
-    candidates.append(Path(__file__).parent.parent / "config.yaml")
-
-    for candidate in candidates:
-        if candidate.exists():
-            raw = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            pg_raw = raw.get("postgres", {})
-            ch_raw = raw.get("clickhouse", {})
-            cr_raw = raw.get("crawler", {})
-            wt_raw = raw.get("watcher", {})
-            return AppConfig(
-                rpc_url=raw.get("rpc_url", ""),
-                log_level=raw.get("log_level", "info"),
-                postgres=PostgresConfig(
-                    **{
-                        k: v
-                        for k, v in pg_raw.items()
-                        if k in PostgresConfig.__dataclass_fields__
-                    }
-                ),
-                clickhouse=ClickHouseConfig(
-                    **{
-                        k: v
-                        for k, v in ch_raw.items()
-                        if k in ClickHouseConfig.__dataclass_fields__
-                    }
-                ),
-                crawler=CrawlerConfig(
-                    **{
-                        k: v
-                        for k, v in cr_raw.items()
-                        if k in CrawlerConfig.__dataclass_fields__
-                    }
-                ),
-                watcher=WatcherConfig(
-                    **{
-                        k: v
-                        for k, v in wt_raw.items()
-                        if k in WatcherConfig.__dataclass_fields__
-                    }
-                ),
-            )
-
-    raise FileNotFoundError("找不到 config.yaml，请参照 config.yaml.example 创建。")
+    raw = load_yaml_config(
+        path,
+        anchor_file=__file__,
+        missing_message="找不到 config.yaml，请参照 config.yaml.example 创建。",
+    )
+    return AppConfig(
+        rpc_url=raw.get("rpc_url", ""),
+        log_level=raw.get("log_level", "info"),
+        postgres=build_dataclass(PostgresConfig, raw.get("postgres")),
+        clickhouse=build_dataclass(ClickHouseConfig, raw.get("clickhouse")),
+        crawler=build_dataclass(CrawlerConfig, raw.get("crawler")),
+        watcher=build_dataclass(WatcherConfig, raw.get("watcher")),
+    )

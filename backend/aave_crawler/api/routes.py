@@ -43,7 +43,8 @@ from .service import (
     simulate_short_liquidation_period,
 )
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api/aave")
+common_router = APIRouter(prefix="/api")
 
 
 def _w3(request: Request):
@@ -159,7 +160,7 @@ async def positions(
     return await get_positions_history(pool, ts, limit=min(limit, 100))
 
 
-@router.get(
+@common_router.get(
     "/price",
     response_model=PriceResponse,
     summary="查询资产价格（当前或历史）",
@@ -180,7 +181,7 @@ async def asset_price(
     ),
 ) -> PriceResponse:
     if time == "now":
-        return await get_eth_price(_w3(request), asset)
+        return await get_eth_price(_w3(request), asset, pool=pool)
     ts = _parse_utc_time(time)
     return await get_eth_price(_w3(request), asset, timestamp=ts, pool=pool)
 
@@ -323,7 +324,7 @@ async def liquidate_waterfall(
     )
 
 
-@router.get(
+@common_router.get(
     "/price/period",
     response_model=PricePeriodResponse,
     summary="查询资产历史价格序列",
