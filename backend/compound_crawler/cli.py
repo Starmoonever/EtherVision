@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import datetime, timezone
 
 import click
+from crawler_shared.logging import setup_cli_logging
 
 from .config import load_config
 from .crawler import run_crawler
@@ -15,12 +15,7 @@ from .watcher import run_watcher
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    setup_cli_logging(verbose)
 
 
 @click.group()

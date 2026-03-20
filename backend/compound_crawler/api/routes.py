@@ -30,7 +30,8 @@ async def market_state_period(
     start: str = Query(..., description="UTC datetime at hour precision (start)"),
     end: str = Query(..., description="UTC datetime at hour precision (end)"),
     interval: int = Query(
-        24, ge=1, le=168, description="Sampling interval in hours (default 24)"
+        24,
+        description="Sampling interval in hours (default 24, allowed 1-168)",
     ),
     detail: bool = Query(False, description="Whether to expand reserve details"),
 ) -> "MarketStatePeriodResponse":

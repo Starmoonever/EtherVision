@@ -9,8 +9,11 @@ from decimal import Decimal
 from typing import Any
 
 import asyncpg
+from crawler_shared.config import PostgresConfig
+from crawler_shared.postgres import create_pool as create_asyncpg_pool
+from sqlalchemy import inspect
 
-from .config import PostgresConfig
+from .orm_models import Base, CompoundV3UserPosition
 
 logger = logging.getLogger(__name__)
 
@@ -169,16 +172,7 @@ ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
 
 
 async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
-    return await asyncpg.create_pool(
-        host=pg.host,
-        port=pg.port,
-        user=pg.user,
-        password=pg.password,
-        database=pg.database,
-        ssl=pg.ssl,
-        min_size=1,
-        max_size=10,
-    )
+    return await create_asyncpg_pool(pg, min_size=1, max_size=10)
 
 
 async def _try_enable_hypertable(conn: Any, table_name: str) -> None:
@@ -339,3 +333,9 @@ async def upsert_reserve_snapshots(
     async with pool.acquire() as conn:
         await conn.executemany(sql, values)
     return len(rows)
+
+
+def ensure_compound_v3_user_positions_table(engine):
+    inspector = inspect(engine)
+    if not inspector.has_table("compound_v3_user_positions", schema="loan"):
+        Base.metadata.create_all(engine, tables=[CompoundV3UserPosition.__table__])
