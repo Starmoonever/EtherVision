@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from collections import defaultdict
 from typing import Any
 
 import asyncpg
@@ -403,6 +405,58 @@ ON CONFLICT ("timestamp", market, user_address, asset, side) DO UPDATE SET
     created_at = NOW();
 """
 
+_USER_POSITION_COLUMNS = (
+    "timestamp",
+    "block_number",
+    "market",
+    "symbol",
+    "user_address",
+    "has_open_position",
+    "is_liquidatable",
+    "base_token",
+    "base_symbol",
+    "base_price_usd",
+    "eth_price_usd",
+    "total_collateral_usd",
+    "total_debt_usd",
+    "discounted_collateral_usd",
+    "liquidation_buffer_usd",
+    "health_factor",
+    "eth_sensitive_collateral_usd",
+    "eth_sensitive_debt_usd",
+    "net_eth_exposure_usd",
+    "non_eth_collateral_usd",
+    "non_eth_debt_usd",
+    "basis_risk_collateral_usd",
+    "eth_down_liq_price_usd",
+    "eth_up_liq_price_usd",
+    "eth_liq_mode",
+    "dominant_risk",
+    "assets_jsonb",
+)
+
+_USER_POSITION_ASSET_COLUMNS = (
+    "timestamp",
+    "block_number",
+    "market",
+    "user_address",
+    "asset",
+    "symbol",
+    "side",
+    "decimals",
+    "amount",
+    "price_in_base",
+    "price_usd",
+    "value_usd",
+    "discounted_value_usd",
+    "borrow_collateral_factor",
+    "liquidate_collateral_factor",
+    "liquidation_factor",
+    "beta_to_eth",
+    "is_eth_correlated",
+    "is_basis_risk_asset",
+)
+
 
 async def create_pool(pg: PostgresConfig) -> asyncpg.Pool:
     return await create_asyncpg_pool(pg, min_size=1, max_size=10)
@@ -761,12 +815,35 @@ async def upsert_user_position_snapshots(
             r.eth_up_liq_price_usd,
             r.eth_liq_mode,
             r.dominant_risk,
-            r.assets_jsonb,
+            json.dumps(r.assets_jsonb, ensure_ascii=False),
         )
         for r in rows
     ]
+
+    delete_groups: dict[tuple[datetime, bytes], list[bytes]] = defaultdict(list)
+    for row in rows:
+        delete_groups[(row.timestamp, row.market)].append(row.user_address)
+
     async with pool.acquire() as conn:
-        await conn.executemany(_UPSERT_USER_POSITION, values)
+        async with conn.transaction():
+            for (timestamp, market), user_addresses in delete_groups.items():
+                await conn.execute(
+                    f"""
+                    DELETE FROM loan.{_USER_POSITION_TABLE}
+                    WHERE "timestamp" = $1
+                      AND market = $2
+                      AND user_address = ANY($3::bytea[])
+                    """,
+                    timestamp,
+                    market,
+                    user_addresses,
+                )
+            await conn.copy_records_to_table(
+                _USER_POSITION_TABLE,
+                schema_name="loan",
+                records=values,
+                columns=list(_USER_POSITION_COLUMNS),
+            )
     return len(rows)
 
 
@@ -800,8 +877,31 @@ async def upsert_user_position_asset_rows(
         )
         for r in rows
     ]
+
+    delete_groups: dict[tuple[datetime, bytes], list[bytes]] = defaultdict(list)
+    for row in rows:
+        delete_groups[(row.timestamp, row.market)].append(row.user_address)
+
     async with pool.acquire() as conn:
-        await conn.executemany(_UPSERT_USER_POSITION_ASSET, values)
+        async with conn.transaction():
+            for (timestamp, market), user_addresses in delete_groups.items():
+                await conn.execute(
+                    f"""
+                    DELETE FROM loan.{_USER_POSITION_ASSET_TABLE}
+                    WHERE "timestamp" = $1
+                      AND market = $2
+                      AND user_address = ANY($3::bytea[])
+                    """,
+                    timestamp,
+                    market,
+                    user_addresses,
+                )
+            await conn.copy_records_to_table(
+                _USER_POSITION_ASSET_TABLE,
+                schema_name="loan",
+                records=values,
+                columns=list(_USER_POSITION_ASSET_COLUMNS),
+            )
     return len(rows)
 
 

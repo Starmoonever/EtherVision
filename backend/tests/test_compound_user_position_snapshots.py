@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from compound_crawler.user_position_snapshots import (
+    BackfillStats,
     iter_snapshot_points,
     parse_csv_address_cell,
     _solve_eth_liq_prices,
@@ -67,3 +68,9 @@ def test_iter_snapshot_points_rejects_subdaily_interval() -> None:
             datetime(2026, 3, 2, tzinfo=timezone.utc),
             0,
         )
+
+
+def test_backfill_stats_tracks_skipped_empty() -> None:
+    stats = BackfillStats()
+    stats.skipped_empty += 3
+    assert stats.skipped_empty == 3
