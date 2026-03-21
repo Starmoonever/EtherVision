@@ -99,8 +99,31 @@ class BackfillStats:
     skipped_empty: int = 0
 
 
+@dataclass
+class CollectedMarketSnapshots:
+    timestamp: datetime
+    block_number: int
+    market: str
+    symbol: str
+    snapshots: list[UserPositionSnapshotRow]
+
+
 def _normalize_market_name(name: str) -> str:
     return name.strip().lower()
+
+
+def _resolve_market_address(market: str) -> str:
+    normalized = market.strip().lower()
+    if normalized.startswith("0x") and len(normalized) == 42:
+        for address in COMPOUND_V3_MARKET_NAMES:
+            if address.lower() == normalized:
+                return address.lower()
+        raise ValueError(f"unknown market: {market}")
+
+    for address, name in COMPOUND_V3_MARKET_NAMES.items():
+        if name.lower() == normalized:
+            return address
+    raise ValueError(f"unknown market: {market}")
 
 
 def available_csv_markets(base_dir: Path) -> list[str]:
@@ -703,6 +726,58 @@ async def _collect_user_snapshots_batch(
     ]
 
 
+async def _collect_market_snapshot_rows(
+    w3: AsyncWeb3,
+    cfg: AppConfig,
+    *,
+    market: str,
+    point_ts: datetime,
+    block_number: int,
+    users: list[bytes],
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[
+    MarketContext, list[UserPositionSnapshotRow], list[UserPositionAssetRow], int
+]:
+    market_address = _resolve_market_address(market)
+    market_ctx = await _load_market_context(
+        w3, market_address, block_number, metadata_cache
+    )
+
+    user_batch_size = max(1, cfg.crawler.batch_size)
+    snapshot_rows: list[UserPositionSnapshotRow] = []
+    asset_rows: list[UserPositionAssetRow] = []
+    skipped_empty = 0
+
+    for user_batch in _chunked(users, user_batch_size):
+        try:
+            results = await _collect_user_snapshots_batch(
+                w3,
+                market_ctx,
+                user_addresses=user_batch,
+                point_ts=point_ts,
+                block_number=block_number,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to collect user batch market=%s ts=%s block=%s batch_size=%s: %s",
+                market,
+                point_ts.isoformat(),
+                block_number,
+                len(user_batch),
+                exc,
+            )
+            continue
+
+        for snapshot_row, asset_row_group in results:
+            if not snapshot_row.has_open_position:
+                skipped_empty += 1
+                continue
+            snapshot_rows.append(snapshot_row)
+            asset_rows.extend(asset_row_group)
+
+    return market_ctx, snapshot_rows, asset_rows, skipped_empty
+
+
 async def _collect_market_point(
     w3: AsyncWeb3,
     pool: asyncpg.Pool,
@@ -716,20 +791,7 @@ async def _collect_market_point(
     stats: BackfillStats,
     metadata_cache: dict[str, tuple[str | None, int | None]],
 ) -> None:
-    market_address = next(
-        (
-            addr
-            for addr, name in COMPOUND_V3_MARKET_NAMES.items()
-            if name.lower() == market_name.lower()
-        ),
-        None,
-    )
-    if market_address is None:
-        raise ValueError(f"unknown market: {market_name}")
-
-    market_ctx = await _load_market_context(
-        w3, market_address, block_number, metadata_cache
-    )
+    market_address = _resolve_market_address(market_name)
     pending_users = users
     if skip_existing:
         existing = await fetch_existing_user_position_addresses(
@@ -743,35 +805,16 @@ async def _collect_market_point(
     if not pending_users:
         return
 
-    user_batch_size = max(1, cfg.crawler.batch_size)
-    snapshot_rows: list[UserPositionSnapshotRow] = []
-    asset_rows: list[UserPositionAssetRow] = []
-    for user_batch in _chunked(pending_users, user_batch_size):
-        try:
-            results = await _collect_user_snapshots_batch(
-                w3,
-                market_ctx,
-                user_addresses=user_batch,
-                point_ts=point_ts,
-                block_number=block_number,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to collect user batch market=%s ts=%s block=%s batch_size=%s: %s",
-                market_name,
-                point_ts.isoformat(),
-                block_number,
-                len(user_batch),
-                exc,
-            )
-            continue
-
-        for snapshot_row, asset_row_group in results:
-            if not snapshot_row.has_open_position:
-                stats.skipped_empty += 1
-                continue
-            snapshot_rows.append(snapshot_row)
-            asset_rows.extend(asset_row_group)
+    _, snapshot_rows, asset_rows, skipped_empty = await _collect_market_snapshot_rows(
+        w3,
+        cfg,
+        market=market_name,
+        point_ts=point_ts,
+        block_number=block_number,
+        users=pending_users,
+        metadata_cache=metadata_cache,
+    )
+    stats.skipped_empty += skipped_empty
 
     if dry_run:
         stats.snapshots += len(snapshot_rows)
@@ -830,6 +873,78 @@ async def _collect_market_point(
 
     stats.snapshots += await upsert_user_position_snapshots(pool, snapshot_rows)
     stats.assets += await upsert_user_position_asset_rows(pool, asset_rows)
+
+
+async def collect_market_user_snapshots(
+    cfg: AppConfig,
+    pool: asyncpg.Pool,
+    *,
+    market: str,
+    point_ts: datetime | None = None,
+    persist: bool = False,
+    derived_users_dir: Path | None = None,
+    user_addresses: list[bytes] | None = None,
+) -> CollectedMarketSnapshots:
+    if persist:
+        await ensure_user_position_snapshot_tables(
+            pool, use_timescaledb=cfg.market_state.use_timescaledb
+        )
+
+    market_address = _resolve_market_address(market)
+    market_symbol = COMPOUND_V3_MARKET_NAMES[market_address]
+    if user_addresses is not None:
+        users = user_addresses
+    else:
+        csv_dir = derived_users_dir or (
+            Path(__file__).resolve().parent.parent / "derived_users"
+        )
+        csv_path = csv_dir / f"compound_v3_{market_symbol.lower()}_users.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"missing user csv: {csv_path}")
+        users = _load_users_from_csv(csv_path)
+    if point_ts is None:
+        point_w3 = await _build_web3(cfg)
+        latest_block = await point_w3.eth.get_block("latest")
+        latest_timestamp = latest_block.get("timestamp")
+        latest_number = latest_block.get("number")
+        if latest_timestamp is None or latest_number is None:
+            raise RuntimeError("latest block missing timestamp or number")
+        timestamp = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
+        block_number = int(latest_number)
+        w3 = point_w3
+    else:
+        timestamp = (
+            point_ts.replace(tzinfo=timezone.utc)
+            if point_ts.tzinfo is None
+            else point_ts.astimezone(timezone.utc)
+        )
+        w3 = await _build_web3(cfg)
+        block_number = await _block_at_timestamp(
+            w3, int(timestamp.timestamp()), pool=pool
+        )
+
+    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    market_ctx, snapshot_rows, asset_rows, _ = await _collect_market_snapshot_rows(
+        w3,
+        cfg,
+        market=market_address,
+        point_ts=timestamp,
+        block_number=block_number,
+        users=users,
+        metadata_cache=metadata_cache,
+    )
+
+    if persist:
+        await upsert_user_position_snapshots(pool, snapshot_rows)
+        await upsert_user_position_asset_rows(pool, asset_rows)
+
+    return CollectedMarketSnapshots(
+        timestamp=timestamp,
+        block_number=block_number,
+        market=market_ctx.market_address.lower(),
+        symbol=market_ctx.market_symbol,
+        snapshots=snapshot_rows,
+    )
 
 
 async def run_user_position_backfill(
@@ -918,8 +1033,10 @@ async def run_user_position_backfill(
 
 __all__ = [
     "BackfillStats",
+    "CollectedMarketSnapshots",
     "MIN_INTERVAL_DAYS",
     "available_csv_markets",
+    "collect_market_user_snapshots",
     "iter_snapshot_points",
     "parse_csv_address_cell",
     "run_user_position_backfill",

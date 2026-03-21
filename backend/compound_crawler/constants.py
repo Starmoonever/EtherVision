@@ -17,7 +17,7 @@ COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
     "0x3afdc9bca9213a35503b077a6072f3d0d5ab0840": "USDT",
     "0xa17581a9e3356d9a858b789d68b4d866e593ae94": "WETH",
     "0x5d409e56d886231adaf00c8775665ad0f9897b56": "USDS",
-    "0x3d0bb1ccab520a66e607822fc55bc921738fAFE3": "wstETH",
+    "0x3d0bb1ccab520a66e607822fc55bc921738fafe3": "wstETH",
 }
 
 # Compound V2 defaults are intentionally empty for now.
