@@ -790,7 +790,7 @@ async def _collect_market_point(
     dry_run: bool,
     stats: BackfillStats,
     metadata_cache: dict[str, tuple[str | None, int | None]],
-) -> None:
+) -> tuple[list[UserPositionSnapshotRow], list[UserPositionAssetRow]]:
     market_address = _resolve_market_address(market_name)
     pending_users = users
     if skip_existing:
@@ -803,7 +803,7 @@ async def _collect_market_point(
         stats.skipped_existing += len(existing)
         pending_users = [addr for addr in users if addr not in existing]
     if not pending_users:
-        return
+        return [], []
 
     _, snapshot_rows, asset_rows, skipped_empty = await _collect_market_snapshot_rows(
         w3,
@@ -817,8 +817,6 @@ async def _collect_market_point(
     stats.skipped_empty += skipped_empty
 
     if dry_run:
-        stats.snapshots += len(snapshot_rows)
-        stats.assets += len(asset_rows)
         if snapshot_rows:
             logger.info(
                 "dry-run point summary market=%s ts=%s block=%s open_positions=%s skipped_empty=%s",
@@ -869,10 +867,37 @@ async def _collect_market_point(
                     ensure_ascii=False,
                 ),
             )
+        return snapshot_rows, asset_rows
+
+    return snapshot_rows, asset_rows
+
+
+async def _flush_backfill_write_batch(
+    pool: asyncpg.Pool,
+    *,
+    snapshot_rows: list[UserPositionSnapshotRow],
+    asset_rows: list[UserPositionAssetRow],
+    stats: BackfillStats,
+) -> None:
+    if not snapshot_rows and not asset_rows:
         return
 
-    stats.snapshots += await upsert_user_position_snapshots(pool, snapshot_rows)
-    stats.assets += await upsert_user_position_asset_rows(pool, asset_rows)
+    logger.info(
+        "Flushing Compound user position batch: snapshots=%s assets=%s",
+        len(snapshot_rows),
+        len(asset_rows),
+    )
+    inserted_snapshots = await upsert_user_position_snapshots(pool, snapshot_rows)
+    inserted_assets = await upsert_user_position_asset_rows(pool, asset_rows)
+    stats.snapshots += inserted_snapshots
+    stats.assets += inserted_assets
+    logger.info(
+        "Flushed Compound user position batch: inserted_snapshots=%s inserted_assets=%s total_snapshots=%s total_assets=%s",
+        inserted_snapshots,
+        inserted_assets,
+        stats.snapshots,
+        stats.assets,
+    )
 
 
 async def collect_market_user_snapshots(
@@ -982,6 +1007,10 @@ async def run_user_position_backfill(
 
     stats = BackfillStats()
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    pending_snapshot_rows: list[UserPositionSnapshotRow] = []
+    pending_asset_rows: list[UserPositionAssetRow] = []
+    write_snapshot_batch_size = max(1000, cfg.crawler.batch_size * 10)
+    write_asset_batch_size = max(5000, cfg.crawler.batch_size * 50)
     block_numbers = list(
         await asyncio.gather(
             *[
@@ -1000,13 +1029,19 @@ async def run_user_position_backfill(
         dry_run,
         skip_existing,
     )
+    if not dry_run:
+        logger.info(
+            "Compound user position write batching enabled: snapshot_batch_size=%s asset_batch_size=%s",
+            write_snapshot_batch_size,
+            write_asset_batch_size,
+        )
 
     for point, block_number in zip(points, block_numbers):
         for market in markets:
             users = market_users[market.lower()]
             if not users:
                 continue
-            await _collect_market_point(
+            snapshot_rows, asset_rows = await _collect_market_point(
                 w3,
                 pool,
                 cfg,
@@ -1019,6 +1054,33 @@ async def run_user_position_backfill(
                 stats=stats,
                 metadata_cache=metadata_cache,
             )
+            if dry_run:
+                stats.snapshots += len(snapshot_rows)
+                stats.assets += len(asset_rows)
+                continue
+
+            pending_snapshot_rows.extend(snapshot_rows)
+            pending_asset_rows.extend(asset_rows)
+            if (
+                len(pending_snapshot_rows) >= write_snapshot_batch_size
+                or len(pending_asset_rows) >= write_asset_batch_size
+            ):
+                await _flush_backfill_write_batch(
+                    pool,
+                    snapshot_rows=pending_snapshot_rows,
+                    asset_rows=pending_asset_rows,
+                    stats=stats,
+                )
+                pending_snapshot_rows = []
+                pending_asset_rows = []
+
+    if not dry_run:
+        await _flush_backfill_write_batch(
+            pool,
+            snapshot_rows=pending_snapshot_rows,
+            asset_rows=pending_asset_rows,
+            stats=stats,
+        )
 
     logger.info(
         "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s skipped_empty=%s dry_run=%s",

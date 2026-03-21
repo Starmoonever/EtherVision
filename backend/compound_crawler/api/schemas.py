@@ -143,3 +143,94 @@ class MarketStateResponse(BaseModel):
 
 class MarketStatePeriodResponse(BaseModel):
     points: list[MarketStateResponse]
+
+
+class GovernanceAssetResponse(BaseModel):
+    asset: str = Field(description="抵押资产地址。")
+    symbol: str | None = Field(description="抵押资产符号。")
+    price_feed: str | None = Field(description="该抵押资产的预言机地址。")
+    decimals: int | None = Field(description="该抵押资产的小数位数。")
+    borrow_collateral_factor: str = Field(description="借款时计入可借额度的抵押系数。")
+    liquidate_collateral_factor: str = Field(description="清算判定时使用的抵押系数。")
+    liquidation_factor: str = Field(description="被清算时的折价相关系数。")
+    supply_cap: str = Field(description="该抵押资产的供应上限，已按 decimals 缩放。")
+
+
+class MarketGovernanceResponse(BaseModel):
+    version: str = Field(description="Compound 协议版本；当前仅支持 v3。")
+    market: str = Field(description="市场合约地址。")
+    symbol: str | None = Field(description="市场名称，例如 USDC、WETH。")
+    effective_timestamp: str = Field(description="该治理配置版本首次生效的 UTC 时间。")
+    block_number: int = Field(description="该治理配置版本首次观测到的链上区块号。")
+    config_hash: str = Field(description="按治理参数归一化后计算出的配置哈希。")
+    source: str = Field(description="治理参数来源；当前为直接读取 Comet 合约。")
+    governor: str | None = Field(description="治理者地址。")
+    pause_guardian: str | None = Field(description="暂停 guardian 地址。")
+    base_token: str = Field(description="市场 base token 地址。")
+    base_symbol: str | None = Field(description="base token 符号。")
+    base_token_price_feed: str | None = Field(
+        description="base token 的价格预言机地址。"
+    )
+    extension_delegate: str | None = Field(
+        description="Comet extension delegate 地址。"
+    )
+    base_scale: str = Field(description="base token 的整数 scale，例如 1000000。")
+    base_decimals: int = Field(description="base token 的 decimals。")
+    supply_kink: str = Field(
+        description="供给利率曲线 kink 点，1e18 定点缩放后已转为十进制。"
+    )
+    borrow_kink: str = Field(
+        description="借款利率曲线 kink 点，1e18 定点缩放后已转为十进制。"
+    )
+    supply_per_second_interest_rate_slope_low: str = Field(
+        description="供给利率曲线低利用率段斜率，每秒值。"
+    )
+    supply_per_second_interest_rate_slope_high: str = Field(
+        description="供给利率曲线高利用率段斜率，每秒值。"
+    )
+    supply_per_second_interest_rate_base: str = Field(
+        description="供给利率曲线基础利率，每秒值。"
+    )
+    supply_per_year_interest_rate_slope_low: str = Field(
+        description="供给利率曲线低利用率段斜率，按每秒值年化后的结果。"
+    )
+    supply_per_year_interest_rate_slope_high: str = Field(
+        description="供给利率曲线高利用率段斜率，按每秒值年化后的结果。"
+    )
+    supply_per_year_interest_rate_base: str = Field(
+        description="供给利率曲线基础利率，按每秒值年化后的结果。"
+    )
+    borrow_per_second_interest_rate_slope_low: str = Field(
+        description="借款利率曲线低利用率段斜率，每秒值。"
+    )
+    borrow_per_second_interest_rate_slope_high: str = Field(
+        description="借款利率曲线高利用率段斜率，每秒值。"
+    )
+    borrow_per_second_interest_rate_base: str = Field(
+        description="借款利率曲线基础利率，每秒值。"
+    )
+    borrow_per_year_interest_rate_slope_low: str = Field(
+        description="借款利率曲线低利用率段斜率，按每秒值年化后的结果。"
+    )
+    borrow_per_year_interest_rate_slope_high: str = Field(
+        description="借款利率曲线高利用率段斜率，按每秒值年化后的结果。"
+    )
+    borrow_per_year_interest_rate_base: str = Field(
+        description="借款利率曲线基础利率，按每秒值年化后的结果。"
+    )
+    store_front_price_factor: str = Field(description="清算 store front price factor。")
+    tracking_index_scale: str = Field(description="奖励 tracking index scale。")
+    base_tracking_supply_speed: str = Field(description="供给侧奖励发放速度。")
+    base_tracking_borrow_speed: str = Field(description="借款侧奖励发放速度。")
+    base_min_for_rewards: str = Field(description="开始累计奖励所需的最小 base 余额。")
+    base_borrow_min: str = Field(description="最小借款额。")
+    target_reserves: str = Field(description="目标储备规模。")
+    assets: list[GovernanceAssetResponse] | None = Field(
+        description="该市场可接受的 collateral 配置列表；当 `detail=false` 时返回 null。"
+    )
+
+
+class MarketGovernancePeriodResponse(BaseModel):
+    points: list[MarketGovernanceResponse] = Field(
+        description="时间区间内发生治理参数变更的配置版本列表；只返回有变动的数据点。"
+    )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -14,6 +14,9 @@ from ..constants import COMPOUND_V3_MARKET_NAMES
 from ..db import market_table_name, reserve_table_name
 from ..user_position_snapshots import collect_market_user_snapshots
 from .schemas import (
+    GovernanceAssetResponse,
+    MarketGovernanceResponse,
+    MarketGovernancePeriodResponse,
     MarketStatePeriodResponse,
     MarketStateReserveResponse,
     MarketStateResponse,
@@ -24,6 +27,8 @@ from .schemas import (
 
 _SECONDS_PER_YEAR = Decimal("31536000")
 _USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
+_GOVERNANCE_TABLE = "compound_v3_market_config_versions"
+_GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
 
 
 def _bytea_to_address(value: bytes | bytearray | memoryview) -> str:
@@ -212,6 +217,145 @@ async def get_positions(
     )
 
 
+async def get_market_governance(
+    pool,
+    version: str,
+    market: str,
+    date: str | None = None,
+    detail: bool = False,
+) -> MarketGovernanceResponse:
+    if version != "v3":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
+
+    market_address = _market_to_address(market)
+    market_bytes = _address_to_bytes(market_address)
+    point_ts = _parse_hour_utc(date) if date is not None else None
+
+    async with pool.acquire() as conn:
+        if point_ts is None:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_GOVERNANCE_TABLE}
+                WHERE market = $1
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                market_bytes,
+            )
+        else:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_GOVERNANCE_TABLE}
+                WHERE market = $1
+                  AND effective_timestamp <= $2
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                market_bytes,
+                point_ts,
+            )
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="未找到该市场的治理参数")
+
+        asset_rows: list[Any] = []
+        if detail:
+            asset_rows = await conn.fetch(
+                f"""
+                SELECT *
+                FROM loan.{_GOVERNANCE_ASSET_TABLE}
+                WHERE market = $1
+                  AND config_hash = $2
+                ORDER BY symbol NULLS LAST, asset
+                """,
+                market_bytes,
+                row["config_hash"],
+            )
+
+    return _map_market_governance_row(row, asset_rows, detail=detail)
+
+
+async def get_market_governance_period(
+    pool,
+    version: str,
+    market: str,
+    start: str,
+    end: str,
+    latest_only_per_day: bool = False,
+    detail: bool = False,
+) -> MarketGovernancePeriodResponse:
+    if version != "v3":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
+
+    start_dt = _parse_hour_utc(start)
+    end_dt = _parse_hour_utc(end)
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start 必须小于等于 end")
+
+    market_address = _market_to_address(market)
+    market_bytes = _address_to_bytes(market_address)
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT *
+            FROM loan.{_GOVERNANCE_TABLE}
+            WHERE market = $1
+              AND effective_timestamp >= $2
+              AND effective_timestamp <= $3
+            ORDER BY effective_timestamp, block_number, config_hash
+            """,
+            market_bytes,
+            start_dt,
+            end_dt,
+        )
+        if not rows:
+            return MarketGovernancePeriodResponse(points=[])
+
+        selected_rows = list(rows)
+        if latest_only_per_day:
+            rows_by_day: dict[date, Any] = {}
+            for row in selected_rows:
+                ts = _row_get(row, "effective_timestamp")
+                day = ts.astimezone(timezone.utc).date()
+                rows_by_day[day] = row
+            selected_rows = [rows_by_day[day] for day in sorted(rows_by_day)]
+
+        asset_rows: list[Any] = []
+        if detail:
+            config_hashes = [str(row["config_hash"]) for row in selected_rows]
+            asset_rows = await conn.fetch(
+                f"""
+                SELECT *
+                FROM loan.{_GOVERNANCE_ASSET_TABLE}
+                WHERE market = $1
+                  AND config_hash = ANY($2::text[])
+                ORDER BY config_hash, symbol NULLS LAST, asset
+                """,
+                market_bytes,
+                config_hashes,
+            )
+
+    asset_rows_by_hash: dict[str, list[Any]] = {}
+    for asset_row in asset_rows:
+        asset_rows_by_hash.setdefault(str(asset_row["config_hash"]), []).append(
+            asset_row
+        )
+
+    return MarketGovernancePeriodResponse(
+        points=[
+            _map_market_governance_row(
+                row,
+                asset_rows_by_hash.get(str(row["config_hash"]), []),
+                detail=detail,
+            )
+            for row in selected_rows
+        ]
+    )
+
+
 async def get_sorted_positions(limit: int) -> list[PositionResponse]:
     _ = limit
     return []
@@ -339,6 +483,12 @@ def _load_assets_payload(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _bytea_to_optional_address(value: Any) -> str | None:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return _bytea_to_address(value)
+    return None
+
+
 def _map_position_asset(payload: dict[str, Any]) -> PositionAssetResponse:
     return PositionAssetResponse(
         asset=str(payload.get("asset", "")),
@@ -450,6 +600,99 @@ def _map_market_reserve_row(row: Any) -> MarketStateReserveResponse:
         price_usd=_fmt(row["price_usd"]),
         supply_usd=_fmt(row["supply_usd"]),
         borrow_usd=_fmt(row["borrow_usd"]),
+    )
+
+
+def _map_governance_asset_row(row: Any) -> GovernanceAssetResponse:
+    return GovernanceAssetResponse(
+        asset=_bytea_to_address(row["asset"]),
+        symbol=row["symbol"],
+        price_feed=_bytea_to_optional_address(row["price_feed"]),
+        decimals=row["decimals"],
+        borrow_collateral_factor=_fmt(row["borrow_collateral_factor"]),
+        liquidate_collateral_factor=_fmt(row["liquidate_collateral_factor"]),
+        liquidation_factor=_fmt(row["liquidation_factor"]),
+        supply_cap=_fmt(row["supply_cap"]),
+    )
+
+
+def _map_market_governance_row(
+    row: Any, asset_rows: list[Any], *, detail: bool
+) -> MarketGovernanceResponse:
+    raw_config = _row_get(row, "raw_config_jsonb", {})
+    raw_config_dict = raw_config if isinstance(raw_config, dict) else {}
+    return MarketGovernanceResponse(
+        version="v3",
+        market=_bytea_to_address(_require_bytes(_row_get(row, "market"), "market")),
+        symbol=_row_get(row, "symbol"),
+        effective_timestamp=_timestamp_to_utc_string(
+            _row_get(row, "effective_timestamp")
+        ),
+        block_number=_require_int(_row_get(row, "block_number"), "block_number"),
+        config_hash=str(_row_get(row, "config_hash")),
+        source=str(raw_config_dict.get("source", "unknown")),
+        governor=_bytea_to_optional_address(_row_get(row, "governor")),
+        pause_guardian=_bytea_to_optional_address(_row_get(row, "pause_guardian")),
+        base_token=_bytea_to_address(
+            _require_bytes(_row_get(row, "base_token"), "base_token")
+        ),
+        base_symbol=_row_get(row, "base_token_symbol"),
+        base_token_price_feed=_bytea_to_optional_address(
+            _row_get(row, "base_token_price_feed")
+        ),
+        extension_delegate=_bytea_to_optional_address(
+            _row_get(row, "extension_delegate")
+        ),
+        base_scale=_fmt(_row_get(row, "base_scale")),
+        base_decimals=int(_row_get(row, "base_decimals")),
+        supply_kink=_fmt(_row_get(row, "supply_kink")),
+        borrow_kink=_fmt(_row_get(row, "borrow_kink")),
+        supply_per_second_interest_rate_slope_low=_fmt(
+            raw_config_dict.get("supply_per_second_interest_rate_slope_low")
+        ),
+        supply_per_second_interest_rate_slope_high=_fmt(
+            raw_config_dict.get("supply_per_second_interest_rate_slope_high")
+        ),
+        supply_per_second_interest_rate_base=_fmt(
+            raw_config_dict.get("supply_per_second_interest_rate_base")
+        ),
+        supply_per_year_interest_rate_slope_low=_fmt(
+            _row_get(row, "supply_per_year_interest_rate_slope_low")
+        ),
+        supply_per_year_interest_rate_slope_high=_fmt(
+            _row_get(row, "supply_per_year_interest_rate_slope_high")
+        ),
+        supply_per_year_interest_rate_base=_fmt(
+            _row_get(row, "supply_per_year_interest_rate_base")
+        ),
+        borrow_per_second_interest_rate_slope_low=_fmt(
+            raw_config_dict.get("borrow_per_second_interest_rate_slope_low")
+        ),
+        borrow_per_second_interest_rate_slope_high=_fmt(
+            raw_config_dict.get("borrow_per_second_interest_rate_slope_high")
+        ),
+        borrow_per_second_interest_rate_base=_fmt(
+            raw_config_dict.get("borrow_per_second_interest_rate_base")
+        ),
+        borrow_per_year_interest_rate_slope_low=_fmt(
+            _row_get(row, "borrow_per_year_interest_rate_slope_low")
+        ),
+        borrow_per_year_interest_rate_slope_high=_fmt(
+            _row_get(row, "borrow_per_year_interest_rate_slope_high")
+        ),
+        borrow_per_year_interest_rate_base=_fmt(
+            _row_get(row, "borrow_per_year_interest_rate_base")
+        ),
+        store_front_price_factor=_fmt(_row_get(row, "store_front_price_factor")),
+        tracking_index_scale=_fmt(_row_get(row, "tracking_index_scale")),
+        base_tracking_supply_speed=_fmt(_row_get(row, "base_tracking_supply_speed")),
+        base_tracking_borrow_speed=_fmt(_row_get(row, "base_tracking_borrow_speed")),
+        base_min_for_rewards=_fmt(_row_get(row, "base_min_for_rewards")),
+        base_borrow_min=_fmt(_row_get(row, "base_borrow_min")),
+        target_reserves=_fmt(_row_get(row, "target_reserves")),
+        assets=[_map_governance_asset_row(item) for item in asset_rows]
+        if detail
+        else None,
     )
 
 
