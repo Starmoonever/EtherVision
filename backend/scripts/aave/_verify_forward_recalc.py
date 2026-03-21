@@ -27,6 +27,7 @@ from datetime import date
 from pathlib import Path
 
 import asyncpg
+from web3 import Web3
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -47,6 +48,64 @@ logger = logging.getLogger(__name__)
 
 RAY = 10**27
 
+# ── aToken 映射（DataProvider.getReserveTokensAddresses） ─────────────────────
+
+_DP_V3 = "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3"
+_DP_V2 = "0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d"
+
+_RESERVE_TOKENS_ABI = [
+    {
+        "inputs": [{"name": "asset", "type": "address"}],
+        "name": "getReserveTokensAddresses",
+        "outputs": [
+            {"name": "aTokenAddress", "type": "address"},
+            {"name": "stableDebtTokenAddress", "type": "address"},
+            {"name": "variableDebtTokenAddress", "type": "address"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+
+async def _build_token_to_atoken(
+    pool: asyncpg.Pool,
+    rpc_url: str,
+    protocol: str,
+) -> dict[str, str]:
+    """通过 DataProvider.getReserveTokensAddresses 构建 token_address → atoken_address 映射。
+
+    从 market_snapshots 取底层资产地址，逐一查合约，返回小写地址映射。
+    每次 run() 调用一次，结果复用于所有日期对。
+    """
+    base = protocol.split("_")[0].lower()
+    rows = await pool.fetch(
+        f"SELECT DISTINCT lower(token_address) AS addr "
+        f"FROM loan.aave_{base}_market_snapshots WHERE token_address IS NOT NULL"
+    )
+    underlying = [r["addr"] for r in rows]
+    if not underlying:
+        return {}
+
+    dp_addr = Web3.to_checksum_address(_DP_V3 if base == "v3" else _DP_V2)
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    contract = w3.eth.contract(address=dp_addr, abi=_RESERVE_TOKENS_ABI)
+
+    mapping: dict[str, str] = {}
+    for asset in underlying:
+        try:
+            result = contract.functions.getReserveTokensAddresses(
+                Web3.to_checksum_address(asset)
+            ).call()
+            mapping[asset] = result[0].lower()
+        except Exception as exc:
+            logger.debug("getReserveTokensAddresses(%s) 失败: %s", asset, exc)
+
+    logger.info(
+        "[%s] token→atoken 映射加载完成，共 %d 个", protocol.upper(), len(mapping)
+    )
+    return mapping
+
 
 # ── 核心验证逻辑 ───────────────────────────────────────────────────────────────
 
@@ -61,6 +120,8 @@ async def _fetch_event_users(
 
     注意：aave_history.created_at 是采集时间（非区块时间），不能用于日期过滤。
     必须使用 block_number 范围：昨日快照块（不含）到今日快照块（含）之间有操作的用户。
+
+    aToken ERC-20 Transfer 用户不在此排除——对他们应用转账净额修正后仍纳入验证。
     """
     version = protocol.lstrip("v")  # "v3" → "3", "v2" → "2"
     rows = await pool.fetch(
@@ -90,12 +151,64 @@ async def _fetch_event_users(
     return {r["addr"] for r in rows}
 
 
+async def _fetch_atoken_transfer_nets(
+    pool: asyncpg.Pool,
+    user_addrs: list[str],
+    yesterday_block: int,
+    today_block: int,
+    atoken_addrs: list[str],
+) -> dict[tuple[str, str], int]:
+    """查询 (yesterday_block, today_block] 区间内目标用户的 aToken 净转账量。
+
+    返回 dict[(user_address, atoken_address), net_raw]：
+      net_raw > 0：净转入；net_raw < 0：净转出；净额为 0 的对不出现。
+
+    atoken_addrs：限定要查询的 aToken 地址集合（从 token→atoken 映射取 values），
+    避免扫描无关 aToken。
+    """
+    if not user_addrs or not atoken_addrs:
+        return {}
+
+    rows = await pool.fetch(
+        """
+        SELECT user_addr, atoken_address, SUM(net_raw) AS net_raw
+        FROM (
+            SELECT lower(to_address)    AS user_addr,
+                   atoken_address,
+                   amount_raw::NUMERIC  AS net_raw
+            FROM loan.aave_atoken_transfers
+            WHERE lower(to_address) = ANY($1)
+              AND atoken_address    = ANY($2)
+              AND block_number > $3
+              AND block_number <= $4
+            UNION ALL
+            SELECT lower(from_address)   AS user_addr,
+                   atoken_address,
+                   -amount_raw::NUMERIC  AS net_raw
+            FROM loan.aave_atoken_transfers
+            WHERE lower(from_address) = ANY($1)
+              AND atoken_address       = ANY($2)
+              AND block_number > $3
+              AND block_number <= $4
+        ) t
+        GROUP BY user_addr, atoken_address
+        HAVING SUM(net_raw) != 0
+        """,
+        user_addrs,
+        atoken_addrs,
+        yesterday_block,
+        today_block,
+    )
+    return {(r["user_addr"], r["atoken_address"]): int(r["net_raw"]) for r in rows}
+
+
 async def verify_one_pair(
     pool: asyncpg.Pool,
     protocol: str,
     yesterday: date,
     today: date,
     sample_size: int,
+    token_to_atoken: dict[str, str],
 ) -> dict:
     """对一对日期验证 forward_recalc 精度。
 
@@ -148,8 +261,8 @@ async def verify_one_pair(
                 token_address=r["token_address"],
                 liquidity_index=int(r["liquidity_index_ray"]),
                 variable_borrow_index=int(r["variable_borrow_index_ray"]),
-                liquidity_rate=0,
-                variable_borrow_rate=0,
+                liquidity_rate=int(r["liquidity_rate_ray"] or 0),
+                variable_borrow_rate=int(r["variable_borrow_rate_ray"] or 0),
             )
             for r in nn_rows
         }
@@ -163,7 +276,8 @@ async def verify_one_pair(
         nn = await pool.fetch(
             f"""
             SELECT DISTINCT ON (token_address)
-                token_address, liquidity_index_ray, variable_borrow_index_ray
+                token_address, liquidity_index_ray, variable_borrow_index_ray,
+                liquidity_rate_ray, variable_borrow_rate_ray
             FROM loan."{ms_table}"
             WHERE liquidity_index_ray IS NOT NULL
               AND liquidity_index_ray > 0
@@ -187,6 +301,10 @@ async def verify_one_pair(
         )
         return {}
 
+    # 阈值常量（与 run() 中的判定保持一致）
+    supply_threshold = 1e-3  # 0.1%
+    var_threshold = 1e-3  # 0.1%
+
     # token 活跃性判断：当日 stored_index 相比昨日是否变化，且变化幅度在合理日涨幅范围内
     # 「停滞 token」误差 = accumulated(normalizedDebt - stored_idx)，属 Phase 1 已记录的结构性偏差，
     # 不纳入 forward_recalc 精度阈值检查。
@@ -197,6 +315,19 @@ async def verify_one_pair(
     # 与真实链上不变量不同；将其归入停滞类，避免误计入活跃阈值检查。
     _MAX_DAILY_RATE = 1.05  # 单日 index 合理涨幅上限（5%，真实日利率远低于此）
 
+    # 利率预期误差过滤：market_snapshots 与 daily_positions 快照时刻之间约有 4 小时偏差
+    # （V2: market_collector ~UTC 20:xx，daily_positions ~UTC 00:00）。
+    # 对于利率极高的冷门 V2 token（DPI/ENJ 等可达 300-1000% APR），
+    # 仅这 4 小时内积累的利息就可超过 0.1% 阈值——误差源是快照时间偏移而非算法问题。
+    # 策略：若 token 当前利率 × 4h 窗口 ≥ var_threshold，归为结构性偏差，不计入活跃检查。
+    _SNAPSHOT_OFFSET_SECONDS = 4 * 3600  # ~4h，对应 ~1000 个以太坊区块
+
+    def _offset_error(rate_ray: int, threshold: float) -> bool:
+        """当前利率在快照偏移窗口内预期产生的误差是否已超阈值（即结构性不可达）。"""
+        return (
+            rate_ray / RAY * _SNAPSHOT_OFFSET_SECONDS / _SECONDS_PER_YEAR >= threshold
+        )
+
     active_liq_tokens: set[str] = {
         addr
         for addr, idx in reserve_indices.items()
@@ -204,6 +335,7 @@ async def verify_one_pair(
         and yi.liquidity_index > 0
         and idx.liquidity_index != yi.liquidity_index
         and idx.liquidity_index / yi.liquidity_index < _MAX_DAILY_RATE
+        and not _offset_error(idx.liquidity_rate, supply_threshold)
     }
     active_var_tokens: set[str] = {
         addr
@@ -212,6 +344,7 @@ async def verify_one_pair(
         and yi.variable_borrow_index > 0
         and idx.variable_borrow_index != yi.variable_borrow_index
         and idx.variable_borrow_index / yi.variable_borrow_index < _MAX_DAILY_RATE
+        and not _offset_error(idx.variable_borrow_rate, var_threshold)
     }
 
     # 3. 查询 (yesterday_block, today_block] 区间内的事件用户，后续排除
@@ -263,16 +396,25 @@ async def verify_one_pair(
     # 5. 读取 today 的 RPC 实际值（同 user + token）
     user_addrs = list({r["user_address"] for r in yest_rows})
 
-    today_rows = await pool.fetch(
-        f"""
-        SELECT user_address, token_address,
-               supply_raw, variable_debt_raw, stable_debt_raw
-        FROM loan."{tables.reserve_positions}"
-        WHERE snapshot_date = $1
-          AND user_address = ANY($2)
-        """,
-        today,
-        user_addrs,
+    today_rows, transfer_nets = await asyncio.gather(
+        pool.fetch(
+            f"""
+            SELECT user_address, token_address,
+                   supply_raw, variable_debt_raw, stable_debt_raw
+            FROM loan."{tables.reserve_positions}"
+            WHERE snapshot_date = $1
+              AND user_address = ANY($2)
+            """,
+            today,
+            user_addrs,
+        ),
+        _fetch_atoken_transfer_nets(
+            pool,
+            user_addrs,
+            yesterday_block,
+            today_block,
+            list(token_to_atoken.values()),
+        ),
     )
     today_map: dict[tuple[str, str], dict] = {
         (r["user_address"], r["token_address"]): dict(r) for r in today_rows
@@ -280,6 +422,9 @@ async def verify_one_pair(
 
     # 6. 逐行计算 forward_recalc 值，与 today 实际值对比（排除事件用户）
     # 按 token 活跃性分类：活跃 token 纳入阈值检查；停滞 token 仅统计不检查（结构性偏差）
+    # supply 端额外应用 aToken Transfer 净额修正：
+    #   corrected_supply = recalc_supply + net_transfer_raw
+    # net_transfer_raw > 0 = 净转入，< 0 = 净转出；与 supply_raw 单位相同，可直接相加。
     active_supply_errors: list[float] = []
     stale_supply_errors: list[float] = []
     active_var_errors: list[float] = []
@@ -290,6 +435,7 @@ async def verify_one_pair(
     worst_stale_var: list[tuple[float, str]] = []
     excluded_event = 0
     excluded_no_today = 0
+    transfer_adjusted_n = 0  # supply 端应用了 aToken Transfer 修正的行数
     # aave_history 数据断层导致的漏网事件用户（误差 > 100%，仓位发生了根本性变化）
     history_gap_slips = 0
 
@@ -330,6 +476,15 @@ async def verify_one_pair(
             scaled_var * idx.variable_borrow_index // RAY if scaled_var > 0 else 0
         )
 
+        # aToken Transfer 净额修正（仅 supply 端）
+        # 通过 token_to_atoken 映射找到对应的 atoken_address，再查净额
+        # net_transfer > 0 = 净转入；< 0 = 净转出；与 supply_raw 单位相同
+        atoken_addr = token_to_atoken.get(token_addr)
+        net_transfer = (
+            transfer_nets.get((user_addr, atoken_addr), 0) if atoken_addr else 0
+        )
+        corrected_supply = max(0, recalc_supply + net_transfer)
+
         if principal_stable > 0:
             prev_ts = row["prev_block_ts"]
             seconds = (today_block_ts - prev_ts).total_seconds()
@@ -345,11 +500,12 @@ async def verify_one_pair(
         actual_supply = int(actual["supply_raw"])
         actual_var = int(actual["variable_debt_raw"])
 
-        # supply 误差
+        # supply 误差（用 Transfer 修正后的值）
         if scaled_supply > 0 and actual_supply > 10**12:
-            err = abs(recalc_supply - actual_supply) / actual_supply
+            err = abs(corrected_supply - actual_supply) / actual_supply
+            if net_transfer != 0:
+                transfer_adjusted_n += 1
             # 误差 > 100%：仓位发生根本性变化，aave_history 数据断层导致事件用户漏网
-            # 此类行不纳入误差统计，单独计数
             if err > 1.0:
                 history_gap_slips += 1
             elif token_addr in active_liq_tokens:
@@ -391,13 +547,14 @@ async def verify_one_pair(
         )
 
     logger.debug(
-        "  %s %s→%s：排除事件用户行 %d，无今日数据行 %d，history 漏网行 %d",
+        "  %s %s→%s：排除事件用户行 %d，无今日数据行 %d，history 漏网行 %d，transfer 修正行 %d",
         protocol.upper(),
         yesterday,
         today,
         excluded_event,
         excluded_no_today,
         history_gap_slips,
+        transfer_adjusted_n,
     )
 
     def _stats(errors: list[float]) -> dict:
@@ -416,6 +573,7 @@ async def verify_one_pair(
         "yest_sample_users": len(user_addrs),
         "excluded_event": excluded_event,
         "history_gap_slips": history_gap_slips,
+        "transfer_adjusted": transfer_adjusted_n,
         # 活跃 token：阈值检查对象
         "active_supply": _stats(active_supply_errors),
         "active_var": _stats(active_var_errors),
@@ -446,6 +604,11 @@ async def run(
         max_size=4,
     )
     try:
+        # 构建 token_address → atoken_address 映射（DataProvider，每次 run 调用一次）
+        token_to_atoken = await _build_token_to_atoken(pool, cfg.rpc_url, protocol)
+        if not token_to_atoken:
+            logger.warning("token→atoken 映射为空，aToken Transfer 修正将不生效")
+
         tables = get_daily_tables(protocol)
 
         # 构建日期过滤条件（start/end 优先；未指定时取最近 days+1 天）
@@ -500,7 +663,7 @@ async def run(
         )
         # 表头：活跃 token 列（纳入阈值检查）+ 停滞 token 列（结构性偏差，仅展示）
         logger.info(
-            "%-12s %-12s | [活跃] %-6s %-10s %-10s  %-6s %-10s %-10s | [停滞] var_max | excl | gap",
+            "%-12s %-12s | [活跃] %-6s %-10s %-10s  %-6s %-10s %-10s | [停滞] var_max | excl | xfer | gap",
             "yesterday",
             "today",
             "sup_n",
@@ -510,7 +673,7 @@ async def run(
             "var_avg",
             "var_max",
         )
-        logger.info("-" * 128)
+        logger.info("-" * 140)
 
         all_active_sup_max: list[float] = []
         all_active_var_max: list[float] = []
@@ -520,7 +683,9 @@ async def run(
         for i in range(len(all_dates) - 1):
             yesterday = all_dates[i]
             today = all_dates[i + 1]
-            result = await verify_one_pair(pool, protocol, yesterday, today, sample)
+            result = await verify_one_pair(
+                pool, protocol, yesterday, today, sample, token_to_atoken
+            )
             if not result:
                 continue
 
@@ -530,7 +695,7 @@ async def run(
             gap = result["history_gap_slips"]
             total_gap_slips += gap
             logger.info(
-                "%-12s %-12s | [活跃] %-6d %-10.3e %-10.3e  %-6d %-10.3e %-10.3e | %-10.3e | %-4d | %d",
+                "%-12s %-12s | [活跃] %-6d %-10.3e %-10.3e  %-6d %-10.3e %-10.3e | %-10.3e | %-4d | %-4d | %d",
                 result["yesterday"],
                 result["today"],
                 as_["n"],
@@ -541,6 +706,7 @@ async def run(
                 av["max"],
                 sv["max"],
                 result["excluded_event"],
+                result["transfer_adjusted"],
                 gap,
             )
             if as_["max"] > 0:
@@ -550,7 +716,7 @@ async def run(
             if sv["max"] > 0:
                 all_stale_var_max.append(sv["max"])
 
-        logger.info("-" * 128)
+        logger.info("-" * 140)
         if all_active_sup_max:
             logger.info(
                 "[活跃] supply   全期最大: %.3e  平均最大: %.3e",
@@ -574,13 +740,10 @@ async def run(
                 total_gap_slips,
             )
 
-        # 阈值检查仅针对「活跃 token」：
-        # supply：理论误差机器精度级，0.1% 为宽松上限
-        # var_debt：单日利息 ≈ 0.005~0.1%，0.1% 为宽松上限（active token 当日有 updateState）
+        # 阈值常量（与 verify_one_pair 内部一致）
         supply_threshold = 1e-3  # 0.1%
-        var_threshold = (
-            1e-3  # 0.1%（活跃 token，当日 stored_index 已更新至接近 normalizedDebt）
-        )
+        var_threshold = 1e-3  # 0.1%
+        # 注：阈值常量在 verify_one_pair 内同步定义，用于活跃 token 过滤（利率预期误差检查）
         supply_pass = (
             not all_active_sup_max or max(all_active_sup_max) < supply_threshold
         )

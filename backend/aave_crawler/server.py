@@ -2,8 +2,8 @@
 FastAPI 应用工厂 & 启动入口。
 
 启动方式：
-  uv run aave-api                          # 使用 config.yaml，默认 0.0.0.0:8000
-  uv run aave-api --host 127.0.0.1 --port 8080
+    uv run api                               # 使用 config.yaml，默认 0.0.0.0:8000
+    uv run api --host 127.0.0.1 --port 8080
   uv run uvicorn aave_crawler.server:app   # 直接使用 uvicorn（不支持 CLI 参数）
 """
 
@@ -17,7 +17,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import router
+from .api.routes import common_router as aave_common_router
+from .api.routes import router as aave_router
 from .api.service import _cache
 from .config import load_config
 from .database import close_engine, init_engine
@@ -32,6 +33,7 @@ from .db import (
     ensure_tables,
 )
 from .rpc import build_web3
+from compound_crawler.api.routes import router as compound_router
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +67,8 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     application = FastAPI(
-        title="Aave V3 ETH 仓位查询 API",
-        description="实时查询以太主网 Aave V3 用户仓位及 ETH liq_price",
+        title="Aave + Compound API",
+        description="统一提供 Aave 与 Compound 的查询接口",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -79,10 +81,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    application.include_router(router)
+    application.include_router(aave_router)
+    application.include_router(aave_common_router)
+    application.include_router(compound_router)
 
-    @application.get("/health", tags=["系统"])
+    @application.get("/aave/health", tags=["系统"])
     async def health() -> dict:
+        return {"status": "ok"}
+
+    @application.get("/compound/health", tags=["系统"])
+    async def compound_health() -> dict:
         return {"status": "ok"}
 
     return application
@@ -93,10 +101,10 @@ app = create_app()
 
 
 def main() -> None:
-    """CLI 入口（aave-api 命令）"""
+    """CLI 入口（统一 API：Aave + Compound）"""
     import click
 
-    @click.command("aave-api")
+    @click.command("api")
     @click.option("--host", default="0.0.0.0", show_default=True, help="监听地址")
     @click.option("--port", default=8000, show_default=True, type=int, help="端口")
     @click.option("--reload", is_flag=True, default=False, help="开发模式热重载")
@@ -143,7 +151,7 @@ def main() -> None:
         reload_includes: tuple[str, ...],
         reload_excludes: tuple[str, ...],
     ) -> None:
-        """启动 Aave 仓位查询 API 服务"""
+        """启动统一 API 服务（Aave + Compound）"""
         # --log-level 未显式传入时，读 config.yaml log_level，最终默认 info
         if log_level is None:
             try:

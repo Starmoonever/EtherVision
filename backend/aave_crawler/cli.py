@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
 import click
+from crawler_shared.logging import setup_cli_logging
 
 from .config import load_config
 from .crawler import run_crawler
@@ -16,16 +16,7 @@ from .watcher import run_watcher
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    # 压制 web3 / httpx 的 DEBUG 噪音
-    logging.getLogger("web3").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    setup_cli_logging(verbose, quiet_loggers=("web3", "httpx", "asyncio"))
 
 
 @click.group()

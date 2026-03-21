@@ -264,7 +264,7 @@ nohup uv run aave-crawler watch -p v3        > nohup_v3.log 2>&1 &
 nohup uv run aave-crawler watch -p v3_borrow > nohup_v3_borrow.log 2>&1 &
 
 # 4. 启动 API
-uv run aave-api
+uv run api
 ```
 
 ---
@@ -275,16 +275,16 @@ uv run aave-api
 
 ```bash
 # 默认监听 0.0.0.0:8000
-uv run aave-api
+uv run api
 
 # 开发热重载
-uv run aave-api --reload
+uv run api --reload
 
 # 自定义端口
-uv run aave-api --port 8080
+uv run api --port 8080
 
 # 生产多进程
-uv run aave-api --workers 4
+uv run api --workers 4
 ```
 
 启动后访问 `http://localhost:8000/docs` 查看交互式 Swagger 文档。
@@ -295,36 +295,36 @@ uv run aave-api --workers 4
 
 #### 抵押端（ETH 下跌风险 / `collateral`）
 
-| 方法 | 路径                    | 说明                                                                |
-| ---- | ----------------------- | ------------------------------------------------------------------- |
-| GET  | `/api/position`         | 查询单用户实时或历史仓位                                            |
-| GET  | `/api/liq_price`        | 计算单用户 ETH 下跌清算触发价                                       |
-| GET  | `/api/positions`        | 批量仓位排行（实时快照或历史重建）；仅含 `liq_price > 0` 的有效仓位 |
-| GET  | `/api/position/replay`  | 以 transaction 为数据点回放指定地址历史仓位（支持缓存）             |
-| GET  | `/api/txs`              | 查询指定地址在时间范围内的 Aave 历史交易列表                        |
-| GET  | `/api/price`            | 查询资产价格（实时链上或 DeFiLlama 历史）                           |
-| GET  | `/api/price/period`     | 查询资产在时间段内按分钟间隔的历史价格序列                          |
-| GET  | `/api/liquidate`        | 模拟 ETH 价格下跌时的全网清算情况                                   |
-| GET  | `/api/liquidate/period` | 模拟 ETH 价格在区间内波动时清算量的变化趋势                         |
+| 方法 | 路径                         | 说明                                                                |
+| ---- | ---------------------------- | ------------------------------------------------------------------- |
+| GET  | `/api/aave/position`         | 查询单用户实时或历史仓位                                            |
+| GET  | `/api/aave/liq_price`        | 计算单用户 ETH 下跌清算触发价                                       |
+| GET  | `/api/aave/positions`        | 批量仓位排行（实时快照或历史重建）；仅含 `liq_price > 0` 的有效仓位 |
+| GET  | `/api/aave/position/replay`  | 以 transaction 为数据点回放指定地址历史仓位（支持缓存）             |
+| GET  | `/api/aave/txs`              | 查询指定地址在时间范围内的 Aave 历史交易列表                        |
+| GET  | `/api/price`                 | 查询资产价格（实时链上或 DeFiLlama 历史）                           |
+| GET  | `/api/price/period`          | 查询资产在时间段内按分钟间隔的历史价格序列                          |
+| GET  | `/api/aave/liquidate`        | 模拟 ETH 价格下跌时的全网清算情况                                   |
+| GET  | `/api/aave/liquidate/period` | 模拟 ETH 价格在区间内波动时清算量的变化趋势                         |
 
 #### 借贷端（ETH 上涨风险 / `borrow`）
 
-| 方法 | 路径                           | 说明                                                           |
-| ---- | ------------------------------ | -------------------------------------------------------------- |
-| GET  | `/api/borrow/positions`        | 查询借入 WETH 的仓位排行；仅含 `liq_price_rise > 0` 的有效仓位 |
-| GET  | `/api/borrow/position`         | 查询单地址借贷端仓位详情                                       |
-| GET  | `/api/borrow/liquidate`        | 模拟 ETH 价格上涨时的做空清算情况                              |
-| GET  | `/api/borrow/liquidate/period` | 模拟 ETH 价格在区间内上涨时空头清算量的变化趋势                |
+| 方法 | 路径                                | 说明                                                           |
+| ---- | ----------------------------------- | -------------------------------------------------------------- |
+| GET  | `/api/aave/borrow/positions`        | 查询借入 WETH 的仓位排行；仅含 `liq_price_rise > 0` 的有效仓位 |
+| GET  | `/api/aave/borrow/position`         | 查询单地址借贷端仓位详情                                       |
+| GET  | `/api/aave/borrow/liquidate`        | 模拟 ETH 价格上涨时的做空清算情况                              |
+| GET  | `/api/aave/borrow/liquidate/period` | 模拟 ETH 价格在区间内上涨时空头清算量的变化趋势                |
 
 #### 通用
 
-| 方法 | 路径      | 说明         |
-| ---- | --------- | ------------ |
-| GET  | `/health` | 服务健康检查 |
+| 方法 | 路径           | 说明         |
+| ---- | -------------- | ------------ |
+| GET  | `/aave/health` | 服务健康检查 |
 
 ---
 
-### `GET /api/position`
+### `GET /api/aave/position`
 
 查询指定用户的 Aave 完整仓位。
 
@@ -337,7 +337,7 @@ uv run aave-api --workers 4
 **省略 `date`（实时）**，返回 `PositionResponse`：
 
 ```bash
-curl "http://localhost:8000/api/position?address=0xYourAddress"
+curl "http://localhost:8000/api/aave/position?address=0xYourAddress"
 ```
 
 ```json
@@ -356,7 +356,7 @@ curl "http://localhost:8000/api/position?address=0xYourAddress"
 **指定 `date`（历史重建）**，返回 `HistoricalPositionResponse`：
 
 ```bash
-curl "http://localhost:8000/api/position?address=0xYourAddress&date=2024-11-14"
+curl "http://localhost:8000/api/aave/position?address=0xYourAddress&date=2024-11-14"
 ```
 
 ```json
@@ -384,7 +384,7 @@ curl "http://localhost:8000/api/position?address=0xYourAddress&date=2024-11-14"
 
 ---
 
-### `GET /api/liq_price`
+### `GET /api/aave/liq_price`
 
 计算当 ETH 价格跌至多少时，该用户的健康系数将触碰 1.0。
 
@@ -394,7 +394,7 @@ curl "http://localhost:8000/api/position?address=0xYourAddress&date=2024-11-14"
 | `version` | string | ❌   | `v2` 或 `v3`（默认） |
 
 ```bash
-curl "http://localhost:8000/api/liq_price?address=0xYourAddress"
+curl "http://localhost:8000/api/aave/liq_price?address=0xYourAddress"
 ```
 
 ```json
@@ -412,7 +412,7 @@ curl "http://localhost:8000/api/liq_price?address=0xYourAddress"
 
 ---
 
-### `GET /api/positions`
+### `GET /api/aave/positions`
 
 批量查询抵押端仓位排行。**仅返回 `liq_price > 0` 的有效仓位**（有债务且有 ETH 系抵押品）。
 
@@ -426,12 +426,12 @@ curl "http://localhost:8000/api/liq_price?address=0xYourAddress"
 
 ```bash
 # 清算价最高的 20 个账户（最危险）
-curl "http://localhost:8000/api/positions?orderby=liq_price&order=desc&limit=20"
+curl "http://localhost:8000/api/aave/positions?orderby=liq_price&order=desc&limit=20"
 ```
 
 ---
 
-### `GET /api/position/replay`
+### `GET /api/aave/position/replay`
 
 以 transaction 为数据点，回放指定地址在时间范围内**每笔 Aave 操作时刻的链上真实仓位**。
 
@@ -449,7 +449,7 @@ curl "http://localhost:8000/api/positions?orderby=liq_price&order=desc&limit=20"
 | `detail`    | bool   | ❌   | `false` | `true` 时每个数据点附带 `reserves` 资产明细数组                |
 
 ```bash
-curl "http://localhost:8000/api/position/replay?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3&detail=true"
+curl "http://localhost:8000/api/aave/position/replay?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3&detail=true"
 ```
 
 ```json
@@ -498,9 +498,9 @@ curl "http://localhost:8000/api/position/replay?address=0xYourAddress&start=2024
 
 ---
 
-### `GET /api/txs`
+### `GET /api/aave/txs`
 
-列出指定地址在时间范围内所有触发 Aave 仓位变化的历史交易。数据来源：`aave.aave_history` 表。每条记录附带 `cached` 字段，标注该 tx 的仓位快照是否已在 `/api/position/replay` 的缓存中。
+列出指定地址在时间范围内所有触发 Aave 仓位变化的历史交易。数据来源：`aave.aave_history` 表。每条记录附带 `cached` 字段，标注该 tx 的仓位快照是否已在 `/api/aave/position/replay` 的缓存中。
 
 | 参数      | 类型   | 必填 | 默认 | 说明            |
 | --------- | ------ | ---- | ---- | --------------- |
@@ -510,7 +510,7 @@ curl "http://localhost:8000/api/position/replay?address=0xYourAddress&start=2024
 | `version` | string | ❌   | `v3` | `v2` 或 `v3`    |
 
 ```bash
-curl "http://localhost:8000/api/txs?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3"
+curl "http://localhost:8000/api/aave/txs?address=0xYourAddress&start=2024-11-01&end=2025-01-01&version=v3"
 ```
 
 ```json
@@ -545,7 +545,7 @@ curl "http://localhost:8000/api/txs?address=0xYourAddress&start=2024-11-01&end=2
 
 ---
 
-### `GET /api/liquidate`
+### `GET /api/aave/liquidate`
 
 模拟当 ETH 价格跌至指定值时，有哪些账户将被触发清算，以及可供清算人获取的抵押品总额。
 
@@ -560,7 +560,7 @@ curl "http://localhost:8000/api/txs?address=0xYourAddress&start=2024-11-01&end=2
 | `version`   | string                                                                             | `v3`        | `v2` 或 `v3`                                       |
 
 ```bash
-curl "http://localhost:8000/api/liquidate?eth_price=2000&orderby=eth_collateral_usd&order=desc&limit=10"
+curl "http://localhost:8000/api/aave/liquidate?eth_price=2000&orderby=eth_collateral_usd&order=desc&limit=10"
 ```
 
 ```json
@@ -589,7 +589,7 @@ $$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \t
 
 ---
 
-### `GET /api/liquidate/period`
+### `GET /api/aave/liquidate/period`
 
 分析 ETH 价格在指定区间内以固定步长变化时，各价格点对应的清算量汇总。一次数据库查询，内存过滤，效率较高。
 
@@ -602,7 +602,7 @@ $$\text{total\_liquidation\_usd} = \sum \min\!\left(\text{debt} \times 1.05,\ \t
 | `version`   | string    | `v3`     | `v2` 或 `v3`                        |
 
 ```bash
-curl "http://localhost:8000/api/liquidate/period?start=500&end=2000&interval=100" | jq .
+curl "http://localhost:8000/api/aave/liquidate/period?start=500&end=2000&interval=100" | jq .
 ```
 
 返回按价格升序排列，可直接用于绘制清算量随价格变化的折线图。
@@ -640,7 +640,7 @@ curl "http://localhost:8000/api/price/period?asset=eth&start=2025-02-01&end=2025
 
 ---
 
-### `GET /api/borrow/positions`
+### `GET /api/aave/borrow/positions`
 
 查询借入 WETH 的仓位排行。**仅返回 `liq_price_rise > 0` 的有效仓位**（面临 ETH 上涨清算风险）。
 
@@ -652,12 +652,12 @@ curl "http://localhost:8000/api/price/period?asset=eth&start=2025-02-01&end=2025
 | `version` | string                                                                     | `v3`             | `v2` 或 `v3` |
 
 ```bash
-curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=asc&limit=20"
+curl "http://localhost:8000/api/aave/borrow/positions?orderby=liq_price_rise&order=asc&limit=20"
 ```
 
 ---
 
-### `GET /api/borrow/position`
+### `GET /api/aave/borrow/position`
 
 从数据库快照中读取单地址借贷端仓位（借入 WETH 场景），含汇总信息及每个资产的 reserve 明细。
 
@@ -670,7 +670,7 @@ curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=as
 
 ---
 
-### `GET /api/borrow/liquidate`
+### `GET /api/aave/borrow/liquidate`
 
 模拟当 ETH 价格涨至指定值时，有哪些借入 WETH 的账户会被清算。
 
@@ -688,7 +688,7 @@ curl "http://localhost:8000/api/borrow/positions?orderby=liq_price_rise&order=as
 
 ---
 
-### `GET /api/borrow/liquidate/period`
+### `GET /api/aave/borrow/liquidate/period`
 
 分析 ETH 价格在指定区间内上涨时，空头仓位清算量的变化趋势。
 
@@ -789,7 +789,7 @@ backend/
 │   └── test_routes.py       # 路由单元测试（全 mock，无需真实 DB/RPC）
 └── aave_crawler/
     ├── cli.py               # Click CLI 入口（aave-crawler 命令）
-    ├── server.py            # FastAPI app 工厂 + uvicorn 入口（aave-api 命令）
+    ├── server.py            # FastAPI app 工厂 + uvicorn 入口（api 命令）
     ├── config.py            # 配置加载
     ├── models.py            # 数据模型（dataclass）
     ├── rpc.py               # 合约调用（web3.py AsyncWeb3）

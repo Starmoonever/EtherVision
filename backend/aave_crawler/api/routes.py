@@ -12,6 +12,7 @@ from .schemas import (
     HistoricalPositionResponse,
     LiquidationPeriodItem,
     LiquidationSimResponse,
+    LiquidationWaterfallResponse,
     MarketReplayResponse,
     PositionPeriodItem,
     PositionReplayResponse,
@@ -37,11 +38,13 @@ from .service import (
     get_user_tx_history,
     simulate_liquidation,
     simulate_liquidation_period,
+    simulate_liquidation_waterfall,
     simulate_short_liquidation,
     simulate_short_liquidation_period,
 )
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api/aave")
+common_router = APIRouter(prefix="/api")
 
 
 def _w3(request: Request):
@@ -157,7 +160,7 @@ async def positions(
     return await get_positions_history(pool, ts, limit=min(limit, 100))
 
 
-@router.get(
+@common_router.get(
     "/price",
     response_model=PriceResponse,
     summary="查询资产价格（当前或历史）",
@@ -178,7 +181,7 @@ async def asset_price(
     ),
 ) -> PriceResponse:
     if time == "now":
-        return await get_eth_price(_w3(request), asset)
+        return await get_eth_price(_w3(request), asset, pool=pool)
     ts = _parse_utc_time(time)
     return await get_eth_price(_w3(request), asset, timestamp=ts, pool=pool)
 
@@ -264,6 +267,64 @@ async def liquidate_simulation(
 
 
 @router.get(
+    "/liquidate/waterfall",
+    response_model=LiquidationWaterfallResponse,
+    summary="模拟某日仓位的清算瀑布（含级联）",
+    description=(
+        "基于日级仓位快照，先施加初始 ETH 下跌冲击，再按卖压迭代价格冲击，"
+        "循环模拟多轮清算直到收敛。\n\n"
+        "参数说明：\n"
+        "- `version`：当前仅支持 v3\n"
+        "- `initial_price_shock_eth`：初始下跌比例（0.05=下跌 5%）\n"
+        "- `date`：UTC 日期（YYYY-MM-DD），为空则使用今日\n"
+        "- `impact_k`：级联冲击参数，price_impact = k * (sell_volume / daily_volume)\n"
+        "- `sell_partition_eth`：清算获得 ETH 的卖出比例"
+    ),
+)
+async def liquidate_waterfall(
+    pool: AsyncpgPool,
+    version: Literal["v3"] = Query("v3", description="Aave 协议版本（当前仅支持 v3）"),
+    initial_price_shock_eth: float = Query(
+        ...,
+        ge=0,
+        lt=1,
+        description="初始 ETH 下跌冲击比例，取值 [0,1)，如 0.05 表示下跌 5%",
+    ),
+    date: str | None = Query(
+        None,
+        description="快照日期（UTC），格式 YYYY-MM-DD；省略时使用今日",
+    ),
+    impact_k: float = Query(
+        0.0,
+        ge=0,
+        description="价格冲击函数参数 k（第一阶段仅记录，不参与迭代）",
+    ),
+    sell_partition_eth: float = Query(
+        1.0,
+        ge=0,
+        le=1,
+        description="清算人获得 ETH 抵押品后立即卖出的比例，取值 [0,1]",
+    ),
+) -> LiquidationWaterfallResponse:
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    snapshot_date = None
+    if date is not None:
+        ts = _parse_utc_time(date)
+        snapshot_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+
+    return await simulate_liquidation_waterfall(
+        pool=pool,
+        protocol=version,
+        snapshot_date=snapshot_date,
+        initial_price_shock_eth=Decimal(str(initial_price_shock_eth)),
+        impact_k=Decimal(str(impact_k)),
+        sell_partition_eth=Decimal(str(sell_partition_eth)),
+    )
+
+
+@common_router.get(
     "/price/period",
     response_model=PricePeriodResponse,
     summary="查询资产历史价格序列",

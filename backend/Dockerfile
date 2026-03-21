@@ -13,4 +13,4 @@ EXPOSE 8000
 
 # Mount config.yaml at runtime:
 #   docker run -v ./config.yaml:/app/config.yaml ...
-CMD ["uv", "run", "aave-api", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "api", "--host", "0.0.0.0", "--port", "8000"]
