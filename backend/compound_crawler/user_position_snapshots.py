@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import csv
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -13,8 +14,10 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
+from eth_abi.abi import decode as _abi_decode
 from web3 import AsyncWeb3
 
+from aave_crawler.rpc import MULTICALL3_ABI, MULTICALL3_ADDRESS, MULTICALL3_DEPLOY_BLOCK
 from .config import AppConfig
 from .constants import COMET_ABI, COMPOUND_V3_MARKET_NAMES
 from .crawler import (
@@ -43,6 +46,8 @@ MIN_INTERVAL_DAYS = 1
 INF_HEALTH_FACTOR = Decimal("1e18")
 ZERO = Decimal("0")
 ONE = Decimal("1")
+_UINT256_OUTPUT = ["uint256"]
+_USER_COLLATERAL_OUTPUT = ["uint128", "uint128"]
 ETH_CORRELATED_SYMBOLS = frozenset(
     {
         "ETH",
@@ -91,10 +96,34 @@ class BackfillStats:
     snapshots: int = 0
     assets: int = 0
     skipped_existing: int = 0
+    skipped_empty: int = 0
+
+
+@dataclass
+class CollectedMarketSnapshots:
+    timestamp: datetime
+    block_number: int
+    market: str
+    symbol: str
+    snapshots: list[UserPositionSnapshotRow]
 
 
 def _normalize_market_name(name: str) -> str:
     return name.strip().lower()
+
+
+def _resolve_market_address(market: str) -> str:
+    normalized = market.strip().lower()
+    if normalized.startswith("0x") and len(normalized) == 42:
+        for address in COMPOUND_V3_MARKET_NAMES:
+            if address.lower() == normalized:
+                return address.lower()
+        raise ValueError(f"unknown market: {market}")
+
+    for address, name in COMPOUND_V3_MARKET_NAMES.items():
+        if name.lower() == normalized:
+            return address
+    raise ValueError(f"unknown market: {market}")
 
 
 def available_csv_markets(base_dir: Path) -> list[str]:
@@ -140,6 +169,64 @@ def iter_snapshot_points(
         points.append(cursor)
         cursor += delta
     return points
+
+
+def _chunked[T](items: list[T], size: int) -> list[list[T]]:
+    if size <= 0:
+        raise ValueError("chunk size must be > 0")
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+async def _multicall_contract_reads(
+    w3: AsyncWeb3,
+    block_number: int,
+    calls: list[tuple[str, str, list[Any], list[str]]],
+) -> list[Any | BaseException]:
+    if not calls:
+        return []
+
+    if block_number < MULTICALL3_DEPLOY_BLOCK:
+        coroutines = [
+            w3.eth.contract(
+                address=AsyncWeb3.to_checksum_address(target), abi=COMET_ABI
+            )
+            .get_function_by_name(method)(*args)
+            .call(block_identifier=block_number)
+            for target, method, args, _ in calls
+        ]
+        return list(await asyncio.gather(*coroutines, return_exceptions=True))
+
+    mc_contract = w3.eth.contract(address=MULTICALL3_ADDRESS, abi=MULTICALL3_ABI)
+    encoded_calls = []
+    for target, method, args, _ in calls:
+        contract = w3.eth.contract(
+            address=AsyncWeb3.to_checksum_address(target),
+            abi=COMET_ABI,
+        )
+        encoded_calls.append(
+            (
+                AsyncWeb3.to_checksum_address(target),
+                True,
+                contract.encode_abi(method, args=args),
+            )
+        )
+
+    raw_results: list[tuple[bool, bytes]] = await mc_contract.functions.aggregate3(
+        encoded_calls
+    ).call(block_identifier=block_number)
+
+    decoded_results: list[Any | BaseException] = []
+    for (_, _, _, output_types), (success, return_data) in zip(calls, raw_results):
+        if not success or not return_data:
+            decoded_results.append(
+                Exception("Multicall3: call failed or empty return data")
+            )
+            continue
+        try:
+            decoded_results.append(_abi_decode(output_types, return_data))
+        except Exception as exc:
+            decoded_results.append(exc)
+    return decoded_results
 
 
 def _beta_to_eth(symbol: str | None) -> Decimal:
@@ -295,24 +382,15 @@ async def _load_market_context(
     )
 
 
-async def _collect_user_snapshot(
+def _build_user_snapshot(
     market_ctx: MarketContext,
     user_address: bytes,
     point_ts: datetime,
     block_number: int,
+    base_supply_raw: int,
+    base_borrow_raw: int,
+    collateral_balance_raws: dict[str, int],
 ) -> tuple[UserPositionSnapshotRow, list[UserPositionAssetRow]]:
-    user_hex = "0x" + user_address.hex()
-    user_checksum = AsyncWeb3.to_checksum_address(user_hex)
-
-    base_supply_raw, base_borrow_raw = await asyncio.gather(
-        market_ctx.comet.functions.balanceOf(user_checksum).call(
-            block_identifier=block_number
-        ),
-        market_ctx.comet.functions.borrowBalanceOf(user_checksum).call(
-            block_identifier=block_number
-        ),
-    )
-
     base_supply = Decimal(int(base_supply_raw)) / (
         Decimal(10) ** market_ctx.base_decimals
     )
@@ -418,31 +496,8 @@ async def _collect_user_snapshot(
             )
         )
 
-    user_collateral_calls = [
-        market_ctx.comet.functions.userCollateral(
-            user_checksum,
-            AsyncWeb3.to_checksum_address(asset.address),
-        ).call(block_identifier=block_number)
-        for asset in market_ctx.assets
-    ]
-    collateral_results = await asyncio.gather(
-        *user_collateral_calls, return_exceptions=True
-    )
-
-    for asset, result in zip(market_ctx.assets, collateral_results):
-        if isinstance(result, BaseException):
-            logger.warning(
-                "Failed to fetch user collateral user=%s market=%s asset=%s block=%s: %s",
-                user_hex,
-                market_ctx.market_address,
-                asset.address,
-                block_number,
-                result,
-            )
-            continue
-
-        collateral_tuple = tuple(result)
-        balance_raw = int(collateral_tuple[0])
+    for asset in market_ctx.assets:
+        balance_raw = collateral_balance_raws.get(asset.address.lower(), 0)
         if balance_raw <= 0:
             continue
 
@@ -565,33 +620,178 @@ async def _collect_user_snapshot(
     return snapshot_row, asset_rows
 
 
+async def _collect_user_snapshots_batch(
+    w3: AsyncWeb3,
+    market_ctx: MarketContext,
+    user_addresses: list[bytes],
+    point_ts: datetime,
+    block_number: int,
+) -> list[tuple[UserPositionSnapshotRow, list[UserPositionAssetRow]]]:
+    if not user_addresses:
+        return []
+
+    comet_address = market_ctx.market_address
+    user_checksums = {
+        user_address: AsyncWeb3.to_checksum_address("0x" + user_address.hex())
+        for user_address in user_addresses
+    }
+
+    base_calls: list[tuple[str, str, list[Any], list[str]]] = []
+    for user_address in user_addresses:
+        checksum = user_checksums[user_address]
+        base_calls.append((comet_address, "balanceOf", [checksum], _UINT256_OUTPUT))
+        base_calls.append(
+            (comet_address, "borrowBalanceOf", [checksum], _UINT256_OUTPUT)
+        )
+    base_results = await _multicall_contract_reads(w3, block_number, base_calls)
+
+    base_map: dict[bytes, tuple[int, int]] = {}
+    for idx, user_address in enumerate(user_addresses):
+        supply_result = base_results[2 * idx]
+        borrow_result = base_results[2 * idx + 1]
+
+        base_supply_raw = 0
+        base_borrow_raw = 0
+        if isinstance(supply_result, BaseException):
+            logger.warning(
+                "Failed to fetch base supply market=%s user=%s block=%s: %s",
+                comet_address,
+                "0x" + user_address.hex(),
+                block_number,
+                supply_result,
+            )
+        else:
+            base_supply_raw = int(tuple(supply_result)[0])
+
+        if isinstance(borrow_result, BaseException):
+            logger.warning(
+                "Failed to fetch base borrow market=%s user=%s block=%s: %s",
+                comet_address,
+                "0x" + user_address.hex(),
+                block_number,
+                borrow_result,
+            )
+        else:
+            base_borrow_raw = int(tuple(borrow_result)[0])
+
+        base_map[user_address] = (base_supply_raw, base_borrow_raw)
+
+    collateral_calls: list[tuple[str, str, list[Any], list[str]]] = []
+    call_keys: list[tuple[bytes, str]] = []
+    for user_address in user_addresses:
+        checksum = user_checksums[user_address]
+        for asset in market_ctx.assets:
+            collateral_calls.append(
+                (
+                    comet_address,
+                    "userCollateral",
+                    [checksum, AsyncWeb3.to_checksum_address(asset.address)],
+                    _USER_COLLATERAL_OUTPUT,
+                )
+            )
+            call_keys.append((user_address, asset.address.lower()))
+
+    collateral_results = await _multicall_contract_reads(
+        w3, block_number, collateral_calls
+    )
+    collateral_map: dict[bytes, dict[str, int]] = {
+        user_address: {} for user_address in user_addresses
+    }
+
+    for (user_address, asset_address), result in zip(call_keys, collateral_results):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "Failed to fetch collateral market=%s user=%s asset=%s block=%s: %s",
+                comet_address,
+                "0x" + user_address.hex(),
+                asset_address,
+                block_number,
+                result,
+            )
+            continue
+        collateral_tuple = tuple(result)
+        collateral_map[user_address][asset_address] = int(collateral_tuple[0])
+
+    return [
+        _build_user_snapshot(
+            market_ctx,
+            user_address=user_address,
+            point_ts=point_ts,
+            block_number=block_number,
+            base_supply_raw=base_map[user_address][0],
+            base_borrow_raw=base_map[user_address][1],
+            collateral_balance_raws=collateral_map[user_address],
+        )
+        for user_address in user_addresses
+    ]
+
+
+async def _collect_market_snapshot_rows(
+    w3: AsyncWeb3,
+    cfg: AppConfig,
+    *,
+    market: str,
+    point_ts: datetime,
+    block_number: int,
+    users: list[bytes],
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[
+    MarketContext, list[UserPositionSnapshotRow], list[UserPositionAssetRow], int
+]:
+    market_address = _resolve_market_address(market)
+    market_ctx = await _load_market_context(
+        w3, market_address, block_number, metadata_cache
+    )
+
+    user_batch_size = max(1, cfg.crawler.batch_size)
+    snapshot_rows: list[UserPositionSnapshotRow] = []
+    asset_rows: list[UserPositionAssetRow] = []
+    skipped_empty = 0
+
+    for user_batch in _chunked(users, user_batch_size):
+        try:
+            results = await _collect_user_snapshots_batch(
+                w3,
+                market_ctx,
+                user_addresses=user_batch,
+                point_ts=point_ts,
+                block_number=block_number,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to collect user batch market=%s ts=%s block=%s batch_size=%s: %s",
+                market,
+                point_ts.isoformat(),
+                block_number,
+                len(user_batch),
+                exc,
+            )
+            continue
+
+        for snapshot_row, asset_row_group in results:
+            if not snapshot_row.has_open_position:
+                skipped_empty += 1
+                continue
+            snapshot_rows.append(snapshot_row)
+            asset_rows.extend(asset_row_group)
+
+    return market_ctx, snapshot_rows, asset_rows, skipped_empty
+
+
 async def _collect_market_point(
     w3: AsyncWeb3,
     pool: asyncpg.Pool,
     cfg: AppConfig,
     market_name: str,
     point_ts: datetime,
+    block_number: int,
     users: list[bytes],
     skip_existing: bool,
     dry_run: bool,
     stats: BackfillStats,
     metadata_cache: dict[str, tuple[str | None, int | None]],
-) -> None:
-    market_address = next(
-        (
-            addr
-            for addr, name in COMPOUND_V3_MARKET_NAMES.items()
-            if name.lower() == market_name.lower()
-        ),
-        None,
-    )
-    if market_address is None:
-        raise ValueError(f"unknown market: {market_name}")
-
-    block_number = await _block_at_timestamp(w3, int(point_ts.timestamp()), pool=pool)
-    market_ctx = await _load_market_context(
-        w3, market_address, block_number, metadata_cache
-    )
+) -> tuple[list[UserPositionSnapshotRow], list[UserPositionAssetRow]]:
+    market_address = _resolve_market_address(market_name)
     pending_users = users
     if skip_existing:
         existing = await fetch_existing_user_position_addresses(
@@ -603,49 +803,173 @@ async def _collect_market_point(
         stats.skipped_existing += len(existing)
         pending_users = [addr for addr in users if addr not in existing]
     if not pending_users:
-        return
+        return [], []
 
-    sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency))
-
-    async def _one_user(
-        user_address: bytes,
-    ) -> tuple[UserPositionSnapshotRow, list[UserPositionAssetRow]] | None:
-        async with sem:
-            try:
-                return await _collect_user_snapshot(
-                    market_ctx,
-                    user_address=user_address,
-                    point_ts=point_ts,
-                    block_number=block_number,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to collect user position market=%s user=%s ts=%s block=%s: %s",
-                    market_name,
-                    "0x" + user_address.hex(),
-                    point_ts.isoformat(),
-                    block_number,
-                    exc,
-                )
-                return None
-
-    results = await asyncio.gather(*(_one_user(user) for user in pending_users))
-    snapshot_rows: list[UserPositionSnapshotRow] = []
-    asset_rows: list[UserPositionAssetRow] = []
-    for item in results:
-        if item is None:
-            continue
-        snapshot_row, asset_row_group = item
-        snapshot_rows.append(snapshot_row)
-        asset_rows.extend(asset_row_group)
+    _, snapshot_rows, asset_rows, skipped_empty = await _collect_market_snapshot_rows(
+        w3,
+        cfg,
+        market=market_name,
+        point_ts=point_ts,
+        block_number=block_number,
+        users=pending_users,
+        metadata_cache=metadata_cache,
+    )
+    stats.skipped_empty += skipped_empty
 
     if dry_run:
-        stats.snapshots += len(snapshot_rows)
-        stats.assets += len(asset_rows)
+        if snapshot_rows:
+            logger.info(
+                "dry-run point summary market=%s ts=%s block=%s open_positions=%s skipped_empty=%s",
+                market_name,
+                point_ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                block_number,
+                len(snapshot_rows),
+                stats.skipped_empty,
+            )
+        for snapshot_row in snapshot_rows:
+            logger.info(
+                "dry-run snapshot %s",
+                json.dumps(
+                    {
+                        "timestamp": snapshot_row.timestamp.astimezone(
+                            timezone.utc
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "block_number": snapshot_row.block_number,
+                        "market": "0x" + snapshot_row.market.hex(),
+                        "symbol": snapshot_row.symbol,
+                        "user_address": "0x" + snapshot_row.user_address.hex(),
+                        "base_symbol": snapshot_row.base_symbol,
+                        "base_price_usd": str(snapshot_row.base_price_usd),
+                        "eth_price_usd": str(snapshot_row.eth_price_usd),
+                        "total_collateral_usd": str(snapshot_row.total_collateral_usd),
+                        "total_debt_usd": str(snapshot_row.total_debt_usd),
+                        "discounted_collateral_usd": str(
+                            snapshot_row.discounted_collateral_usd
+                        ),
+                        "liquidation_buffer_usd": str(
+                            snapshot_row.liquidation_buffer_usd
+                        ),
+                        "health_factor": str(snapshot_row.health_factor),
+                        "eth_down_liq_price_usd": (
+                            str(snapshot_row.eth_down_liq_price_usd)
+                            if snapshot_row.eth_down_liq_price_usd is not None
+                            else None
+                        ),
+                        "eth_up_liq_price_usd": (
+                            str(snapshot_row.eth_up_liq_price_usd)
+                            if snapshot_row.eth_up_liq_price_usd is not None
+                            else None
+                        ),
+                        "eth_liq_mode": snapshot_row.eth_liq_mode,
+                        "dominant_risk": snapshot_row.dominant_risk,
+                        "assets": snapshot_row.assets_jsonb,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        return snapshot_rows, asset_rows
+
+    return snapshot_rows, asset_rows
+
+
+async def _flush_backfill_write_batch(
+    pool: asyncpg.Pool,
+    *,
+    snapshot_rows: list[UserPositionSnapshotRow],
+    asset_rows: list[UserPositionAssetRow],
+    stats: BackfillStats,
+) -> None:
+    if not snapshot_rows and not asset_rows:
         return
 
-    stats.snapshots += await upsert_user_position_snapshots(pool, snapshot_rows)
-    stats.assets += await upsert_user_position_asset_rows(pool, asset_rows)
+    logger.info(
+        "Flushing Compound user position batch: snapshots=%s assets=%s",
+        len(snapshot_rows),
+        len(asset_rows),
+    )
+    inserted_snapshots = await upsert_user_position_snapshots(pool, snapshot_rows)
+    inserted_assets = await upsert_user_position_asset_rows(pool, asset_rows)
+    stats.snapshots += inserted_snapshots
+    stats.assets += inserted_assets
+    logger.info(
+        "Flushed Compound user position batch: inserted_snapshots=%s inserted_assets=%s total_snapshots=%s total_assets=%s",
+        inserted_snapshots,
+        inserted_assets,
+        stats.snapshots,
+        stats.assets,
+    )
+
+
+async def collect_market_user_snapshots(
+    cfg: AppConfig,
+    pool: asyncpg.Pool,
+    *,
+    market: str,
+    point_ts: datetime | None = None,
+    persist: bool = False,
+    derived_users_dir: Path | None = None,
+    user_addresses: list[bytes] | None = None,
+) -> CollectedMarketSnapshots:
+    if persist:
+        await ensure_user_position_snapshot_tables(
+            pool, use_timescaledb=cfg.market_state.use_timescaledb
+        )
+
+    market_address = _resolve_market_address(market)
+    market_symbol = COMPOUND_V3_MARKET_NAMES[market_address]
+    if user_addresses is not None:
+        users = user_addresses
+    else:
+        csv_dir = derived_users_dir or (
+            Path(__file__).resolve().parent.parent / "derived_users"
+        )
+        csv_path = csv_dir / f"compound_v3_{market_symbol.lower()}_users.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"missing user csv: {csv_path}")
+        users = _load_users_from_csv(csv_path)
+    if point_ts is None:
+        point_w3 = await _build_web3(cfg)
+        latest_block = await point_w3.eth.get_block("latest")
+        latest_timestamp = latest_block.get("timestamp")
+        latest_number = latest_block.get("number")
+        if latest_timestamp is None or latest_number is None:
+            raise RuntimeError("latest block missing timestamp or number")
+        timestamp = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
+        block_number = int(latest_number)
+        w3 = point_w3
+    else:
+        timestamp = (
+            point_ts.replace(tzinfo=timezone.utc)
+            if point_ts.tzinfo is None
+            else point_ts.astimezone(timezone.utc)
+        )
+        w3 = await _build_web3(cfg)
+        block_number = await _block_at_timestamp(
+            w3, int(timestamp.timestamp()), pool=pool
+        )
+
+    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    market_ctx, snapshot_rows, asset_rows, _ = await _collect_market_snapshot_rows(
+        w3,
+        cfg,
+        market=market_address,
+        point_ts=timestamp,
+        block_number=block_number,
+        users=users,
+        metadata_cache=metadata_cache,
+    )
+
+    if persist:
+        await upsert_user_position_snapshots(pool, snapshot_rows)
+        await upsert_user_position_asset_rows(pool, asset_rows)
+
+    return CollectedMarketSnapshots(
+        timestamp=timestamp,
+        block_number=block_number,
+        market=market_ctx.market_address.lower(),
+        symbol=market_ctx.market_symbol,
+        snapshots=snapshot_rows,
+    )
 
 
 async def run_user_position_backfill(
@@ -683,6 +1007,18 @@ async def run_user_position_backfill(
 
     stats = BackfillStats()
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    pending_snapshot_rows: list[UserPositionSnapshotRow] = []
+    pending_asset_rows: list[UserPositionAssetRow] = []
+    write_snapshot_batch_size = max(1000, cfg.crawler.batch_size * 10)
+    write_asset_batch_size = max(5000, cfg.crawler.batch_size * 50)
+    block_numbers = list(
+        await asyncio.gather(
+            *[
+                _block_at_timestamp(w3, int(point.timestamp()), pool=pool)
+                for point in points
+            ]
+        )
+    )
 
     logger.info(
         "Compound user position backfill invoked: markets=%s start=%s end=%s interval_days=%s dry_run=%s skip_existing=%s",
@@ -693,30 +1029,65 @@ async def run_user_position_backfill(
         dry_run,
         skip_existing,
     )
+    if not dry_run:
+        logger.info(
+            "Compound user position write batching enabled: snapshot_batch_size=%s asset_batch_size=%s",
+            write_snapshot_batch_size,
+            write_asset_batch_size,
+        )
 
-    for point in points:
+    for point, block_number in zip(points, block_numbers):
         for market in markets:
             users = market_users[market.lower()]
             if not users:
                 continue
-            await _collect_market_point(
+            snapshot_rows, asset_rows = await _collect_market_point(
                 w3,
                 pool,
                 cfg,
                 market_name=market,
                 point_ts=point,
+                block_number=block_number,
                 users=users,
                 skip_existing=skip_existing,
                 dry_run=dry_run,
                 stats=stats,
                 metadata_cache=metadata_cache,
             )
+            if dry_run:
+                stats.snapshots += len(snapshot_rows)
+                stats.assets += len(asset_rows)
+                continue
+
+            pending_snapshot_rows.extend(snapshot_rows)
+            pending_asset_rows.extend(asset_rows)
+            if (
+                len(pending_snapshot_rows) >= write_snapshot_batch_size
+                or len(pending_asset_rows) >= write_asset_batch_size
+            ):
+                await _flush_backfill_write_batch(
+                    pool,
+                    snapshot_rows=pending_snapshot_rows,
+                    asset_rows=pending_asset_rows,
+                    stats=stats,
+                )
+                pending_snapshot_rows = []
+                pending_asset_rows = []
+
+    if not dry_run:
+        await _flush_backfill_write_batch(
+            pool,
+            snapshot_rows=pending_snapshot_rows,
+            asset_rows=pending_asset_rows,
+            stats=stats,
+        )
 
     logger.info(
-        "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s dry_run=%s",
+        "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s skipped_empty=%s dry_run=%s",
         stats.snapshots,
         stats.assets,
         stats.skipped_existing,
+        stats.skipped_empty,
         dry_run,
     )
     return stats
@@ -724,8 +1095,10 @@ async def run_user_position_backfill(
 
 __all__ = [
     "BackfillStats",
+    "CollectedMarketSnapshots",
     "MIN_INTERVAL_DAYS",
     "available_csv_markets",
+    "collect_market_user_snapshots",
     "iter_snapshot_points",
     "parse_csv_address_cell",
     "run_user_position_backfill",

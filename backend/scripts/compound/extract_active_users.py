@@ -17,8 +17,8 @@ DB_DSN = os.getenv("PG_DSN", "postgresql://user:pass@localhost:5432/defi")
 
 MARKET_ADDRESS = {
     "usdc": "0xc3d688b66703497daa19211eedff47f25384cdc3",
-    "usdt": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
-    "weth": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
+    "usdt": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
+    "weth": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
 }
 
 
