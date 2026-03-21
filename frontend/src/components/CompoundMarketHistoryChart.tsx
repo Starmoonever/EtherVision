@@ -20,8 +20,8 @@ interface ChartPoint {
   timestamp: string;
   borrow_usd: number;
   available_liquidity_usd: number;
-  borrow_rate: number;
-  supply_rate: number;
+  borrow_apr: number;
+  supply_apr: number;
   utilization: number;
 }
 
@@ -64,8 +64,8 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
             timestamp: pt.timestamp.replace('T', ' '),
             borrow_usd: borrowUsd,
             available_liquidity_usd: Math.max(0, supplyUsd - borrowUsd),
-            borrow_rate: parseFloat(pt.borrow_rate || '0') * 100,
-            supply_rate: parseFloat(pt.supply_rate || '0') * 100,
+            borrow_apr: parseFloat(pt.borrow_apr || '0') * 100,
+            supply_apr: parseFloat(pt.supply_apr || '0') * 100,
             utilization: parseFloat(pt.utilization || '0') * 100,
           };
         });
@@ -185,8 +185,8 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                 formatter={(value: any, name: any) => {
                   let label = name;
-                  if (name === '借出该资产总值') label = '借出该资产总值';
-                  else if (name === '剩余可借该资产总值') label = '剩余可借该资产总值';
+                  if (name === `借出 ${asset} 总值`) label = `借出 ${asset} 总值`;
+                  else if (name === `剩余可借 ${asset} 总值`) label = `剩余可借 ${asset} 总值`;
                   return [`$${Number(value).toLocaleString()}`, label];
                 }}
               />
@@ -194,7 +194,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 type="monotone"
                 dataKey="borrow_usd"
-                name="借出该资产总值"
+                name={`借出 ${asset} 总值`}
                 stroke="#ef4444"
                 dot={false}
                 strokeWidth={2}
@@ -202,7 +202,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 type="monotone"
                 dataKey="available_liquidity_usd"
-                name="剩余可借该资产总值"
+                name={`剩余可借 ${asset} 总值`}
                 stroke="#10b981"
                 dot={false}
                 strokeWidth={2}
@@ -246,7 +246,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 yAxisId="left"
                 type="monotone"
-                dataKey="borrow_rate"
+                dataKey="borrow_apr"
                 name="借款年利息率"
                 stroke="#ef4444"
                 dot={false}
@@ -255,7 +255,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 yAxisId="left"
                 type="monotone"
-                dataKey="supply_rate"
+                dataKey="supply_apr"
                 name="存款年收益率"
                 stroke="#10b981"
                 dot={false}

@@ -76,7 +76,7 @@ export function AddressInput({ onSearch, loading }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault(); // 阻止浏览器刷新
     // 移除首尾空格
-    const trimmed = value.trim();
+    let trimmed = value.trim();
     // 如果钱包地址为空
     if (!trimmed) {
       // 设置报错信息
@@ -84,8 +84,16 @@ export function AddressInput({ onSearch, loading }: Props) {
       //终止执行并返回，不进行后续搜索。
       return;
     }
+
+    // 容错处理：如果用户没有输入 0x 前缀，自动补全
+    if (!trimmed.startsWith('0x') && !trimmed.startsWith('0X')) {
+      trimmed = '0x' + trimmed;
+    }
+
     // 检验地址是否符合格式
-    if (!isAddress(trimmed)) {
+    // 即使是没有 checksum 的纯大写或纯小写地址，只要长度是 42，isAddress 也能判断其为 true。
+    // 但是如果地址混合了大小写且 checksum 错误，isAddress 可能会返回 false，因此这里使用 isAddress 进行宽松验证。
+    if (!isAddress(trimmed, { strict: false })) {
       setError('抵押ETH的钱包地址格式无效');
       return;
     }

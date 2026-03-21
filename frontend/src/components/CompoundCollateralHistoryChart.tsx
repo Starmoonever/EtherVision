@@ -70,7 +70,12 @@ export function CompoundCollateralHistoryChart({ version, asset }: CompoundColla
     const symbolsSet = new Set<string>();
     data.forEach(pt => {
       if (pt.reserves && Array.isArray(pt.reserves)) {
-        pt.reserves.forEach(r => symbolsSet.add(r.symbol));
+        pt.reserves.forEach(r => {
+          // 抵押代币不能为借贷市场借出代币，且该抵押代币的 supply_usd 必须 >= 1
+          if (r.symbol !== pt.symbol && parseFloat(r.supply_usd || '0') >= 1) {
+            symbolsSet.add(r.symbol);
+          }
+        });
       }
     });
     return Array.from(symbolsSet);
@@ -98,8 +103,8 @@ export function CompoundCollateralHistoryChart({ version, asset }: CompoundColla
         price_in_base: parseFloat(reserve.price_in_base || '0'),
         supply_usd: parseFloat(reserve.supply_usd || '0'),
         borrow_usd: parseFloat(reserve.borrow_usd || '0'),
-        borrow_rate: parseFloat(reserve.borrow_rate || '0') * 100,
-        supply_rate: parseFloat(reserve.supply_rate || '0') * 100,
+        borrow_apr: parseFloat(reserve.borrow_apr || '0') * 100,
+        supply_apr: parseFloat(reserve.supply_apr || '0') * 100,
         utilization: parseFloat(reserve.utilization || '0') * 100,
       };
     }).filter(Boolean) as any[];
@@ -228,9 +233,6 @@ export function CompoundCollateralHistoryChart({ version, asset }: CompoundColla
               />
               <Legend />
               <Line type="monotone" dataKey="supply_usd" name={`抵押 ${selectedSymbol} 总值`} stroke="#3b82f6" dot={false} strokeWidth={2} />
-              {selectedSymbol !== 'rsETH' && (
-                <Line type="monotone" dataKey="borrow_usd" name={`借出 ${selectedSymbol} 总值`} stroke="#ef4444" dot={false} strokeWidth={2} />
-              )}
             </LineChart>
           </ResponsiveContainer>
         </div>

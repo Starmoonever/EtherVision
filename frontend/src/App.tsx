@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getAddress } from 'viem';
 import { AddressInput } from './components/AddressInput';
 import { SummaryCard } from './components/SummaryCard';
 import { PositionTable } from './components/PositionTable';
@@ -6,7 +7,11 @@ import { PositionReplayChart } from './components/PositionReplayChart';
 import { MarketAssessment } from './components/MarketAssessment';
 import { CompoundMarketAssessment } from './components/CompoundMarketAssessment';
 import { fetchUserPosition } from './api';
+import { fetchCompoundUserPosition } from './api/compound';
 import type { UserPosition, BorrowPosition } from './api';
+import type { CompoundUserPositionItem } from './api/compound';
+import { CompoundSummaryCard } from './components/CompoundSummaryCard';
+import { CompoundEthSensitiveTable } from './components/CompoundEthSensitiveTable';
 import './App.css';
 
 interface VersionState {
@@ -15,7 +20,14 @@ interface VersionState {
   notFound: boolean;
 }
 
+interface CompoundVersionState {
+  data: CompoundUserPositionItem | null;
+  loading: boolean;
+  notFound: boolean;
+}
+
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
+const emptyCompoundState = (): CompoundVersionState => ({ data: null, loading: false, notFound: false });
 
 export default function App() {
   const [protocol, setProtocol] = useState<'aave' | 'compound'>('aave');
@@ -26,15 +38,36 @@ export default function App() {
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3'); // 个人账户分析版本
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
+  
+  // Compound 个人账户分析状态
+  const [compoundAsset, setCompoundAsset] = useState<'USDC' | 'USDT' | 'WETH' | 'all'>('USDC'); // 默认 USDC 而不是 all，以符合具体资产查询
+  const [compoundAddress, setCompoundAddress] = useState('');
+  const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
 
   const handleSearch = (address: string) => {
-    if (!address.startsWith('0x') || address.length !== 42) {
-      setError('请输入有效的 42 位以太坊地址');
-      setQueriedAddress('');
+    // 对原始地址进行标准化 (Keccak-256 哈希 checksum 格式)
+    // 强制转换为全小写后再交给 getAddress，避免由于大小写混合导致的 Checksum 校验失败抛出异常
+    let safeAddress = address;
+    try {
+      safeAddress = getAddress(address.toLowerCase());
+    } catch (e) {
+      console.warn('Address standardization failed, using original input', e);
+      setError('抵押ETH的钱包地址格式无效');
+      if (protocol === 'aave') {
+        setQueriedAddress('');
+      } else {
+        setCompoundAddress('');
+      }
       return;
     }
+    
     setError('');
-    setQueriedAddress(address);
+    
+    if (protocol === 'aave') {
+      setQueriedAddress(safeAddress);
+    } else {
+      setCompoundAddress(safeAddress);
+    }
   };
 
   useEffect(() => {
@@ -42,6 +75,11 @@ export default function App() {
     setV2State(emptyState());
     setV3State(emptyState());
   }, [queriedAddress]);
+
+  useEffect(() => {
+    // 每次 Compound 地址或资产变化时，清空状态
+    setCompoundState(emptyCompoundState());
+  }, [compoundAddress, compoundAsset]);
 
   useEffect(() => {
     if (!queriedAddress) return;
@@ -68,6 +106,40 @@ export default function App() {
       load('v3', setV3State);
     }
   }, [queriedAddress, personalVersion]);
+
+  useEffect(() => {
+    if (!compoundAddress) return;
+
+    const loadCompound = async () => {
+      setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
+      
+      // Compound 当前仅支持 v3
+      if (personalVersion === 'v2') {
+        setError('抱歉，暂无 Compound v2 数据');
+        setCompoundState({ data: null, loading: false, notFound: false });
+        return;
+      }
+      
+      try {
+        const response = await fetchCompoundUserPosition('v3', compoundAsset, compoundAddress);
+        // Assuming API returns a single position item per query based on schema
+        if (response.positions && response.positions.length > 0) {
+          setCompoundState({ data: response.positions[0], loading: false, notFound: false });
+        } else {
+          setCompoundState({ data: null, loading: false, notFound: true });
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('404')) {
+          setCompoundState({ data: null, loading: false, notFound: true });
+        } else {
+          setCompoundState({ data: null, loading: false, notFound: false });
+          console.error(err);
+        }
+      }
+    };
+
+    loadCompound();
+  }, [compoundAddress, compoundAsset, personalVersion]);
 
   return (
     <div className="app">
@@ -285,7 +357,7 @@ export default function App() {
             <>
               <div className="hero">
                 <h1 className="hero-title">个人账户分析</h1>
-                <p className="hero-sub">账户头寸与清算预测</p>
+                <p className="hero-sub">不同借贷市场下账户头寸和 ETH 相关清算风险预测</p>
               </div>
 
               <AddressInput onSearch={handleSearch} loading={false} />
@@ -341,11 +413,75 @@ export default function App() {
             <>
               <div className="hero">
                 <h1 className="hero-title">Compound 个人账户分析</h1>
-                <p className="hero-sub">账户头寸与清算预测</p>
+                <p className="hero-sub">不同借贷市场下账户头寸和 ETH 相关清算风险预测</p>
               </div>
-              <div style={{ textAlign: 'center', color: '#94a3b8', marginTop: '4rem' }}>
-                Compound 个人账户分析模块正在开发中...
+              
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    background: '#1e293b',
+                    borderRadius: '8px',
+                    padding: '4px',
+                    gap: '4px',
+                  }}
+                >
+                  {(['USDC', 'USDT', 'WETH', 'all'] as const).map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => setCompoundAsset(a)}
+                      style={{
+                        background: compoundAsset === a ? '#3b82f6' : 'transparent',
+                        color: compoundAsset === a ? '#fff' : '#94a3b8',
+                        border: 'none',
+                        padding: '6px 24px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem',
+                        fontWeight: 600,
+                        transition: 'all 0.2s',
+                        textTransform: a === 'all' ? 'uppercase' : 'none'
+                      }}
+                    >
+                      {a}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              <AddressInput onSearch={handleSearch} loading={false} />
+
+              {error && (
+                <div className="error-block">
+                  <span className="error-icon">⚠️</span>
+                  <p>{error}</p>
+                </div>
+              )}
+              
+              {compoundAddress && (
+                <div className="results-container" style={{ marginTop: '2rem' }}>
+                  <div
+                    style={{
+                      border: '1px solid #334155',
+                      borderRadius: '14px',
+                      padding: '1.25rem',
+                      background: '#0d1117',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                    }}
+                  >
+                    <CompoundSummaryCard 
+                      address={compoundAddress} 
+                      version={personalVersion} 
+                      market={compoundAsset} 
+                      {...compoundState} 
+                    />
+                    
+                    <CompoundEthSensitiveTable {...compoundState} />
+                  </div>
+                </div>
+              )}
             </>
           )
         ) : (
