@@ -73,6 +73,12 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
     );
   }
 
+  const sliderMin = marketSide === 'collateral' ? -100 : 0;
+  const sliderMax = marketSide === 'collateral' ? 0 : mode === 'history' ? 200 : 100;
+  const sliderTicks = Array.from(
+    { length: Math.floor((sliderMax - sliderMin) / 10) + 1 },
+    (_, index) => sliderMin + index * 10,
+  );
   const simulatedPrice = ethPrice * (1 + priceChange / 100);
 
   return (
@@ -245,14 +251,34 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
                 {priceChange}%
               </span>
             </div>
-            <input
-              type="range"
-              min={marketSide === 'collateral' ? -100 : 0}
-              max={marketSide === 'collateral' ? 0 : mode === 'history' ? 200 : 100}
-              value={priceChange}
-              onChange={(e) => handlePriceChange(Number(e.target.value))}
-              style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
-            />
+            <div style={{ position: 'relative', paddingBottom: '0.6rem' }}>
+              <input
+                type="range"
+                min={sliderMin}
+                max={sliderMax}
+                value={priceChange}
+                onChange={(e) => handlePriceChange(Number(e.target.value))}
+                style={{ width: '100%', accentColor: priceChange < 0 ? '#f87171' : '#4ade80' }}
+              />
+              {sliderTicks.map((tick) => {
+                const left = ((tick - sliderMin) / (sliderMax - sliderMin)) * 100;
+                return (
+                  <div
+                    key={tick}
+                    style={{
+                      position: 'absolute',
+                      top: '15px',
+                      left: `${left}%`,
+                      width: '1px',
+                      height: '6px',
+                      background: '#475569',
+                      transform: 'translateX(-0.5px)',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                );
+              })}
+            </div>
           </div>
 
           {/* 图表区：深色背景突出可见性 */}

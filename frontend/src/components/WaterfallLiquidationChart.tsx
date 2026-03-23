@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ComposedChart,
   Bar,
@@ -20,6 +20,7 @@ interface WaterfallLiquidationChartProps {
 interface WaterfallChartPoint {
   turnName: string;
   yLeftValue: number;
+  animatedYLeftValue: number;
   ethPriceNum: number;
   eth_sold_amount: string;
   eth_sold_value: string;
@@ -38,7 +39,26 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
   const [initialShock, setInitialShock] = useState<number>(5); // 0% - 100%
   const [impactK, setImpactK] = useState<number>(2.5); // 1.0 - 6.0
   const [sellPartition, setSellPartition] = useState<number>(0.5); // 0.05 - 1.0
-  const [date, setDate] = useState<string>('2026-02-10'); // 2026-01-01 to 2026-03-20
+  const [committedInitialShock, setCommittedInitialShock] = useState<number>(5);
+  const [committedImpactK, setCommittedImpactK] = useState<number>(2.5);
+  const [committedSellPartition, setCommittedSellPartition] = useState<number>(0.5);
+  const [date, setDate] = useState<string>('2026-03-18'); // 2026-01-01 to 2026-03-20
+  const [animationStep, setAnimationStep] = useState(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setCommittedInitialShock(initialShock);
+      setCommittedImpactK(impactK);
+      setCommittedSellPartition(sellPartition);
+    }, 800);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [impactK, initialShock, sellPartition]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -54,10 +74,10 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
         const fetchVersion = version === 'all' ? 'v3' : version;
         const res = await fetchWaterfallLiquidation(
           fetchVersion,
-          initialShock / 100, // convert percentage to decimal [0, 1)
+          committedInitialShock / 100,
           date,
-          impactK,
-          sellPartition,
+          committedImpactK,
+          committedSellPartition,
         );
         setData(res);
       } catch (err: unknown) {
@@ -69,10 +89,46 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
       }
     };
 
-    // Add a small debounce to prevent too many requests while dragging sliders
-    const timeoutId = setTimeout(loadData, 300);
-    return () => clearTimeout(timeoutId);
-  }, [version, initialShock, impactK, sellPartition, date]);
+    loadData();
+  }, [committedImpactK, committedInitialShock, committedSellPartition, date, version]);
+
+  useEffect(() => {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (!data?.liquidation_turns.length) {
+      setAnimationStep(0);
+      return;
+    }
+
+    const turnsCount = data.liquidation_turns.length;
+    const perBarDurationMs = 200;
+    const animationStart = performance.now();
+
+    const tick = (now: number) => {
+      const elapsed = now - animationStart;
+      const nextStep = Math.min(turnsCount, elapsed / perBarDurationMs);
+      setAnimationStep(nextStep);
+
+      if (nextStep < turnsCount) {
+        animationFrameRef.current = requestAnimationFrame(tick);
+      } else {
+        animationFrameRef.current = null;
+      }
+    };
+
+    setAnimationStep(0);
+    animationFrameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [data]);
 
   // Determine colors for sliders based on their values
   const getImpactKColor = (val: number) => {
@@ -86,6 +142,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
     if (val <= 0.8) return '#facc15'; // Yellow
     return '#f87171'; // Red
   };
+  const initialShockTicks = Array.from({ length: 11 }, (_, index) => index * 10);
 
   // Prepare chart data
   const chartData: WaterfallChartPoint[] =
@@ -94,15 +151,33 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
       const ethPriceNum = parseFloat(turn.eth_price);
 
       // Y left axis: eth_sold_value / sell_partition_eth
-      const yLeftValue = sellPartition > 0 ? ethSoldValueNum / sellPartition : 0;
+      const yLeftValue = committedSellPartition > 0 ? ethSoldValueNum / committedSellPartition : 0;
 
       return {
         turnName: index === 0 ? '初始冲击' : `轮次${index}`,
         yLeftValue,
+        animatedYLeftValue: yLeftValue * Math.max(0, Math.min(1, animationStep - index)),
         ethPriceNum,
         ...turn,
       };
     }) || [];
+  const yLeftMax = chartData.reduce((max, item) => Math.max(max, item.yLeftValue), 0);
+  const yLeftDomainMax = yLeftMax > 0 ? yLeftMax * 1.1 : 1;
+  const ethPriceValues = chartData.map((item) => item.ethPriceNum);
+  const yRightMinRaw = ethPriceValues.length > 0 ? Math.min(...ethPriceValues) : 0;
+  const yRightMaxRaw = ethPriceValues.length > 0 ? Math.max(...ethPriceValues) : 1;
+  const yRightPadding =
+    yRightMaxRaw > yRightMinRaw
+      ? (yRightMaxRaw - yRightMinRaw) * 0.08
+      : Math.max(yRightMaxRaw * 0.05, 1);
+  const yRightDomainMin = Math.max(0, yRightMinRaw - yRightPadding);
+  const yRightDomainMax = yRightMaxRaw + yRightPadding;
+
+  const formatUsdAxisTick = (value: number) => {
+    if (yLeftMax >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+    if (yLeftMax >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+    return `$${value.toFixed(0)}`;
+  };
 
   return (
     <div
@@ -162,15 +237,32 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                 {initialShock}%
               </span>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={initialShock}
-              onChange={(e) => setInitialShock(Number(e.target.value))}
-              style={{ width: '100%', accentColor: '#3b82f6' }}
-            />
+            <div style={{ position: 'relative', paddingBottom: '0.6rem' }}>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={initialShock}
+                onChange={(e) => setInitialShock(Number(e.target.value))}
+                style={{ width: '100%', accentColor: '#3b82f6' }}
+              />
+              {initialShockTicks.map((tick) => (
+                <div
+                  key={tick}
+                  style={{
+                    position: 'absolute',
+                    top: '15px',
+                    left: `${tick}%`,
+                    width: '1px',
+                    height: '6px',
+                    background: '#475569',
+                    transform: 'translateX(-0.5px)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ))}
+            </div>
           </div>
 
           {/* Slider 2: Impact K */}
@@ -388,7 +480,9 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
               >
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>总清算价值 (USD)</div>
                 <div style={{ fontSize: '1.2rem', color: '#10b981', fontWeight: 'bold' }}>
-                  ${(parseFloat(data.total_liquidation_usd) / 1000000).toFixed(2)}M
+                  {parseFloat(data.total_liquidation_usd) >= 1_000_000
+                    ? `$${(parseFloat(data.total_liquidation_usd) / 1000000).toFixed(2)}M`
+                    : `$${parseFloat(data.total_liquidation_usd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
                 </div>
               </div>
               <div
@@ -503,7 +597,9 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                   <YAxis
                     yAxisId="left"
                     stroke="#ef4444"
-                    tickFormatter={(val) => `$${(val / 1000000).toFixed(1)}M`}
+                    tickFormatter={formatUsdAxisTick}
+                    domain={[0, yLeftDomainMax]}
+                    allowDecimals={yLeftMax < 1_000_000}
                   />
                   {/* Right Axis: ETH Price (Line) */}
                   <YAxis
@@ -511,7 +607,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                     orientation="right"
                     stroke="#3b82f6"
                     tickFormatter={(val) => `$${val}`}
-                    domain={['auto', 'auto']}
+                    domain={[yRightDomainMin, yRightDomainMax]}
                   />
                   <Tooltip
                     contentStyle={{
@@ -537,7 +633,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                       if (label === 'yLeftValue')
                         return [
                           `$${numericValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-                          '抛压估值 (Sold Value / Partition)',
+                          '该轮清算 ETH 价值',
                         ];
                       return [String(value ?? ''), label];
                     }}
@@ -546,11 +642,12 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                   <Legend verticalAlign="top" height={36} />
                   <Bar
                     yAxisId="left"
-                    dataKey="yLeftValue"
+                    dataKey="animatedYLeftValue"
                     name="该轮清算ETH价值 (USD)"
                     fill="#ef4444"
                     opacity={0.8}
                     radius={[4, 4, 0, 0]}
+                    isAnimationActive={false}
                   />
                   <Line
                     yAxisId="right"
@@ -561,6 +658,9 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                     strokeWidth={2}
                     dot={{ r: 4, fill: '#0f172a', stroke: '#3b82f6', strokeWidth: 2 }}
                     activeDot={{ r: 6 }}
+                    isAnimationActive={true}
+                    animationDuration={450}
+                    animationEasing="ease-out"
                   />
                 </ComposedChart>
               </ResponsiveContainer>
