@@ -95,7 +95,7 @@ export async function fetchCompoundMarketHistory(
   end: string,
 ): Promise<CompoundMarketPoint[]> {
   const data = await apiFetch<CompoundMarketHistoryResponse>(
-    `/compound/market/state/period?version=${version}&market=${market}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&detail=true`
+    `/compound/market/state/period?version=${version}&market=${market}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&detail=true`,
   );
   if (!data.points || !Array.isArray(data.points)) {
     throw new Error('Invalid Compound market history response format');
@@ -106,9 +106,9 @@ export async function fetchCompoundMarketHistory(
 export async function fetchCompoundUserPosition(
   version: string,
   market: string,
-  address: string
+  address: string,
 ): Promise<CompoundUserPositionResponse> {
   return apiFetch<CompoundUserPositionResponse>(
-    `/compound/position?version=${version}&market=${market}&address=${address}`
+    `/compound/position?version=${version}&market=${market}&address=${address}`,
   );
 }

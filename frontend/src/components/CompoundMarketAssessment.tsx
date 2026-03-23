@@ -108,7 +108,7 @@ export function CompoundMarketAssessment({ marketVersion }: CompoundMarketAssess
         {/* Right: Historical Data Panel */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
           <CompoundMarketHistoryChart version={marketVersion} asset={asset} />
-          
+
           <div style={{ marginTop: '2rem' }}>
             <CompoundCollateralHistoryChart version={marketVersion} asset={asset} />
           </div>

@@ -27,7 +27,11 @@ interface CompoundVersionState {
 }
 
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
-const emptyCompoundState = (): CompoundVersionState => ({ data: null, loading: false, notFound: false });
+const emptyCompoundState = (): CompoundVersionState => ({
+  data: null,
+  loading: false,
+  notFound: false,
+});
 
 export default function App() {
   const [protocol, setProtocol] = useState<'aave' | 'compound'>('aave');
@@ -38,7 +42,7 @@ export default function App() {
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3'); // 个人账户分析版本
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
-  
+
   // Compound 个人账户分析状态
   const [compoundAsset, setCompoundAsset] = useState<'USDC' | 'USDT' | 'WETH' | 'all'>('USDC'); // 默认 USDC 而不是 all，以符合具体资产查询
   const [compoundAddress, setCompoundAddress] = useState('');
@@ -60,9 +64,9 @@ export default function App() {
       }
       return;
     }
-    
+
     setError('');
-    
+
     if (protocol === 'aave') {
       setQueriedAddress(safeAddress);
     } else {
@@ -112,14 +116,14 @@ export default function App() {
 
     const loadCompound = async () => {
       setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
-      
+
       // Compound 当前仅支持 v3
       if (personalVersion === 'v2') {
         setError('抱歉，暂无 Compound v2 数据');
         setCompoundState({ data: null, loading: false, notFound: false });
         return;
       }
-      
+
       try {
         const response = await fetchCompoundUserPosition('v3', compoundAsset, compoundAddress);
         // Assuming API returns a single position item per query based on schema
@@ -150,7 +154,7 @@ export default function App() {
               <span className="logo-icon">⚡</span>
               <span className="logo-text"> ETH 市场清算风险监测</span>
             </div>
-            
+
             {/* Protocol Switch */}
             <div
               style={{
@@ -415,7 +419,7 @@ export default function App() {
                 <h1 className="hero-title">Compound 个人账户分析</h1>
                 <p className="hero-sub">不同借贷市场下账户头寸和 ETH 相关清算风险预测</p>
               </div>
-              
+
               <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
                 <div
                   style={{
@@ -440,7 +444,7 @@ export default function App() {
                         fontSize: '0.9rem',
                         fontWeight: 600,
                         transition: 'all 0.2s',
-                        textTransform: a === 'all' ? 'uppercase' : 'none'
+                        textTransform: a === 'all' ? 'uppercase' : 'none',
                       }}
                     >
                       {a}
@@ -457,7 +461,7 @@ export default function App() {
                   <p>{error}</p>
                 </div>
               )}
-              
+
               {compoundAddress && (
                 <div className="results-container" style={{ marginTop: '2rem' }}>
                   <div
@@ -471,37 +475,35 @@ export default function App() {
                       gap: '1rem',
                     }}
                   >
-                    <CompoundSummaryCard 
-                      address={compoundAddress} 
-                      version={personalVersion} 
-                      market={compoundAsset} 
-                      {...compoundState} 
+                    <CompoundSummaryCard
+                      address={compoundAddress}
+                      version={personalVersion}
+                      market={compoundAsset}
+                      {...compoundState}
                     />
-                    
+
                     <CompoundEthSensitiveTable {...compoundState} />
                   </div>
                 </div>
               )}
             </>
           )
+        ) : protocol === 'aave' ? (
+          <>
+            <div className="hero">
+              <h1 className="hero-title">宏观市场评估</h1>
+              <p className="hero-sub">ETH 实时价格与清算模拟</p>
+            </div>
+            <MarketAssessment marketVersion={marketVersion} />
+          </>
         ) : (
-          protocol === 'aave' ? (
-            <>
-              <div className="hero">
-                <h1 className="hero-title">宏观市场评估</h1>
-                <p className="hero-sub">ETH 实时价格与清算模拟</p>
-              </div>
-              <MarketAssessment marketVersion={marketVersion} />
-            </>
-          ) : (
-            <>
-              <div className="hero">
-                <h1 className="hero-title">宏观借贷市场评估</h1>
-                <p className="hero-sub">Compound 借贷市场状态分析</p>
-              </div>
-              <CompoundMarketAssessment marketVersion={marketVersion} />
-            </>
-          )
+          <>
+            <div className="hero">
+              <h1 className="hero-title">宏观借贷市场评估</h1>
+              <p className="hero-sub">Compound 借贷市场状态分析</p>
+            </div>
+            <CompoundMarketAssessment marketVersion={marketVersion} />
+          </>
         )}
       </main>
 
