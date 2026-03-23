@@ -1,11 +1,8 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { getAddress } from 'viem';
 import { AddressInput } from './components/AddressInput';
 import { CompoundEthSensitiveTable } from './components/CompoundEthSensitiveTable';
-import { CompoundMarketAssessment } from './components/CompoundMarketAssessment';
 import { CompoundSummaryCard } from './components/CompoundSummaryCard';
-import { MarketAssessment } from './components/MarketAssessment';
-import { PositionReplayChart } from './components/PositionReplayChart';
 import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
 import { fetchUserPosition } from './api';
@@ -13,6 +10,22 @@ import type { BorrowPosition, UserPosition } from './api';
 import { fetchCompoundUserPosition } from './api/compound';
 import type { CompoundUserPositionItem } from './api/compound';
 import './App.css';
+
+const MarketAssessment = lazy(() =>
+  import('./components/MarketAssessment').then((module) => ({
+    default: module.MarketAssessment,
+  })),
+);
+const CompoundMarketAssessment = lazy(() =>
+  import('./components/CompoundMarketAssessment').then((module) => ({
+    default: module.CompoundMarketAssessment,
+  })),
+);
+const PositionReplayChart = lazy(() =>
+  import('./components/PositionReplayChart').then((module) => ({
+    default: module.PositionReplayChart,
+  })),
+);
 
 interface VersionState {
   data: UserPosition | BorrowPosition | null;
@@ -44,6 +57,22 @@ const resultPanelStyle = {
   flexDirection: 'column' as const,
   gap: '1rem',
 };
+
+function ChartFallback({ minHeight = '240px' }: { minHeight?: string }) {
+  return (
+    <div
+      className="card"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight,
+      }}
+    >
+      <div className="spinner"></div>
+    </div>
+  );
+}
 
 export default function App() {
   const [protocol, setProtocol] = useState<'aave' | 'compound'>('aave');
@@ -293,7 +322,9 @@ export default function App() {
           )}
 
           <div style={{ marginTop: '2rem' }}>
-            <PositionReplayChart address={queriedAddress} version={personalVersion} />
+            <Suspense fallback={<ChartFallback minHeight="320px" />}>
+              <PositionReplayChart address={queriedAddress} version={personalVersion} />
+            </Suspense>
           </div>
         </div>
       )}
@@ -335,7 +366,9 @@ export default function App() {
         <p className="hero-sub">ETH 实时价格与清算模拟</p>
         {renderMarketVersionSwitch()}
       </div>
-      <MarketAssessment marketVersion={marketVersion} />
+      <Suspense fallback={<ChartFallback minHeight="420px" />}>
+        <MarketAssessment marketVersion={marketVersion} />
+      </Suspense>
     </>
   );
 
@@ -346,7 +379,9 @@ export default function App() {
         <p className="hero-sub">Compound 借贷市场状态分析</p>
         {renderMarketVersionSwitch()}
       </div>
-      <CompoundMarketAssessment marketVersion={marketVersion} />
+      <Suspense fallback={<ChartFallback minHeight="420px" />}>
+        <CompoundMarketAssessment marketVersion={marketVersion} />
+      </Suspense>
     </>
   );
 

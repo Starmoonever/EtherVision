@@ -28,4 +28,19 @@ export default defineConfig({
     // 注入为 import.meta.env.VITE_RPC_URL，与代码中的读取方式保持一致
     'import.meta.env.VITE_RPC_URL': JSON.stringify(appConfig.rpc_url ?? ''),
   },
+  build: {
+    chunkSizeWarningLimit: 550,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/recharts')) {
+            return 'recharts';
+          }
+          if (id.includes('node_modules/viem')) {
+            return 'viem';
+          }
+        },
+      },
+    },
+  },
 });
