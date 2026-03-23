@@ -17,6 +17,18 @@ interface WaterfallLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
 }
 
+interface WaterfallChartPoint {
+  turnName: string;
+  yLeftValue: number;
+  ethPriceNum: number;
+  eth_sold_amount: string;
+  eth_sold_value: string;
+  liquidation_accounts: string;
+  liquidation_volume_usd: string;
+  eth_price: string;
+  eth_price_decline: string;
+}
+
 export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChartProps) {
   const [data, setData] = useState<WaterfallResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,9 +60,9 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
           sellPartition,
         );
         setData(res);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Failed to fetch waterfall liquidation data', err);
-        setError(err.message || '获取数据失败');
+        setError(err instanceof Error ? err.message : '获取数据失败');
         setData(null);
       } finally {
         setLoading(false);
@@ -76,13 +88,13 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
   };
 
   // Prepare chart data
-  const chartData =
+  const chartData: WaterfallChartPoint[] =
     data?.liquidation_turns.map((turn, index) => {
       const ethSoldValueNum = parseFloat(turn.eth_sold_value);
       const ethPriceNum = parseFloat(turn.eth_price);
 
       // Y left axis: eth_sold_value / sell_partition_eth
-      const yLeftValue = ethSoldValueNum / sellPartition;
+      const yLeftValue = sellPartition > 0 ? ethSoldValueNum / sellPartition : 0;
 
       return {
         turnName: index === 0 ? '初始冲击' : `轮次${index}`,
@@ -333,7 +345,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
               >
                 <span
                   title="模拟清算人看涨ETH，倾向长期持有清算获得资产。此时清算仅发生资产转移，几乎不影响价格"
-                  style={{ width: '26.3%', textAlign: 'left', cursor: 'help' }}
+                  style={{ flex: 1, textAlign: 'left', cursor: 'help' }}
                 >
                   长期持有
                 </span>
@@ -345,7 +357,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                 </span>
                 <span
                   title="模拟极端行情下，清算人看空 ETH，为规避 ETH价格进一步下降，卖出大部分清算所得 ETH"
-                  style={{ width: '42.1%', textAlign: 'right', cursor: 'help' }}
+                  style={{ flex: 1, textAlign: 'right', cursor: 'help' }}
                 >
                   极度恐慌
                 </span>
@@ -508,18 +520,26 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                       color: '#e2e8f0',
                     }}
                     itemStyle={{ fontSize: '0.9rem' }}
-                    formatter={(value: any, name: any) => {
-                      if (name === 'ethPriceNum')
+                    formatter={(value: number | string | undefined, name: string | undefined) => {
+                      const numericValue =
+                        typeof value === 'number'
+                          ? value
+                          : value === undefined
+                            ? 0
+                            : Number.parseFloat(value);
+                      const label = name ?? '';
+
+                      if (label === 'ethPriceNum')
                         return [
-                          `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                          `$${numericValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
                           '该轮 ETH 价格',
                         ];
-                      if (name === 'yLeftValue')
+                      if (label === 'yLeftValue')
                         return [
-                          `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                          `$${numericValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
                           '抛压估值 (Sold Value / Partition)',
                         ];
-                      return [value, name];
+                      return [String(value ?? ''), label];
                     }}
                     labelFormatter={(label) => `${label}`}
                   />
