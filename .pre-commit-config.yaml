@@ -38,5 +38,15 @@ repos:
     hooks:
       - id: pyright
 
+  # 前端编译检查
+  - repo: local
+    hooks:
+      - id: frontend-build
+        name: frontend build
+        entry: bash -lc 'cd frontend && pnpm build'
+        language: system
+        pass_filenames: false
+        files: ^frontend/
+
 ci:
   autoupdate_schedule: weekly

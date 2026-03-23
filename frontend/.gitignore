@@ -24,6 +24,8 @@ dist-ssr
 *.sw?
 
 # Config & Environment variables (local overrides, not committed)
-.env
-.env.*
+.env*
+!.env.example
 config.yaml
+
+openapi.json

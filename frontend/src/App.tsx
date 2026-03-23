@@ -69,213 +69,106 @@ export default function App() {
     }
   }, [queriedAddress, personalVersion]);
 
+  const renderProtocolSwitch = () => (
+    <div className="switch-group">
+      <button
+        onClick={() => setProtocol('aave')}
+        className={`switch-btn ${protocol === 'aave' ? 'active' : ''}`}
+        type="button"
+      >
+        Aave
+      </button>
+      <button
+        onClick={() => setProtocol('compound')}
+        className={`switch-btn ${protocol === 'compound' ? 'active' : ''}`}
+        type="button"
+      >
+        Compound
+      </button>
+    </div>
+  );
+
+  const renderPageTabs = () => (
+    <div className="switch-group">
+      <button
+        onClick={() => setActiveTab('personal')}
+        className={`switch-btn switch-btn-wide ${activeTab === 'personal' ? 'active active-purple' : ''}`}
+        type="button"
+      >
+        个人账户分析
+      </button>
+      <button
+        onClick={() => setActiveTab('market')}
+        className={`switch-btn switch-btn-wide ${activeTab === 'market' ? 'active active-purple' : ''}`}
+        type="button"
+      >
+        宏观市场评估
+      </button>
+    </div>
+  );
+
+  const renderPersonalVersionSwitch = () => (
+    <div className="hero-switch">
+      <div className="switch-group">
+        <button
+          onClick={() => setPersonalVersion('v2')}
+          className={`switch-btn ${personalVersion === 'v2' ? 'active active-purple' : ''}`}
+          type="button"
+        >
+          V2
+        </button>
+        <button
+          onClick={() => setPersonalVersion('v3')}
+          className={`switch-btn ${personalVersion === 'v3' ? 'active active-purple' : ''}`}
+          type="button"
+        >
+          V3
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderMarketVersionSwitch = () => (
+    <div className="hero-switch">
+      <div className="switch-group">
+        <button
+          onClick={() => setMarketVersion('v2')}
+          className={`switch-btn ${marketVersion === 'v2' ? 'active active-purple' : ''}`}
+          type="button"
+        >
+          V2
+        </button>
+        <button
+          onClick={() => setMarketVersion('v3')}
+          className={`switch-btn ${marketVersion === 'v3' ? 'active active-purple' : ''}`}
+          type="button"
+        >
+          V3
+        </button>
+        <button
+          onClick={() => setMarketVersion('all')}
+          className={`switch-btn ${marketVersion === 'all' ? 'active active-purple' : ''}`}
+          type="button"
+        >
+          ALL
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-inner">
-          <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div className="header-brand">
+            <div className="logo">
               <span className="logo-icon">⚡</span>
               <span className="logo-text"> ETH 市场清算风险监测</span>
             </div>
-            
-            {/* Protocol Switch */}
-            <div
-              style={{
-                display: 'flex',
-                background: '#1e293b',
-                borderRadius: '8px',
-                padding: '2px',
-              }}
-            >
-              <button
-                onClick={() => setProtocol('aave')}
-                style={{
-                  background: protocol === 'aave' ? '#3b82f6' : 'transparent',
-                  color: protocol === 'aave' ? '#fff' : '#94a3b8',
-                  border: 'none',
-                  padding: '4px 12px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600,
-                  transition: 'all 0.2s',
-                }}
-              >
-                Aave
-              </button>
-              <button
-                onClick={() => setProtocol('compound')}
-                style={{
-                  background: protocol === 'compound' ? '#3b82f6' : 'transparent',
-                  color: protocol === 'compound' ? '#fff' : '#94a3b8',
-                  border: 'none',
-                  padding: '4px 12px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600,
-                  transition: 'all 0.2s',
-                }}
-              >
-                Compound
-              </button>
-            </div>
           </div>
 
-          {/* 导航 Tab */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              background: '#1e293b',
-              borderRadius: '8px',
-              padding: '2px',
-            }}
-          >
-            <button
-              onClick={() => setActiveTab('personal')}
-              style={{
-                background: activeTab === 'personal' ? '#7c3aed' : 'transparent',
-                color: activeTab === 'personal' ? '#fff' : '#94a3b8',
-                border: 'none',
-                padding: '6px 18px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                transition: 'all 0.2s',
-              }}
-            >
-              个人账户分析
-            </button>
-            <button
-              onClick={() => setActiveTab('market')}
-              style={{
-                background: activeTab === 'market' ? '#7c3aed' : 'transparent',
-                color: activeTab === 'market' ? '#fff' : '#94a3b8',
-                border: 'none',
-                padding: '6px 18px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                transition: 'all 0.2s',
-              }}
-            >
-              宏观市场评估
-            </button>
-          </div>
-
-          {activeTab === 'personal' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div
-                className="version-switch"
-                style={{
-                  display: 'flex',
-                  background: '#1e293b',
-                  borderRadius: '8px',
-                  padding: '2px',
-                }}
-              >
-                <button
-                  onClick={() => setPersonalVersion('v2')}
-                  style={{
-                    background: personalVersion === 'v2' ? '#7c3aed' : 'transparent',
-                    color: personalVersion === 'v2' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  V2
-                </button>
-                <button
-                  onClick={() => setPersonalVersion('v3')}
-                  style={{
-                    background: personalVersion === 'v3' ? '#7c3aed' : 'transparent',
-                    color: personalVersion === 'v3' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  V3
-                </button>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'market' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div
-                className="version-switch"
-                style={{
-                  display: 'flex',
-                  background: '#1e293b',
-                  borderRadius: '8px',
-                  padding: '2px',
-                }}
-              >
-                <button
-                  onClick={() => setMarketVersion('v2')}
-                  style={{
-                    background: marketVersion === 'v2' ? '#7c3aed' : 'transparent',
-                    color: marketVersion === 'v2' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  V2
-                </button>
-                <button
-                  onClick={() => setMarketVersion('v3')}
-                  style={{
-                    background: marketVersion === 'v3' ? '#7c3aed' : 'transparent',
-                    color: marketVersion === 'v3' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  V3
-                </button>
-                <button
-                  onClick={() => setMarketVersion('all')}
-                  style={{
-                    background: marketVersion === 'all' ? '#7c3aed' : 'transparent',
-                    color: marketVersion === 'all' ? '#fff' : '#94a3b8',
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  ALL
-                </button>
-              </div>
-            </div>
-          )}
+          <div className="header-nav">{renderPageTabs()}</div>
+          <div className="header-protocol">{renderProtocolSwitch()}</div>
         </div>
       </header>
 
@@ -284,8 +177,9 @@ export default function App() {
           protocol === 'aave' ? (
             <>
               <div className="hero">
-                <h1 className="hero-title">个人账户分析</h1>
+                <h1 className="hero-title">Aave 个人账户分析</h1>
                 <p className="hero-sub">账户头寸与清算预测</p>
+                {renderPersonalVersionSwitch()}
               </div>
 
               <AddressInput onSearch={handleSearch} loading={false} />
@@ -342,30 +236,31 @@ export default function App() {
               <div className="hero">
                 <h1 className="hero-title">Compound 个人账户分析</h1>
                 <p className="hero-sub">账户头寸与清算预测</p>
+                {renderPersonalVersionSwitch()}
               </div>
               <div style={{ textAlign: 'center', color: '#94a3b8', marginTop: '4rem' }}>
                 Compound 个人账户分析模块正在开发中...
               </div>
             </>
           )
+        ) : protocol === 'aave' ? (
+          <>
+            <div className="hero">
+              <h1 className="hero-title">Aave 宏观市场评估</h1>
+              <p className="hero-sub">ETH 实时价格与清算模拟</p>
+              {renderMarketVersionSwitch()}
+            </div>
+            <MarketAssessment marketVersion={marketVersion} />
+          </>
         ) : (
-          protocol === 'aave' ? (
-            <>
-              <div className="hero">
-                <h1 className="hero-title">宏观市场评估</h1>
-                <p className="hero-sub">ETH 实时价格与清算模拟</p>
-              </div>
-              <MarketAssessment marketVersion={marketVersion} />
-            </>
-          ) : (
-            <>
-              <div className="hero">
-                <h1 className="hero-title">宏观借贷市场评估</h1>
-                <p className="hero-sub">Compound 借贷市场状态分析</p>
-              </div>
-              <CompoundMarketAssessment marketVersion={marketVersion} />
-            </>
-          )
+          <>
+            <div className="hero">
+              <h1 className="hero-title">Compound 宏观借贷市场评估</h1>
+              <p className="hero-sub">Compound 借贷市场状态分析</p>
+              {renderMarketVersionSwitch()}
+            </div>
+            <CompoundMarketAssessment marketVersion={marketVersion} />
+          </>
         )}
       </main>
 

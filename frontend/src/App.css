@@ -19,14 +19,27 @@
   max-width: 1600px;
   margin: 0 auto;
   padding: 0.85rem 2rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+}
+.header-brand {
   display: flex;
   align-items: center;
-  justify-content: space-between;
 }
 .logo {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+.header-nav {
+  display: flex;
+  justify-content: center;
+}
+.header-protocol {
+  display: flex;
+  justify-content: flex-end;
 }
 .logo-icon {
   font-size: 1.4rem;
@@ -73,6 +86,11 @@
   font-size: 0.95rem;
   margin: 0;
 }
+.hero-switch {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
 
 /* ── Tabs ────────────────────────────────────────────────────────────── */
 .tabs-container {
@@ -106,6 +124,41 @@
   background: #7c3aed;
   color: #fff;
   box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+}
+
+.switch-group {
+  display: inline-flex;
+  align-items: center;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 2px;
+}
+.switch-btn {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.switch-btn:hover {
+  color: #e2e8f0;
+}
+.switch-btn-wide {
+  padding-left: 1.15rem;
+  padding-right: 1.15rem;
+  font-size: 0.9rem;
+}
+.switch-btn.active {
+  background: #3b82f6;
+  color: #fff;
+}
+.switch-btn.active-purple {
+  background: #7c3aed;
 }
 
 /* ── Input Form ──────────────────────────────────────────────────────── */
@@ -417,6 +470,20 @@
 }
 .filter-icon {
   font-size: 1rem;
+}
+
+@media (max-width: 900px) {
+  .header-inner {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .header-brand,
+  .header-nav,
+  .header-protocol {
+    justify-content: center;
+    width: 100%;
+  }
 }
 
 .filter-checks {
