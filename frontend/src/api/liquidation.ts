@@ -31,6 +31,13 @@ export interface LiquidationDetailResponse {
   total_weth_debt_usd?: string;
 }
 
+export interface LiquidationDetailParams {
+  limit?: number;
+  offset?: number;
+  orderby?: string;
+  order?: 'asc' | 'desc';
+}
+
 export interface HistoricalLiquidationPoint {
   snapshot_date: string;
   liquidation_cnt: string;
@@ -108,8 +115,15 @@ export async function fetchLiquidationDetail(
   side: 'collateral' | 'borrow',
   version: string,
   ethPrice: number,
+  params: LiquidationDetailParams = {},
 ): Promise<LiquidationDetailResponse | null> {
-  const key = `${side}|${version}|${Math.round(ethPrice)}`;
+  const {
+    limit = 20,
+    offset = 0,
+    orderby = side === 'borrow' ? 'liq_price_rise' : 'liq_price',
+    order = side === 'borrow' ? 'asc' : 'desc',
+  } = params;
+  const key = `${side}|${version}|${ethPrice.toFixed(2)}|${limit}|${offset}|${orderby}|${order}`;
   const cached = _detailCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.data;
@@ -118,8 +132,8 @@ export async function fetchLiquidationDetail(
   const cap = ethPrice * 0.01;
   const path =
     side === 'borrow'
-      ? `/aave/borrow/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`
-      : `/aave/liquidate?eth_price=${ethPrice - cap}&limit=1000&cap=${ethPrice + cap}&version=${version}`;
+      ? `/aave/borrow/liquidate?eth_price=${ethPrice - cap}&limit=${limit}&offset=${offset}&orderby=${orderby}&order=${order}&cap=${ethPrice + cap}&version=${version}`
+      : `/aave/liquidate?eth_price=${ethPrice - cap}&limit=${limit}&offset=${offset}&orderby=${orderby}&order=${order}&cap=${ethPrice + cap}&version=${version}`;
 
   const response = await apiFetchRaw(path);
   if (response.status === 422) {

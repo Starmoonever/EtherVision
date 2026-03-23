@@ -122,6 +122,7 @@ MOCK_SIM_RESPONSE = LiquidationSimResponse(
             liq_price="1666.67",
             eth_collateral_amount="1.500000",
             eth_collateral_usd="2250.00",
+            total_collateral_usd="4500.00",
             total_debt_usd="2000.00",
         )
     ],

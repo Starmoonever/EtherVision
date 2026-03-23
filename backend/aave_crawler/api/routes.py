@@ -213,14 +213,20 @@ async def liquidate_simulation(
         le=1000,
         description="返回的仓位数量，默认 100，最多 1000",
     ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="分页偏移量，从 0 开始；配合 limit 使用",
+    ),
     orderby: Literal[
         "liq_price",
         "eth_collateral_amount",
         "eth_collateral_usd",
+        "total_collateral_usd",
         "total_debt_usd",
     ] = Query(
         "liq_price",
-        description="排序字段：liq_price / eth_collateral_amount / eth_collateral_usd / total_debt_usd",
+        description="排序字段：liq_price / eth_collateral_amount / eth_collateral_usd / total_collateral_usd / total_debt_usd",
     ),
     order: Literal["desc", "asc"] = Query(
         "desc",
@@ -259,6 +265,7 @@ async def liquidate_simulation(
         orderby=orderby,
         order=order,
         limit=limit,
+        offset=offset,
         eth_ratio=Decimal(str(eth_ratio)),
         protocol=version,
         cap=Decimal(str(cap)) if cap is not None else None,
@@ -647,9 +654,15 @@ async def borrow_liquidate_simulation(
     limit: int = Query(
         100, ge=1, le=1000, description="返回的仓位数量，默认 100，最多 1000"
     ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="分页偏移量，从 0 开始；配合 limit 使用",
+    ),
     orderby: Literal[
         "liq_price_rise",
         "weth_debt_usd",
+        "total_collateral_usd",
         "total_debt_usd",
     ] = Query("liq_price_rise", description="排序字段"),
     order: Literal["desc", "asc"] = Query(
@@ -680,6 +693,7 @@ async def borrow_liquidate_simulation(
         orderby=orderby,
         order=order,
         limit=limit,
+        offset=offset,
         protocol=protocol,
         cap=Decimal(str(cap)) if cap is not None else None,
         eth_ratio=Decimal(str(eth_ratio)),

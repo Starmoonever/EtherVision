@@ -106,6 +106,7 @@ class LiquidationSimItem(BaseModel):
     eth_collateral_usd: str = Field(
         description="ETH 抵押品在模拟价格下的 USD 估值（eth_collateral_amount × eth_price）"
     )
+    total_collateral_usd: str = Field(description="仓位总抵押 USD（快照时刻）")
     total_debt_usd: str = Field(description="总借贷 USD（快照时刻）")
 
 

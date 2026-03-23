@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import {
   ComposedChart,
   Bar,
@@ -10,18 +10,19 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
-import type {
-  LiquidationPosition as Position,
-  LiquidationDetailResponse as LiquidationData,
-} from '../api';
+import { fetchUserPosition } from '../api';
+import type { LiquidationDetailResponse as LiquidationData } from '../api';
+import type { UserPosition } from '../api';
 
 type SortField =
-  | 'eth_collateral_amount'
+  | 'liq_price'
+  | 'liq_price_rise'
   | 'eth_collateral_usd'
   | 'total_debt_usd'
-  | 'weth_debt_amount'
   | 'weth_debt_usd'
   | 'total_collateral_usd';
+
+type SortOrder = 'asc' | 'desc';
 
 interface LiquidationChartProps {
   currentEthPrice: number;
@@ -39,6 +40,22 @@ interface ChartDataPoint {
   isCurrent: boolean;
 }
 
+const PAGE_SIZE = 20;
+const MODAL_TABLE_MIN_WIDTH = 1080;
+const MODAL_COLUMN_WIDTHS = {
+  address: 250,
+  liqPrice: 140,
+  metric: 145,
+} as const;
+
+function getDefaultSortField(side: 'collateral' | 'borrow'): SortField {
+  return side === 'borrow' ? 'liq_price_rise' : 'liq_price';
+}
+
+function getDefaultSortOrder(side: 'collateral' | 'borrow'): SortOrder {
+  return side === 'borrow' ? 'asc' : 'desc';
+}
+
 export function LiquidationChart({
   currentEthPrice,
   priceChange,
@@ -51,9 +68,25 @@ export function LiquidationChart({
   const [showModal, setShowModal] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalData, setModalData] = useState<LiquidationData | null>(null);
-  const [sortField, setSortField] = useState<SortField>('eth_collateral_usd');
+  const [sortField, setSortField] = useState<SortField>(getDefaultSortField(side));
+  const [sortOrder, setSortOrder] = useState<SortOrder>(getDefaultSortOrder(side));
+  const [currentPage, setCurrentPage] = useState(1);
+  const [copiedAddress, setCopiedAddress] = useState('');
+  const [expandedAddress, setExpandedAddress] = useState<string | null>(null);
+  const [positionDetails, setPositionDetails] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        error: string;
+        data: UserPosition | null;
+      }
+    >
+  >({});
 
   const selectedPrice = currentEthPrice * (1 + priceChange / 100);
+  const totalPositions = parseInt(modalData?.positions_cnt || '0', 10);
+  const totalPages = Math.max(1, Math.ceil(totalPositions / PAGE_SIZE));
 
   useEffect(() => {
     const fetchRangeData = async () => {
@@ -205,84 +238,127 @@ export function LiquidationChart({
     isCurrent: Math.abs(d.price - selectedPrice) < currentEthPrice * 0.0025,
   }));
 
-  const handleShowDetails = async () => {
-    setModalLoading(true);
+  useEffect(() => {
+    setSortField(getDefaultSortField(side));
+    setSortOrder(getDefaultSortOrder(side));
+    setCurrentPage(1);
+  }, [side]);
+
+  useEffect(() => {
+    if (!showModal || version === 'all') return;
+
+    let cancelled = false;
+
+    const loadModalData = async () => {
+      setModalLoading(true);
+      try {
+        const result = await fetchLiquidationDetail(side, version, selectedPrice, {
+          limit: PAGE_SIZE,
+          offset: (currentPage - 1) * PAGE_SIZE,
+          orderby: sortField,
+          order: sortOrder,
+        });
+
+        if (!cancelled) {
+          setModalData(result);
+        }
+      } catch (err) {
+        console.error('Fetch detail error:', err);
+        if (!cancelled) {
+          setModalData(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setModalLoading(false);
+        }
+      }
+    };
+
+    loadModalData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPage, selectedPrice, showModal, side, sortField, sortOrder, version]);
+
+  const handleShowDetails = () => {
+    setCopiedAddress('');
+    setCurrentPage(1);
+    setSortField(getDefaultSortField(side));
+    setSortOrder(getDefaultSortOrder(side));
+    setModalData(null);
     setShowModal(true);
+  };
+
+  const handleCopyAddress = async (address: string) => {
     try {
-      let positions: Position[] = [];
-      let totalLiqUsd = 0;
-      let posCnt = 0;
-
-      const fetchDetail = (v: string) => fetchLiquidationDetail(side, v, selectedPrice);
-
-      if (version === 'all') {
-        const [v2Res, v3Res] = await Promise.all([fetchDetail('v2'), fetchDetail('v3')]);
-
-        const v2Positions = v2Res?.positions || [];
-        const v3Positions = v3Res?.positions || [];
-
-        positions = [...v2Positions, ...v3Positions];
-
-        // 重新计算总和
-        if (v2Res) {
-          totalLiqUsd += parseFloat(v2Res.total_liquidation_usd);
-          posCnt += parseInt(v2Res.positions_cnt);
-        }
-        if (v3Res) {
-          totalLiqUsd += parseFloat(v3Res.total_liquidation_usd);
-          posCnt += parseInt(v3Res.positions_cnt);
-        }
-      } else {
-        const res = await fetchDetail(version);
-        if (res) {
-          positions = res.positions || [];
-          totalLiqUsd = parseFloat(res.total_liquidation_usd);
-          posCnt = parseInt(res.positions_cnt);
-        }
-      }
-
-      const result: LiquidationData = {
-        simulated_eth_price: selectedPrice.toString(),
-        positions: positions,
-        positions_cnt: posCnt.toString(),
-        total_liquidation_usd: totalLiqUsd.toString(),
-      };
-
-      // 初始排序，默认按 sortField (如果是 borrow 模式，可能默认排序字段不同)
-      // 如果是借贷端，默认按 total_collateral_usd 排序，或者是 weth_debt_usd
-      const initialSortField: SortField =
-        side === 'borrow' ? 'weth_debt_usd' : 'eth_collateral_usd';
-      setSortField(initialSortField);
-
-      if (result.positions) {
-        result.positions.sort(
-          (a: Position, b: Position) =>
-            parseFloat(b[initialSortField] || '0') - parseFloat(a[initialSortField] || '0'),
-        );
-      }
-
-      setModalData(result);
+      await navigator.clipboard.writeText(address);
+      setCopiedAddress(address);
+      window.setTimeout(() => {
+        setCopiedAddress((prev) => (prev === address ? '' : prev));
+      }, 1500);
     } catch (err) {
-      console.error('Fetch detail error:', err);
-      // 发生错误时清空数据，避免显示旧数据
-      setModalData(null);
-    } finally {
-      setModalLoading(false);
+      console.error('Copy address failed:', err);
     }
   };
 
-  // 当 sortField 改变时，重新排序 modalData
-  useEffect(() => {
-    setModalData((prev) => {
-      if (!prev?.positions) return prev;
-      const sortedPositions = [...prev.positions].sort((a, b) => {
-        const valA = parseFloat(a[sortField] || '0');
-        const valB = parseFloat(b[sortField] || '0');
-        return valB - valA;
-      });
-      return { ...prev, positions: sortedPositions };
-    });
-  }, [sortField]);
+  const formatUsd = (value: string | undefined, maximumFractionDigits: number = 2) =>
+    `$${parseFloat(value || '0').toLocaleString(undefined, { maximumFractionDigits })}`;
+
+  const formatAmount = (value: string | undefined, maximumFractionDigits: number = 4) =>
+    parseFloat(value || '0').toLocaleString(undefined, { maximumFractionDigits });
+
+  const formatHealthFactor = (value: number) => {
+    if (!Number.isFinite(value)) return 'inf';
+    if (value > 100) return '>100';
+    return value.toFixed(2);
+  };
+
+  const detailColumnCount = side === 'borrow' ? 5 : 6;
+
+  const handleTogglePositionDetails = async (address: string) => {
+    if (expandedAddress === address) {
+      setExpandedAddress(null);
+      return;
+    }
+
+    setExpandedAddress(address);
+
+    if (positionDetails[address]?.data || positionDetails[address]?.loading) {
+      return;
+    }
+
+    setPositionDetails((prev) => ({
+      ...prev,
+      [address]: {
+        loading: true,
+        error: '',
+        data: null,
+      },
+    }));
+
+    try {
+      const data = await fetchUserPosition(address, version);
+      setPositionDetails((prev) => ({
+        ...prev,
+        [address]: {
+          loading: false,
+          error: '',
+          data,
+        },
+      }));
+    } catch (err) {
+      console.error('Fetch user position detail error:', err);
+      setPositionDetails((prev) => ({
+        ...prev,
+        [address]: {
+          loading: false,
+          error: err instanceof Error ? err.message : '加载仓位详情失败',
+          data: null,
+        },
+      }));
+    }
+  };
 
   if (loading && chartData.length === 0) {
     return (
@@ -453,7 +529,7 @@ export function LiquidationChart({
               border: '1px solid #334155',
               borderRadius: '12px',
               width: '90%',
-              maxWidth: '800px',
+              maxWidth: '960px',
               maxHeight: '80vh',
               display: 'flex',
               flexDirection: 'column',
@@ -481,10 +557,7 @@ export function LiquidationChart({
                 <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
                   在 ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}{' '}
                   清算价格增减1%区间内，
-                  <span style={{ color: '#f87171', fontWeight: 'bold' }}>
-                    {' '}
-                    {modalData?.positions?.length || 0}{' '}
-                  </span>
+                  <span style={{ color: '#f87171', fontWeight: 'bold' }}> {totalPositions} </span>
                   个仓位面临清算
                 </span>
               </div>
@@ -503,11 +576,22 @@ export function LiquidationChart({
             </div>
 
             <div style={{ padding: '0 1.2rem 1.2rem 1.2rem', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', gap: '1rem', margin: '1rem 0', alignItems: 'center' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '1rem',
+                  margin: '1rem 0',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                }}
+              >
                 <span style={{ color: '#94a3b8', fontSize: '0.9rem' }}>排序方式:</span>
                 <select
                   value={sortField}
-                  onChange={(e) => setSortField(e.target.value as SortField)}
+                  onChange={(e) => {
+                    setSortField(e.target.value as SortField);
+                    setCurrentPage(1);
+                  }}
                   style={{
                     background: '#1e293b',
                     color: '#e2e8f0',
@@ -520,18 +604,40 @@ export function LiquidationChart({
                 >
                   {side === 'borrow' ? (
                     <>
+                      <option value="liq_price_rise">清算价格</option>
                       <option value="weth_debt_usd">借出 ETH 价值 (USD)</option>
-                      <option value="weth_debt_amount">借出 ETH 数量</option>
                       <option value="total_collateral_usd">仓位总抵押 (USD)</option>
                     </>
                   ) : (
                     <>
+                      <option value="liq_price">清算价格</option>
                       <option value="eth_collateral_usd">抵押 ETH 价值 (USD)</option>
-                      <option value="eth_collateral_amount">抵押 ETH 数量</option>
+                      <option value="total_collateral_usd">仓位总抵押 (USD)</option>
                       <option value="total_debt_usd">仓位总债务 (USD)</option>
                     </>
                   )}
                 </select>
+                <button
+                  onClick={() => {
+                    setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                    setCurrentPage(1);
+                  }}
+                  type="button"
+                  style={{
+                    background: '#1e293b',
+                    color: '#e2e8f0',
+                    border: '1px solid #334155',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '6px',
+                    fontSize: '0.9rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {sortOrder === 'asc' ? '升序' : '降序'}
+                </button>
+                <span style={{ color: '#64748b', fontSize: '0.85rem' }}>
+                  每页 {PAGE_SIZE} 条，共 {totalPositions} 条
+                </span>
               </div>
 
               {modalLoading ? (
@@ -539,106 +645,683 @@ export function LiquidationChart({
                   加载中...
                 </div>
               ) : modalData?.positions && modalData.positions.length > 0 ? (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #334155' }}>
-                      <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>
-                        地址
-                      </th>
-                      <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                        清算价格
-                      </th>
-                      {side === 'borrow' ? (
-                        <>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            借出 ETH 数量
-                          </th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            借出 ETH 价值
-                          </th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            仓位总抵押
-                          </th>
-                        </>
-                      ) : (
-                        <>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            抵押 ETH 数量
-                          </th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            抵押 ETH 价值
-                          </th>
-                          <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                            仓位总债务
-                          </th>
-                        </>
+                <div style={{ overflowX: 'auto' }}>
+                  <table
+                    style={{
+                      width: '100%',
+                      minWidth: `${MODAL_TABLE_MIN_WIDTH}px`,
+                      tableLayout: 'fixed',
+                      borderCollapse: 'collapse',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    <colgroup>
+                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.address}px` }} />
+                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.liqPrice}px` }} />
+                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
+                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
+                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
+                      {side === 'collateral' && (
+                        <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
                       )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {modalData.positions.map((pos, idx) => (
-                      <tr key={idx} style={{ borderBottom: '1px solid #1e293b' }}>
-                        <td
-                          style={{ padding: '0.8rem', color: '#cbd5e1', fontFamily: 'monospace' }}
-                        >
-                          {pos.address.slice(0, 6)}...{pos.address.slice(-4)}
-                        </td>
-                        <td style={{ textAlign: 'right', padding: '0.8rem', color: '#f87171' }}>
-                          $
-                          {parseFloat(
-                            side === 'borrow' ? pos.liq_price_rise || '0' : pos.liq_price,
-                          ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                        </td>
+                    </colgroup>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid #334155' }}>
+                        <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>
+                          地址
+                        </th>
+                        <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                          清算价格
+                        </th>
                         {side === 'borrow' ? (
                           <>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              {parseFloat(pos.weth_debt_amount || '0').toLocaleString(undefined, {
-                                maximumFractionDigits: 4,
-                              })}
-                            </td>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              $
-                              {parseFloat(pos.weth_debt_usd || '0').toLocaleString(undefined, {
-                                maximumFractionDigits: 2,
-                              })}
-                            </td>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
-                              $
-                              {parseFloat(pos.total_collateral_usd || '0').toLocaleString(
-                                undefined,
-                                { maximumFractionDigits: 2 },
-                              )}
-                            </td>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              借出 ETH 数量
+                            </th>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              借出 ETH 价值
+                            </th>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              仓位总抵押
+                            </th>
                           </>
                         ) : (
                           <>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              {parseFloat(pos.eth_collateral_amount || '0').toLocaleString(
-                                undefined,
-                                { maximumFractionDigits: 4 },
-                              )}
-                            </td>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#e2e8f0' }}>
-                              $
-                              {parseFloat(pos.eth_collateral_usd || '0').toLocaleString(undefined, {
-                                maximumFractionDigits: 2,
-                              })}
-                            </td>
-                            <td style={{ textAlign: 'right', padding: '0.8rem', color: '#94a3b8' }}>
-                              $
-                              {parseFloat(pos.total_debt_usd || '0').toLocaleString(undefined, {
-                                maximumFractionDigits: 2,
-                              })}
-                            </td>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              抵押 ETH 数量
+                            </th>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              抵押 ETH 价值
+                            </th>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              仓位总抵押
+                            </th>
+                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                              仓位总债务
+                            </th>
                           </>
                         )}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {modalData.positions.map((pos, idx) => {
+                        const detailState = positionDetails[pos.address];
+                        const isExpanded = expandedAddress === pos.address;
+
+                        return (
+                          <Fragment key={`${idx}-${pos.address}`}>
+                            <tr style={{ borderBottom: '1px solid #1e293b' }}>
+                              <td style={{ padding: '0.8rem' }}>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    color: '#cbd5e1',
+                                    fontFamily: 'monospace',
+                                    flexWrap: 'wrap',
+                                  }}
+                                >
+                                  <span title={pos.address}>
+                                    {pos.address.slice(0, 6)}...{pos.address.slice(-4)}
+                                  </span>
+                                  <button
+                                    onClick={() => handleCopyAddress(pos.address)}
+                                    type="button"
+                                    style={{
+                                      background:
+                                        copiedAddress === pos.address ? '#14532d' : '#1e293b',
+                                      color: copiedAddress === pos.address ? '#86efac' : '#94a3b8',
+                                      border: '1px solid #334155',
+                                      borderRadius: '6px',
+                                      padding: '0.2rem 0.45rem',
+                                      fontSize: '0.75rem',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {copiedAddress === pos.address ? '已复制' : '复制'}
+                                  </button>
+                                  <button
+                                    onClick={() => handleTogglePositionDetails(pos.address)}
+                                    type="button"
+                                    style={{
+                                      background: isExpanded ? '#334155' : '#1e293b',
+                                      color: '#e2e8f0',
+                                      border: '1px solid #334155',
+                                      borderRadius: '6px',
+                                      padding: '0.2rem 0.5rem',
+                                      fontSize: '0.75rem',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {isExpanded ? '收起仓位' : '查看仓位'}
+                                  </button>
+                                </div>
+                              </td>
+                              <td
+                                style={{ textAlign: 'right', padding: '0.8rem', color: '#f87171' }}
+                              >
+                                {formatUsd(side === 'borrow' ? pos.liq_price_rise : pos.liq_price)}
+                              </td>
+                              {side === 'borrow' ? (
+                                <>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#e2e8f0',
+                                    }}
+                                  >
+                                    {formatAmount(pos.weth_debt_amount)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#e2e8f0',
+                                    }}
+                                  >
+                                    {formatUsd(pos.weth_debt_usd)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#94a3b8',
+                                    }}
+                                  >
+                                    {formatUsd(pos.total_collateral_usd)}
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#e2e8f0',
+                                    }}
+                                  >
+                                    {formatAmount(pos.eth_collateral_amount)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#e2e8f0',
+                                    }}
+                                  >
+                                    {formatUsd(pos.eth_collateral_usd)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#94a3b8',
+                                    }}
+                                  >
+                                    {formatUsd(pos.total_collateral_usd)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      padding: '0.8rem',
+                                      color: '#94a3b8',
+                                    }}
+                                  >
+                                    {formatUsd(pos.total_debt_usd)}
+                                  </td>
+                                </>
+                              )}
+                            </tr>
+
+                            {isExpanded && (
+                              <tr key={`detail-${idx}-${pos.address}`}>
+                                <td
+                                  colSpan={detailColumnCount}
+                                  style={{
+                                    padding: '0.9rem 0.8rem 1rem',
+                                    background: '#111827',
+                                    borderBottom: '1px solid #1e293b',
+                                  }}
+                                >
+                                  {detailState?.loading ? (
+                                    <div style={{ color: '#94a3b8', padding: '0.5rem 0' }}>
+                                      正在加载仓位明细...
+                                    </div>
+                                  ) : detailState?.error ? (
+                                    <div style={{ color: '#fca5a5', padding: '0.5rem 0' }}>
+                                      {detailState.error}
+                                    </div>
+                                  ) : detailState?.data ? (
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '0.75rem',
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'grid',
+                                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                                          gap: '0.75rem',
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            background: '#0f172a',
+                                            border: '1px solid #1f2937',
+                                            borderRadius: '10px',
+                                            padding: '0.8rem',
+                                            textAlign: 'center',
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              color: '#64748b',
+                                              fontSize: '0.78rem',
+                                              marginBottom: '0.35rem',
+                                            }}
+                                          >
+                                            总抵押
+                                          </div>
+                                          <div style={{ color: '#e2e8f0', fontWeight: 700 }}>
+                                            {formatUsd(detailState.data.total_collateral_usd)}
+                                          </div>
+                                        </div>
+                                        <div
+                                          style={{
+                                            background: '#0f172a',
+                                            border: '1px solid #1f2937',
+                                            borderRadius: '10px',
+                                            padding: '0.8rem',
+                                            textAlign: 'center',
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              color: '#64748b',
+                                              fontSize: '0.78rem',
+                                              marginBottom: '0.35rem',
+                                            }}
+                                          >
+                                            总债务
+                                          </div>
+                                          <div style={{ color: '#e2e8f0', fontWeight: 700 }}>
+                                            {formatUsd(detailState.data.total_debt_usd)}
+                                          </div>
+                                        </div>
+                                        <div
+                                          style={{
+                                            background: '#0f172a',
+                                            border: '1px solid #1f2937',
+                                            borderRadius: '10px',
+                                            padding: '0.8rem',
+                                            textAlign: 'center',
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              color: '#64748b',
+                                              fontSize: '0.78rem',
+                                              marginBottom: '0.35rem',
+                                            }}
+                                          >
+                                            波动前健康因子
+                                          </div>
+                                          <div style={{ color: '#e2e8f0', fontWeight: 700 }}>
+                                            {formatHealthFactor(
+                                              detailState.data.health_factor === 'inf'
+                                                ? Number.POSITIVE_INFINITY
+                                                : parseFloat(detailState.data.health_factor),
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div
+                                        style={{
+                                          display: 'grid',
+                                          gridTemplateColumns:
+                                            'repeat(auto-fit, minmax(420px, 420px))',
+                                          justifyContent: 'center',
+                                          gap: '1rem',
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            border: '1px solid #1f2937',
+                                            borderRadius: '10px',
+                                            background: '#0f172a',
+                                            overflow: 'hidden',
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              padding: '0.8rem 1rem',
+                                              borderBottom: '1px solid #1f2937',
+                                              color: '#86efac',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            抵押端 / Supplied
+                                          </div>
+                                          {detailState.data.reserves.filter(
+                                            (reserve) =>
+                                              parseFloat(reserve.supply_amount || '0') > 0,
+                                          ).length > 0 ? (
+                                            <div style={{ overflowX: 'auto' }}>
+                                              <table
+                                                style={{
+                                                  width: '100%',
+                                                  borderCollapse: 'collapse',
+                                                  fontSize: '0.82rem',
+                                                }}
+                                              >
+                                                <thead>
+                                                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'left',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Reserve
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      单价
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Supply
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Supply USD
+                                                    </th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {detailState.data.reserves
+                                                    .filter(
+                                                      (reserve) =>
+                                                        parseFloat(reserve.supply_amount || '0') >
+                                                        0,
+                                                    )
+                                                    .map((reserve) => (
+                                                      <tr
+                                                        key={`${pos.address}-supply-${reserve.token_address}`}
+                                                        style={{
+                                                          borderBottom: '1px solid #1f2937',
+                                                        }}
+                                                      >
+                                                        <td
+                                                          style={{
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#e2e8f0',
+                                                          }}
+                                                        >
+                                                          {reserve.symbol}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatUsd(reserve.price_usd)}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatAmount(reserve.supply_amount, 6)}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatUsd(reserve.supply_usd)}
+                                                        </td>
+                                                      </tr>
+                                                    ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          ) : (
+                                            <div
+                                              style={{
+                                                padding: '1rem',
+                                                color: '#64748b',
+                                                fontSize: '0.82rem',
+                                              }}
+                                            >
+                                              无非零抵押仓位
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <div
+                                          style={{
+                                            border: '1px solid #1f2937',
+                                            borderRadius: '10px',
+                                            background: '#0f172a',
+                                            overflow: 'hidden',
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              padding: '0.8rem 1rem',
+                                              borderBottom: '1px solid #1f2937',
+                                              color: '#fca5a5',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            借贷端 / Borrowed
+                                          </div>
+                                          {detailState.data.reserves.filter(
+                                            (reserve) =>
+                                              parseFloat(reserve.total_debt_amount || '0') > 0,
+                                          ).length > 0 ? (
+                                            <div style={{ overflowX: 'auto' }}>
+                                              <table
+                                                style={{
+                                                  width: '100%',
+                                                  borderCollapse: 'collapse',
+                                                  fontSize: '0.82rem',
+                                                }}
+                                              >
+                                                <thead>
+                                                  <tr style={{ borderBottom: '1px solid #334155' }}>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'left',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Reserve
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      单价
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Stable Debt
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Variable Debt
+                                                    </th>
+                                                    <th
+                                                      style={{
+                                                        textAlign: 'right',
+                                                        padding: '0.65rem 0.5rem',
+                                                        color: '#64748b',
+                                                      }}
+                                                    >
+                                                      Debt USD
+                                                    </th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {detailState.data.reserves
+                                                    .filter(
+                                                      (reserve) =>
+                                                        parseFloat(
+                                                          reserve.total_debt_amount || '0',
+                                                        ) > 0,
+                                                    )
+                                                    .map((reserve) => (
+                                                      <tr
+                                                        key={`${pos.address}-debt-${reserve.token_address}`}
+                                                        style={{
+                                                          borderBottom: '1px solid #1f2937',
+                                                        }}
+                                                      >
+                                                        <td
+                                                          style={{
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#e2e8f0',
+                                                          }}
+                                                        >
+                                                          {reserve.symbol}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatUsd(reserve.price_usd)}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatAmount(
+                                                            reserve.stable_debt_amount,
+                                                            6,
+                                                          )}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatAmount(
+                                                            reserve.variable_debt_amount,
+                                                            6,
+                                                          )}
+                                                        </td>
+                                                        <td
+                                                          style={{
+                                                            textAlign: 'right',
+                                                            padding: '0.65rem 0.5rem',
+                                                            color: '#cbd5e1',
+                                                          }}
+                                                        >
+                                                          {formatUsd(reserve.total_debt_usd)}
+                                                        </td>
+                                                      </tr>
+                                                    ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          ) : (
+                                            <div
+                                              style={{
+                                                padding: '1rem',
+                                                color: '#64748b',
+                                                fontSize: '0.82rem',
+                                              }}
+                                            >
+                                              无非零借贷仓位
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{ color: '#94a3b8', padding: '0.5rem 0' }}>
+                                      暂无仓位明细
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : totalPositions > 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                  当前页无数据
+                </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
                   该价格点无清算数据
+                </div>
+              )}
+
+              {totalPositions > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '1rem',
+                    paddingTop: '1rem',
+                    borderTop: '1px solid #1e293b',
+                    gap: '1rem',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>
+                    第 {currentPage} / {totalPages} 页
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <button
+                      onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1 || modalLoading}
+                      type="button"
+                      style={{
+                        background: currentPage === 1 || modalLoading ? '#0f172a' : '#1e293b',
+                        color: currentPage === 1 || modalLoading ? '#475569' : '#e2e8f0',
+                        border: '1px solid #334155',
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: '6px',
+                        cursor: currentPage === 1 || modalLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      上一页
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage >= totalPages || modalLoading}
+                      type="button"
+                      style={{
+                        background:
+                          currentPage >= totalPages || modalLoading ? '#0f172a' : '#1e293b',
+                        color: currentPage >= totalPages || modalLoading ? '#475569' : '#e2e8f0',
+                        border: '1px solid #334155',
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: '6px',
+                        cursor:
+                          currentPage >= totalPages || modalLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      下一页
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -613,6 +613,7 @@ _SIM_SORT_COLS = {
     "liq_price": "liq_price",
     "eth_collateral_amount": "eth_collateral_amount",
     "eth_collateral_usd": "eth_collateral_usd",
+    "total_collateral_usd": "total_collateral_usd",
     "total_debt_usd": "total_debt_usd",
 }
 
@@ -643,6 +644,15 @@ WITH eth_cols AS (
       AND r.supply_raw > 0
     GROUP BY r.user_address
 ),
+all_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_usd) AS total_collateral_usd_stored
+    FROM loan."{res_table}" r
+    WHERE r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+),
 latest_snaps AS (
     SELECT DISTINCT ON (user_address)
         user_address,
@@ -658,11 +668,19 @@ base AS (
         COALESCE(e.eth_col_amount, 0)                                 AS eth_collateral_amount,
         COALESCE(e.eth_col_amount, 0) * :eth_price                    AS eth_collateral_usd,
         COALESCE(e.eth_col_usd, 0)                                    AS eth_supply_usd_stored,
-        p.total_collateral_usd,
+        COALESCE(c.total_collateral_usd_stored, p.total_collateral_usd, 0)
+                                                                    AS total_collateral_usd_stored,
+        GREATEST(
+            COALESCE(c.total_collateral_usd_stored, p.total_collateral_usd, 0)
+            - COALESCE(e.eth_col_usd, 0)
+            + COALESCE(e.eth_col_amount, 0) * :eth_price,
+            0
+        )                                                           AS total_collateral_usd,
         p.total_debt_usd,
         COALESCE(s.liq_price_weth, p.liq_price)                      AS liq_price
     FROM loan."{pos_table}" p
     LEFT JOIN eth_cols e    ON e.user_address = p.user_address
+    LEFT JOIN all_cols c    ON c.user_address = p.user_address
     LEFT JOIN latest_snaps s ON s.user_address = p.user_address
 )
 SELECT * FROM base
@@ -681,6 +699,7 @@ async def simulate_liquidation(
     orderby: str = "liq_price",
     order: str = "desc",
     limit: int = 100,
+    offset: int = 0,
     eth_ratio: Decimal = ETH_COLLATERAL_RATIO_MIN,
     protocol: str = "v3",
     cap: Decimal | None = None,
@@ -711,7 +730,7 @@ async def simulate_liquidation(
         use_cap=cap is not None,
         use_current_eth_price=current_eth_price is not None,
     )
-    # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit 仅限制 positions 列表
+    # 全量拉取所有触发清算仓位，以便统计数据覆盖全部；limit/offset 仅限制 positions 列表
     params = {"eth_price": float(eth_price)}
     if current_eth_price is not None:
         params["current_eth_price"] = float(current_eth_price)
@@ -730,12 +749,16 @@ async def simulate_liquidation(
         eth_amt = Decimal(str(row.eth_collateral_amount))
         eth_usd = Decimal(str(row.eth_collateral_usd))
         eth_usd_stored = Decimal(str(row.eth_supply_usd_stored))
+        total_col_usd_stored = Decimal(str(row.total_collateral_usd_stored))
         total_col_usd = Decimal(str(row.total_collateral_usd))
         debt_usd = Decimal(str(row.total_debt_usd))
         liq_p = Decimal(str(row.liq_price))
 
         # ETH 抵押品比例过滤：使用爬取时存储价值，避免模拟价格远低于爬取价格时比例失真
-        if total_col_usd <= 0 or eth_usd_stored / total_col_usd < eth_ratio:
+        if (
+            total_col_usd_stored <= 0
+            or eth_usd_stored / total_col_usd_stored < eth_ratio
+        ):
             continue
 
         # 清算人实际可获取的抵押品价值：不超过可用抵押品，含 5% 奖励加码
@@ -751,12 +774,14 @@ async def simulate_liquidation(
                 liq_price=_fmt(liq_p),
                 eth_collateral_amount=_fmt(eth_amt, 6),
                 eth_collateral_usd=_fmt(eth_usd),
+                total_collateral_usd=_fmt(total_col_usd),
                 total_debt_usd=_fmt(debt_usd),
             )
         )
 
     total_count = len(all_items)
-    items = all_items[:limit]
+    page_start = min(offset, total_count)
+    items = all_items[page_start : page_start + limit]
 
     cap_note = f"；liq_price 上限过滤：< {cap}" if cap is not None else ""
     cur_price_note = (
@@ -764,9 +789,14 @@ async def simulate_liquidation(
         if current_eth_price is not None
         else ""
     )
+    page_note = (
+        f"；本次返回第 {page_start + 1} - {page_start + len(items)} 条"
+        if total_count > 0
+        else "；本次返回 0 条"
+    )
     note = (
         f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发清算"
-        f"（本次返回前 {len(items)} 条）；"
+        f"{page_note}；"
         f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
         f"total_liquidation_usd = Σ min(债务 × {_WETH_LIQ_BONUS}, ETH抵押品USD)，"
         f"统计基于全部 {total_count} 个仓位；"
@@ -1163,6 +1193,7 @@ async def simulate_liquidation_waterfall(
 _BORROW_SORT_COLS = {
     "liq_price_rise": "liq_price_rise",
     "weth_debt_usd": "weth_debt_usd",
+    "total_collateral_usd": "total_collateral_usd",
     "total_debt_usd": "total_debt_usd",
     "health_factor": "health_factor",
 }
@@ -1308,6 +1339,7 @@ async def simulate_short_liquidation(
     orderby: str = "liq_price_rise",
     order: str = "asc",
     limit: int = 100,
+    offset: int = 0,
     protocol: str = "v3_borrow",
     cap: Decimal | None = None,
     eth_ratio: Decimal = ETH_DEBT_RATIO_MIN,
@@ -1321,19 +1353,46 @@ async def simulate_short_liquidation(
     """
     order_col = _BORROW_SORT_COLS.get(orderby, "liq_price_rise")
     order_dir = "DESC" if order.lower() == "desc" else "ASC"
-    pos_table, _ = _tables(protocol)
+    pos_table, res_table = _tables(protocol)
 
     cap_filter = "  AND p.liq_price_rise < $2::numeric" if cap is not None else ""
     sql = f"""
+WITH all_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_usd) AS total_collateral_usd_stored
+    FROM loan.{res_table} r
+    WHERE r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+),
+eth_cols AS (
+    SELECT
+        r.user_address,
+        SUM(r.supply_raw / POWER(10, r.decimals::NUMERIC)) AS eth_col_amount,
+        SUM(r.supply_usd) AS eth_col_usd
+    FROM loan.{res_table} r
+    WHERE UPPER(r.symbol) = ANY(ARRAY[{", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))}]::text[])
+      AND r.use_as_collateral = true
+      AND r.supply_raw > 0
+    GROUP BY r.user_address
+)
 SELECT
     p.user_address                                                          AS address,
     p.liq_price_rise,
     (p.weth_debt_raw::numeric / POWER(10::numeric, 18))                     AS weth_debt_amount,
     (p.weth_debt_raw::numeric / POWER(10::numeric, 18)) * $1::numeric       AS weth_debt_usd_sim,
     p.weth_debt_usd                                                         AS weth_debt_usd_stored,
-    p.total_collateral_usd,
+    GREATEST(
+        COALESCE(c.total_collateral_usd_stored, p.total_collateral_usd, 0)
+        - COALESCE(e.eth_col_usd, 0)
+        + COALESCE(e.eth_col_amount, 0) * $1::numeric,
+        0
+    )                                                                       AS total_collateral_usd,
     p.total_debt_usd
 FROM loan.{pos_table} p
+LEFT JOIN all_cols c ON c.user_address = p.user_address
+LEFT JOIN eth_cols e ON e.user_address = p.user_address
 WHERE p.liq_price_rise > 0
   AND p.liq_price_rise <= $1::numeric
 {cap_filter}
@@ -1379,12 +1438,18 @@ ORDER BY {order_col} {order_dir}
         )
 
     total_count = len(all_items)
-    items = all_items[:limit]
+    page_start = min(offset, total_count)
+    items = all_items[page_start : page_start + limit]
 
     cap_note = f"；liq_price_rise 上限过滤：< {cap}" if cap is not None else ""
+    page_note = (
+        f"；本次返回第 {page_start + 1} - {page_start + len(items)} 条"
+        if total_count > 0
+        else "；本次返回 0 条"
+    )
     note = (
         f"共 {total_count} 个仓位将在 ETH=${eth_price} 时触发做空清算"
-        f"（本次返回前 {len(items)} 条）；"
+        f"{page_note}；"
         f"清算奖励系数 {_WETH_LIQ_BONUS}（WETH Aave V3 默认），"
         f"total_liquidation_usd = Σ min(WETH债务USD × {_WETH_LIQ_BONUS}, 总抵押USD)；"
         f"统计基于全部 {total_count} 个仓位；"
