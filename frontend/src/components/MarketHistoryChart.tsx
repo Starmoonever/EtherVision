@@ -1,21 +1,37 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  LineChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
 } from 'recharts';
+import { apiFetch } from '../api/client';
 
 interface MarketHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
 }
 
+interface MarketReplayPoint {
+  block_timestamp: string;
+  eth_price_usd: string;
+  eth_total_debt_usd: string;
+  eth_available_liquidity_usd: string;
+  eth_supply_apy: string;
+  eth_variable_borrow_apy: string;
+  eth_utilization_rate: string;
+}
+
+interface MarketReplayResponse {
+  points: MarketReplayPoint[];
+}
+
 interface MarketPoint {
   timestamp: string;
+  eth_price_usd: number;
   total_debt_usd: number;
   available_liquidity_usd: number;
   variable_borrow_apy: number;
@@ -23,143 +39,93 @@ interface MarketPoint {
   utilization_rate: number;
 }
 
+type TimeRangePreset = '3M' | '6M' | '1Y';
+
+function formatDateInput(date: Date) {
+  return date.toISOString().split('T')[0];
+}
+
+function getPresetRange(preset: TimeRangePreset) {
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+
+  if (preset === '3M') startDate.setMonth(endDate.getMonth() - 3);
+  else if (preset === '6M') startDate.setMonth(endDate.getMonth() - 6);
+  else startDate.setFullYear(endDate.getFullYear() - 1);
+
+  return {
+    start: formatDateInput(startDate),
+    end: formatDateInput(endDate),
+  };
+}
+
+function formatUsdTick(value: number) {
+  return `$${(value / 1e6).toFixed(0)}M`;
+}
+
+function formatPriceTick(value: number) {
+  return `$${value.toFixed(0)}`;
+}
+
+function formatTooltipValue(value: number | string | undefined, name: string | undefined) {
+  const numericValue = Number(value ?? 0);
+  const label = name ?? '';
+  if (label === 'ETH 历史价格') {
+    return [`$${numericValue.toLocaleString()}`, label] as [string, string];
+  }
+  return [`$${numericValue.toLocaleString()}`, label] as [string, string];
+}
+
+function formatRateTooltipValue(value: number | string | undefined, name: string | undefined) {
+  const numericValue = Number(value ?? 0);
+  const label = name ?? '';
+  if (label === 'ETH 历史价格') {
+    return [`$${numericValue.toLocaleString()}`, label] as [string, string];
+  }
+  return [`${numericValue.toFixed(2)}%`, label] as [string, string];
+}
+
 export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
   const [data, setData] = useState<MarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y'>('3M');
+  const [timeRange, setTimeRange] = useState<TimeRangePreset | null>('3M');
+  const [dateRange, setDateRange] = useState(() => getPresetRange('3M'));
+  const today = formatDateInput(new Date());
 
   useEffect(() => {
     const fetchData = async () => {
+      if (version === 'all') {
+        setData([]);
+        setError('');
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       setError('');
       try {
-        const baseUrl = import.meta.env.VITE_API_BASE_URL;
-        const now = new Date();
-        const end = now.toISOString().split('T')[0];
+        const json = await apiFetch<MarketReplayResponse>(
+          `/aave/positions/replay?start=${dateRange.start}&end=${dateRange.end}&version=${version}&interval=24`,
+        );
 
-        const startDate = new Date();
-        if (timeRange === '3M') startDate.setMonth(now.getMonth() - 3);
-        else if (timeRange === '6M') startDate.setMonth(now.getMonth() - 6);
-        else if (timeRange === '1Y') startDate.setFullYear(now.getFullYear() - 1);
-
-        const start = startDate.toISOString().split('T')[0];
-
-        // Helper to fetch and process data for a specific version
-        const fetchAndProcess = async (v: string) => {
-          const res = await fetch(
-            `${baseUrl}/aave/positions/replay?start=${start}&end=${end}&version=${v}&detail=true`,
-          );
-          if (!res.ok) throw new Error(`Failed to fetch ${v} market history`);
-          const json = await res.json();
-          if (!json.points || !Array.isArray(json.points)) throw new Error('Invalid data format');
-
-          return json.points
-            .map((pt: any) => {
-              const ethReserve = pt.reserves.find(
-                (r: any) => r.symbol.toUpperCase() === 'ETH' || r.symbol.toUpperCase() === 'WETH',
-              );
-              if (!ethReserve) return null;
-              return {
-                timestamp: pt.block_timestamp.split('T')[0],
-                total_debt_usd: parseFloat(ethReserve.total_debt_usd || '0'),
-                available_liquidity_usd: parseFloat(ethReserve.available_liquidity_usd || '0'),
-                total_supply_usd: parseFloat(ethReserve.total_supply_usd || '0'),
-                variable_borrow_apy: parseFloat(ethReserve.variable_borrow_apy || '0'),
-                supply_apy: parseFloat(ethReserve.supply_apy || '0'),
-                utilization_rate: parseFloat(ethReserve.utilization_rate || '0'),
-              };
-            })
-            .filter(Boolean);
-        };
-
-        let finalData: MarketPoint[] = [];
-
-        if (version === 'all') {
-          const [v2Data, v3Data] = await Promise.all([
-            fetchAndProcess('v2'),
-            fetchAndProcess('v3'),
-          ]);
-
-          // Aggregate data by timestamp
-          const dateMap = new Map<string, any>();
-
-          // Process V2
-          v2Data.forEach((pt: any) => {
-            if (!dateMap.has(pt.timestamp)) {
-              dateMap.set(pt.timestamp, { ...pt, count: 1 });
-            } else {
-              // Should not happen for same version, but safe to ignore or overwrite
-              dateMap.set(pt.timestamp, pt);
-            }
-          });
-
-          // Merge V3
-          v3Data.forEach((pt: any) => {
-            if (dateMap.has(pt.timestamp)) {
-              const existing = dateMap.get(pt.timestamp);
-
-              // Sum amounts
-              const totalDebt = existing.total_debt_usd + pt.total_debt_usd;
-              const totalSupply = existing.total_supply_usd + pt.total_supply_usd;
-              const totalLiquidity = existing.available_liquidity_usd + pt.available_liquidity_usd;
-
-              // Weighted averages for rates
-              // Avoid division by zero
-              const weightedBorrowAPY =
-                totalDebt > 0
-                  ? (existing.variable_borrow_apy * existing.total_debt_usd +
-                      pt.variable_borrow_apy * pt.total_debt_usd) /
-                    totalDebt
-                  : 0;
-
-              const weightedSupplyAPY =
-                totalSupply > 0
-                  ? (existing.supply_apy * existing.total_supply_usd +
-                      pt.supply_apy * pt.total_supply_usd) /
-                    totalSupply
-                  : 0;
-
-              // Utilization rate = Total Debt / Total Supply
-              const utilizationRate = totalSupply > 0 ? totalDebt / totalSupply : 0;
-
-              dateMap.set(pt.timestamp, {
-                timestamp: pt.timestamp,
-                total_debt_usd: totalDebt,
-                available_liquidity_usd: totalLiquidity,
-                variable_borrow_apy: weightedBorrowAPY,
-                supply_apy: weightedSupplyAPY,
-                utilization_rate: utilizationRate,
-              });
-            } else {
-              dateMap.set(pt.timestamp, pt);
-            }
-          });
-
-          finalData = Array.from(dateMap.values()).map((pt) => ({
-            ...pt,
-            variable_borrow_apy: pt.variable_borrow_apy * 100,
-            supply_apy: pt.supply_apy * 100,
-            utilization_rate: pt.utilization_rate * 100,
-          }));
-        } else {
-          // Single version
-          const data = await fetchAndProcess(version);
-          finalData = data.map((pt: any) => ({
-            timestamp: pt.timestamp,
-            total_debt_usd: pt.total_debt_usd,
-            available_liquidity_usd: pt.available_liquidity_usd,
-            variable_borrow_apy: pt.variable_borrow_apy * 100,
-            supply_apy: pt.supply_apy * 100,
-            utilization_rate: pt.utilization_rate * 100,
-          }));
+        if (!json.points || !Array.isArray(json.points)) {
+          throw new Error('Invalid data format');
         }
 
-        setData(
-          finalData.sort(
-            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-          ),
-        );
+        const finalData = json.points
+          .map((pt) => ({
+            timestamp: pt.block_timestamp.split('T')[0],
+            eth_price_usd: parseFloat(pt.eth_price_usd || '0'),
+            total_debt_usd: parseFloat(pt.eth_total_debt_usd || '0'),
+            available_liquidity_usd: parseFloat(pt.eth_available_liquidity_usd || '0'),
+            variable_borrow_apy: parseFloat(pt.eth_variable_borrow_apy || '0') * 100,
+            supply_apy: parseFloat(pt.eth_supply_apy || '0') * 100,
+            utilization_rate: parseFloat(pt.eth_utilization_rate || '0') * 100,
+          }))
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        setData(finalData);
       } catch (err) {
         console.error(err);
         setError('无法加载市场历史数据');
@@ -168,50 +134,52 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
       }
     };
 
-    fetchData();
-  }, [version, timeRange]);
+    if (!dateRange.start || !dateRange.end) {
+      setData([]);
+      setError('请选择完整时间区间');
+      return;
+    }
 
-  if (loading)
-    return (
-      <div
-        className="card"
-        style={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >
-        <div className="spinner"></div>
-      </div>
-    );
-  if (error)
-    return (
-      <div
-        className="card"
-        style={{
-          height: 100,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#f87171',
-        }}
-      >
-        {error}
-      </div>
-    );
+    if (dateRange.start > dateRange.end) {
+      setData([]);
+      setError('开始日期不能晚于结束日期');
+      return;
+    }
 
-  // Ensure charts have data or show a message
-  if (!data.length)
-    return (
-      <div
-        className="card"
-        style={{
-          height: 400,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#94a3b8',
-        }}
-      >
-        暂无数据
-      </div>
-    );
+    void fetchData();
+  }, [dateRange.end, dateRange.start, version]);
+
+  if (version === 'all') {
+    return;
+  }
+
+  const handlePresetClick = (preset: TimeRangePreset) => {
+    setTimeRange(preset);
+    setDateRange(getPresetRange(preset));
+  };
+
+  const handleDateChange = (field: 'start' | 'end', value: string) => {
+    setTimeRange(null);
+    setDateRange((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const renderStatusCard = (message: string, color: string, height = 400, showSpinner = false) => (
+    <div
+      className="card"
+      style={{
+        height,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color,
+      }}
+    >
+      {showSpinner ? <div className="spinner"></div> : message}
+    </div>
+  );
 
   return (
     <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -223,144 +191,220 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
           marginBottom: '0.5rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
-            历史数据回顾
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {(['3M', '6M', '1Y'] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => setTimeRange(r)}
-              style={{
-                background: timeRange === r ? '#3b82f6' : 'transparent',
-                color: timeRange === r ? '#fff' : '#94a3b8',
-                border: '1px solid #334155',
-                padding: '2px 8px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-              }}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Chart 1: Market Size */}
-      <div className="card">
-        <div
-          className="card-header"
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-        >
-          <span className="card-title">市场规模 （USD）</span>
-        </div>
-        <div style={{ height: 400 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
-              <YAxis
-                stroke="#64748b"
-                tickFormatter={(val) => `$${(val / 1e6).toFixed(0)}M`}
-                width={60}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any, name: any) => {
-                  let label = name;
-                  if (name === '借出 ETH 总值') label = '借出 ETH 总值';
-                  else if (name === '剩余可借 ETH 总值') label = '剩余可借 ETH 总值';
-                  return [`$${Number(value).toLocaleString()}`, label];
+        <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {(['3M', '6M', '1Y'] as const).map((preset) => (
+              <button
+                key={preset}
+                onClick={() => handlePresetClick(preset)}
+                style={{
+                  background: timeRange === preset ? '#3b82f6' : 'transparent',
+                  color: timeRange === preset ? '#fff' : '#94a3b8',
+                  border: '1px solid #334155',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
                 }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="total_debt_usd"
-                name="借出 ETH 总值"
-                stroke="#ef4444"
-                dot={false}
-                strokeWidth={2}
-              />
-              <Line
-                type="monotone"
-                dataKey="available_liquidity_usd"
-                name="剩余可借 ETH 总值"
-                stroke="#10b981"
-                dot={false}
-                strokeWidth={2}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input
+              type="date"
+              value={dateRange.start}
+              max={dateRange.end || today}
+              onChange={(e) => handleDateChange('start', e.target.value)}
+              style={{
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#cbd5e1',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '0.8rem',
+              }}
+            />
+            <span style={{ color: '#64748b' }}>-</span>
+            <input
+              type="date"
+              value={dateRange.end}
+              min={dateRange.start}
+              max={today}
+              onChange={(e) => handleDateChange('end', e.target.value)}
+              style={{
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#cbd5e1',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '0.8rem',
+              }}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Chart 2: Rates */}
-      <div className="card">
-        <div
-          className="card-header"
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-        >
-          <span className="card-title">抵押借贷利率与资金利用率</span>
-        </div>
-        <div style={{ height: 400 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
-              <YAxis
-                yAxisId="left"
-                stroke="#64748b"
-                tickFormatter={(val) => `${val}%`}
-                width={40}
-              />
-              <YAxis
-                yAxisId="right"
-                orientation="right"
-                stroke="#3b82f6"
-                tickFormatter={(val) => `${val}%`}
-                width={40}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any, name: any) => [`${Number(value).toFixed(2)}%`, name]}
-              />
-              <Legend />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="variable_borrow_apy"
-                name="借款实际年化利息率"
-                stroke="#ef4444"
-                dot={false}
-                strokeWidth={2}
-              />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="supply_apy"
-                name="存款年化收益率"
-                stroke="#10b981"
-                dot={false}
-                strokeWidth={2}
-              />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="utilization_rate"
-                name="资金利用率"
-                stroke="#3b82f6"
-                dot={false}
-                strokeWidth={2}
-                strokeDasharray="5 5"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      {loading ? (
+        renderStatusCard('', '#94a3b8', 400, true)
+      ) : error ? (
+        renderStatusCard(error, '#f87171', 100)
+      ) : !data.length ? (
+        renderStatusCard('暂无数据', '#94a3b8')
+      ) : (
+        <>
+          <div className="card">
+            <div
+              className="card-header"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <span className="card-title">市场规模（ETH 市场 + ETH 价格）</span>
+            </div>
+            <div style={{ height: 400 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="timestamp"
+                    stroke="#64748b"
+                    tick={{ fontSize: 12 }}
+                    minTickGap={30}
+                  />
+                  <YAxis yAxisId="size" stroke="#64748b" tickFormatter={formatUsdTick} width={60} />
+                  <YAxis
+                    yAxisId="price"
+                    orientation="right"
+                    stroke="#f59e0b"
+                    tickFormatter={formatPriceTick}
+                    width={60}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                    formatter={formatTooltipValue}
+                  />
+                  <Legend />
+                  <Line
+                    yAxisId="size"
+                    type="monotone"
+                    dataKey="total_debt_usd"
+                    name="借出 ETH 总值"
+                    stroke="#ef4444"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="size"
+                    type="monotone"
+                    dataKey="available_liquidity_usd"
+                    name="剩余可借 ETH 总值"
+                    stroke="#10b981"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="price"
+                    type="monotone"
+                    dataKey="eth_price_usd"
+                    name="ETH 历史价格"
+                    stroke="#f59e0b"
+                    dot={false}
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="card">
+            <div
+              className="card-header"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <span className="card-title">抵押借贷利率、资金利用率与 ETH 价格</span>
+            </div>
+            <div style={{ height: 400 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="timestamp"
+                    stroke="#64748b"
+                    tick={{ fontSize: 12 }}
+                    minTickGap={30}
+                  />
+                  <YAxis
+                    yAxisId="utilization"
+                    stroke="#3b82f6"
+                    tickFormatter={(val) => `${Number(val).toFixed(0)}%`}
+                    width={48}
+                  />
+                  <YAxis
+                    yAxisId="apy"
+                    orientation="right"
+                    stroke="#ef4444"
+                    tickFormatter={(val) => `${Number(val).toFixed(2)}%`}
+                    width={56}
+                  />
+                  <YAxis
+                    yAxisId="price"
+                    hide
+                    orientation="right"
+                    stroke="#f59e0b"
+                    tickFormatter={formatPriceTick}
+                    width={60}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                    formatter={formatRateTooltipValue}
+                  />
+                  <Legend />
+                  <Line
+                    yAxisId="apy"
+                    type="monotone"
+                    dataKey="variable_borrow_apy"
+                    name="借款实际年化利息率"
+                    stroke="#ef4444"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="apy"
+                    type="monotone"
+                    dataKey="supply_apy"
+                    name="存款年化收益率"
+                    stroke="#10b981"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="utilization"
+                    type="monotone"
+                    dataKey="utilization_rate"
+                    name="资金利用率"
+                    stroke="#3b82f6"
+                    dot={false}
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                  />
+                  <Line
+                    yAxisId="price"
+                    type="monotone"
+                    dataKey="eth_price_usd"
+                    name="ETH 历史价格"
+                    stroke="#f59e0b"
+                    dot={false}
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -188,7 +188,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
         <span className="card-title">模拟清算瀑布图 (多轮迭代)</span>
       </div>
 
-      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'stretch' }}>
         {/* Left side: Controls (Date + 3 Sliders) */}
         <div
           style={{
@@ -196,10 +196,12 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
             display: 'flex',
             flexDirection: 'column',
             gap: '1.5rem',
+            alignSelf: 'stretch',
             background: '#0a0f1a',
             padding: '1rem',
             borderRadius: '8px',
             border: '1px solid #1e293b',
+            boxSizing: 'border-box',
           }}
         >
           {/* Date Picker */}
@@ -606,7 +608,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                     yAxisId="right"
                     orientation="right"
                     stroke="#3b82f6"
-                    tickFormatter={(val) => `$${val}`}
+                    tickFormatter={(val) => `$${Number(val).toFixed(2)}`}
                     domain={[yRightDomainMin, yRightDomainMax]}
                   />
                   <Tooltip

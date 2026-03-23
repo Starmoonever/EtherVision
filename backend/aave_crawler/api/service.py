@@ -2581,6 +2581,37 @@ async def get_market_replay(
 
     selected_blocks = [r["block_number"] for r in rows]
 
+    eth_reserve_map: dict[int, asyncpg.Record] = {}
+    if selected_blocks:
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(selected_blocks)))
+        sql_eth_detail = f"""
+            SELECT DISTINCT ON (block_number)
+                block_number,
+                token_address,
+                symbol,
+                price_usd,
+                total_supply_usd,
+                total_debt_usd,
+                available_liquidity_usd,
+                utilization_rate,
+                liquidity_rate_ray,
+                variable_borrow_rate_ray,
+                stable_borrow_rate_ray
+            FROM loan.{detail_table}
+            WHERE block_number IN ({placeholders})
+              AND UPPER(symbol) IN ('WETH', 'ETH')
+            ORDER BY
+                block_number,
+                CASE
+                    WHEN UPPER(symbol) = 'WETH' THEN 0
+                    WHEN UPPER(symbol) = 'ETH' THEN 1
+                    ELSE 2
+                END,
+                total_supply_usd DESC
+        """
+        eth_detail_rows = await pool.fetch(sql_eth_detail, *selected_blocks)
+        eth_reserve_map = {int(dr["block_number"]): dr for dr in eth_detail_rows}
+
     # 只有 detail=true 时才查 reserve 明细
     reserve_map: dict[int, list[MarketReservePoint]] = {}
     if detail and selected_blocks:
@@ -2622,6 +2653,42 @@ async def get_market_replay(
     for r in rows:
         blk = r["block_number"]
         ts_str = r["block_timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
+        eth_row = eth_reserve_map.get(blk)
+        eth_price_usd = (
+            _fmt(Decimal(str(eth_row["price_usd"])), 8)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 8)
+        )
+        eth_total_supply_usd = (
+            _fmt(Decimal(str(eth_row["total_supply_usd"])), 2)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 2)
+        )
+        eth_total_debt_usd = (
+            _fmt(Decimal(str(eth_row["total_debt_usd"])), 2)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 2)
+        )
+        eth_available_liquidity_usd = (
+            _fmt(Decimal(str(eth_row["available_liquidity_usd"])), 2)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 2)
+        )
+        eth_utilization_rate = (
+            _fmt(Decimal(str(eth_row["utilization_rate"])), 8)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 8)
+        )
+        eth_supply_apy = (
+            _fmt(Decimal(str(eth_row["liquidity_rate_ray"])) / _RAY, 8)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 8)
+        )
+        eth_variable_borrow_apy = (
+            _fmt(Decimal(str(eth_row["variable_borrow_rate_ray"])) / _RAY, 8)
+            if eth_row is not None
+            else _fmt(Decimal("0"), 8)
+        )
         points.append(
             MarketSnapshotPoint(
                 block_number=blk,
@@ -2632,6 +2699,13 @@ async def get_market_replay(
                 weighted_utilization=_fmt(Decimal(str(r["weighted_utilization"])), 8),
                 weighted_supply_apy=_fmt(Decimal(str(r["weighted_supply_apy"])), 8),
                 weighted_borrow_apy=_fmt(Decimal(str(r["weighted_borrow_apy"])), 8),
+                eth_price_usd=eth_price_usd,
+                eth_total_supply_usd=eth_total_supply_usd,
+                eth_total_debt_usd=eth_total_debt_usd,
+                eth_available_liquidity_usd=eth_available_liquidity_usd,
+                eth_utilization_rate=eth_utilization_rate,
+                eth_supply_apy=eth_supply_apy,
+                eth_variable_borrow_apy=eth_variable_borrow_apy,
                 reserves=reserve_map.get(blk, []),
             )
         )

@@ -462,6 +462,15 @@ class MarketSnapshotPoint(BaseModel):
     weighted_utilization: str = Field(description="加权平均利用率（8 位小数）")
     weighted_supply_apy: str = Field(description="加权平均存款 APY")
     weighted_borrow_apy: str = Field(description="加权平均浮动借款 APY")
+    eth_price_usd: str = Field(description="ETH/WETH 市场价格（USD）")
+    eth_total_supply_usd: str = Field(description="ETH/WETH 市场总供给（USD）")
+    eth_total_debt_usd: str = Field(description="ETH/WETH 市场总借贷（USD）")
+    eth_available_liquidity_usd: str = Field(
+        description="ETH/WETH 市场可用流动性（USD）"
+    )
+    eth_utilization_rate: str = Field(description="ETH/WETH 市场利用率（0~1）")
+    eth_supply_apy: str = Field(description="ETH/WETH 市场存款 APY")
+    eth_variable_borrow_apy: str = Field(description="ETH/WETH 市场浮动借款 APY")
     reserves: list[MarketReservePoint] = Field(
         default_factory=list,
         description="reserve 明细；仅当请求 detail=true 时填充",
