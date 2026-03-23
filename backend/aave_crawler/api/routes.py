@@ -9,6 +9,7 @@ from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (
     BorrowPositionResponse,
     BorrowUserPositionResponse,
+    HistoricalLiquidationDetailResponse,
     HistoricalPositionResponse,
     LiquidationPeriodItem,
     LiquidationSimResponse,
@@ -25,9 +26,11 @@ from .schemas import (
 )
 from .service import (
     get_borrow_user_position,
+    get_daily_user_position,
     get_eth_price,
     get_market_replay,
     get_positions_history,
+    get_positions_period_detail,
     get_positions_period,
     get_price_period,
     get_sorted_borrow_positions,
@@ -109,6 +112,36 @@ async def user_position(
     if result is None:
         # 历史 DB 中无该地址的操作记录，仓位未发生变化，回退到实时链上数据
         return await get_user_position(_w3(request), pool, address, protocol=version)
+    return result
+
+
+@router.get(
+    "/position/daily",
+    response_model=PositionResponse,
+    summary="查询日级历史仓位快照",
+    description=(
+        "从 `loan.aave_v{2|3}_eth_daily_positions` 与 `loan.aave_v{2|3}_eth_daily_reserve_positions` "
+        "读取指定日期 00:00 UTC 的仓位快照。\n\n"
+        "注意：该接口返回的是日级快照，不反映当日盘中变化。"
+    ),
+)
+async def daily_user_position(
+    pool: AsyncpgPool,
+    address: str = Query(..., description="以太坊钱包地址（支持校验和或小写）"),
+    date: str = Query(..., description="快照日期（UTC），如 2024-01-01"),
+    version: Literal["v2", "v3"] = Query(
+        "v3", description="Aave 协议版本：v2 或 v3（默认）"
+    ),
+) -> PositionResponse:
+    from datetime import datetime, timezone
+
+    ts = _parse_utc_time(date)
+    snapshot_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+    result = await get_daily_user_position(
+        pool, address=address, snapshot_date=snapshot_date, protocol=version
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="该日期无历史仓位快照")
     return result
 
 
@@ -532,6 +565,60 @@ async def positions_period(
         end_ts=end_ts,
         interval_days=interval,
         sim_eth_price_distance=sim_eth_price_distance,
+    )
+
+
+@router.get(
+    "/positions/period/detail",
+    response_model=HistoricalLiquidationDetailResponse,
+    summary="查询历史价格波动清算模拟的单日明细",
+    description=(
+        "给定历史日期和模拟价格波动百分比，返回该日 00:00 UTC 快照下会被触发清算的仓位明细。\n\n"
+        "注意：仓位与 reserve 明细均以该日零点快照为准，不反映当日盘中变化。"
+    ),
+)
+async def positions_period_detail(
+    pool: AsyncpgPool,
+    date: str = Query(..., description="快照日期（UTC），如 2024-01-01"),
+    side: Literal["collateral", "borrow"] = Query(
+        ..., description="清算方向：collateral=ETH 下跌清算，borrow=ETH 上涨清算"
+    ),
+    sim_eth_price_distance: float = Query(
+        ...,
+        description="ETH 价格模拟偏移（百分制，如 -10 表示跌 10%，25 表示涨 25%）",
+    ),
+    limit: int = Query(20, ge=1, le=1000, description="分页大小，默认 20"),
+    offset: int = Query(0, ge=0, description="分页偏移量，从 0 开始"),
+    orderby: Literal[
+        "liq_price",
+        "liq_price_rise",
+        "eth_collateral_usd",
+        "total_collateral_usd",
+        "total_debt_usd",
+        "weth_debt_usd",
+    ] = Query(
+        "liq_price",
+        description="排序字段",
+    ),
+    order: Literal["asc", "desc"] = Query("desc", description="排序方向"),
+    version: Literal["v2", "v3"] = Query(
+        "v3", description="Aave 协议版本：v2 或 v3（默认）"
+    ),
+) -> HistoricalLiquidationDetailResponse:
+    from datetime import datetime, timezone
+
+    ts = _parse_utc_time(date)
+    snapshot_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+    return await get_positions_period_detail(
+        pool,
+        protocol=version,
+        snapshot_date=snapshot_date,
+        side=side,
+        sim_eth_price_distance=sim_eth_price_distance,
+        orderby=orderby,
+        order=order,
+        limit=limit,
+        offset=offset,
     )
 
 

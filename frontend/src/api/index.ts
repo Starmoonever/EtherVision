@@ -6,9 +6,18 @@ export {
   fetchAssetPricePeriod,
 } from './price';
 export type { PriceResponse, PricePeriodItem } from './price';
-export { fetchLiquidationPeriod, fetchLiquidationDetail } from './liquidation';
-export type { LiqPeriodItem, LiquidationPosition, LiquidationDetailResponse } from './liquidation';
-export { fetchUserPosition, fetchUserBorrowPosition } from './user';
+export {
+  fetchLiquidationPeriod,
+  fetchLiquidationDetail,
+  fetchHistoricalLiquidationDetail,
+} from './liquidation';
+export type {
+  LiqPeriodItem,
+  LiquidationPosition,
+  LiquidationDetailResponse,
+  HistoricalLiquidationDetailResponse,
+} from './liquidation';
+export { fetchUserPosition, fetchHistoricalUserPosition, fetchUserBorrowPosition } from './user';
 export type { UserPosition, BorrowPosition } from './user';
 export { fetchCompoundMarketHistory } from './compound';
 export type {

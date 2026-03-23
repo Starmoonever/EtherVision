@@ -301,6 +301,55 @@ class PositionPeriodItem(BaseModel):
     )
 
 
+class HistoricalLiquidationDetailItem(BaseModel):
+    """历史日级快照下单个清算仓位的明细。"""
+
+    address: str
+    liq_price: str = Field(default="0", description="ETH 下跌清算触发价（USD）")
+    liq_price_rise: str = Field(default="0", description="ETH 上涨清算触发价（USD）")
+    eth_collateral_amount: str = Field(default="0", description="ETH 系抵押数量")
+    eth_collateral_usd: str = Field(
+        default="0",
+        description="ETH 系抵押在模拟价格下的 USD 估值",
+    )
+    total_collateral_usd: str = Field(
+        default="0",
+        description="仓位总抵押在模拟价格下的 USD 估值",
+    )
+    total_debt_usd: str = Field(default="0", description="仓位总债务 USD 估值")
+    weth_debt_amount: str = Field(default="0", description="ETH 系负债数量")
+    weth_debt_usd: str = Field(
+        default="0",
+        description="ETH 系负债在模拟价格下的 USD 估值",
+    )
+
+
+class HistoricalLiquidationDetailResponse(BaseModel):
+    """历史价格波动清算模拟的单日明细响应。"""
+
+    snapshot_date: str = Field(description="历史快照日期（UTC，YYYY-MM-DD）")
+    simulated_eth_price: str = Field(description="该日模拟 ETH 价格（USD）")
+    positions: list[HistoricalLiquidationDetailItem] = Field(
+        default_factory=list,
+        description="触发清算的仓位明细",
+    )
+    positions_cnt: str = Field(description="触发清算的仓位数量")
+    total_eth_collateral_amount: str = Field(
+        default="0", description="清算抵押 ETH 总量"
+    )
+    total_eth_collateral_usd: str = Field(
+        default="0",
+        description="清算抵押 ETH 在模拟价格下的 USD 总值",
+    )
+    total_weth_debt_amount: str = Field(default="0", description="清算 WETH 债务总量")
+    total_weth_debt_usd: str = Field(
+        default="0",
+        description="清算 WETH 债务在模拟价格下的 USD 总值",
+    )
+    total_liquidation_usd: str = Field(description="清算人可获得的抵押品 USD 总值")
+    note: str = Field(default="", description="历史快照口径说明")
+
+
 class BorrowUserPositionResponse(BaseModel):
     """借贷端单用户仓位详情：仅返回借贷端专属字段，不与 /user/position 重叠。"""
 

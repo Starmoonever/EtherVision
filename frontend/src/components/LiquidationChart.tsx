@@ -41,12 +41,6 @@ interface ChartDataPoint {
 }
 
 const PAGE_SIZE = 20;
-const MODAL_TABLE_MIN_WIDTH = 1080;
-const MODAL_COLUMN_WIDTHS = {
-  address: 250,
-  liqPrice: 140,
-  metric: 145,
-} as const;
 
 function getDefaultSortField(side: 'collateral' | 'borrow'): SortField {
   return side === 'borrow' ? 'liq_price_rise' : 'liq_price';
@@ -314,7 +308,7 @@ export function LiquidationChart({
     return value.toFixed(2);
   };
 
-  const detailColumnCount = side === 'borrow' ? 5 : 6;
+  const detailColumnCount = 5;
 
   const handleTogglePositionDetails = async (address: string) => {
     if (expandedAddress === address) {
@@ -528,8 +522,8 @@ export function LiquidationChart({
               background: '#0f172a',
               border: '1px solid #334155',
               borderRadius: '12px',
-              width: '90%',
-              maxWidth: '960px',
+              width: '92%',
+              maxWidth: '1120px',
               maxHeight: '80vh',
               display: 'flex',
               flexDirection: 'column',
@@ -559,6 +553,10 @@ export function LiquidationChart({
                   清算价格增减1%区间内，
                   <span style={{ color: '#f87171', fontWeight: 'bold' }}> {totalPositions} </span>
                   个仓位面临清算
+                </span>
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  规则：仅统计快照时健康因子 {'>'} 1 的仓位；抵押端仅保留 0 {'<'} 清算价格
+                  {' < '}当前 ETH 价格的仓位，借贷端仅保留清算价格 {'>'} 当前 ETH 价格的仓位。
                 </span>
               </div>
               <button
@@ -645,58 +643,100 @@ export function LiquidationChart({
                   加载中...
                 </div>
               ) : modalData?.positions && modalData.positions.length > 0 ? (
-                <div style={{ overflowX: 'auto' }}>
+                <div>
                   <table
                     style={{
                       width: '100%',
-                      minWidth: `${MODAL_TABLE_MIN_WIDTH}px`,
                       tableLayout: 'fixed',
                       borderCollapse: 'collapse',
-                      fontSize: '0.9rem',
+                      fontSize: '0.85rem',
                     }}
                   >
-                    <colgroup>
-                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.address}px` }} />
-                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.liqPrice}px` }} />
-                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
-                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
-                      <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
-                      {side === 'collateral' && (
-                        <col style={{ width: `${MODAL_COLUMN_WIDTHS.metric}px` }} />
-                      )}
-                    </colgroup>
                     <thead>
                       <tr style={{ borderBottom: '1px solid #334155' }}>
-                        <th style={{ textAlign: 'left', padding: '0.8rem', color: '#64748b' }}>
+                        <th
+                          style={{
+                            width: '29%',
+                            textAlign: 'left',
+                            padding: '0.75rem 0.6rem',
+                            color: '#64748b',
+                          }}
+                        >
                           地址
                         </th>
-                        <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                        <th
+                          style={{
+                            width: '17%',
+                            textAlign: 'right',
+                            padding: '0.75rem 0.6rem',
+                            color: '#64748b',
+                          }}
+                        >
                           清算价格
                         </th>
                         {side === 'borrow' ? (
                           <>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               借出 ETH 数量
                             </th>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               借出 ETH 价值
                             </th>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               仓位总抵押
                             </th>
                           </>
                         ) : (
                           <>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
-                              抵押 ETH 数量
-                            </th>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               抵押 ETH 价值
                             </th>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               仓位总抵押
                             </th>
-                            <th style={{ textAlign: 'right', padding: '0.8rem', color: '#64748b' }}>
+                            <th
+                              style={{
+                                width: '18%',
+                                textAlign: 'right',
+                                padding: '0.75rem 0.6rem',
+                                color: '#64748b',
+                              }}
+                            >
                               仓位总债务
                             </th>
                           </>
@@ -711,7 +751,7 @@ export function LiquidationChart({
                         return (
                           <Fragment key={`${idx}-${pos.address}`}>
                             <tr style={{ borderBottom: '1px solid #1e293b' }}>
-                              <td style={{ padding: '0.8rem' }}>
+                              <td style={{ padding: '0.75rem 0.6rem' }}>
                                 <div
                                   style={{
                                     display: 'flex',
@@ -722,7 +762,7 @@ export function LiquidationChart({
                                     flexWrap: 'wrap',
                                   }}
                                 >
-                                  <span title={pos.address}>
+                                  <span title={pos.address} style={{ whiteSpace: 'nowrap' }}>
                                     {pos.address.slice(0, 6)}...{pos.address.slice(-4)}
                                   </span>
                                   <button
@@ -759,7 +799,11 @@ export function LiquidationChart({
                                 </div>
                               </td>
                               <td
-                                style={{ textAlign: 'right', padding: '0.8rem', color: '#f87171' }}
+                                style={{
+                                  textAlign: 'right',
+                                  padding: '0.75rem 0.6rem',
+                                  color: '#f87171',
+                                }}
                               >
                                 {formatUsd(side === 'borrow' ? pos.liq_price_rise : pos.liq_price)}
                               </td>
@@ -768,7 +812,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#e2e8f0',
                                     }}
                                   >
@@ -777,7 +821,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#e2e8f0',
                                     }}
                                   >
@@ -786,7 +830,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#94a3b8',
                                     }}
                                   >
@@ -798,16 +842,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
-                                      color: '#e2e8f0',
-                                    }}
-                                  >
-                                    {formatAmount(pos.eth_collateral_amount)}
-                                  </td>
-                                  <td
-                                    style={{
-                                      textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#e2e8f0',
                                     }}
                                   >
@@ -816,7 +851,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#94a3b8',
                                     }}
                                   >
@@ -825,7 +860,7 @@ export function LiquidationChart({
                                   <td
                                     style={{
                                       textAlign: 'right',
-                                      padding: '0.8rem',
+                                      padding: '0.75rem 0.6rem',
                                       color: '#94a3b8',
                                     }}
                                   >
@@ -942,10 +977,9 @@ export function LiquidationChart({
                                       <div
                                         style={{
                                           display: 'grid',
-                                          gridTemplateColumns:
-                                            'repeat(auto-fit, minmax(420px, 420px))',
-                                          justifyContent: 'center',
+                                          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                                           gap: '1rem',
+                                          alignItems: 'start',
                                         }}
                                       >
                                         <div
@@ -964,16 +998,17 @@ export function LiquidationChart({
                                               fontWeight: 700,
                                             }}
                                           >
-                                            抵押端 / Supplied
+                                            抵押端
                                           </div>
                                           {detailState.data.reserves.filter(
                                             (reserve) =>
                                               parseFloat(reserve.supply_amount || '0') > 0,
                                           ).length > 0 ? (
-                                            <div style={{ overflowX: 'auto' }}>
+                                            <div>
                                               <table
                                                 style={{
                                                   width: '100%',
+                                                  tableLayout: 'fixed',
                                                   borderCollapse: 'collapse',
                                                   fontSize: '0.82rem',
                                                 }}
@@ -987,7 +1022,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Reserve
+                                                      资产
                                                     </th>
                                                     <th
                                                       style={{
@@ -1005,7 +1040,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Supply
+                                                      抵押数量
                                                     </th>
                                                     <th
                                                       style={{
@@ -1014,7 +1049,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Supply USD
+                                                      抵押价值
                                                     </th>
                                                   </tr>
                                                 </thead>
@@ -1101,16 +1136,17 @@ export function LiquidationChart({
                                               fontWeight: 700,
                                             }}
                                           >
-                                            借贷端 / Borrowed
+                                            借贷端
                                           </div>
                                           {detailState.data.reserves.filter(
                                             (reserve) =>
                                               parseFloat(reserve.total_debt_amount || '0') > 0,
                                           ).length > 0 ? (
-                                            <div style={{ overflowX: 'auto' }}>
+                                            <div>
                                               <table
                                                 style={{
                                                   width: '100%',
+                                                  tableLayout: 'fixed',
                                                   borderCollapse: 'collapse',
                                                   fontSize: '0.82rem',
                                                 }}
@@ -1124,7 +1160,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Reserve
+                                                      资产
                                                     </th>
                                                     <th
                                                       style={{
@@ -1142,7 +1178,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Stable Debt
+                                                      稳定债务
                                                     </th>
                                                     <th
                                                       style={{
@@ -1151,7 +1187,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Variable Debt
+                                                      浮动债务
                                                     </th>
                                                     <th
                                                       style={{
@@ -1160,7 +1196,7 @@ export function LiquidationChart({
                                                         color: '#64748b',
                                                       }}
                                                     >
-                                                      Debt USD
+                                                      债务价值
                                                     </th>
                                                   </tr>
                                                 </thead>

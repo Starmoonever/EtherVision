@@ -33,12 +33,14 @@ def _make_row(
     liq_price_rise: float = 0.0,
     weth_debt_raw: int = 0,
     eth_price_usd: float = 3000.0,
+    health_factor: float = 1.5,
 ) -> MagicMock:
     """构造一条模拟 asyncpg.Record 行（行级 schema）。"""
     row = MagicMock()
     row.__getitem__ = lambda self, key: {
         "snapshot_date": snapshot_date,
         "eth_collateral_amount": Decimal(str(eth_collateral_amount)),
+        "health_factor": Decimal(str(health_factor)),
         "liq_price": Decimal(str(liq_price)),
         "liq_price_rise": Decimal(str(liq_price_rise)),
         "weth_debt_raw": weth_debt_raw,
@@ -302,6 +304,50 @@ class TestGetPositionsPeriod:
         assert result[0].liquidation_cnt == "0"
 
     @pytest.mark.asyncio
+    async def test_unhealthy_snapshot_excluded(self):
+        """快照时 health_factor <= 1 的仓位不再计入未来价格波动清算。"""
+        rows = [
+            _make_row(
+                date(2025, 1, 1),
+                eth_collateral_amount=1.0,
+                liq_price=6409.3,
+                eth_price_usd=1857.08,
+                health_factor=0.4459,
+            )
+        ]
+        pool = _make_pool(rows)
+        result = await get_positions_period(
+            pool,
+            "v3",
+            _ts("2025-01-01"),
+            _ts("2025-01-01"),
+            sim_eth_price_distance=-15.0,
+        )
+        assert result[0].liquidation_cnt == "0"
+
+    @pytest.mark.asyncio
+    async def test_liq_price_above_spot_excluded_for_collateral_side(self):
+        """下跌清算的有效触发价必须低于当日 ETH 现价。"""
+        rows = [
+            _make_row(
+                date(2025, 1, 1),
+                eth_collateral_amount=1.0,
+                liq_price=6409.3,
+                eth_price_usd=1857.08,
+                health_factor=1.25,
+            )
+        ]
+        pool = _make_pool(rows)
+        result = await get_positions_period(
+            pool,
+            "v3",
+            _ts("2025-01-01"),
+            _ts("2025-01-01"),
+            sim_eth_price_distance=-15.0,
+        )
+        assert result[0].liquidation_cnt == "0"
+
+    @pytest.mark.asyncio
     async def test_interval_1_returns_all_dates(self):
         """interval_days=1（默认）时所有日期均返回。"""
         rows = [_make_row(date(2025, 1, d), eth_price_usd=3000.0) for d in range(1, 8)]
@@ -382,7 +428,7 @@ class TestGetPositionsPeriod:
             _make_row(
                 date(2025, 1, 1),
                 eth_collateral_amount=20.0,
-                liq_price=2800.0,
+                liq_price=2300.0,
                 eth_price_usd=2500.0,
             )
         ]

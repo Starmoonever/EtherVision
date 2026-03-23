@@ -397,6 +397,11 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     if total_debt == 0:
         return Decimal("0")
 
+    hf_raw = s.health_factor
+    if hf_raw < _MAX_UINT256 and _raw_to_decimal(hf_raw, 18) <= Decimal("1"):
+        # 当前快照已处于可清算状态，不应再把 liq_price 解释成“未来下跌触发价”
+        return Decimal("0")
+
     # 统一使用 WETH 价格作为 P_now（由调用方传入）
     eth_price_now = eth_price_usd
     if eth_price_now is None or eth_price_now == 0:
@@ -450,6 +455,9 @@ def _calc_liq_price(pos: UserPosition, eth_price_usd: Decimal) -> Decimal:
     # numer 可以为负（非ETH抵押安全垫 > 非ETH债务），此时清算价更低，趋于 0
     liq_price = numer / denom * eth_price_now
     if liq_price <= 0:
+        return Decimal("0")
+    if liq_price >= eth_price_now:
+        # 若触发价高于/等于当前价，说明仓位已处于不健康状态或该值不具备“下跌触发价”语义。
         return Decimal("0")
 
     return min(liq_price, _LIQ_PRICE_CAP)

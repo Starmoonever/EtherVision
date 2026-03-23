@@ -49,6 +49,13 @@ export interface HistoricalLiquidationPoint {
   sim_eth_price: string;
 }
 
+export interface HistoricalLiquidationDetailResponse extends LiquidationDetailResponse {
+  snapshot_date: string;
+  total_eth_collateral_amount?: string;
+  total_eth_collateral_usd?: string;
+  note: string;
+}
+
 export interface WaterfallTurn {
   eth_sold_amount: string;
   eth_sold_value: string;
@@ -154,6 +161,26 @@ export async function fetchHistoricalLiquidation(
 ): Promise<HistoricalLiquidationPoint[]> {
   const path = `/aave/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
   return apiFetch<HistoricalLiquidationPoint[]>(path);
+}
+
+export async function fetchHistoricalLiquidationDetail(
+  date: string,
+  version: string,
+  side: 'collateral' | 'borrow',
+  simEthPriceDistance: number,
+  params: LiquidationDetailParams = {},
+): Promise<HistoricalLiquidationDetailResponse> {
+  const {
+    limit = 20,
+    offset = 0,
+    orderby = side === 'borrow' ? 'liq_price_rise' : 'liq_price',
+    order = side === 'borrow' ? 'asc' : 'desc',
+  } = params;
+  const path =
+    `/aave/positions/period/detail?date=${date}` +
+    `&version=${version}&side=${side}&sim_eth_price_distance=${simEthPriceDistance}` +
+    `&limit=${limit}&offset=${offset}&orderby=${orderby}&order=${order}`;
+  return apiFetch<HistoricalLiquidationDetailResponse>(path);
 }
 
 export async function fetchWaterfallLiquidation(

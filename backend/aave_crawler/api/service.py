@@ -55,6 +55,8 @@ from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
 from .schemas import (
     BorrowPositionResponse,
     BorrowUserPositionResponse,
+    HistoricalLiquidationDetailItem,
+    HistoricalLiquidationDetailResponse,
     HistoricalPositionResponse,
     HistoricalReserveDetail,
     LiqPriceResponse,
@@ -630,7 +632,7 @@ def _build_simulate_sql(
     eth_upper_sql = ", ".join(f"'{s}'" for s in sorted(_ETH_SYMBOLS))
     current_price_filter = ""
     if use_current_eth_price:
-        current_price_filter = "  AND liq_price <= :current_eth_price"
+        current_price_filter = "  AND liq_price < :current_eth_price"
     cap_filter = "  AND liq_price < :cap" if use_cap else ""
     return f"""
 WITH eth_cols AS (
@@ -677,6 +679,7 @@ base AS (
             0
         )                                                           AS total_collateral_usd,
         p.total_debt_usd,
+        p.health_factor,
         COALESCE(s.liq_price_weth, p.liq_price)                      AS liq_price
     FROM loan."{pos_table}" p
     LEFT JOIN eth_cols e    ON e.user_address = p.user_address
@@ -686,6 +689,8 @@ base AS (
 SELECT * FROM base
 WHERE liq_price > 0
   AND liq_price < 9999999.99
+  AND total_debt_usd > 0
+  AND health_factor > 1
   AND liq_price >= :eth_price
 {current_price_filter}
 {cap_filter}
@@ -848,12 +853,14 @@ SELECT
     COALESCE(e.eth_col_usd, 0)                   AS eth_supply_usd_stored,
     p.total_collateral_usd,
     p.total_debt_usd,
+    p.health_factor,
     COALESCE(s.liq_price_weth, p.liq_price)      AS liq_price
 FROM loan."{pos_table}" p
 LEFT JOIN eth_cols e    ON e.user_address = p.user_address
 LEFT JOIN latest_snaps s ON s.user_address = p.user_address
 WHERE COALESCE(s.liq_price_weth, p.liq_price) > 0
   AND COALESCE(s.liq_price_weth, p.liq_price) < 9999999.99
+  AND p.health_factor > 1
 """
 
 
@@ -886,12 +893,18 @@ async def simulate_liquidation_period(
             Decimal(str(r["eth_supply_usd_stored"])),
             Decimal(str(r["total_collateral_usd"])),
             Decimal(str(r["total_debt_usd"])),
+            Decimal(str(r["health_factor"])),
             Decimal(str(r["liq_price"])),
         )
         for r in rows
         # 仅保留跌价清算仓位：liq_price 必须 <= 当前 ETH 价格
-        if current_eth_price is None
-        or Decimal(str(r["liq_price"])) <= current_eth_price
+        if (
+            (
+                current_eth_price is None
+                or Decimal(str(r["liq_price"])) < current_eth_price
+            )
+            and _is_healthy_snapshot(Decimal(str(r["health_factor"])))
+        )
     ]
 
     result: list[LiquidationPeriodItem] = []
@@ -901,7 +914,14 @@ async def simulate_liquidation_period(
         total_eth_usd = Decimal("0")
         total_liq_usd = Decimal("0")
         cnt = 0
-        for eth_amt, eth_usd_stored, total_col_usd, debt_usd, liq_p in positions:
+        for (
+            eth_amt,
+            eth_usd_stored,
+            total_col_usd,
+            debt_usd,
+            _health_factor,
+            liq_p,
+        ) in positions:
             if liq_p >= price:
                 eth_usd = eth_amt * price
                 # ETH 抵押品比例过滤：使用爬取时存储价值，避免模拟价格远低于爬取价格时比例失真
@@ -2938,6 +2958,123 @@ def _daily_positions_table(protocol: str) -> str:
     return f"aave_{ver}_eth_daily_positions"
 
 
+def _daily_reserve_positions_table(protocol: str) -> str:
+    """返回日级 reserve 仓位表名（不含 schema）。"""
+    ver = "v2" if protocol.lower().startswith("v2") else "v3"
+    return f"aave_{ver}_eth_daily_reserve_positions"
+
+
+def _is_healthy_snapshot(health_factor: Decimal) -> bool:
+    return health_factor >= MAX_HF or health_factor > Decimal("1")
+
+
+async def get_daily_user_position(
+    pool: asyncpg.Pool,
+    address: str,
+    snapshot_date,
+    protocol: str = "v3",
+) -> PositionResponse | None:
+    pos_table = _daily_positions_table(protocol)
+    res_table = _daily_reserve_positions_table(protocol)
+
+    pos_row = await pool.fetchrow(
+        f"""
+        SELECT
+            user_address,
+            total_collateral_usd,
+            available_borrows_usd,
+            total_debt_usd,
+            health_factor,
+            ltv,
+            liq_threshold,
+            liq_price,
+            liq_price_rise,
+            eth_collateral_amount,
+            eth_collateral_usd,
+            weth_debt_raw,
+            weth_debt_usd
+        FROM loan."{pos_table}"
+        WHERE snapshot_date = $1
+          AND lower(user_address) = lower($2)
+        LIMIT 1
+        """,
+        snapshot_date,
+        address,
+    )
+    if pos_row is None:
+        return None
+
+    reserve_rows = await pool.fetch(
+        f"""
+        SELECT
+            symbol,
+            token_address,
+            decimals,
+            price_usd,
+            supply_raw,
+            supply_usd,
+            stable_debt_raw,
+            variable_debt_raw,
+            total_debt_usd,
+            use_as_collateral
+        FROM loan."{res_table}"
+        WHERE snapshot_date = $1
+          AND lower(user_address) = lower($2)
+          AND (supply_raw > 0 OR stable_debt_raw > 0 OR variable_debt_raw > 0)
+        ORDER BY GREATEST(supply_usd, total_debt_usd) DESC, symbol ASC
+        """,
+        snapshot_date,
+        address,
+    )
+
+    hf_val = Decimal(str(pos_row["health_factor"]))
+    hf_str = "inf" if hf_val >= MAX_HF else _fmt(hf_val, 4)
+
+    reserves: list[ReservePositionSchema] = []
+    for row in reserve_rows:
+        decimals = int(row["decimals"])
+        denom = Decimal(10) ** decimals
+        supply_amount = Decimal(str(row["supply_raw"])) / denom
+        stable_debt_amount = Decimal(str(row["stable_debt_raw"])) / denom
+        variable_debt_amount = Decimal(str(row["variable_debt_raw"])) / denom
+        total_debt_amount = stable_debt_amount + variable_debt_amount
+
+        reserves.append(
+            ReservePositionSchema(
+                symbol=str(row["symbol"]),
+                token_address=str(row["token_address"]),
+                price_usd=_fmt(Decimal(str(row["price_usd"]))),
+                supply_amount=_fmt(supply_amount, 6),
+                supply_usd=_fmt(Decimal(str(row["supply_usd"]))),
+                stable_debt_amount=_fmt(stable_debt_amount, 6),
+                variable_debt_amount=_fmt(variable_debt_amount, 6),
+                total_debt_amount=_fmt(total_debt_amount, 6),
+                total_debt_usd=_fmt(Decimal(str(row["total_debt_usd"]))),
+                use_as_collateral=bool(row["use_as_collateral"]),
+            )
+        )
+
+    return PositionResponse(
+        address=str(pos_row["user_address"]),
+        eth_collateral_amount=_fmt(Decimal(str(pos_row["eth_collateral_amount"])), 6),
+        eth_collateral_usd=_fmt(Decimal(str(pos_row["eth_collateral_usd"]))),
+        total_collateral_usd=_fmt(Decimal(str(pos_row["total_collateral_usd"]))),
+        available_borrows_usd=_fmt(Decimal(str(pos_row["available_borrows_usd"]))),
+        total_debt_usd=_fmt(Decimal(str(pos_row["total_debt_usd"]))),
+        health_factor=hf_str,
+        ltv=_fmt(Decimal(str(pos_row["ltv"])), 4),
+        liq_threshold=_fmt(Decimal(str(pos_row["liq_threshold"])), 4),
+        liq_price=_fmt(Decimal(str(pos_row["liq_price"]))),
+        weth_debt_amount=_fmt(
+            Decimal(str(pos_row["weth_debt_raw"])) / Decimal("1e18"),
+            6,
+        ),
+        weth_debt_usd=_fmt(Decimal(str(pos_row["weth_debt_usd"]))),
+        liq_price_rise=_fmt(Decimal(str(pos_row["liq_price_rise"]))),
+        reserves=reserves,
+    )
+
+
 async def get_positions_period(
     pool: asyncpg.Pool,
     protocol: str,
@@ -2967,6 +3104,7 @@ async def get_positions_period(
         SELECT
             snapshot_date,
             eth_collateral_amount,
+            health_factor,
             liq_price,
             liq_price_rise,
             weth_debt_raw,
@@ -3010,8 +3148,15 @@ async def get_positions_period(
             eth_col = Decimal(str(r["eth_collateral_amount"]))
             if eth_col <= 0:
                 continue
+            health_factor = Decimal(str(r["health_factor"]))
+            if not _is_healthy_snapshot(health_factor):
+                continue
             liq_price = Decimal(str(r["liq_price"]))
             liq_price_rise = Decimal(str(r["liq_price_rise"]))
+            if price_dropped and liq_price >= eth_price:
+                continue
+            if price_rose and liq_price_rise <= eth_price:
+                continue
 
             liquidated = (
                 price_dropped and liq_price > 0 and liq_price >= sim_price
@@ -3036,3 +3181,153 @@ async def get_positions_period(
             )
         )
     return result
+
+
+async def get_positions_period_detail(
+    pool: asyncpg.Pool,
+    protocol: str,
+    snapshot_date,
+    side: str,
+    sim_eth_price_distance: float,
+    orderby: str = "liq_price",
+    order: str = "desc",
+    limit: int = 20,
+    offset: int = 0,
+) -> HistoricalLiquidationDetailResponse:
+    table = _daily_positions_table(protocol)
+    rows = await pool.fetch(
+        f"""
+        SELECT
+            user_address,
+            total_collateral_usd,
+            total_debt_usd,
+            health_factor,
+            liq_price,
+            liq_price_rise,
+            eth_collateral_amount,
+            eth_collateral_usd,
+            weth_debt_raw,
+            eth_price_usd
+        FROM loan."{table}"
+        WHERE snapshot_date = $1
+        """,
+        snapshot_date,
+    )
+
+    eth_price = Decimal(
+        str(next((row["eth_price_usd"] for row in rows if row["eth_price_usd"] > 0), 0))
+    )
+    sim_price = eth_price * Decimal(str(1 + sim_eth_price_distance / 100))
+
+    all_items: list[HistoricalLiquidationDetailItem] = []
+    total_eth_collateral_amount = Decimal("0")
+    total_eth_collateral_usd = Decimal("0")
+    total_weth_debt_amount = Decimal("0")
+    total_weth_debt_usd = Decimal("0")
+    total_liquidation_usd = Decimal("0")
+
+    for row in rows:
+        total_collateral_usd_stored = Decimal(str(row["total_collateral_usd"]))
+        total_debt_usd = Decimal(str(row["total_debt_usd"]))
+        health_factor = Decimal(str(row["health_factor"]))
+        if not _is_healthy_snapshot(health_factor):
+            continue
+        liq_price = Decimal(str(row["liq_price"]))
+        liq_price_rise = Decimal(str(row["liq_price_rise"]))
+        eth_collateral_amount = Decimal(str(row["eth_collateral_amount"]))
+        eth_collateral_usd_stored = Decimal(str(row["eth_collateral_usd"]))
+        weth_debt_amount = Decimal(str(row["weth_debt_raw"])) / Decimal("1e18")
+
+        eth_collateral_usd_sim = eth_collateral_amount * sim_price
+        total_collateral_usd_sim = max(
+            total_collateral_usd_stored
+            - eth_collateral_usd_stored
+            + eth_collateral_usd_sim,
+            Decimal("0"),
+        )
+        weth_debt_usd_sim = weth_debt_amount * sim_price
+
+        liquidated = (
+            liq_price_rise > eth_price and liq_price_rise <= sim_price
+            if side == "borrow"
+            else liq_price > 0 and liq_price < eth_price and liq_price >= sim_price
+        )
+        if not liquidated:
+            continue
+
+        if side == "borrow":
+            total_weth_debt_amount += weth_debt_amount
+            total_weth_debt_usd += weth_debt_usd_sim
+            total_liquidation_usd += min(
+                weth_debt_usd_sim * _WETH_LIQ_BONUS,
+                total_collateral_usd_sim,
+            )
+        else:
+            total_eth_collateral_amount += eth_collateral_amount
+            total_eth_collateral_usd += eth_collateral_usd_sim
+            total_liquidation_usd += min(
+                total_debt_usd * _WETH_LIQ_BONUS,
+                eth_collateral_usd_sim,
+            )
+
+        all_items.append(
+            HistoricalLiquidationDetailItem(
+                address=str(row["user_address"]),
+                liq_price=_fmt(liq_price) if liq_price > 0 else "0",
+                liq_price_rise=_fmt(liq_price_rise) if liq_price_rise > 0 else "0",
+                eth_collateral_amount=_fmt(eth_collateral_amount, 6),
+                eth_collateral_usd=_fmt(eth_collateral_usd_sim),
+                total_collateral_usd=_fmt(total_collateral_usd_sim),
+                total_debt_usd=_fmt(total_debt_usd),
+                weth_debt_amount=_fmt(weth_debt_amount, 6),
+                weth_debt_usd=_fmt(weth_debt_usd_sim),
+            )
+        )
+
+    collateral_sort_cols = {
+        "liq_price": "liq_price",
+        "eth_collateral_usd": "eth_collateral_usd",
+        "total_collateral_usd": "total_collateral_usd",
+        "total_debt_usd": "total_debt_usd",
+    }
+    borrow_sort_cols = {
+        "liq_price_rise": "liq_price_rise",
+        "weth_debt_usd": "weth_debt_usd",
+        "total_collateral_usd": "total_collateral_usd",
+    }
+    sort_field = (
+        borrow_sort_cols.get(orderby, "liq_price_rise")
+        if side == "borrow"
+        else collateral_sort_cols.get(orderby, "liq_price")
+    )
+    all_items.sort(
+        key=lambda item: Decimal(getattr(item, sort_field) or "0"),
+        reverse=order.lower() == "desc",
+    )
+
+    total_count = len(all_items)
+    page_start = min(offset, total_count)
+    items = all_items[page_start : page_start + limit]
+    range_note = (
+        f"第 {page_start + 1} - {page_start + len(items)} 条"
+        if total_count > 0
+        else "0 条"
+    )
+    note = (
+        f"历史仓位数据截止 {snapshot_date} 00:00 UTC；"
+        f"本次按 ETH 价格变动 {sim_eth_price_distance}% 模拟，返回 {range_note}；"
+        "仓位展开明细同样基于该时点快照，不反映当日盘中变化。"
+    )
+
+    return HistoricalLiquidationDetailResponse(
+        snapshot_date=str(snapshot_date),
+        simulated_eth_price=_fmt(sim_price),
+        positions=items,
+        positions_cnt=str(total_count),
+        total_eth_collateral_amount=_fmt(total_eth_collateral_amount, 6),
+        total_eth_collateral_usd=_fmt(total_eth_collateral_usd),
+        total_weth_debt_amount=_fmt(total_weth_debt_amount, 6),
+        total_weth_debt_usd=_fmt(total_weth_debt_usd),
+        total_liquidation_usd=_fmt(total_liquidation_usd),
+        note=note,
+    )

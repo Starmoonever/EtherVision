@@ -45,6 +45,17 @@ export async function fetchUserPosition(address: string, version?: string): Prom
   return apiFetch<UserPosition>(`/aave/position?${query}`);
 }
 
+export async function fetchHistoricalUserPosition(
+  address: string,
+  date: string,
+  version?: string,
+): Promise<UserPosition> {
+  const query = version
+    ? `address=${address}&date=${date}&version=${version}`
+    : `address=${address}&date=${date}`;
+  return apiFetch<UserPosition>(`/aave/position/daily?${query}`);
+}
+
 /**
  * 获取指定地址在 Aave 上的借贷仓位详情。
  * @deprecated 请使用 fetchUserPosition，后端接口已合并
