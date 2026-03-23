@@ -58,13 +58,13 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick, primaryMetric }
             )}
         </p>
         {primaryMetric === 'eth_collateral_usd' ? (
-            <p style={{ color: '#e2e8f0', margin: 0, fontSize: '0.9rem' }}>
-                总抵押资产价值: {point.total_collateral_usd}
-            </p>
+          <p style={{ color: '#e2e8f0', margin: 0, fontSize: '0.9rem' }}>
+            总抵押资产价值: {point.total_collateral_usd}
+          </p>
         ) : (
-            <p style={{ color: '#e2e8f0', margin: 0, fontSize: '0.9rem' }}>
-                总贷出债务价值: {point.total_debt_usd}
-            </p>
+          <p style={{ color: '#e2e8f0', margin: 0, fontSize: '0.9rem' }}>
+            总贷出债务价值: {point.total_debt_usd}
+          </p>
         )}
         {payload.map((entry: any, index: number) => (
           <p key={index} style={{ color: entry.color, margin: 0, fontSize: '0.9rem' }}>
@@ -584,7 +584,9 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
               />
 
               <Tooltip
-                content={<CustomTooltip onDetailsClick={setSelectedPoint} primaryMetric={primaryMetric} />}
+                content={
+                  <CustomTooltip onDetailsClick={setSelectedPoint} primaryMetric={primaryMetric} />
+                }
                 wrapperStyle={{ pointerEvents: 'auto', zIndex: 1000 }}
                 trigger="hover"
                 active={activeTooltip !== null ? true : undefined}

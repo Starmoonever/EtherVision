@@ -19,14 +19,14 @@ repos:
 
   # Markdown 规范检查
   - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.21.0
+    rev: v0.22.0
     hooks:
       - id: markdownlint-cli2
         args: ['--fix'] # 自动修复可修复的问题
 
   # Python lint + formatter (Ruff)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.5
+    rev: v0.15.7
     hooks:
       - id: ruff-check
         args: ['--fix'] # 自动修复可修复的问题
