@@ -12,7 +12,7 @@ import {
 import { fetchCompoundMarketHistory } from '../api/compound';
 
 interface CompoundMarketHistoryChartProps {
-  version: 'v2' | 'v3' | 'all';
+  version: 'v2' | 'v3';
   market: string;
   marketSymbol: string;
 }
@@ -20,7 +20,8 @@ interface CompoundMarketHistoryChartProps {
 interface ChartPoint {
   timestamp: string;
   borrow_usd: number;
-  available_liquidity_usd: number;
+  total_market_usd: number;
+  asset_price_usd: number;
   borrow_apr: number;
   supply_apr: number;
   utilization: number;
@@ -34,7 +35,24 @@ export function CompoundMarketHistoryChart({
   const [data, setData] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y'>('3M');
+  const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y' | null>('3M');
+  const [customStart, setCustomStart] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    return d.toISOString().slice(0, 10);
+  });
+  const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    if (timeRange === null) return;
+    const now = new Date();
+    const startDate = new Date();
+    if (timeRange === '3M') startDate.setMonth(now.getMonth() - 3);
+    else if (timeRange === '6M') startDate.setMonth(now.getMonth() - 6);
+    else startDate.setFullYear(now.getFullYear() - 1);
+    setCustomStart(startDate.toISOString().slice(0, 10));
+    setCustomEnd(now.toISOString().slice(0, 10));
+  }, [timeRange]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -47,20 +65,18 @@ export function CompoundMarketHistoryChart({
           return;
         }
 
-        const now = new Date();
-        const end = now.toISOString().slice(0, 13).replace('T', ' ') + ':00:00'; // YYYY-MM-DD HH:00:00
+        const startDate = new Date(`${customStart}T00:00:00`);
+        const endDate = new Date(`${customEnd}T23:00:00`);
+        if (startDate.getTime() > endDate.getTime()) {
+          setError('自选时间区间无效：开始日期不能晚于结束日期');
+          setLoading(false);
+          return;
+        }
 
-        const startDate = new Date();
-        if (timeRange === '3M') startDate.setMonth(now.getMonth() - 3);
-        else if (timeRange === '6M') startDate.setMonth(now.getMonth() - 6);
-        else if (timeRange === '1Y') startDate.setFullYear(now.getFullYear() - 1);
+        const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
+        const end = endDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
 
-        const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00'; // YYYY-MM-DD HH:00:00
-
-        // 对接后端要求：Compound 仅支持 v3 数据，如果是 all，强制转换为 v3 发起请求
-        const fetchVersion = version === 'all' ? 'v3' : version;
-
-        const points = await fetchCompoundMarketHistory(fetchVersion, market, start, end);
+        const points = await fetchCompoundMarketHistory(version, market, start, end);
 
         const finalData: ChartPoint[] = points.map((pt) => {
           const supplyUsd = parseFloat(pt.supply_usd || '0');
@@ -68,7 +84,8 @@ export function CompoundMarketHistoryChart({
           return {
             timestamp: pt.timestamp.replace('T', ' '),
             borrow_usd: borrowUsd,
-            available_liquidity_usd: Math.max(0, supplyUsd - borrowUsd),
+            total_market_usd: Math.max(0, supplyUsd),
+            asset_price_usd: parseFloat(pt.price_usd || '0'),
             borrow_apr: parseFloat(pt.borrow_apr || '0') * 100,
             supply_apr: parseFloat(pt.supply_apr || '0') * 100,
             utilization: parseFloat(pt.utilization || '0') * 100,
@@ -89,7 +106,7 @@ export function CompoundMarketHistoryChart({
     };
 
     fetchData();
-  }, [version, market, timeRange]);
+  }, [version, market, timeRange, customStart, customEnd]);
 
   if (loading)
     return (
@@ -167,6 +184,43 @@ export function CompoundMarketHistoryChart({
           ))}
         </div>
       </div>
+      <div
+        style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '-0.5rem' }}
+      >
+        <input
+          type="date"
+          value={customStart}
+          onChange={(e) => {
+            setTimeRange(null);
+            setCustomStart(e.target.value);
+          }}
+          style={{
+            background: '#0f172a',
+            border: '1px solid #334155',
+            color: '#cbd5e1',
+            borderRadius: '4px',
+            padding: '2px 6px',
+            fontSize: '0.75rem',
+          }}
+        />
+        <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
+        <input
+          type="date"
+          value={customEnd}
+          onChange={(e) => {
+            setTimeRange(null);
+            setCustomEnd(e.target.value);
+          }}
+          style={{
+            background: '#0f172a',
+            border: '1px solid #334155',
+            color: '#cbd5e1',
+            borderRadius: '4px',
+            padding: '2px 6px',
+            fontSize: '0.75rem',
+          }}
+        />
+      </div>
 
       {/* Chart 1: Market Size */}
       <div className="card">
@@ -182,8 +236,16 @@ export function CompoundMarketHistoryChart({
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
               <YAxis
+                yAxisId="left"
                 stroke="#64748b"
                 tickFormatter={(val) => `$${(val / 1e6).toFixed(0)}M`}
+                width={60}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke="#f59e0b"
+                tickFormatter={(val) => `$${val}`}
                 width={60}
               />
               <Tooltip
@@ -191,13 +253,17 @@ export function CompoundMarketHistoryChart({
                 formatter={(value: any, name: any) => {
                   let label = name;
                   if (name === `借出 ${marketSymbol} 总值`) label = `借出 ${marketSymbol} 总值`;
-                  else if (name === `剩余可借 ${marketSymbol} 总值`)
-                    label = `剩余可借 ${marketSymbol} 总值`;
-                  return [`$${Number(value).toLocaleString()}`, label];
+                  else if (name === `${marketSymbol} 市场总值`) label = `${marketSymbol} 市场总值`;
+                  else if (name === `${marketSymbol} 资产价格`) label = `${marketSymbol} 资产价格`;
+                  return [
+                    `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+                    label,
+                  ];
                 }}
               />
               <Legend />
               <Line
+                yAxisId="left"
                 type="monotone"
                 dataKey="borrow_usd"
                 name={`借出 ${marketSymbol} 总值`}
@@ -206,12 +272,23 @@ export function CompoundMarketHistoryChart({
                 strokeWidth={2}
               />
               <Line
+                yAxisId="left"
                 type="monotone"
-                dataKey="available_liquidity_usd"
-                name={`剩余可借 ${marketSymbol} 总值`}
+                dataKey="total_market_usd"
+                name={`${marketSymbol} 市场总值`}
                 stroke="#10b981"
                 dot={false}
                 strokeWidth={2}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="asset_price_usd"
+                name={`${marketSymbol} 资产价格`}
+                stroke="#f59e0b"
+                dot={false}
+                strokeWidth={2}
+                strokeDasharray="5 4"
               />
             </LineChart>
           </ResponsiveContainer>
@@ -244,9 +321,18 @@ export function CompoundMarketHistoryChart({
                 tickFormatter={(val) => `${val}%`}
                 width={40}
               />
+              <YAxis yAxisId="priceHidden" hide={true} />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any, name: any) => [`${Number(value).toFixed(2)}%`, name]}
+                formatter={(value: any, name: any) => {
+                  if (name === `${marketSymbol} 价格趋势`) {
+                    return [
+                      `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+                      name,
+                    ];
+                  }
+                  return [`${Number(value).toFixed(2)}%`, name];
+                }}
               />
               <Legend />
               <Line
@@ -276,6 +362,16 @@ export function CompoundMarketHistoryChart({
                 dot={false}
                 strokeWidth={2}
                 strokeDasharray="5 5"
+              />
+              <Line
+                yAxisId="priceHidden"
+                type="monotone"
+                dataKey="asset_price_usd"
+                name={`${marketSymbol} 价格趋势`}
+                stroke="#fbbf24"
+                dot={false}
+                strokeWidth={2}
+                strokeDasharray="2 4"
               />
             </LineChart>
           </ResponsiveContainer>

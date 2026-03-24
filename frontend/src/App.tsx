@@ -82,7 +82,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
   const [error, setError] = useState('');
 
-  const [marketVersion, setMarketVersion] = useState<'v2' | 'v3' | 'all'>('all');
+  const [marketVersion, setMarketVersion] = useState<'v2' | 'v3'>('v3');
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3');
 
   const [queriedAddress, setQueriedAddress] = useState('');
@@ -313,13 +313,6 @@ export default function App() {
           type="button"
         >
           V3
-        </button>
-        <button
-          onClick={() => setMarketVersion('all')}
-          className={`switch-btn ${marketVersion === 'all' ? 'active active-purple' : ''}`}
-          type="button"
-        >
-          ALL
         </button>
       </div>
     </div>

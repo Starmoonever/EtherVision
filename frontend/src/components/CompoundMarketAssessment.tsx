@@ -6,7 +6,7 @@ import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
 
 export interface CompoundMarketAssessmentProps {
-  marketVersion: 'v2' | 'v3' | 'all';
+  marketVersion: 'v2' | 'v3';
   markets: CompoundMarket[];
   selectedMarket: string;
   onMarketChange: (market: string) => void;

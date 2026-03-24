@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
+  Area,
+  AreaChart,
   LineChart,
   Line,
   XAxis,
@@ -13,9 +15,21 @@ import { fetchCompoundMarketHistory } from '../api/compound';
 import type { CompoundMarketPoint } from '../api/compound';
 
 interface CompoundCollateralHistoryChartProps {
-  version: 'v2' | 'v3' | 'all';
+  version: 'v2' | 'v3';
   market: string;
   marketSymbol: string;
+}
+
+interface CollateralChartPoint {
+  timestamp: string;
+  price_in_base: number;
+  total_collateral_usd: number;
+}
+
+interface CompositionPoint {
+  timestamp: string;
+  total_collateral_usd: number;
+  [symbol: string]: string | number;
 }
 
 export function CompoundCollateralHistoryChart({
@@ -26,8 +40,25 @@ export function CompoundCollateralHistoryChart({
   const [data, setData] = useState<CompoundMarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y'>('3M');
+  const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y' | null>('3M');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
+  const [customStart, setCustomStart] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    return d.toISOString().slice(0, 10);
+  });
+  const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    if (timeRange === null) return;
+    const now = new Date();
+    const startDate = new Date();
+    if (timeRange === '3M') startDate.setMonth(now.getMonth() - 3);
+    else if (timeRange === '6M') startDate.setMonth(now.getMonth() - 6);
+    else startDate.setFullYear(now.getFullYear() - 1);
+    setCustomStart(startDate.toISOString().slice(0, 10));
+    setCustomEnd(now.toISOString().slice(0, 10));
+  }, [timeRange]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -40,19 +71,18 @@ export function CompoundCollateralHistoryChart({
           return;
         }
 
-        const now = new Date();
-        const end = now.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
-
-        const startDate = new Date();
-        if (timeRange === '3M') startDate.setMonth(now.getMonth() - 3);
-        else if (timeRange === '6M') startDate.setMonth(now.getMonth() - 6);
-        else if (timeRange === '1Y') startDate.setFullYear(now.getFullYear() - 1);
+        const startDate = new Date(`${customStart}T00:00:00`);
+        const endDate = new Date(`${customEnd}T23:00:00`);
+        if (startDate.getTime() > endDate.getTime()) {
+          setError('自选时间区间无效：开始日期不能晚于结束日期');
+          setLoading(false);
+          return;
+        }
 
         const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
+        const end = endDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
 
-        const fetchVersion = version === 'all' ? 'v3' : version;
-
-        const points = await fetchCompoundMarketHistory(fetchVersion, market, start, end);
+        const points = await fetchCompoundMarketHistory(version, market, start, end);
 
         // Sort data by time
         const sortedPoints = points.sort(
@@ -68,7 +98,7 @@ export function CompoundCollateralHistoryChart({
     };
 
     fetchData();
-  }, [version, market, timeRange]);
+  }, [version, market, timeRange, customStart, customEnd]);
 
   // Extract all available collateral symbols
   const availableSymbols = useMemo(() => {
@@ -87,6 +117,33 @@ export function CompoundCollateralHistoryChart({
     return Array.from(symbolsSet);
   }, [data]);
 
+  const compositionData = useMemo<CompositionPoint[]>(() => {
+    if (!data.length || !availableSymbols.length) return [];
+
+    return data.map((pt) => {
+      const bySymbol: Record<string, number> = {};
+      let total = 0;
+
+      for (const reserve of pt.reserves || []) {
+        if (!reserve.symbol || reserve.symbol === pt.symbol) continue;
+        const collateralUsd = parseFloat(reserve.supply_usd || '0');
+        if (collateralUsd <= 0) continue;
+        bySymbol[reserve.symbol] = (bySymbol[reserve.symbol] || 0) + collateralUsd;
+        total += collateralUsd;
+      }
+
+      const row: CompositionPoint = {
+        timestamp: pt.timestamp.split('T')[0].split(' ')[0],
+        total_collateral_usd: total,
+      };
+      for (const sym of availableSymbols) {
+        const val = bySymbol[sym] || 0;
+        row[sym] = total > 0 ? (val / total) * 100 : 0;
+      }
+      return row;
+    });
+  }, [data, availableSymbols]);
+
   // Set default selected symbol if none is selected
   useEffect(() => {
     if (availableSymbols.length > 0 && !availableSymbols.includes(selectedSymbol)) {
@@ -95,28 +152,39 @@ export function CompoundCollateralHistoryChart({
   }, [availableSymbols, selectedSymbol]);
 
   // Format data for the charts based on selected symbol
-  const chartData = useMemo(() => {
+  const chartData = useMemo<CollateralChartPoint[]>(() => {
     if (!data.length || !selectedSymbol) return [];
 
     return data
-      .map((pt) => {
+      .map((pt): CollateralChartPoint | null => {
         const reserve = pt.reserves?.find((r) => r.symbol === selectedSymbol);
         if (!reserve) return null;
 
         return {
           // Format timestamp as 20XX-XX-XX
           timestamp: pt.timestamp.split('T')[0].split(' ')[0],
-          price_usd: parseFloat(reserve.price_usd || '0'),
           price_in_base: parseFloat(reserve.price_in_base || '0'),
-          supply_usd: parseFloat(reserve.supply_usd || '0'),
-          borrow_usd: parseFloat(reserve.borrow_usd || '0'),
-          borrow_apr: parseFloat(reserve.borrow_apr || '0') * 100,
-          supply_apr: parseFloat(reserve.supply_apr || '0') * 100,
-          utilization: parseFloat(reserve.utilization || '0') * 100,
+          total_collateral_usd: parseFloat(reserve.supply_usd || '0'),
         };
       })
-      .filter(Boolean) as any[];
+      .filter((item): item is CollateralChartPoint => item !== null);
   }, [data, selectedSymbol]);
+
+  const collateralAxis = useMemo(() => {
+    const maxValue = chartData.reduce((max, item) => Math.max(max, item.total_collateral_usd), 0);
+
+    if (maxValue >= 1e9) return { divisor: 1e9, suffix: 'B' };
+    if (maxValue >= 1e6) return { divisor: 1e6, suffix: 'M' };
+    if (maxValue >= 1e3) return { divisor: 1e3, suffix: 'K' };
+    return { divisor: 1, suffix: '' };
+  }, [chartData]);
+
+  const formatCollateralTick = (value: number) => {
+    if (collateralAxis.divisor === 1) {
+      return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    }
+    return `$${(value / collateralAxis.divisor).toFixed(2)}${collateralAxis.suffix}`;
+  };
 
   if (loading)
     return (
@@ -204,6 +272,43 @@ export function CompoundCollateralHistoryChart({
           ))}
         </div>
       </div>
+      <div
+        style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '-0.5rem' }}
+      >
+        <input
+          type="date"
+          value={customStart}
+          onChange={(e) => {
+            setTimeRange(null);
+            setCustomStart(e.target.value);
+          }}
+          style={{
+            background: '#0f172a',
+            border: '1px solid #334155',
+            color: '#cbd5e1',
+            borderRadius: '4px',
+            padding: '2px 6px',
+            fontSize: '0.75rem',
+          }}
+        />
+        <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
+        <input
+          type="date"
+          value={customEnd}
+          onChange={(e) => {
+            setTimeRange(null);
+            setCustomEnd(e.target.value);
+          }}
+          style={{
+            background: '#0f172a',
+            border: '1px solid #334155',
+            color: '#cbd5e1',
+            borderRadius: '4px',
+            padding: '2px 6px',
+            fontSize: '0.75rem',
+          }}
+        />
+      </div>
 
       {/* Symbol Tabs */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
@@ -228,13 +333,13 @@ export function CompoundCollateralHistoryChart({
         ))}
       </div>
 
-      {/* Chart 1: Collateral Prices */}
+      {/* Combined Chart: price_in_base + total_collateral_usd */}
       <div className="card">
         <div
           className="card-header"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span className="card-title">{selectedSymbol} 价格图</span>
+          <span className="card-title">{selectedSymbol} 价格与抵押规模</span>
         </div>
         <div style={{ height: 400 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -243,26 +348,34 @@ export function CompoundCollateralHistoryChart({
               <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
               <YAxis
                 yAxisId="left"
-                stroke="#10b981"
-                tickFormatter={(val) => `$${val}`}
+                stroke="#3b82f6"
+                tickFormatter={formatCollateralTick}
                 width={60}
               />
-              <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" width={60} />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke="#f59e0b"
+                tickFormatter={(val) => `${val}`}
+                width={60}
+              />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any, name: any) => {
-                  if (name === `${selectedSymbol} 价格 (USD)`)
-                    return [`$${Number(value).toLocaleString()}`, name];
-                  return [Number(value).toLocaleString(), name];
+                formatter={(value: unknown, name: unknown) => {
+                  const numericValue = typeof value === 'number' ? value : Number(value);
+                  const label = String(name);
+                  if (label === `${selectedSymbol} 抵押总值 (USD)`)
+                    return [`$${numericValue.toLocaleString()}`, label];
+                  return [numericValue.toLocaleString(), label];
                 }}
               />
               <Legend />
               <Line
                 yAxisId="left"
                 type="monotone"
-                dataKey="price_usd"
-                name={`${selectedSymbol} 价格 (USD)`}
-                stroke="#10b981"
+                dataKey="total_collateral_usd"
+                name={`${selectedSymbol} 抵押总值 (USD)`}
+                stroke="#3b82f6"
                 dot={false}
                 strokeWidth={2}
               />
@@ -280,40 +393,72 @@ export function CompoundCollateralHistoryChart({
         </div>
       </div>
 
-      {/* Chart 2: Market Size */}
+      {/* Composition Chart: collateral share over time */}
       <div className="card">
         <div
           className="card-header"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span className="card-title">{selectedSymbol} 市场规模 (USD)</span>
+          <span className="card-title">各抵押资产占总抵押价值占比</span>
         </div>
-        <div style={{ height: 400 }}>
+        <div style={{ height: 420 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
+            <AreaChart data={compositionData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
               <YAxis
                 stroke="#64748b"
-                tickFormatter={(val) =>
-                  selectedSymbol === 'rsETH' ? `$${val}` : `$${(val / 1e6).toFixed(0)}M`
-                }
-                width={60}
+                domain={[0, 100]}
+                tickFormatter={(val) => `${val.toFixed(0)}%`}
+                width={55}
               />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                formatter={(value: any, name: any) => [`$${Number(value).toLocaleString()}`, name]}
+                formatter={(value: unknown, name: unknown) => [
+                  `${Number(value).toFixed(2)}%`,
+                  `${String(name)} 占比`,
+                ]}
+                labelFormatter={(
+                  label: unknown,
+                  payload?: ReadonlyArray<{ payload?: { total_collateral_usd?: unknown } }>,
+                ) => {
+                  const total = payload?.[0]?.payload?.total_collateral_usd;
+                  if (typeof total === 'number') {
+                    return `${String(label)} | 总抵押: $${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+                  }
+                  return String(label);
+                }}
               />
               <Legend />
-              <Line
-                type="monotone"
-                dataKey="supply_usd"
-                name={`抵押 ${selectedSymbol} 总值`}
-                stroke="#3b82f6"
-                dot={false}
-                strokeWidth={2}
-              />
-            </LineChart>
+              {availableSymbols.map((sym, idx) => {
+                const palette = [
+                  '#3b82f6',
+                  '#10b981',
+                  '#f59e0b',
+                  '#ef4444',
+                  '#8b5cf6',
+                  '#14b8a6',
+                  '#f97316',
+                  '#06b6d4',
+                  '#84cc16',
+                  '#ec4899',
+                ];
+                const color = palette[idx % palette.length];
+                return (
+                  <Area
+                    key={sym}
+                    type="monotone"
+                    dataKey={sym}
+                    name={sym}
+                    stackId="collateral-share"
+                    stroke={color}
+                    fill={color}
+                    fillOpacity={0.35}
+                    dot={false}
+                  />
+                );
+              })}
+            </AreaChart>
           </ResponsiveContainer>
         </div>
       </div>
