@@ -60,6 +60,11 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
     await pool.close()
+    try:
+        if w3 is not None:
+            await w3.provider.disconnect()
+    except Exception:
+        logger.debug("关闭 RPC provider 连接失败", exc_info=True)
     await close_engine()
     _cache.clear()
     logger.info("API 服务关闭")

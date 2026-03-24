@@ -48,6 +48,8 @@ const emptyCompoundState = (): CompoundVersionState => ({
 });
 const aavePositionCache = new Map<string, AaveCacheEntry>();
 const compoundPositionCache = new Map<string, CompoundCacheEntry>();
+const compoundCacheKey = (address: string, market: string) =>
+  `v3:${address.toLowerCase()}:${market.toLowerCase()}`;
 
 const resultPanelStyle = {
   border: '1px solid #334155',
@@ -180,7 +182,7 @@ export default function App() {
       }
       setError('');
 
-      const cacheKey = `v3:${compoundMarket.toLowerCase()}:${compoundAddress.toLowerCase()}`;
+      const cacheKey = compoundCacheKey(compoundAddress, compoundMarket);
       const cached = compoundPositionCache.get(cacheKey);
       if (cached) {
         if (cached.kind === 'not_found') {
@@ -197,6 +199,25 @@ export default function App() {
         const response = await fetchCompoundUserPosition('v3', compoundMarket, compoundAddress);
         if (response.positions && response.positions.length > 0) {
           const position = response.positions[0];
+
+          if (compoundMarket === 'all') {
+            const foundMarkets = new Set<string>();
+            for (const item of response.positions) {
+              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market), {
+                kind: 'data',
+                data: item,
+              });
+              foundMarkets.add(item.market.toLowerCase());
+            }
+            for (const item of compoundMarkets) {
+              if (!foundMarkets.has(item.address.toLowerCase())) {
+                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address), {
+                  kind: 'not_found',
+                });
+              }
+            }
+          }
+
           compoundPositionCache.set(cacheKey, { kind: 'data', data: position });
           setCompoundState({ data: position, loading: false, notFound: false });
         } else {
@@ -215,7 +236,7 @@ export default function App() {
     };
 
     loadCompound();
-  }, [activeTab, compoundAddress, compoundMarket, personalVersion, protocol]);
+  }, [activeTab, compoundAddress, compoundMarket, compoundMarkets, personalVersion, protocol]);
 
   const renderProtocolSwitch = () => (
     <div className="switch-group">

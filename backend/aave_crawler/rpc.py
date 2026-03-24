@@ -368,6 +368,12 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
     """
     timeout = cfg.crawler.rpc_timeout
 
+    async def _safe_disconnect(w3: AsyncWeb3) -> None:
+        try:
+            await w3.provider.disconnect()
+        except Exception:
+            pass
+
     async def _try_url(url: str) -> AsyncWeb3 | None:
         w3 = AsyncWeb3(AsyncHTTPProvider(url, request_kwargs={"timeout": timeout}))
         try:
@@ -379,11 +385,13 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
                     chain_id,
                     ETH_CHAIN_ID,
                 )
+                await _safe_disconnect(w3)
                 return None
             logger.info("使用 RPC: %s (chain_id=1)", url)
             return w3
         except Exception as exc:
             logger.debug("RPC %s 探测失败: %s", url, exc)
+            await _safe_disconnect(w3)
             return None
 
     # 优先尝试自定义节点

@@ -63,6 +63,12 @@ async def _build_web3(cfg: AppConfig) -> AsyncWeb3:
     """Build AsyncWeb3 for Ethereum mainnet using compound config."""
     timeout = cfg.crawler.rpc_timeout
 
+    async def _safe_disconnect(w3: AsyncWeb3) -> None:
+        try:
+            await w3.provider.disconnect()
+        except Exception:
+            pass
+
     async def _try_url(url: str) -> AsyncWeb3 | None:
         w3 = AsyncWeb3(AsyncHTTPProvider(url, request_kwargs={"timeout": timeout}))
         try:
@@ -74,11 +80,13 @@ async def _build_web3(cfg: AppConfig) -> AsyncWeb3:
                     chain_id,
                     ETH_CHAIN_ID,
                 )
+                await _safe_disconnect(w3)
                 return None
             logger.info("Using RPC: %s (chain_id=1)", url)
             return w3
         except Exception as exc:
             logger.debug("RPC %s probe failed: %s", url, exc)
+            await _safe_disconnect(w3)
             return None
 
     custom = (cfg.rpc_url or "").strip()
