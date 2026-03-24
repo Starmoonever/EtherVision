@@ -105,6 +105,16 @@ class UserPositionResponse(BaseModel):
     )
 
 
+class MarketItemResponse(BaseModel):
+    address: str = Field(description="市场合约地址。")
+    symbol: str = Field(description="市场符号，例如 USDC、WETH。")
+
+
+class MarketsResponse(BaseModel):
+    version: str = Field(description="Compound 协议版本；当前仅支持 v3。")
+    markets: list[MarketItemResponse] = Field(description="当前支持的市场列表。")
+
+
 class HealthResponse(BaseModel):
     status: str
 

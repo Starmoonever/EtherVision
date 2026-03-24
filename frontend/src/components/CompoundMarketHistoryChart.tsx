@@ -13,7 +13,8 @@ import { fetchCompoundMarketHistory } from '../api/compound';
 
 interface CompoundMarketHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
-  asset: string;
+  market: string;
+  marketSymbol: string;
 }
 
 interface ChartPoint {
@@ -25,7 +26,11 @@ interface ChartPoint {
   utilization: number;
 }
 
-export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHistoryChartProps) {
+export function CompoundMarketHistoryChart({
+  version,
+  market,
+  marketSymbol,
+}: CompoundMarketHistoryChartProps) {
   const [data, setData] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -55,7 +60,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
         // 对接后端要求：Compound 仅支持 v3 数据，如果是 all，强制转换为 v3 发起请求
         const fetchVersion = version === 'all' ? 'v3' : version;
 
-        const points = await fetchCompoundMarketHistory(fetchVersion, asset, start, end);
+        const points = await fetchCompoundMarketHistory(fetchVersion, market, start, end);
 
         const finalData: ChartPoint[] = points.map((pt) => {
           const supplyUsd = parseFloat(pt.supply_usd || '0');
@@ -84,7 +89,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
     };
 
     fetchData();
-  }, [version, asset, timeRange]);
+  }, [version, market, timeRange]);
 
   if (loading)
     return (
@@ -139,7 +144,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
-            {asset} 借贷市场历史数据回顾
+            {marketSymbol} 借贷市场历史数据回顾
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -185,8 +190,9 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                 formatter={(value: any, name: any) => {
                   let label = name;
-                  if (name === `借出 ${asset} 总值`) label = `借出 ${asset} 总值`;
-                  else if (name === `剩余可借 ${asset} 总值`) label = `剩余可借 ${asset} 总值`;
+                  if (name === `借出 ${marketSymbol} 总值`) label = `借出 ${marketSymbol} 总值`;
+                  else if (name === `剩余可借 ${marketSymbol} 总值`)
+                    label = `剩余可借 ${marketSymbol} 总值`;
                   return [`$${Number(value).toLocaleString()}`, label];
                 }}
               />
@@ -194,7 +200,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 type="monotone"
                 dataKey="borrow_usd"
-                name={`借出 ${asset} 总值`}
+                name={`借出 ${marketSymbol} 总值`}
                 stroke="#ef4444"
                 dot={false}
                 strokeWidth={2}
@@ -202,7 +208,7 @@ export function CompoundMarketHistoryChart({ version, asset }: CompoundMarketHis
               <Line
                 type="monotone"
                 dataKey="available_liquidity_usd"
-                name={`剩余可借 ${asset} 总值`}
+                name={`剩余可借 ${marketSymbol} 总值`}
                 stroke="#10b981"
                 dot={false}
                 strokeWidth={2}

@@ -42,7 +42,7 @@ export function CompoundSummaryCard({
   const healthFactor = parseFloat(data.health_factor || '0');
 
   // Format health factor
-  let hfDisplay = healthFactor > 100 ? '> 100' : healthFactor.toFixed(2);
+  let hfDisplay = healthFactor.toFixed(6);
   let hfColor = '#10b981'; // Green
   if (healthFactor < 1.0)
     hfColor = '#ef4444'; // Red
@@ -73,8 +73,8 @@ export function CompoundSummaryCard({
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
               $
               {discountedCollateral.toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
+                minimumFractionDigits: 6,
+                maximumFractionDigits: 6,
               })}
             </div>
 
@@ -109,8 +109,8 @@ export function CompoundSummaryCard({
                       <span style={{ color: '#10b981' }}>
                         $
                         {parseFloat(asset.discounted_value_usd || '0').toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
+                          minimumFractionDigits: 6,
+                          maximumFractionDigits: 6,
                         })}
                       </span>
                     </div>
@@ -136,8 +136,8 @@ export function CompoundSummaryCard({
               <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#ef4444' }}>
                 $
                 {totalDebt.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
+                  minimumFractionDigits: 6,
+                  maximumFractionDigits: 6,
                 })}
               </div>
             </div>

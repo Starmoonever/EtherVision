@@ -1,5 +1,15 @@
 import { apiFetch } from './client';
 
+export interface CompoundMarket {
+  address: string;
+  symbol: string;
+}
+
+interface CompoundMarketsResponse {
+  version: string;
+  markets: CompoundMarket[];
+}
+
 export interface CompoundReserve {
   reserve: string;
   symbol: string;
@@ -86,6 +96,14 @@ export interface CompoundUserPositionResponse {
   version: string;
   address: string;
   positions: CompoundUserPositionItem[];
+}
+
+export async function fetchCompoundMarkets(version: string): Promise<CompoundMarket[]> {
+  const data = await apiFetch<CompoundMarketsResponse>(`/compound/markets?version=${version}`);
+  if (!data.markets || !Array.isArray(data.markets)) {
+    throw new Error('Invalid Compound markets response format');
+  }
+  return data.markets;
 }
 
 export async function fetchCompoundMarketHistory(

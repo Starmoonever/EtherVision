@@ -1,68 +1,64 @@
 import { useState, useEffect } from 'react';
 import { fetchAssetPrice } from '../api';
+import type { CompoundMarket } from '../api/compound';
 import { CompoundPriceTrend } from './CompoundPriceTrend';
 import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
 
 export interface CompoundMarketAssessmentProps {
   marketVersion: 'v2' | 'v3' | 'all';
+  markets: CompoundMarket[];
+  selectedMarket: string;
+  onMarketChange: (market: string) => void;
 }
 
-export function CompoundMarketAssessment({ marketVersion }: CompoundMarketAssessmentProps) {
-  const [asset, setAsset] = useState<'USDC' | 'USDT' | 'WETH'>('USDC');
+export function CompoundMarketAssessment({
+  marketVersion,
+  markets,
+  selectedMarket,
+  onMarketChange,
+}: CompoundMarketAssessmentProps) {
   const [assetPrice, setAssetPrice] = useState<number | null>(null);
+  const activeMarket = markets.find((item) => item.address === selectedMarket) ?? markets[0];
+  const activeMarketAddress = activeMarket?.address ?? '';
+  const activeMarketSymbol = activeMarket?.symbol ?? '';
+
+  useEffect(() => {
+    if (!activeMarketAddress) return;
+    if (selectedMarket !== activeMarketAddress) {
+      onMarketChange(activeMarketAddress);
+    }
+  }, [activeMarketAddress, onMarketChange, selectedMarket]);
 
   // Fetch real-time price from API
   useEffect(() => {
+    if (!activeMarketSymbol) return;
+
     const fetchPrice = async () => {
       try {
-        const price = await fetchAssetPrice(asset);
+        const price = await fetchAssetPrice(activeMarketSymbol);
         setAssetPrice(price);
       } catch (err) {
-        console.error(`Fetch ${asset} price error:`, err);
+        setAssetPrice(null);
+        console.error(`Fetch ${activeMarketSymbol} price error:`, err);
       }
     };
 
     fetchPrice(); // Initial fetch
     const interval = setInterval(fetchPrice, 600000); // Poll every 10 minutes
     return () => clearInterval(interval);
-  }, [asset]);
+  }, [activeMarketSymbol]);
+
+  if (!activeMarketAddress) {
+    return (
+      <div className="card" style={{ textAlign: 'center', color: '#94a3b8' }}>
+        暂无 Compound 市场配置
+      </div>
+    );
+  }
 
   return (
     <div className="market-assessment">
-      {/* Asset Toggle */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
-        <div
-          style={{
-            display: 'flex',
-            background: '#1e293b',
-            borderRadius: '8px',
-            padding: '4px',
-            gap: '4px',
-          }}
-        >
-          {(['USDC', 'USDT', 'WETH'] as const).map((a) => (
-            <button
-              key={a}
-              onClick={() => setAsset(a)}
-              style={{
-                background: asset === a ? '#3b82f6' : 'transparent',
-                color: asset === a ? '#fff' : '#94a3b8',
-                border: 'none',
-                padding: '6px 24px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                transition: 'all 0.2s',
-              }}
-            >
-              {a}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div
         style={{
           display: 'grid',
@@ -84,7 +80,7 @@ export function CompoundMarketAssessment({ marketVersion }: CompoundMarketAssess
                 marginBottom: '0.75rem',
               }}
             >
-              <span className="card-title">{asset} 实时价格</span>
+              <span className="card-title">{activeMarketSymbol} 实时价格</span>
               <span className="badge green-badge">Live</span>
             </div>
             <div className="metric-value" style={{ fontSize: '2.2rem' }}>
@@ -102,15 +98,23 @@ export function CompoundMarketAssessment({ marketVersion }: CompoundMarketAssess
           <hr style={{ border: 'none', borderTop: '1px solid #1e293b', margin: 0 }} />
 
           {/* Historical trend */}
-          <CompoundPriceTrend asset={asset} />
+          <CompoundPriceTrend asset={activeMarketSymbol} />
         </div>
 
         {/* Right: Historical Data Panel */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-          <CompoundMarketHistoryChart version={marketVersion} asset={asset} />
+          <CompoundMarketHistoryChart
+            version={marketVersion}
+            market={activeMarketAddress}
+            marketSymbol={activeMarketSymbol}
+          />
 
           <div style={{ marginTop: '2rem' }}>
-            <CompoundCollateralHistoryChart version={marketVersion} asset={asset} />
+            <CompoundCollateralHistoryChart
+              version={marketVersion}
+              market={activeMarketAddress}
+              marketSymbol={activeMarketSymbol}
+            />
           </div>
         </div>
       </div>

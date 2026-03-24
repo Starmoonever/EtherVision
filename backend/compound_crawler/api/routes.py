@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Literal
 from fastapi import APIRouter, Query
 from .schemas import (
+    MarketsResponse,
     MarketGovernanceResponse,
     MarketGovernancePeriodResponse,
     MarketStatePeriodResponse,
@@ -11,6 +12,7 @@ from .schemas import (
     UserPositionResponse,
 )
 from .service import (
+    get_markets,
     get_market_governance,
     get_market_governance_period,
     get_market_state,
@@ -21,6 +23,20 @@ from ..database import AsyncpgPool
 
 
 router = APIRouter(prefix="/api/compound")
+
+
+@router.get(
+    "/markets",
+    response_model=MarketsResponse,
+    summary="List supported Compound markets",
+)
+async def markets(
+    version: Literal["v2", "v3"] = Query(
+        "v3",
+        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+    ),
+) -> MarketsResponse:
+    return get_markets(version)
 
 
 @router.get(
@@ -49,7 +65,7 @@ async def position(
     ),
     market: str = Query(
         ...,
-        description='市场地址或名称，也支持 `all`：`"0x..." | "USDC" | "USDT" | "WETH" | "all"`',
+        description='市场地址或名称，也支持 `all`：`"0x..." | "<SYMBOL>" | "all"`',
     ),
     address: str = Query(
         ...,
@@ -98,7 +114,7 @@ async def market_governance(
     ),
     market: str = Query(
         ...,
-        description='市场地址或名称：`"0x..." | "USDC" | "USDT" | "WETH" | "USDS" | "wstETH"`',
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
     ),
     date: str | None = Query(
         None,
@@ -143,7 +159,7 @@ async def market_governance_period(
     ),
     market: str = Query(
         ...,
-        description='市场地址或名称：`"0x..." | "USDC" | "USDT" | "WETH" | "USDS" | "wstETH"`',
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
     ),
     start: str = Query(..., description="UTC datetime at hour precision (start)"),
     end: str = Query(..., description="UTC datetime at hour precision (end)"),
@@ -180,7 +196,7 @@ async def market_state_period(
     ),
     market: str = Query(
         ...,
-        description='market name: "USDC" | "USDT" | "WETH" (case-insensitive)',
+        description="market name or address (case-insensitive for symbol)",
     ),
     start: str = Query(..., description="UTC datetime at hour precision (start)"),
     end: str = Query(..., description="UTC datetime at hour precision (end)"),
@@ -214,7 +230,7 @@ async def market_state(
     ),
     market: str = Query(
         ...,
-        description='market name: "USDC" | "USDT" | "WETH" (case-insensitive)',
+        description="market name or address (case-insensitive for symbol)",
     ),
     date: str = Query(..., description="UTC datetime at hour precision"),
     detail: bool = Query(False, description="Whether to expand reserve details"),

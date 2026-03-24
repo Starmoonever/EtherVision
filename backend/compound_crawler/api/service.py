@@ -14,6 +14,8 @@ from ..constants import COMPOUND_V3_MARKET_NAMES
 from ..db import market_table_name, reserve_table_name
 from ..user_position_snapshots import collect_market_user_snapshots
 from .schemas import (
+    MarketItemResponse,
+    MarketsResponse,
     GovernanceAssetResponse,
     MarketGovernanceResponse,
     MarketGovernancePeriodResponse,
@@ -29,6 +31,24 @@ _SECONDS_PER_YEAR = Decimal("31536000")
 _USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
 _GOVERNANCE_TABLE = "compound_v3_market_config_versions"
 _GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
+
+
+def get_markets(version: str) -> MarketsResponse:
+    if version != "v3":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
+
+    configured = [item.lower() for item in load_config().market_state.v3_markets or []]
+    addresses = list(dict.fromkeys(configured)) or list(COMPOUND_V3_MARKET_NAMES.keys())
+
+    markets = [
+        MarketItemResponse(
+            address=address,
+            symbol=COMPOUND_V3_MARKET_NAMES.get(address, address),
+        )
+        for address in addresses
+    ]
+    markets.sort(key=lambda item: (item.symbol.lower(), item.address.lower()))
+    return MarketsResponse(version=version, markets=markets)
 
 
 def _bytea_to_address(value: bytes | bytearray | memoryview) -> str:
@@ -438,7 +458,7 @@ def _market_to_address(market: str) -> str:
                 return address.lower()
         raise HTTPException(
             status_code=400,
-            detail="market 仅支持已知的 Compound v3 市场地址、USDC | USDT | WETH，或 all",
+            detail="market 仅支持已知的 Compound v3 市场地址或符号，或 all",
         )
 
     for address, name in COMPOUND_V3_MARKET_NAMES.items():
@@ -446,7 +466,7 @@ def _market_to_address(market: str) -> str:
             return address
     raise HTTPException(
         status_code=400,
-        detail="market 仅支持已知的 Compound v3 市场地址、USDC | USDT | WETH，或 all",
+        detail="market 仅支持已知的 Compound v3 市场地址或符号，或 all",
     )
 
 

@@ -11,13 +11,20 @@ interface Props {
   onSearch: (address: string) => void;
   // 布尔值，是否正在查询链上数据
   loading: boolean;
+  historyKey?: string;
+  placeholder?: string;
 }
 
-const STORAGE_KEY = 'search_history';
+const DEFAULT_STORAGE_KEY = 'search_history';
 const MAX_HISTORY = 50;
 
 // 组件函数 AddressInput，接收 Props 参数
-export function AddressInput({ onSearch, loading }: Props) {
+export function AddressInput({
+  onSearch,
+  loading,
+  historyKey = DEFAULT_STORAGE_KEY,
+  placeholder = '输入钱包地址 (0x...)',
+}: Props) {
   // 状态变量 value: 存储用户在搜索框里的输入
   const [value, setValue] = useState('');
   // 状态变量 error: 存储校验过程中的错误提示信息
@@ -32,14 +39,14 @@ export function AddressInput({ onSearch, loading }: Props) {
   // 加载历史记录
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(historyKey);
       if (stored) {
         setHistory(JSON.parse(stored));
       }
     } catch (e) {
       console.error('Failed to load history', e);
     }
-  }, []);
+  }, [historyKey]);
 
   // 点击外部关闭下拉框
   useEffect(() => {
@@ -55,12 +62,12 @@ export function AddressInput({ onSearch, loading }: Props) {
   const saveHistory = (address: string) => {
     const newHistory = [address, ...history.filter((h) => h !== address)].slice(0, MAX_HISTORY);
     setHistory(newHistory);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+    localStorage.setItem(historyKey, JSON.stringify(newHistory));
   };
 
   const clearHistory = () => {
     setHistory([]);
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(historyKey);
   };
 
   const handleHistoryClick = (address: string) => {
@@ -123,7 +130,7 @@ export function AddressInput({ onSearch, loading }: Props) {
               setValue(e.target.value); /* 实时更新 value 内容 */
               setError(''); /* 清空之前的错误提示 */
             }}
-            placeholder="输入抵押ETH的钱包地址 (0x...)"
+            placeholder={placeholder}
             className="address-input"
             spellCheck={false}
             disabled={loading}

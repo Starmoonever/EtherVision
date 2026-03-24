@@ -7,8 +7,8 @@ import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
 import { fetchUserPosition } from './api';
 import type { BorrowPosition, UserPosition } from './api';
-import { fetchCompoundUserPosition } from './api/compound';
-import type { CompoundUserPositionItem } from './api/compound';
+import { fetchCompoundMarkets, fetchCompoundUserPosition } from './api/compound';
+import type { CompoundMarket, CompoundUserPositionItem } from './api/compound';
 import './App.css';
 
 const MarketAssessment = lazy(() =>
@@ -38,8 +38,6 @@ interface CompoundVersionState {
   loading: boolean;
   notFound: boolean;
 }
-
-type CompoundAsset = 'USDC' | 'USDT' | 'WETH' | 'all';
 
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 const emptyCompoundState = (): CompoundVersionState => ({
@@ -86,9 +84,15 @@ export default function App() {
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
 
-  const [compoundAsset, setCompoundAsset] = useState<CompoundAsset>('USDC');
+  const [compoundMarkets, setCompoundMarkets] = useState<CompoundMarket[]>([]);
+  const [compoundMarket, setCompoundMarket] = useState<string>('all');
   const [compoundAddress, setCompoundAddress] = useState('');
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
+
+  const selectedCompoundMarketSymbol =
+    compoundMarket === 'all'
+      ? 'all'
+      : (compoundMarkets.find((item) => item.address === compoundMarket)?.symbol ?? compoundMarket);
 
   const handleSearch = (address: string) => {
     let safeAddress = address;
@@ -123,7 +127,21 @@ export default function App() {
 
   useEffect(() => {
     setCompoundState(emptyCompoundState());
-  }, [compoundAddress, compoundAsset]);
+  }, [compoundAddress, compoundMarket]);
+
+  useEffect(() => {
+    const loadCompoundMarkets = async () => {
+      try {
+        const markets = await fetchCompoundMarkets('v3');
+        setCompoundMarkets(markets);
+      } catch (loadError) {
+        console.error(loadError);
+        setError('无法加载 Compound 市场列表');
+      }
+    };
+
+    loadCompoundMarkets();
+  }, []);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
@@ -165,7 +183,7 @@ export default function App() {
 
       try {
         setError('');
-        const response = await fetchCompoundUserPosition('v3', compoundAsset, compoundAddress);
+        const response = await fetchCompoundUserPosition('v3', compoundMarket, compoundAddress);
         if (response.positions && response.positions.length > 0) {
           setCompoundState({ data: response.positions[0], loading: false, notFound: false });
         } else {
@@ -182,7 +200,7 @@ export default function App() {
     };
 
     loadCompound();
-  }, [activeTab, compoundAddress, compoundAsset, personalVersion, protocol]);
+  }, [activeTab, compoundAddress, compoundMarket, personalVersion, protocol]);
 
   const renderProtocolSwitch = () => (
     <div className="switch-group">
@@ -274,14 +292,38 @@ export default function App() {
   const renderCompoundAssetSwitch = () => (
     <div className="hero-switch">
       <div className="switch-group">
-        {(['USDC', 'USDT', 'WETH', 'all'] as const).map((asset) => (
+        {compoundMarkets.map((item) => (
           <button
-            key={asset}
-            onClick={() => setCompoundAsset(asset)}
-            className={`switch-btn ${compoundAsset === asset ? 'active' : ''}`}
+            key={item.address}
+            onClick={() => setCompoundMarket(item.address)}
+            className={`switch-btn ${compoundMarket === item.address ? 'active' : ''}`}
             type="button"
           >
-            {asset}
+            {item.symbol}
+          </button>
+        ))}
+        <button
+          onClick={() => setCompoundMarket('all')}
+          className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
+          type="button"
+        >
+          ALL
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderCompoundMarketSwitch = () => (
+    <div className="hero-switch">
+      <div className="switch-group">
+        {compoundMarkets.map((item) => (
+          <button
+            key={item.address}
+            onClick={() => setCompoundMarket(item.address)}
+            className={`switch-btn ${compoundMarket === item.address ? 'active' : ''}`}
+            type="button"
+          >
+            {item.symbol}
           </button>
         ))}
       </div>
@@ -304,7 +346,12 @@ export default function App() {
         {renderPersonalVersionSwitch()}
       </div>
 
-      <AddressInput onSearch={handleSearch} loading={false} />
+      <AddressInput
+        onSearch={handleSearch}
+        loading={false}
+        historyKey="search_history_aave"
+        placeholder="输入 Aave 钱包地址 (0x...)"
+      />
       {renderError()}
 
       {queriedAddress && (
@@ -340,7 +387,12 @@ export default function App() {
         {renderCompoundAssetSwitch()}
       </div>
 
-      <AddressInput onSearch={handleSearch} loading={false} />
+      <AddressInput
+        onSearch={handleSearch}
+        loading={false}
+        historyKey="search_history_compound"
+        placeholder="输入 Compound 钱包地址 (0x...)"
+      />
       {renderError()}
 
       {compoundAddress && personalVersion === 'v3' && (
@@ -349,7 +401,7 @@ export default function App() {
             <CompoundSummaryCard
               address={compoundAddress}
               version="v3"
-              market={compoundAsset}
+              market={selectedCompoundMarketSymbol}
               {...compoundState}
             />
             <CompoundEthSensitiveTable {...compoundState} />
@@ -378,9 +430,15 @@ export default function App() {
         <h1 className="hero-title">Compound 宏观借贷市场评估</h1>
         <p className="hero-sub">Compound 借贷市场状态分析</p>
         {renderMarketVersionSwitch()}
+        {renderCompoundMarketSwitch()}
       </div>
       <Suspense fallback={<ChartFallback minHeight="420px" />}>
-        <CompoundMarketAssessment marketVersion={marketVersion} />
+        <CompoundMarketAssessment
+          marketVersion={marketVersion}
+          markets={compoundMarkets}
+          selectedMarket={compoundMarket}
+          onMarketChange={setCompoundMarket}
+        />
       </Suspense>
     </>
   );

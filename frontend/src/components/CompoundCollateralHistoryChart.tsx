@@ -14,12 +14,14 @@ import type { CompoundMarketPoint } from '../api/compound';
 
 interface CompoundCollateralHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
-  asset: string;
+  market: string;
+  marketSymbol: string;
 }
 
 export function CompoundCollateralHistoryChart({
   version,
-  asset,
+  market,
+  marketSymbol,
 }: CompoundCollateralHistoryChartProps) {
   const [data, setData] = useState<CompoundMarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -50,7 +52,7 @@ export function CompoundCollateralHistoryChart({
 
         const fetchVersion = version === 'all' ? 'v3' : version;
 
-        const points = await fetchCompoundMarketHistory(fetchVersion, asset, start, end);
+        const points = await fetchCompoundMarketHistory(fetchVersion, market, start, end);
 
         // Sort data by time
         const sortedPoints = points.sort(
@@ -66,7 +68,7 @@ export function CompoundCollateralHistoryChart({
     };
 
     fetchData();
-  }, [version, asset, timeRange]);
+  }, [version, market, timeRange]);
 
   // Extract all available collateral symbols
   const availableSymbols = useMemo(() => {
@@ -268,7 +270,7 @@ export function CompoundCollateralHistoryChart({
                 yAxisId="right"
                 type="monotone"
                 dataKey="price_in_base"
-                name={`1 ${selectedSymbol} 换取 ${asset} 数量`}
+                name={`1 ${selectedSymbol} 换取 ${marketSymbol} 数量`}
                 stroke="#f59e0b"
                 dot={false}
                 strokeWidth={2}

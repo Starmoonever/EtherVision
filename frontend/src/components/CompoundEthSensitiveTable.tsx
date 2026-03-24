@@ -15,14 +15,19 @@ export function CompoundEthSensitiveTable({
     return null; // Handle loading/notFound state gracefully outside or just return null
   }
 
-  const formatUsd = (val: string | number) => {
+  const formatUsdValue = (val: string | number) => {
+    const num = typeof val === 'string' ? parseFloat(val || '0') : val;
+    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 })}`;
+  };
+
+  const formatPrice = (val: string | number) => {
     const num = typeof val === 'string' ? parseFloat(val || '0') : val;
     return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   const formatAmount = (val: string | number) => {
     const num = typeof val === 'string' ? parseFloat(val || '0') : val;
-    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+    return num.toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 });
   };
 
   // Asset filtering: exclude small dust assets (< $0.004)
@@ -72,13 +77,13 @@ export function CompoundEthSensitiveTable({
                     flex: 1,
                     cursor: 'help',
                   }}
-                  title={`ETH 价格上涨至 ${formatUsd(data.eth_up_liq_price_usd)} 时，触发清算`}
+                  title={`ETH 价格上涨至 ${formatPrice(data.eth_up_liq_price_usd)} 时，触发清算`}
                 >
                   <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                     ETH 上涨清算价格
                   </div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#ef4444' }}>
-                    {formatUsd(data.eth_up_liq_price_usd)}
+                    {formatPrice(data.eth_up_liq_price_usd)}
                   </div>
                 </div>
               )}
@@ -91,13 +96,13 @@ export function CompoundEthSensitiveTable({
                     flex: 1,
                     cursor: 'help',
                   }}
-                  title={`ETH 价格下跌至 ${formatUsd(data.eth_down_liq_price_usd)} 时，触发清算`}
+                  title={`ETH 价格下跌至 ${formatPrice(data.eth_down_liq_price_usd)} 时，触发清算`}
                 >
                   <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                     ETH 下跌清算价格
                   </div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#ef4444' }}>
-                    {formatUsd(data.eth_down_liq_price_usd)}
+                    {formatPrice(data.eth_down_liq_price_usd)}
                   </div>
                 </div>
               )}
@@ -125,7 +130,7 @@ export function CompoundEthSensitiveTable({
                 抵押资产价值锚定原生 ETH 价格
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#3b82f6' }}>
-                {formatUsd(nativeEthSensitiveCollateral)}
+                {formatUsdValue(nativeEthSensitiveCollateral)}
               </div>
             </div>
             <div style={{ background: '#1e293b', padding: '1rem', borderRadius: '8px', flex: 1 }}>
@@ -133,7 +138,7 @@ export function CompoundEthSensitiveTable({
                 抵押资产价值锚定 ETH 衍生流动性代币价格
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#3b82f6' }}>
-                {formatUsd(data.basis_risk_collateral_usd)}
+                {formatUsdValue(data.basis_risk_collateral_usd)}
               </div>
             </div>
           </div>
@@ -185,10 +190,10 @@ export function CompoundEthSensitiveTable({
                         </td>
                         <td style={{ textAlign: 'right' }}>{formatAmount(asset.amount)}</td>
                         <td style={{ textAlign: 'right' }}>
-                          {formatUsd(asset.discounted_value_usd)}
+                          {formatUsdValue(asset.discounted_value_usd)}
                         </td>
                         <td style={{ textAlign: 'right', color: '#10b981' }}>
-                          {parseFloat(asset.beta_to_eth || '0').toFixed(4)}
+                          {parseFloat(asset.beta_to_eth || '0').toFixed(6)}
                         </td>
                       </tr>
                     ))}
@@ -245,10 +250,10 @@ export function CompoundEthSensitiveTable({
                         </td>
                         <td style={{ textAlign: 'right' }}>{formatAmount(asset.amount)}</td>
                         <td style={{ textAlign: 'right' }}>
-                          {formatUsd(asset.discounted_value_usd)}
+                          {formatUsdValue(asset.discounted_value_usd)}
                         </td>
                         <td style={{ textAlign: 'right', color: '#f59e0b' }}>
-                          {parseFloat(asset.beta_to_eth || '0').toFixed(4)}
+                          {parseFloat(asset.beta_to_eth || '0').toFixed(6)}
                         </td>
                       </tr>
                     ))}
@@ -278,7 +283,7 @@ export function CompoundEthSensitiveTable({
                 债务价值锚定原生 ETH 价格
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#ef4444' }}>
-                {formatUsd(data.eth_sensitive_debt_usd)}
+                {formatUsdValue(data.eth_sensitive_debt_usd)}
               </div>
             </div>
             {/* Placeholder to keep layout balanced if needed */}
