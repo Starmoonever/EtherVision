@@ -18,6 +18,27 @@ interface Props {
 const DEFAULT_STORAGE_KEY = 'search_history';
 const MAX_HISTORY = 50;
 
+function validateAddressByCase(address: string): { ok: boolean; reason?: string } {
+  if (!isAddress(address, { strict: false })) {
+    return { ok: false, reason: '抵押ETH的钱包地址格式无效' };
+  }
+
+  const hex = address.slice(2);
+  const isLower = hex === hex.toLowerCase();
+  const isUpper = hex === hex.toUpperCase();
+
+  // Pure lower/upper: accept directly, no checksum enforcement.
+  if (isLower || isUpper) {
+    return { ok: true };
+  }
+
+  // Mixed case: checksum must be valid.
+  if (!isAddress(address, { strict: true })) {
+    return { ok: false, reason: '混合大小写地址需通过校验和校验' };
+  }
+  return { ok: true };
+}
+
 // 组件函数 AddressInput，接收 Props 参数
 export function AddressInput({
   onSearch,
@@ -97,11 +118,9 @@ export function AddressInput({
       trimmed = '0x' + trimmed;
     }
 
-    // 检验地址是否符合格式
-    // 即使是没有 checksum 的纯大写或纯小写地址，只要长度是 42，isAddress 也能判断其为 true。
-    // 但是如果地址混合了大小写且 checksum 错误，isAddress 可能会返回 false，因此这里使用 isAddress 进行宽松验证。
-    if (!isAddress(trimmed, { strict: false })) {
-      setError('抵押ETH的钱包地址格式无效');
+    const validation = validateAddressByCase(trimmed);
+    if (!validation.ok) {
+      setError(validation.reason ?? '抵押ETH的钱包地址格式无效');
       return;
     }
     // 地址正确，则清空之前的错误提示

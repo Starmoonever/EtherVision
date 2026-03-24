@@ -1,8 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { getAddress } from 'viem';
 import { AddressInput } from './components/AddressInput';
-import { CompoundEthSensitiveTable } from './components/CompoundEthSensitiveTable';
-import { CompoundSummaryCard } from './components/CompoundSummaryCard';
+import { CompoundPersonalRiskDashboard } from './components/CompoundPersonalRiskDashboard';
 import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
 import { fetchUserPosition } from './api';
@@ -39,12 +37,17 @@ interface CompoundVersionState {
   notFound: boolean;
 }
 
+type AaveCacheEntry = { kind: 'data'; data: UserPosition | BorrowPosition } | { kind: 'not_found' };
+type CompoundCacheEntry = { kind: 'data'; data: CompoundUserPositionItem } | { kind: 'not_found' };
+
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 const emptyCompoundState = (): CompoundVersionState => ({
   data: null,
   loading: false,
   notFound: false,
 });
+const aavePositionCache = new Map<string, AaveCacheEntry>();
+const compoundPositionCache = new Map<string, CompoundCacheEntry>();
 
 const resultPanelStyle = {
   border: '1px solid #334155',
@@ -95,28 +98,12 @@ export default function App() {
       : (compoundMarkets.find((item) => item.address === compoundMarket)?.symbol ?? compoundMarket);
 
   const handleSearch = (address: string) => {
-    let safeAddress = address;
-
-    try {
-      safeAddress = getAddress(address.toLowerCase());
-    } catch (searchError) {
-      console.warn('Address standardization failed, using original input', searchError);
-      setError('抵押ETH的钱包地址格式无效');
-
-      if (protocol === 'aave') {
-        setQueriedAddress('');
-      } else {
-        setCompoundAddress('');
-      }
-      return;
-    }
-
     setError('');
 
     if (protocol === 'aave') {
-      setQueriedAddress(safeAddress);
+      setQueriedAddress(address);
     } else {
-      setCompoundAddress(safeAddress);
+      setCompoundAddress(address);
     }
   };
 
@@ -147,12 +134,25 @@ export default function App() {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
 
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
+      const cacheKey = `${version}:${queriedAddress.toLowerCase()}`;
+      const cached = aavePositionCache.get(cacheKey);
+      if (cached) {
+        if (cached.kind === 'not_found') {
+          setState({ data: null, loading: false, notFound: true });
+          return;
+        }
+        setState({ data: cached.data, loading: false, notFound: false });
+        return;
+      }
+
       setState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         const data = await fetchUserPosition(queriedAddress, version);
+        aavePositionCache.set(cacheKey, { kind: 'data', data });
         setState({ data, loading: false, notFound: false });
       } catch (loadError) {
         if (loadError instanceof Error && loadError.message.includes('404')) {
+          aavePositionCache.set(cacheKey, { kind: 'not_found' });
           setState({ data: null, loading: false, notFound: true });
         } else {
           setState({ data: null, loading: false, notFound: false });
@@ -173,24 +173,39 @@ export default function App() {
     if (!compoundAddress || protocol !== 'compound' || activeTab !== 'personal') return;
 
     const loadCompound = async () => {
-      setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
-
       if (personalVersion === 'v2') {
         setError('抱歉，暂无 Compound v2 数据');
         setCompoundState({ data: null, loading: false, notFound: false });
         return;
       }
+      setError('');
 
+      const cacheKey = `v3:${compoundMarket.toLowerCase()}:${compoundAddress.toLowerCase()}`;
+      const cached = compoundPositionCache.get(cacheKey);
+      if (cached) {
+        if (cached.kind === 'not_found') {
+          setCompoundState({ data: null, loading: false, notFound: true });
+          return;
+        }
+        setCompoundState({ data: cached.data, loading: false, notFound: false });
+        return;
+      }
+
+      setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         setError('');
         const response = await fetchCompoundUserPosition('v3', compoundMarket, compoundAddress);
         if (response.positions && response.positions.length > 0) {
-          setCompoundState({ data: response.positions[0], loading: false, notFound: false });
+          const position = response.positions[0];
+          compoundPositionCache.set(cacheKey, { kind: 'data', data: position });
+          setCompoundState({ data: position, loading: false, notFound: false });
         } else {
+          compoundPositionCache.set(cacheKey, { kind: 'not_found' });
           setCompoundState({ data: null, loading: false, notFound: true });
         }
       } catch (loadError) {
         if (loadError instanceof Error && loadError.message.includes('404')) {
+          compoundPositionCache.set(cacheKey, { kind: 'not_found' });
           setCompoundState({ data: null, loading: false, notFound: true });
         } else {
           setCompoundState({ data: null, loading: false, notFound: false });
@@ -398,13 +413,12 @@ export default function App() {
       {compoundAddress && personalVersion === 'v3' && (
         <div className="results-container" style={{ marginTop: '2rem' }}>
           <div style={resultPanelStyle}>
-            <CompoundSummaryCard
+            <CompoundPersonalRiskDashboard
               address={compoundAddress}
               version="v3"
               market={selectedCompoundMarketSymbol}
               {...compoundState}
             />
-            <CompoundEthSensitiveTable {...compoundState} />
           </div>
         </div>
       )}
