@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, Numeric, TIMESTAMP, JSON, text
 from sqlalchemy.dialects.postgresql import BYTEA
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 

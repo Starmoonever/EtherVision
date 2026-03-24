@@ -3,6 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 
 from ..database import AsyncpgPool, DbSession
 from .constants import ETH_COLLATERAL_RATIO_MIN, ETH_DEBT_RATIO_MIN
@@ -825,3 +826,26 @@ async def borrow_liquidate_period(
         protocol=protocol,
         eth_ratio=Decimal(str(eth_ratio)),
     )
+
+
+@router.get(
+    "/{version}/{path:path}",
+    include_in_schema=False,
+)
+async def aave_version_path_compat(
+    version: Literal["v2", "v3"],
+    path: str,
+    request: Request,
+):
+    # Backward compatibility: /api/aave/v2/xxx -> /api/aave/xxx?version=v2
+    query_items = [
+        (k, v) for k, v in request.query_params.multi_items() if k.lower() != "version"
+    ]
+    query_items.append(("version", version))
+    from urllib.parse import urlencode
+
+    query_string = urlencode(query_items, doseq=True)
+    target = f"/api/aave/{path}"
+    if query_string:
+        target = f"{target}?{query_string}"
+    return RedirectResponse(url=target, status_code=307)

@@ -128,7 +128,7 @@ class MarketStateReserveResponse(BaseModel):
     utilization: str
     borrow_apr: str
     supply_apr: str
-    price_in_base: str
+    price_in_base: str | None = None
     price_usd: str
     supply_usd: str
     borrow_usd: str

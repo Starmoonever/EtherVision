@@ -33,8 +33,19 @@ router = APIRouter(prefix="/api/compound")
 async def markets(
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+        description='protocol version: "v2" | "v3"',
     ),
+) -> MarketsResponse:
+    return get_markets(version)
+
+
+@router.get(
+    "/{version}/markets",
+    response_model=MarketsResponse,
+    summary="List supported Compound markets (version in path)",
+)
+async def markets_by_path(
+    version: Literal["v2", "v3"],
 ) -> MarketsResponse:
     return get_markets(version)
 
@@ -192,8 +203,39 @@ async def market_state_period(
     pool: AsyncpgPool,
     version: str = Query(
         "v3",
-        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+        description='protocol version: "v2" | "v3"',
     ),
+    market: str = Query(
+        ...,
+        description="market name or address (case-insensitive for symbol)",
+    ),
+    start: str = Query(..., description="UTC datetime at hour precision (start)"),
+    end: str = Query(..., description="UTC datetime at hour precision (end)"),
+    interval: int = Query(
+        24,
+        description="Sampling interval in hours (default 24, allowed 1-168)",
+    ),
+    detail: bool = Query(False, description="Whether to expand reserve details"),
+) -> "MarketStatePeriodResponse":
+    return await get_market_state_period(
+        pool=pool,
+        version=version,
+        market=market,
+        start=start,
+        end=end,
+        interval=interval,
+        detail=detail,
+    )
+
+
+@router.get(
+    "/{version}/market/state/period",
+    response_model=MarketStatePeriodResponse,
+    summary="Query Compound market state over a period (version in path)",
+)
+async def market_state_period_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
     market: str = Query(
         ...,
         description="market name or address (case-insensitive for symbol)",
@@ -226,8 +268,32 @@ async def market_state(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+        description='protocol version: "v2" | "v3"',
     ),
+    market: str = Query(
+        ...,
+        description="market name or address (case-insensitive for symbol)",
+    ),
+    date: str = Query(..., description="UTC datetime at hour precision"),
+    detail: bool = Query(False, description="Whether to expand reserve details"),
+) -> MarketStateResponse:
+    return await get_market_state(
+        pool=pool,
+        version=version,
+        market=market,
+        date=date,
+        detail=detail,
+    )
+
+
+@router.get(
+    "/{version}/market/state",
+    response_model=MarketStateResponse,
+    summary="Query Compound market state (version in path)",
+)
+async def market_state_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
     market: str = Query(
         ...,
         description="market name or address (case-insensitive for symbol)",

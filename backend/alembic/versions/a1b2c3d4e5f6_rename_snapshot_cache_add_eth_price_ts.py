@@ -1,7 +1,7 @@
 """rename position_snapshot_cache to aave_position_snapshots, add eth_price_timestamp
 
 Revision ID: a1b2c3d4e5f6
-Revises: 24845454902f
+Revises: e2a7c14d8f05
 Create Date: 2026-03-11 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a1b2c3d4e5f6"
-down_revision: Union[str, Sequence[str], None] = "24845454902f"
+down_revision: Union[str, Sequence[str], None] = "e2a7c14d8f05"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

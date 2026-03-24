@@ -19,10 +19,13 @@ from .config import AppConfig
 from .constants import (
     CHAINLINK_AGGREGATOR_V3_ABI,
     COMET_ABI,
+    COMPOUND_V2_ORACLE_ABI,
     COMPOUND_V2_MARKETS,
     COMPOUND_V2_MARKET_NAMES,
     COMPOUND_V3_MARKETS,
     COMPOUND_V3_MARKET_NAMES,
+    COMPTROLLER_V2_ABI,
+    CTOKEN_V2_ABI,
     ERC20_METADATA_ABI,
     ERC20_SYMBOL_BYTES32_ABI,
 )
@@ -57,6 +60,7 @@ PUBLIC_RPCS = [
 
 COMET_FACTOR_SCALE = Decimal(10**18)
 SECONDS_PER_YEAR = Decimal("31536000")
+SECONDS_PER_BLOCK_V2 = Decimal("12")
 
 
 async def _build_web3(cfg: AppConfig) -> AsyncWeb3:
@@ -329,6 +333,176 @@ async def _token_metadata(
 
     cache[key] = (symbol, decimals)
     return cache[key]
+
+
+async def _v2_underlying_price_usd(
+    w3: AsyncWeb3,
+    ctoken_address: str,
+    comptroller_address: str,
+    underlying_decimals: int,
+    block_number: int,
+) -> Decimal:
+    comptroller = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(comptroller_address),
+        abi=COMPTROLLER_V2_ABI,
+    )
+    oracle_address = await comptroller.functions.oracle().call(
+        block_identifier=block_number
+    )
+    oracle = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(str(oracle_address)),
+        abi=COMPOUND_V2_ORACLE_ABI,
+    )
+    raw_price = await oracle.functions.getUnderlyingPrice(
+        AsyncWeb3.to_checksum_address(ctoken_address)
+    ).call(block_identifier=block_number)
+    price_int = int(raw_price)
+    if price_int <= 0:
+        return Decimal("0")
+    return Decimal(price_int) / (Decimal(10) ** max(0, 36 - underlying_decimals))
+
+
+async def _collect_v2_market_at_block(
+    w3: AsyncWeb3,
+    protocol: str,
+    market_address: str,
+    point_ts: datetime,
+    block_number: int,
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[MarketSnapshotRow, list[ReserveSnapshotRow]]:
+    ctoken = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(market_address),
+        abi=CTOKEN_V2_ABI,
+    )
+    ctoken_checksum = AsyncWeb3.to_checksum_address(market_address)
+
+    (
+        ctoken_symbol_raw,
+        total_borrow_raw,
+        total_reserves_raw,
+        borrow_rate_raw,
+        supply_rate_raw,
+        reserve_factor_raw,
+        comptroller_raw,
+    ) = await asyncio.gather(
+        ctoken.functions.symbol().call(block_identifier=block_number),
+        ctoken.functions.totalBorrows().call(block_identifier=block_number),
+        ctoken.functions.totalReserves().call(block_identifier=block_number),
+        ctoken.functions.borrowRatePerBlock().call(block_identifier=block_number),
+        ctoken.functions.supplyRatePerBlock().call(block_identifier=block_number),
+        ctoken.functions.reserveFactorMantissa().call(block_identifier=block_number),
+        ctoken.functions.comptroller().call(block_identifier=block_number),
+    )
+    try:
+        cash_raw = await ctoken.functions.getCash().call(block_identifier=block_number)
+    except Exception:
+        # cETH does not expose getCash(); fallback to contract ETH balance.
+        cash_raw = await w3.eth.get_balance(
+            ctoken_checksum, block_identifier=block_number
+        )
+    ctoken_symbol = (
+        str(ctoken_symbol_raw)
+        if ctoken_symbol_raw is not None
+        else _resolve_market_name(protocol, market_address)
+    )
+
+    # cETH has no underlying() method.
+    try:
+        underlying_address = str(
+            await ctoken.functions.underlying().call(block_identifier=block_number)
+        )
+        underlying_symbol, underlying_decimals_meta = await _token_metadata(
+            w3, underlying_address, block_number, metadata_cache
+        )
+        underlying_decimals = int(underlying_decimals_meta or 18)
+    except Exception:
+        underlying_address = WETH_MAINNET
+        underlying_symbol = "ETH"
+        underlying_decimals = 18
+
+    price_usd = await _v2_underlying_price_usd(
+        w3,
+        ctoken_address=market_address,
+        comptroller_address=str(comptroller_raw),
+        underlying_decimals=underlying_decimals,
+        block_number=block_number,
+    )
+
+    decimals_scale = Decimal(10) ** underlying_decimals
+    total_borrow = Decimal(int(total_borrow_raw)) / decimals_scale
+    total_reserves = Decimal(int(total_reserves_raw)) / decimals_scale
+    cash = Decimal(int(cash_raw)) / decimals_scale
+    total_supply = cash + total_borrow - total_reserves
+    if total_supply < 0:
+        total_supply = Decimal("0")
+    utilization = (total_borrow / total_supply) if total_supply > 0 else Decimal("0")
+
+    borrow_rate_raw_int = int(borrow_rate_raw)
+    supply_rate_raw_int = int(supply_rate_raw)
+    reserve_factor = Decimal(int(reserve_factor_raw)) / COMET_FACTOR_SCALE
+    borrow_rate = (
+        Decimal(borrow_rate_raw_int) / COMET_FACTOR_SCALE / SECONDS_PER_BLOCK_V2
+    )
+    supply_rate_chain = (
+        Decimal(supply_rate_raw_int) / COMET_FACTOR_SCALE / SECONDS_PER_BLOCK_V2
+    )
+    one_minus_reserve_factor = Decimal("1") - reserve_factor
+    supply_rate_formula = Decimal("0")
+    if borrow_rate > 0 and utilization > 0 and one_minus_reserve_factor > 0:
+        supply_rate_formula = borrow_rate * utilization * one_minus_reserve_factor
+    # NOTE:
+    # Some environments return reserveFactorMantissa=1e18 for v2 markets, which
+    # makes on-chain supplyRatePerBlock and the net formula both zero. For market
+    # trend visualization we fallback to gross lender rate (borrow * utilization)
+    # so the chart does not collapse to a flat zero line.
+    supply_rate_gross = (
+        borrow_rate * utilization
+        if borrow_rate > 0 and utilization > 0
+        else Decimal("0")
+    )
+    if supply_rate_chain > 0:
+        supply_rate = supply_rate_chain
+    elif supply_rate_formula > 0:
+        supply_rate = supply_rate_formula
+    else:
+        supply_rate = supply_rate_gross
+    supply_usd = total_supply * price_usd
+    borrow_usd = total_borrow * price_usd
+    collateral_usd = cash * price_usd
+
+    market_row = MarketSnapshotRow(
+        timestamp=point_ts,
+        market=_to_bytes(market_address),
+        symbol=ctoken_symbol,
+        total_supply=total_supply,
+        total_borrow=total_borrow,
+        collateral_usd=collateral_usd,
+        utilization=utilization,
+        borrow_rate=borrow_rate,
+        supply_rate=supply_rate,
+        price_usd=price_usd,
+        supply_usd=supply_usd,
+        borrow_usd=borrow_usd,
+    )
+    reserve_rows = [
+        ReserveSnapshotRow(
+            timestamp=point_ts,
+            market=_to_bytes(market_address),
+            reserve=_to_bytes(underlying_address),
+            symbol=underlying_symbol or ctoken_symbol,
+            decimals=underlying_decimals,
+            total_supply=total_supply,
+            total_borrow=total_borrow,
+            utilization=utilization,
+            borrow_rate=borrow_rate,
+            supply_rate=supply_rate,
+            price_in_base=price_usd,
+            price_usd=price_usd,
+            supply_usd=supply_usd,
+            borrow_usd=borrow_usd,
+        )
+    ]
+    return market_row, reserve_rows
 
 
 async def _collect_v3_governance_rows_at_block(
@@ -876,6 +1050,62 @@ async def _collect_v3_markets_at_block(
     return market_rows, reserve_rows, config_rows, config_asset_rows, status_rows
 
 
+async def _collect_v2_markets_at_block(
+    cfg: AppConfig,
+    w3: AsyncWeb3,
+    point_ts: datetime,
+    block_number: int,
+    markets: Sequence[str],
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]],
+) -> tuple[list[MarketSnapshotRow], list[ReserveSnapshotRow]]:
+    sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency))
+
+    async def _one_market(
+        market: str,
+    ) -> tuple[MarketSnapshotRow | None, list[ReserveSnapshotRow]]:
+        async with sem:
+            try:
+                if market.startswith("0x") and not await _is_contract_deployed_at_block(
+                    w3, market, block_number, deployment_cache
+                ):
+                    logger.info(
+                        "Skip undeployed v2 market=%s ts=%s block=%s",
+                        market,
+                        point_ts.isoformat(),
+                        block_number,
+                    )
+                    return None, []
+
+                market_row, reserve_rows = await _collect_v2_market_at_block(
+                    w3,
+                    protocol=cfg.protocol,
+                    market_address=market,
+                    point_ts=point_ts,
+                    block_number=block_number,
+                    metadata_cache=metadata_cache,
+                )
+                return market_row, reserve_rows
+            except Exception as exc:
+                logger.warning(
+                    "Failed to collect v2 market=%s ts=%s block=%s: %s",
+                    market,
+                    point_ts.isoformat(),
+                    block_number,
+                    exc,
+                )
+                return None, []
+
+    results = await asyncio.gather(*(_one_market(market) for market in markets))
+    market_rows: list[MarketSnapshotRow] = []
+    reserve_rows: list[ReserveSnapshotRow] = []
+    for market_row, rows in results:
+        if market_row is not None:
+            market_rows.append(market_row)
+            reserve_rows.extend(rows)
+    return market_rows, reserve_rows
+
+
 async def _filter_pending_markets(
     cfg: AppConfig,
     pool: asyncpg.Pool,
@@ -957,11 +1187,27 @@ async def _collect_rows_for_point(
     list[MarketConfigAssetRow],
     list[MarketStatusSnapshotRow],
 ]:
-    if cfg.protocol != "v3" or w3 is None:
+    if w3 is None:
         if include_market_state:
             market_rows, reserve_rows = _build_rows_for_point(point_ts, list(markets))
             return market_rows, reserve_rows, [], [], []
         return [], [], [], [], []
+
+    if cfg.protocol == "v2":
+        if not include_market_state:
+            return [], [], [], [], []
+        market_rows, reserve_rows = await _collect_v2_markets_at_block(
+            cfg,
+            w3,
+            point_ts=point_ts,
+            block_number=await _block_at_timestamp(
+                w3, int(point_ts.timestamp()), pool=pool
+            ),
+            markets=markets,
+            metadata_cache=metadata_cache,
+            deployment_cache=deployment_cache,
+        )
+        return market_rows, reserve_rows, [], [], []
 
     block_number = await _block_at_timestamp(w3, int(point_ts.timestamp()), pool=pool)
     if include_market_state and include_governance:
@@ -1231,12 +1477,8 @@ async def run_crawler(
         "status": 0,
     }
     w3: AsyncWeb3 | None = None
-    if cfg.protocol == "v3":
+    if cfg.protocol in ("v2", "v3"):
         w3 = await _build_web3(cfg)
-    elif cfg.protocol == "v2":
-        logger.warning(
-            "v2 real collection is not implemented yet, fallback to placeholder rows"
-        )
 
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
     deployment_cache: dict[str, dict[str, int]] = {}

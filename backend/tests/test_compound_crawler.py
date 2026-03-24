@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, patch
@@ -106,6 +107,103 @@ async def test_collect_v3_markets_reuses_missing_code_cache() -> None:
 
     assert collect.await_count == 0
     assert len(cast(_FakeW3, w3).eth.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_v2_markets_skips_undeployed_market() -> None:
+    cfg = cast(
+        AppConfig,
+        SimpleNamespace(crawler=SimpleNamespace(concurrency=2), protocol="v2"),
+    )
+    w3 = cast(AsyncWeb3, _FakeW3(b""))
+    point_ts = datetime(2022, 8, 28, 11, 0, 0, tzinfo=timezone.utc)
+    deployment_cache: dict[str, dict[str, int]] = {}
+
+    with patch.object(
+        crawler, "_collect_v2_market_at_block", new=AsyncMock()
+    ) as collect:
+        market_rows, reserve_rows = await crawler._collect_v2_markets_at_block(
+            cfg,
+            w3,
+            point_ts=point_ts,
+            block_number=15427392,
+            markets=["0x39AA39c021dfbaE8faC545936693aC917d5E7563"],
+            metadata_cache={},
+            deployment_cache=deployment_cache,
+        )
+
+    assert market_rows == []
+    assert reserve_rows == []
+    assert collect.await_count == 0
+    assert len(cast(_FakeW3, w3).eth.calls) == 1
+    assert (
+        deployment_cache["0x39aa39c021dfbae8fac545936693ac917d5e7563"][
+            "missing_through"
+        ]
+        == 15427392
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_v2_markets_calls_collector_when_deployed() -> None:
+    cfg = cast(
+        AppConfig,
+        SimpleNamespace(crawler=SimpleNamespace(concurrency=2), protocol="v2"),
+    )
+    w3 = cast(AsyncWeb3, _FakeW3(b"\x01"))
+    point_ts = datetime(2022, 8, 28, 11, 0, 0, tzinfo=timezone.utc)
+
+    fake_market_row = crawler.MarketSnapshotRow(
+        timestamp=point_ts,
+        market=bytes.fromhex("39aa39c021dfbae8fac545936693ac917d5e7563"),
+        symbol="cUSDC",
+        total_supply=Decimal("0"),
+        total_borrow=Decimal("0"),
+        collateral_usd=Decimal("0"),
+        utilization=Decimal("0"),
+        borrow_rate=Decimal("0"),
+        supply_rate=Decimal("0"),
+        price_usd=Decimal("0"),
+        supply_usd=Decimal("0"),
+        borrow_usd=Decimal("0"),
+    )
+    fake_reserve_rows = [
+        crawler.ReserveSnapshotRow(
+            timestamp=point_ts,
+            market=bytes.fromhex("39aa39c021dfbae8fac545936693ac917d5e7563"),
+            reserve=bytes.fromhex("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
+            symbol="USDC",
+            decimals=6,
+            total_supply=Decimal("0"),
+            total_borrow=Decimal("0"),
+            utilization=Decimal("0"),
+            borrow_rate=Decimal("0"),
+            supply_rate=Decimal("0"),
+            price_in_base=Decimal("0"),
+            price_usd=Decimal("0"),
+            supply_usd=Decimal("0"),
+            borrow_usd=Decimal("0"),
+        )
+    ]
+
+    with patch.object(
+        crawler,
+        "_collect_v2_market_at_block",
+        new=AsyncMock(return_value=(fake_market_row, fake_reserve_rows)),
+    ) as collect:
+        market_rows, reserve_rows = await crawler._collect_v2_markets_at_block(
+            cfg,
+            w3,
+            point_ts=point_ts,
+            block_number=15427392,
+            markets=["0x39AA39c021dfbaE8faC545936693aC917d5E7563"],
+            metadata_cache={},
+            deployment_cache={},
+        )
+
+    assert len(market_rows) == 1
+    assert len(reserve_rows) == 1
+    assert collect.await_count == 1
 
 
 def test_governance_config_hash_is_stable() -> None:

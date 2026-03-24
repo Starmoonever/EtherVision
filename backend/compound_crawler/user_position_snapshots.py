@@ -799,6 +799,7 @@ async def _collect_market_point(
             point_ts,
             _to_bytes(market_address),
             users,
+            protocol=cfg.protocol,
         )
         stats.skipped_existing += len(existing)
         pending_users = [addr for addr in users if addr not in existing]
@@ -875,6 +876,7 @@ async def _collect_market_point(
 async def _flush_backfill_write_batch(
     pool: asyncpg.Pool,
     *,
+    protocol: str = "v3",
     snapshot_rows: list[UserPositionSnapshotRow],
     asset_rows: list[UserPositionAssetRow],
     stats: BackfillStats,
@@ -887,8 +889,12 @@ async def _flush_backfill_write_batch(
         len(snapshot_rows),
         len(asset_rows),
     )
-    inserted_snapshots = await upsert_user_position_snapshots(pool, snapshot_rows)
-    inserted_assets = await upsert_user_position_asset_rows(pool, asset_rows)
+    inserted_snapshots = await upsert_user_position_snapshots(
+        pool, snapshot_rows, protocol=protocol
+    )
+    inserted_assets = await upsert_user_position_asset_rows(
+        pool, asset_rows, protocol=protocol
+    )
     stats.snapshots += inserted_snapshots
     stats.assets += inserted_assets
     logger.info(
@@ -912,7 +918,9 @@ async def collect_market_user_snapshots(
 ) -> CollectedMarketSnapshots:
     if persist:
         await ensure_user_position_snapshot_tables(
-            pool, use_timescaledb=cfg.market_state.use_timescaledb
+            pool,
+            protocol=cfg.protocol,
+            use_timescaledb=cfg.market_state.use_timescaledb,
         )
 
     market_address = _resolve_market_address(market)
@@ -960,8 +968,8 @@ async def collect_market_user_snapshots(
     )
 
     if persist:
-        await upsert_user_position_snapshots(pool, snapshot_rows)
-        await upsert_user_position_asset_rows(pool, asset_rows)
+        await upsert_user_position_snapshots(pool, snapshot_rows, protocol=cfg.protocol)
+        await upsert_user_position_asset_rows(pool, asset_rows, protocol=cfg.protocol)
 
     return CollectedMarketSnapshots(
         timestamp=timestamp,
@@ -985,7 +993,9 @@ async def run_user_position_backfill(
     dry_run: bool = False,
 ) -> BackfillStats:
     await ensure_user_position_snapshot_tables(
-        pool, use_timescaledb=cfg.market_state.use_timescaledb
+        pool,
+        protocol=cfg.protocol,
+        use_timescaledb=cfg.market_state.use_timescaledb,
     )
     w3 = await _build_web3(cfg)
 
@@ -1065,22 +1075,40 @@ async def run_user_position_backfill(
                 len(pending_snapshot_rows) >= write_snapshot_batch_size
                 or len(pending_asset_rows) >= write_asset_batch_size
             ):
-                await _flush_backfill_write_batch(
-                    pool,
-                    snapshot_rows=pending_snapshot_rows,
-                    asset_rows=pending_asset_rows,
-                    stats=stats,
-                )
+                if cfg.protocol != "v3":
+                    await _flush_backfill_write_batch(
+                        pool,
+                        protocol=cfg.protocol,
+                        snapshot_rows=pending_snapshot_rows,
+                        asset_rows=pending_asset_rows,
+                        stats=stats,
+                    )
+                else:
+                    await _flush_backfill_write_batch(
+                        pool,
+                        snapshot_rows=pending_snapshot_rows,
+                        asset_rows=pending_asset_rows,
+                        stats=stats,
+                    )
                 pending_snapshot_rows = []
                 pending_asset_rows = []
 
     if not dry_run:
-        await _flush_backfill_write_batch(
-            pool,
-            snapshot_rows=pending_snapshot_rows,
-            asset_rows=pending_asset_rows,
-            stats=stats,
-        )
+        if cfg.protocol != "v3":
+            await _flush_backfill_write_batch(
+                pool,
+                protocol=cfg.protocol,
+                snapshot_rows=pending_snapshot_rows,
+                asset_rows=pending_asset_rows,
+                stats=stats,
+            )
+        else:
+            await _flush_backfill_write_batch(
+                pool,
+                snapshot_rows=pending_snapshot_rows,
+                asset_rows=pending_asset_rows,
+                stats=stats,
+            )
 
     logger.info(
         "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s skipped_empty=%s dry_run=%s",

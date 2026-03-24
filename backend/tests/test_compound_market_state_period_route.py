@@ -28,9 +28,15 @@ class _FakeConn:
         return None
 
     async def fetch(self, sql, *args):
-        if "FROM loan.compound_v3_market_snapshots" in sql:
+        if (
+            "FROM loan.compound_v3_market_snapshots" in sql
+            or "FROM loan.compound_v2_market_snapshots" in sql
+        ):
             return self._rows
-        if "FROM loan.compound_v3_market_snapshot_reserves" in sql:
+        if (
+            "FROM loan.compound_v3_market_snapshot_reserves" in sql
+            or "FROM loan.compound_v2_market_snapshot_reserves" in sql
+        ):
             return self._reserve_rows
         return []
 
@@ -207,3 +213,74 @@ def test_market_state_period_invalid_time_order() -> None:
         )
     assert resp.status_code == 400
     assert "start" in resp.json()["detail"]
+
+
+def test_market_state_period_supports_v2() -> None:
+    ts1 = datetime(2026, 3, 10, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        {
+            "timestamp": ts1,
+            "market": bytes.fromhex("5d3a536e4d6dbd6114cc1ead35777bab948e3643"),
+            "symbol": "cDAI",
+            "total_supply": "100",
+            "total_borrow": "20",
+            "collateral_usd": "0",
+            "utilization": "0.2",
+            "borrow_rate": "0.01",
+            "supply_rate": "0.005",
+            "price_usd": "1",
+            "supply_usd": "100",
+            "borrow_usd": "20",
+        }
+    ]
+    with _build_client(rows=rows) as client:
+        resp = client.get(
+            "/api/compound/market/state/period",
+            params={
+                "version": "v2",
+                "market": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+                "start": "2026-03-10T00:00:00Z",
+                "end": "2026-03-10T00:00:00Z",
+                "interval": 24,
+                "detail": "false",
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["points"]) == 1
+    assert data["points"][0]["version"] == "v2"
+
+
+def test_market_state_period_supports_v2_path_version() -> None:
+    ts1 = datetime(2026, 3, 10, 0, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        {
+            "timestamp": ts1,
+            "market": bytes.fromhex("5d3a536e4d6dbd6114cc1ead35777bab948e3643"),
+            "symbol": "cDAI",
+            "total_supply": "100",
+            "total_borrow": "20",
+            "collateral_usd": "0",
+            "utilization": "0.2",
+            "borrow_rate": "0.01",
+            "supply_rate": "0.005",
+            "price_usd": "1",
+            "supply_usd": "100",
+            "borrow_usd": "20",
+        }
+    ]
+    with _build_client(rows=rows) as client:
+        resp = client.get(
+            "/api/compound/v2/market/state/period",
+            params={
+                "market": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+                "start": "2026-03-10T00:00:00Z",
+                "end": "2026-03-10T00:00:00Z",
+                "interval": 24,
+                "detail": "false",
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["points"]) == 1
+    assert data["points"][0]["version"] == "v2"

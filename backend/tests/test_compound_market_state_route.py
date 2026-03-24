@@ -147,18 +147,63 @@ def test_market_state_ok_with_detail() -> None:
     assert data["reserves"][0]["price_usd"] == "1000"
 
 
-def test_market_state_reject_v2_for_now() -> None:
-    with _build_client(row=None) as client:
+def test_market_state_supports_v2() -> None:
+    row = {
+        "timestamp": datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc),
+        "market": bytes.fromhex("5d3a536e4d6dbd6114cc1ead35777bab948e3643"),
+        "symbol": "cDAI",
+        "total_supply": "100",
+        "total_borrow": "20",
+        "collateral_usd": "80000",
+        "utilization": "0.2",
+        "borrow_rate": "0.01",
+        "supply_rate": "0.005",
+        "price_usd": "1",
+        "supply_usd": "100",
+        "borrow_usd": "20",
+    }
+    with _build_client(row=row) as client:
         resp = client.get(
             "/api/compound/market/state",
             params={
                 "version": "v2",
-                "market": "USDC",
+                "market": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
                 "date": "2026-03-19T12:00:00Z",
             },
         )
-    assert resp.status_code == 400
-    assert "仅支持" in resp.json()["detail"]
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["version"] == "v2"
+    assert data["market"] == "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
+
+
+def test_market_state_supports_v2_path_version() -> None:
+    row = {
+        "timestamp": datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc),
+        "market": bytes.fromhex("5d3a536e4d6dbd6114cc1ead35777bab948e3643"),
+        "symbol": "cDAI",
+        "total_supply": "100",
+        "total_borrow": "20",
+        "collateral_usd": "80000",
+        "utilization": "0.2",
+        "borrow_rate": "0.01",
+        "supply_rate": "0.005",
+        "price_usd": "1",
+        "supply_usd": "100",
+        "borrow_usd": "20",
+    }
+    with _build_client(row=row) as client:
+        resp = client.get(
+            "/api/compound/v2/market/state",
+            params={
+                "market": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+                "date": "2026-03-19T12:00:00Z",
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["version"] == "v2"
+    assert data["market"] == "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
 
 
 def test_market_state_reject_non_hour_date() -> None:

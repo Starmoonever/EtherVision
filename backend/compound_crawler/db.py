@@ -309,6 +309,35 @@ ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
 """
 
 
+_UPSERT_RESERVE_V2 = """
+INSERT INTO loan.{table_name} (
+    "timestamp", market, reserve,
+    symbol, decimals,
+    total_supply, total_borrow, utilization,
+    borrow_rate, supply_rate, price_usd,
+    supply_usd, borrow_usd
+) VALUES (
+    $1, $2, $3,
+    $4, $5,
+    $6, $7, $8,
+    $9, $10, $11,
+    $12, $13
+)
+ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
+    decimals = EXCLUDED.decimals,
+    total_supply = EXCLUDED.total_supply,
+    total_borrow = EXCLUDED.total_borrow,
+    utilization = EXCLUDED.utilization,
+    borrow_rate = EXCLUDED.borrow_rate,
+    supply_rate = EXCLUDED.supply_rate,
+    price_usd = EXCLUDED.price_usd,
+    supply_usd = EXCLUDED.supply_usd,
+    borrow_usd = EXCLUDED.borrow_usd,
+    created_at = NOW();
+"""
+
+
 _MARKET_CONFIG_TABLE = "compound_v3_market_config_versions"
 _MARKET_CONFIG_ASSET_TABLE = "compound_v3_market_config_assets"
 _MARKET_STATUS_TABLE = "compound_v3_market_status_snapshots"
@@ -524,11 +553,18 @@ ON CONFLICT ("timestamp", market) DO UPDATE SET
 """
 
 
-_USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
-_USER_POSITION_ASSET_TABLE = "compound_v3_user_position_snapshot_assets"
+_USER_POSITION_TABLES = {
+    "v2": "compound_v2_user_position_snapshots",
+    "v3": "compound_v3_user_position_snapshots",
+}
 
-_DDL_USER_POSITION = f"""
-CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_TABLE} (
+_USER_POSITION_ASSET_TABLES = {
+    "v2": "compound_v2_user_position_snapshot_assets",
+    "v3": "compound_v3_user_position_snapshot_assets",
+}
+
+_DDL_USER_POSITION = """
+CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"                  TIMESTAMPTZ     NOT NULL,
     block_number                 BIGINT          NOT NULL,
     market                       BYTEA           NOT NULL,
@@ -536,9 +572,9 @@ CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_TABLE} (
     user_address                 BYTEA           NOT NULL,
     has_open_position            BOOLEAN         NOT NULL,
     is_liquidatable              BOOLEAN         NOT NULL,
-    base_token                   BYTEA           NOT NULL,
+    base_token                   BYTEA           NULL,
     base_symbol                  TEXT            NULL,
-    base_price_usd               NUMERIC(30, 8)  NOT NULL,
+    base_price_usd               NUMERIC(30, 8)  NULL,
     eth_price_usd                NUMERIC(30, 8)  NOT NULL,
     total_collateral_usd         NUMERIC(30, 8)  NOT NULL,
     total_debt_usd               NUMERIC(30, 8)  NOT NULL,
@@ -561,18 +597,18 @@ CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_TABLE} (
 );
 """
 
-_DDL_USER_POSITION_INDEX_MARKET_TS = f"""
-CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_TABLE}_market_ts
-    ON loan.{_USER_POSITION_TABLE} (market, "timestamp" DESC);
+_DDL_USER_POSITION_INDEX_MARKET_TS = """
+CREATE INDEX IF NOT EXISTS {index_name}
+    ON loan.{table_name} (market, "timestamp" DESC);
 """
 
-_DDL_USER_POSITION_INDEX_USER_TS = f"""
-CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_TABLE}_user_ts
-    ON loan.{_USER_POSITION_TABLE} (user_address, "timestamp" DESC);
+_DDL_USER_POSITION_INDEX_USER_TS = """
+CREATE INDEX IF NOT EXISTS {index_name}
+    ON loan.{table_name} (user_address, "timestamp" DESC);
 """
 
-_DDL_USER_POSITION_ASSET = f"""
-CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_ASSET_TABLE} (
+_DDL_USER_POSITION_ASSET = """
+CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"                  TIMESTAMPTZ     NOT NULL,
     block_number                 BIGINT          NOT NULL,
     market                       BYTEA           NOT NULL,
@@ -597,18 +633,18 @@ CREATE TABLE IF NOT EXISTS loan.{_USER_POSITION_ASSET_TABLE} (
 );
 """
 
-_DDL_USER_POSITION_ASSET_INDEX_USER_TS = f"""
-CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_ASSET_TABLE}_user_ts
-    ON loan.{_USER_POSITION_ASSET_TABLE} (user_address, "timestamp" DESC);
+_DDL_USER_POSITION_ASSET_INDEX_USER_TS = """
+CREATE INDEX IF NOT EXISTS {index_name}
+    ON loan.{table_name} (user_address, "timestamp" DESC);
 """
 
-_DDL_USER_POSITION_ASSET_INDEX_MARKET_TS = f"""
-CREATE INDEX IF NOT EXISTS idx_{_USER_POSITION_ASSET_TABLE}_market_ts
-    ON loan.{_USER_POSITION_ASSET_TABLE} (market, "timestamp" DESC);
+_DDL_USER_POSITION_ASSET_INDEX_MARKET_TS = """
+CREATE INDEX IF NOT EXISTS {index_name}
+    ON loan.{table_name} (market, "timestamp" DESC);
 """
 
-_UPSERT_USER_POSITION = f"""
-INSERT INTO loan.{_USER_POSITION_TABLE} (
+_UPSERT_USER_POSITION = """
+INSERT INTO loan.{table_name} (
     "timestamp", block_number, market, symbol, user_address,
     has_open_position, is_liquidatable,
     base_token, base_symbol, base_price_usd, eth_price_usd,
@@ -657,8 +693,8 @@ ON CONFLICT ("timestamp", market, user_address) DO UPDATE SET
     created_at = NOW();
 """
 
-_UPSERT_USER_POSITION_ASSET = f"""
-INSERT INTO loan.{_USER_POSITION_ASSET_TABLE} (
+_UPSERT_USER_POSITION_ASSET = """
+INSERT INTO loan.{table_name} (
     "timestamp", block_number, market, user_address, asset, symbol, side, decimals,
     amount, price_in_base, price_usd, value_usd, discounted_value_usd,
     borrow_collateral_factor, liquidate_collateral_factor, liquidation_factor,
@@ -829,27 +865,38 @@ async def _ensure_market_columns(conn: Any, table_name: str) -> None:
     )
 
 
-async def _ensure_reserve_columns(conn: Any, table_name: str) -> None:
-    await conn.execute(
-        f"""
-        ALTER TABLE loan.{table_name}
-        ADD COLUMN IF NOT EXISTS price_in_base NUMERIC(30, 8);
-        """
-    )
+async def _ensure_reserve_columns(
+    conn: Any, table_name: str, *, include_price_in_base: bool
+) -> None:
+    if include_price_in_base:
+        await conn.execute(
+            f"""
+            ALTER TABLE loan.{table_name}
+            ADD COLUMN IF NOT EXISTS price_in_base NUMERIC(30, 8);
+            """
+        )
+    else:
+        await conn.execute(
+            f"""
+            ALTER TABLE loan.{table_name}
+            DROP COLUMN IF EXISTS price_in_base;
+            """
+        )
     await conn.execute(
         f"""
         ALTER TABLE loan.{table_name}
         ADD COLUMN IF NOT EXISTS price_usd NUMERIC(30, 8);
         """
     )
-    await conn.execute(
-        f"""
-        UPDATE loan.{table_name}
-        SET price_in_base = price_usd
-        WHERE price_in_base IS NULL
-          AND price_usd IS NOT NULL;
-        """
-    )
+    if include_price_in_base:
+        await conn.execute(
+            f"""
+            UPDATE loan.{table_name}
+            SET price_in_base = price_usd
+            WHERE price_in_base IS NULL
+              AND price_usd IS NOT NULL;
+            """
+        )
     await conn.execute(
         f"""
         UPDATE loan.{table_name}
@@ -861,12 +908,13 @@ async def _ensure_reserve_columns(conn: Any, table_name: str) -> None:
         WHERE price_usd IS NULL;
         """
     )
-    await conn.execute(
-        f"""
-        ALTER TABLE loan.{table_name}
-        ALTER COLUMN price_in_base SET NOT NULL;
-        """
-    )
+    if include_price_in_base:
+        await conn.execute(
+            f"""
+            ALTER TABLE loan.{table_name}
+            ALTER COLUMN price_in_base SET NOT NULL;
+            """
+        )
     await conn.execute(
         f"""
         ALTER TABLE loan.{table_name}
@@ -910,7 +958,9 @@ async def ensure_market_state_tables(
             )
 
             await conn.execute(_DDL_RESERVE.format(table_name=reserve_table))
-            await _ensure_reserve_columns(conn, reserve_table)
+            await _ensure_reserve_columns(
+                conn, reserve_table, include_price_in_base=(p == "v3")
+            )
             await conn.execute(
                 _DDL_RESERVE_INDEX_MARKET_TS.format(
                     index_name=f"idx_{reserve_table}_market_ts",
@@ -967,6 +1017,20 @@ def reserve_table_name(protocol: str) -> str:
     return _RESERVE_TABLES[p]
 
 
+def user_position_table_name(protocol: str) -> str:
+    p = protocol.lower()
+    if p not in _USER_POSITION_TABLES:
+        raise ValueError(f"Unsupported protocol: {protocol}")
+    return _USER_POSITION_TABLES[p]
+
+
+def user_position_asset_table_name(protocol: str) -> str:
+    p = protocol.lower()
+    if p not in _USER_POSITION_ASSET_TABLES:
+        raise ValueError(f"Unsupported protocol: {protocol}")
+    return _USER_POSITION_ASSET_TABLES[p]
+
+
 async def upsert_market_snapshots(
     pool: asyncpg.Pool,
     protocol: str,
@@ -1005,27 +1069,49 @@ async def upsert_reserve_snapshots(
 ) -> int:
     if not rows:
         return 0
-    table_name = reserve_table_name(protocol)
-    sql = _UPSERT_RESERVE.format(table_name=table_name)
-    values = [
-        (
-            r.timestamp,
-            r.market,
-            r.reserve,
-            r.symbol,
-            r.decimals,
-            r.total_supply,
-            r.total_borrow,
-            r.utilization,
-            r.borrow_rate,
-            r.supply_rate,
-            r.price_in_base,
-            r.price_usd,
-            r.supply_usd,
-            r.borrow_usd,
-        )
-        for r in rows
-    ]
+    p = protocol.lower()
+    table_name = reserve_table_name(p)
+    if p == "v2":
+        sql = _UPSERT_RESERVE_V2.format(table_name=table_name)
+        values = [
+            (
+                r.timestamp,
+                r.market,
+                r.reserve,
+                r.symbol,
+                r.decimals,
+                r.total_supply,
+                r.total_borrow,
+                r.utilization,
+                r.borrow_rate,
+                r.supply_rate,
+                r.price_usd,
+                r.supply_usd,
+                r.borrow_usd,
+            )
+            for r in rows
+        ]
+    else:
+        sql = _UPSERT_RESERVE.format(table_name=table_name)
+        values = [
+            (
+                r.timestamp,
+                r.market,
+                r.reserve,
+                r.symbol,
+                r.decimals,
+                r.total_supply,
+                r.total_borrow,
+                r.utilization,
+                r.borrow_rate,
+                r.supply_rate,
+                r.price_in_base,
+                r.price_usd,
+                r.supply_usd,
+                r.borrow_usd,
+            )
+            for r in rows
+        ]
     async with pool.acquire() as conn:
         await conn.executemany(sql, values)
     return len(rows)
@@ -1170,25 +1256,48 @@ async def upsert_market_status_snapshots(
 
 async def ensure_user_position_snapshot_tables(
     pool: asyncpg.Pool,
+    protocol: str = "v3",
     use_timescaledb: bool = False,
 ) -> None:
+    user_table = user_position_table_name(protocol)
+    user_asset_table = user_position_asset_table_name(protocol)
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_USER_POSITION)
-        await conn.execute(_DDL_USER_POSITION_INDEX_MARKET_TS)
-        await conn.execute(_DDL_USER_POSITION_INDEX_USER_TS)
+        await conn.execute(_DDL_USER_POSITION.format(table_name=user_table))
+        await conn.execute(
+            _DDL_USER_POSITION_INDEX_MARKET_TS.format(
+                index_name=f"idx_{user_table}_market_ts",
+                table_name=user_table,
+            )
+        )
+        await conn.execute(
+            _DDL_USER_POSITION_INDEX_USER_TS.format(
+                index_name=f"idx_{user_table}_user_ts",
+                table_name=user_table,
+            )
+        )
 
-        await conn.execute(_DDL_USER_POSITION_ASSET)
-        await conn.execute(_DDL_USER_POSITION_ASSET_INDEX_USER_TS)
-        await conn.execute(_DDL_USER_POSITION_ASSET_INDEX_MARKET_TS)
+        await conn.execute(_DDL_USER_POSITION_ASSET.format(table_name=user_asset_table))
+        await conn.execute(
+            _DDL_USER_POSITION_ASSET_INDEX_USER_TS.format(
+                index_name=f"idx_{user_asset_table}_user_ts",
+                table_name=user_asset_table,
+            )
+        )
+        await conn.execute(
+            _DDL_USER_POSITION_ASSET_INDEX_MARKET_TS.format(
+                index_name=f"idx_{user_asset_table}_market_ts",
+                table_name=user_asset_table,
+            )
+        )
 
         if use_timescaledb:
-            await _try_enable_hypertable(conn, _USER_POSITION_TABLE)
-            await _try_enable_hypertable(conn, _USER_POSITION_ASSET_TABLE)
+            await _try_enable_hypertable(conn, user_table)
+            await _try_enable_hypertable(conn, user_asset_table)
 
     logger.info(
         "Compound user position snapshot tables ready: %s, %s (timescaledb=%s)",
-        _USER_POSITION_TABLE,
-        _USER_POSITION_ASSET_TABLE,
+        user_table,
+        user_asset_table,
         use_timescaledb,
     )
 
@@ -1198,14 +1307,16 @@ async def fetch_existing_user_position_addresses(
     point_ts: datetime,
     market: bytes,
     user_addresses: list[bytes],
+    protocol: str = "v3",
 ) -> set[bytes]:
     if not user_addresses:
         return set()
+    user_table = user_position_table_name(protocol)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
             SELECT user_address
-            FROM loan.{_USER_POSITION_TABLE}
+            FROM loan.{user_table}
             WHERE "timestamp" = $1
               AND market = $2
               AND user_address = ANY($3::bytea[])
@@ -1220,9 +1331,11 @@ async def fetch_existing_user_position_addresses(
 async def upsert_user_position_snapshots(
     pool: asyncpg.Pool,
     rows: list[UserPositionSnapshotRow],
+    protocol: str = "v3",
 ) -> int:
     if not rows:
         return 0
+    user_table = user_position_table_name(protocol)
     values = [
         (
             r.timestamp,
@@ -1265,7 +1378,7 @@ async def upsert_user_position_snapshots(
             for (timestamp, market), user_addresses in delete_groups.items():
                 await conn.execute(
                     f"""
-                    DELETE FROM loan.{_USER_POSITION_TABLE}
+                    DELETE FROM loan.{user_table}
                     WHERE "timestamp" = $1
                       AND market = $2
                       AND user_address = ANY($3::bytea[])
@@ -1275,7 +1388,7 @@ async def upsert_user_position_snapshots(
                     user_addresses,
                 )
             await conn.copy_records_to_table(
-                _USER_POSITION_TABLE,
+                user_table,
                 schema_name="loan",
                 records=values,
                 columns=list(_USER_POSITION_COLUMNS),
@@ -1286,9 +1399,11 @@ async def upsert_user_position_snapshots(
 async def upsert_user_position_asset_rows(
     pool: asyncpg.Pool,
     rows: list[UserPositionAssetRow],
+    protocol: str = "v3",
 ) -> int:
     if not rows:
         return 0
+    user_asset_table = user_position_asset_table_name(protocol)
     values = [
         (
             r.timestamp,
@@ -1323,7 +1438,7 @@ async def upsert_user_position_asset_rows(
             for (timestamp, market), user_addresses in delete_groups.items():
                 await conn.execute(
                     f"""
-                    DELETE FROM loan.{_USER_POSITION_ASSET_TABLE}
+                    DELETE FROM loan.{user_asset_table}
                     WHERE "timestamp" = $1
                       AND market = $2
                       AND user_address = ANY($3::bytea[])
@@ -1333,7 +1448,7 @@ async def upsert_user_position_asset_rows(
                     user_addresses,
                 )
             await conn.copy_records_to_table(
-                _USER_POSITION_ASSET_TABLE,
+                user_asset_table,
                 schema_name="loan",
                 records=values,
                 columns=list(_USER_POSITION_ASSET_COLUMNS),

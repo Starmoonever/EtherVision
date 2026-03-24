@@ -538,6 +538,223 @@ class CompoundV3MarketSnapshotReserve(Base):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Compound v2 仓位与治理配置快照
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class CompoundV2UserPositionSnapshot(Base):
+    __tablename__ = "compound_v2_user_position_snapshots"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    user_address: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    has_open_position: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_liquidatable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    base_token: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    base_symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    base_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_price_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    total_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    discounted_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    liquidation_buffer_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    health_factor: Mapped[Decimal] = mapped_column(Numeric(40, 18), nullable=False)
+    eth_sensitive_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    eth_sensitive_debt_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    net_eth_exposure_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    non_eth_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    non_eth_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    basis_risk_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    eth_down_liq_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_up_liq_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_liq_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    dominant_risk: Mapped[str] = mapped_column(Text, nullable=False)
+    assets_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV2UserPositionSnapshotAsset(Base):
+    __tablename__ = "compound_v2_user_position_snapshot_assets"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    user_address: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    asset: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    side: Mapped[str] = mapped_column(Text, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decimals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    price_in_base: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    price_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    value_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    discounted_value_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    borrow_collateral_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    liquidate_collateral_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    liquidation_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    beta_to_eth: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    is_eth_correlated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_basis_risk_asset: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ctoken: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    underlying: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    exchange_rate: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
+    is_entered_market: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    collateral_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV2MarketConfigVersion(Base):
+    __tablename__ = "compound_v2_market_config_versions"
+    __table_args__ = {"schema": "loan"}
+
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    config_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    effective_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    comptroller: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    interest_rate_model: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    underlying: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    underlying_symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ctoken_decimals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    underlying_decimals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    collateral_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    reserve_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    liquidation_threshold: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    borrow_cap: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
+    supply_cap: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
+    is_listed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    is_comped: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    is_deprecated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    raw_config_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV2ProtocolConfigVersion(Base):
+    __tablename__ = "compound_v2_protocol_config_versions"
+    __table_args__ = {"schema": "loan"}
+
+    config_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    effective_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    comptroller: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    price_oracle: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    close_factor: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    liquidation_incentive: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 18), nullable=True
+    )
+    pause_guardian: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    transfer_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    seize_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    mint_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    borrow_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    raw_config_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class CompoundV2UserMembership(Base):
+    __tablename__ = "compound_v2_user_memberships"
+    __table_args__ = {"schema": "loan"}
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    user_address: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_entered: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    raw_membership_jsonb: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 区块时间戳缓存表
 # ──────────────────────────────────────────────────────────────────────────────
 

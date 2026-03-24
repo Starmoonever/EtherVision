@@ -35,9 +35,45 @@ def test_compound_markets_route_ok() -> None:
     mocked_service.assert_called_once_with("v3")
 
 
-def test_compound_markets_route_rejects_v2() -> None:
-    with _build_client() as client:
-        resp = client.get("/api/compound/markets", params={"version": "v2"})
+def test_compound_markets_route_supports_v2() -> None:
+    payload = {
+        "version": "v2",
+        "markets": [
+            {
+                "address": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+                "symbol": "cDAI",
+            }
+        ],
+    }
 
-    assert resp.status_code == 400
-    assert "仅支持" in resp.json()["detail"]
+    with patch(
+        "compound_crawler.api.routes.get_markets", return_value=payload
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get("/api/compound/markets", params={"version": "v2"})
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_called_once_with("v2")
+
+
+def test_compound_markets_route_supports_version_in_path() -> None:
+    payload = {
+        "version": "v2",
+        "markets": [
+            {
+                "address": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+                "symbol": "cDAI",
+            }
+        ],
+    }
+
+    with patch(
+        "compound_crawler.api.routes.get_markets", return_value=payload
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get("/api/compound/v2/markets")
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_called_once_with("v2")

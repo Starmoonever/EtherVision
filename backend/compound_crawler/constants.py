@@ -20,10 +20,130 @@ COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
     "0x3d0bb1ccab520a66e607822fc55bc921738fafe3": "wstETH",
 }
 
-# Compound V2 defaults are intentionally empty for now.
-COMPOUND_V2_MARKETS: list[str] = []
+# Compound V2 (Ethereum mainnet) cToken markets.
+# These are used as defaults when config does not provide market lists.
+COMPOUND_V2_MARKETS: list[str] = [
+    "0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643",  # cDAI
+    "0x39AA39c021dfbaE8faC545936693aC917d5E7563",  # cUSDC
+    "0xf650c3d88d12db855b8bf7d11be2e55a4e07dcc9",  # cUSDT
+    "0x4Ddc2D193948926D02f9B1fE9e1daa0718270ED5",  # cETH
+    "0xccF4429DB6322D5C611ee964527D42E5d685DD6a",  # cWBTC
+]
 
-COMPOUND_V2_MARKET_NAMES: dict[str, str] = {}
+COMPOUND_V2_MARKET_NAMES: dict[str, str] = {
+    "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643": "cDAI",
+    "0x39aa39c021dfbae8fac545936693ac917d5e7563": "cUSDC",
+    "0xf650c3d88d12db855b8bf7d11be2e55a4e07dcc9": "cUSDT",
+    "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5": "cETH",
+    "0xccf4429db6322d5c611ee964527d42e5d685dd6a": "cWBTC",
+}
+
+CTOKEN_V2_ABI = [
+    {
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "underlying",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "comptroller",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "totalBorrows",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "totalReserves",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "getCash",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "exchangeRateStored",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "borrowRatePerBlock",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "supplyRatePerBlock",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "reserveFactorMantissa",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+COMPTROLLER_V2_ABI = [
+    {
+        "inputs": [],
+        "name": "oracle",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+COMPOUND_V2_ORACLE_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "getUnderlyingPrice",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
 
 COMET_ABI = [
     {

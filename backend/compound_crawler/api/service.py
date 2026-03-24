@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..config import load_config
-from ..constants import COMPOUND_V3_MARKET_NAMES
+from ..constants import COMPOUND_V2_MARKET_NAMES, COMPOUND_V3_MARKET_NAMES
 from ..db import market_table_name, reserve_table_name
 from ..user_position_snapshots import collect_market_user_snapshots
 from .schemas import (
@@ -34,16 +34,17 @@ _GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
 
 
 def get_markets(version: str) -> MarketsResponse:
-    if version != "v3":
-        raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
+    version = version.lower()
+    if version not in ("v2", "v3"):
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
 
-    configured = [item.lower() for item in load_config().market_state.v3_markets or []]
-    addresses = list(dict.fromkeys(configured)) or list(COMPOUND_V3_MARKET_NAMES.keys())
+    addresses = _available_market_addresses(version)
+    market_name_map = _market_name_map(version)
 
     markets = [
         MarketItemResponse(
             address=address,
-            symbol=COMPOUND_V3_MARKET_NAMES.get(address, address),
+            symbol=market_name_map.get(address, address),
         )
         for address in addresses
     ]
@@ -68,11 +69,9 @@ async def get_market_state_period(
     interval: int = 24,
     detail: bool = False,
 ) -> MarketStatePeriodResponse:
-    if version != "v3":
-        raise HTTPException(
-            status_code=400,
-            detail="当前仅支持 version=v3",
-        )
+    version = version.lower()
+    if version not in ("v2", "v3"):
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
     if interval < 1 or interval > 168:
         raise HTTPException(status_code=400, detail="interval 必须为 1~168 小时")
 
@@ -81,7 +80,7 @@ async def get_market_state_period(
     if start_dt > end_dt:
         raise HTTPException(status_code=400, detail="start 必须小于等于 end")
 
-    market_address = _market_to_address(market)
+    market_address = _market_to_address(version, market)
     market_bytes = _address_to_bytes(market_address)
     market_table = market_table_name(version)
     reserve_table = reserve_table_name(version)
@@ -124,6 +123,9 @@ async def get_market_state_period(
 
         reserves_map: dict[datetime, list[MarketStateReserveResponse]] = {}
         if detail:
+            price_in_base_select = (
+                "price_in_base" if version == "v3" else "NULL::numeric AS price_in_base"
+            )
             reserve_rows = await conn.fetch(
                 f"""
                 SELECT
@@ -136,7 +138,7 @@ async def get_market_state_period(
                     utilization,
                     borrow_rate,
                     supply_rate,
-                    price_in_base,
+                    {price_in_base_select},
                     price_usd,
                     supply_usd,
                     borrow_usd
@@ -188,7 +190,7 @@ async def get_positions(
     if version != "v3":
         raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
 
-    market_addresses = _markets_to_addresses(market)
+    market_addresses = _markets_to_addresses(version, market)
     market_bytes_list = [_address_to_bytes(item) for item in market_addresses]
     user_address_bytes = _parse_user_address(address)
 
@@ -247,7 +249,7 @@ async def get_market_governance(
     if version != "v3":
         raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
 
-    market_address = _market_to_address(market)
+    market_address = _market_to_address("v3", market)
     market_bytes = _address_to_bytes(market_address)
     point_ts = _parse_hour_utc(date) if date is not None else None
 
@@ -314,7 +316,7 @@ async def get_market_governance_period(
     if start_dt > end_dt:
         raise HTTPException(status_code=400, detail="start 必须小于等于 end")
 
-    market_address = _market_to_address(market)
+    market_address = _market_to_address("v3", market)
     market_bytes = _address_to_bytes(market_address)
 
     async with pool.acquire() as conn:
@@ -443,30 +445,31 @@ def _annualize_rate(value: Decimal | float | int | None) -> str:
     return _fmt(Decimal(str(value)) * _SECONDS_PER_YEAR)
 
 
-def _markets_to_addresses(market: str) -> list[str]:
+def _markets_to_addresses(version: str, market: str) -> list[str]:
     normalized = market.strip().lower()
     if normalized == "all":
-        return list(COMPOUND_V3_MARKET_NAMES.keys())
-    return [_market_to_address(market)]
+        return _available_market_addresses(version)
+    return [_market_to_address(version, market)]
 
 
-def _market_to_address(market: str) -> str:
+def _market_to_address(version: str, market: str | None = None) -> str:
+    # Backward compatibility for internal/tests that call _market_to_address(market)
+    # and expect v3 defaults.
+    if market is None:
+        market = version
+        version = "v3"
     normalized = market.strip().lower()
     if normalized.startswith("0x") and len(normalized) == 42:
-        for address in COMPOUND_V3_MARKET_NAMES:
-            if address.lower() == normalized:
-                return address.lower()
-        raise HTTPException(
-            status_code=400,
-            detail="market 仅支持已知的 Compound v3 市场地址或符号，或 all",
-        )
+        return normalized
 
-    for address, name in COMPOUND_V3_MARKET_NAMES.items():
+    market_name_map = _market_name_map(version)
+    for address, name in market_name_map.items():
         if name.lower() == normalized:
             return address
+
     raise HTTPException(
         status_code=400,
-        detail="market 仅支持已知的 Compound v3 市场地址或符号，或 all",
+        detail=f"market 仅支持已配置的 Compound {version} 市场地址或符号，或 all",
     )
 
 
@@ -616,7 +619,11 @@ def _map_market_reserve_row(row: Any) -> MarketStateReserveResponse:
         utilization=_fmt(row["utilization"]),
         borrow_apr=_annualize_rate(row["borrow_rate"]),
         supply_apr=_annualize_rate(row["supply_rate"]),
-        price_in_base=_fmt(row["price_in_base"]),
+        price_in_base=(
+            _fmt(_row_get(row, "price_in_base"))
+            if _row_get(row, "price_in_base") is not None
+            else None
+        ),
         price_usd=_fmt(row["price_usd"]),
         supply_usd=_fmt(row["supply_usd"]),
         borrow_usd=_fmt(row["borrow_usd"]),
@@ -775,14 +782,12 @@ async def get_market_state(
     date: str,
     detail: bool,
 ) -> MarketStateResponse:
-    if version != "v3":
-        raise HTTPException(
-            status_code=400,
-            detail="当前仅支持 version=v3",
-        )
+    version = version.lower()
+    if version not in ("v2", "v3"):
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
 
     point_ts = _parse_hour_utc(date)
-    market_address = _market_to_address(market)
+    market_address = _market_to_address(version, market)
     market_bytes = _address_to_bytes(market_address)
 
     market_table = market_table_name(version)
@@ -818,6 +823,9 @@ async def get_market_state(
 
         reserves: list[MarketStateReserveResponse] | None = None
         if detail:
+            price_in_base_select = (
+                "price_in_base" if version == "v3" else "NULL::numeric AS price_in_base"
+            )
             reserve_rows = await conn.fetch(
                 f"""
                 SELECT
@@ -829,7 +837,7 @@ async def get_market_state(
                     utilization,
                     borrow_rate,
                     supply_rate,
-                    price_in_base,
+                    {price_in_base_select},
                     price_usd,
                     supply_usd,
                     borrow_usd
@@ -859,3 +867,25 @@ async def get_market_state(
         borrow_usd=_fmt(row["borrow_usd"]),
         reserves=reserves,
     )
+
+
+def _market_name_map(version: str) -> dict[str, str]:
+    return COMPOUND_V2_MARKET_NAMES if version == "v2" else COMPOUND_V3_MARKET_NAMES
+
+
+def _configured_market_addresses(version: str) -> list[str]:
+    app_cfg = load_config()
+    cfg = getattr(app_cfg, "market_state", None)
+    if cfg is None:
+        return []
+    raw = cfg.v2_markets if version == "v2" else cfg.v3_markets
+    return [
+        item.strip().lower() for item in raw if isinstance(item, str) and item.strip()
+    ]
+
+
+def _available_market_addresses(version: str) -> list[str]:
+    configured = _configured_market_addresses(version)
+    if configured:
+        return list(dict.fromkeys(configured))
+    return list(_market_name_map(version).keys())
