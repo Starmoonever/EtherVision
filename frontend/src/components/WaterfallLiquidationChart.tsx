@@ -154,7 +154,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
       const yLeftValue = committedSellPartition > 0 ? ethSoldValueNum / committedSellPartition : 0;
 
       return {
-        turnName: index === 0 ? '初始冲击' : `轮次${index}`,
+        turnName: index === 0 ? '开始' : `${index}`,
         yLeftValue,
         animatedYLeftValue: yLeftValue * Math.max(0, Math.min(1, animationStep - index)),
         ethPriceNum,
