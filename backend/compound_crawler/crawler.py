@@ -425,13 +425,45 @@ async def _collect_v2_market_at_block(
         underlying_symbol = "ETH"
         underlying_decimals = 18
 
-    price_usd = await _v2_underlying_price_usd(
-        w3,
-        ctoken_address=market_address,
-        comptroller_address=str(comptroller_raw),
-        underlying_decimals=underlying_decimals,
-        block_number=block_number,
-    )
+    try:
+        price_usd = await _v2_underlying_price_usd(
+            w3,
+            ctoken_address=market_address,
+            comptroller_address=str(comptroller_raw),
+            underlying_decimals=underlying_decimals,
+            block_number=block_number,
+        )
+    except Exception as exc:
+        # Historical v2 oracle calls can revert for some markets/blocks.
+        # Keep the snapshot writable by degrading price lookup behavior.
+        if underlying_address.lower() == WETH_MAINNET.lower():
+            try:
+                price_usd = await _price_from_feed_direct(
+                    w3, ETH_USD_PRICE_FEED, block_number
+                )
+                logger.warning(
+                    "v2 oracle price failed, fallback to ETH/USD feed: market=%s block=%s err=%s",
+                    market_address,
+                    block_number,
+                    exc,
+                )
+            except Exception as feed_exc:
+                logger.warning(
+                    "v2 price fallback failed, set price_usd=0: market=%s block=%s oracle_err=%s feed_err=%s",
+                    market_address,
+                    block_number,
+                    exc,
+                    feed_exc,
+                )
+                price_usd = Decimal("0")
+        else:
+            logger.warning(
+                "v2 oracle price failed, set price_usd=0: market=%s block=%s err=%s",
+                market_address,
+                block_number,
+                exc,
+            )
+            price_usd = Decimal("0")
 
     decimals_scale = Decimal(10) ** underlying_decimals
     total_borrow = Decimal(int(total_borrow_raw)) / decimals_scale
