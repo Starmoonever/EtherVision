@@ -120,6 +120,40 @@ class UserPositionAssetRow:
 
 
 @dataclass
+class CompoundEventPositionSnapshotRow:
+    user_address: bytes
+    protocol: str
+    market: bytes
+    symbol: str | None
+    block_number: int
+    tx_hash: str
+    block_timestamp: datetime
+    has_open_position: bool
+    is_liquidatable: bool
+    base_token: bytes | None
+    base_symbol: str | None
+    base_price_usd: Decimal | None
+    eth_price_usd: Decimal
+    total_collateral_usd: Decimal
+    total_debt_usd: Decimal
+    discounted_collateral_usd: Decimal
+    liquidation_buffer_usd: Decimal
+    health_factor: Decimal
+    eth_sensitive_collateral_usd: Decimal
+    eth_sensitive_debt_usd: Decimal
+    net_eth_exposure_usd: Decimal
+    non_eth_collateral_usd: Decimal
+    non_eth_debt_usd: Decimal
+    basis_risk_collateral_usd: Decimal
+    eth_down_liq_price_usd: Decimal | None
+    eth_up_liq_price_usd: Decimal | None
+    eth_liq_mode: str
+    dominant_risk: str
+    assets_jsonb: list[dict[str, Any]]
+    brief: str = ""
+
+
+@dataclass
 class MarketConfigVersionRow:
     market: bytes
     symbol: str | None
@@ -384,6 +418,7 @@ _MARKET_CONFIG_ASSET_TABLE = "compound_v3_market_config_assets"
 _MARKET_STATUS_TABLE = "compound_v3_market_status_snapshots"
 _V2_MARKET_CONFIG_TABLE = "compound_v2_market_config_versions"
 _V2_PROTOCOL_CONFIG_TABLE = "compound_v2_protocol_config_versions"
+_COMPOUND_EVENT_SNAPSHOT_TABLE = "compound_position_snapshots"
 
 _DDL_MARKET_CONFIG = f"""
 CREATE TABLE IF NOT EXISTS loan.{_MARKET_CONFIG_TABLE} (
@@ -721,6 +756,294 @@ ON CONFLICT (config_hash) DO UPDATE SET
     raw_config_jsonb = EXCLUDED.raw_config_jsonb,
     created_at = NOW();
 """
+
+
+_DDL_COMPOUND_EVENT_SNAPSHOT = f"""
+CREATE TABLE IF NOT EXISTS loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE} (
+    id                           BIGSERIAL        PRIMARY KEY,
+    user_address                 BYTEA            NOT NULL,
+    protocol                     TEXT             NOT NULL,
+    market                       BYTEA            NOT NULL,
+    symbol                       TEXT             NULL,
+    block_number                 BIGINT           NOT NULL,
+    tx_hash                      TEXT             NOT NULL,
+    block_timestamp              TIMESTAMPTZ      NOT NULL,
+    has_open_position            BOOLEAN          NOT NULL,
+    is_liquidatable              BOOLEAN          NOT NULL,
+    base_token                   BYTEA            NULL,
+    base_symbol                  TEXT             NULL,
+    base_price_usd               NUMERIC(30, 8)   NULL,
+    eth_price_usd                NUMERIC(30, 8)   NOT NULL,
+    total_collateral_usd         NUMERIC(30, 8)   NOT NULL,
+    total_debt_usd               NUMERIC(30, 8)   NOT NULL,
+    discounted_collateral_usd    NUMERIC(30, 8)   NOT NULL,
+    liquidation_buffer_usd       NUMERIC(30, 8)   NOT NULL,
+    health_factor                NUMERIC(40, 18)  NOT NULL,
+    eth_sensitive_collateral_usd NUMERIC(30, 8)   NOT NULL,
+    eth_sensitive_debt_usd       NUMERIC(30, 8)   NOT NULL,
+    net_eth_exposure_usd         NUMERIC(30, 8)   NOT NULL,
+    non_eth_collateral_usd       NUMERIC(30, 8)   NOT NULL,
+    non_eth_debt_usd             NUMERIC(30, 8)   NOT NULL,
+    basis_risk_collateral_usd    NUMERIC(30, 8)   NOT NULL,
+    eth_down_liq_price_usd       NUMERIC(30, 8)   NULL,
+    eth_up_liq_price_usd         NUMERIC(30, 8)   NULL,
+    eth_liq_mode                 TEXT             NOT NULL,
+    dominant_risk                TEXT             NOT NULL,
+    assets_jsonb                 JSONB            NOT NULL DEFAULT '[]',
+    brief                        TEXT             NOT NULL DEFAULT '',
+    cached_at                    TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    UNIQUE (user_address, protocol, market, tx_hash)
+);
+"""
+
+_DDL_COMPOUND_EVENT_SNAPSHOT_INDEXES = f"""
+CREATE INDEX IF NOT EXISTS idx_{_COMPOUND_EVENT_SNAPSHOT_TABLE}_user_market_ts
+    ON loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE} (user_address, protocol, market, block_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_{_COMPOUND_EVENT_SNAPSHOT_TABLE}_block
+    ON loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE} (block_number);
+"""
+
+_SQL_UPSERT_COMPOUND_EVENT_SNAPSHOT = f"""
+INSERT INTO loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE} (
+    user_address, protocol, market, symbol, block_number, tx_hash, block_timestamp,
+    has_open_position, is_liquidatable, base_token, base_symbol, base_price_usd,
+    eth_price_usd, total_collateral_usd, total_debt_usd, discounted_collateral_usd,
+    liquidation_buffer_usd, health_factor, eth_sensitive_collateral_usd, eth_sensitive_debt_usd,
+    net_eth_exposure_usd, non_eth_collateral_usd, non_eth_debt_usd, basis_risk_collateral_usd,
+    eth_down_liq_price_usd, eth_up_liq_price_usd, eth_liq_mode, dominant_risk,
+    assets_jsonb, brief
+) VALUES (
+    $1,$2,$3,$4,$5,$6,$7,
+    $8,$9,$10,$11,$12,
+    $13,$14,$15,$16,
+    $17,$18,$19,$20,
+    $21,$22,$23,$24,
+    $25,$26,$27,$28,
+    $29,$30
+)
+ON CONFLICT (user_address, protocol, market, tx_hash) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
+    block_number = EXCLUDED.block_number,
+    block_timestamp = EXCLUDED.block_timestamp,
+    has_open_position = EXCLUDED.has_open_position,
+    is_liquidatable = EXCLUDED.is_liquidatable,
+    base_token = EXCLUDED.base_token,
+    base_symbol = EXCLUDED.base_symbol,
+    base_price_usd = EXCLUDED.base_price_usd,
+    eth_price_usd = EXCLUDED.eth_price_usd,
+    total_collateral_usd = EXCLUDED.total_collateral_usd,
+    total_debt_usd = EXCLUDED.total_debt_usd,
+    discounted_collateral_usd = EXCLUDED.discounted_collateral_usd,
+    liquidation_buffer_usd = EXCLUDED.liquidation_buffer_usd,
+    health_factor = EXCLUDED.health_factor,
+    eth_sensitive_collateral_usd = EXCLUDED.eth_sensitive_collateral_usd,
+    eth_sensitive_debt_usd = EXCLUDED.eth_sensitive_debt_usd,
+    net_eth_exposure_usd = EXCLUDED.net_eth_exposure_usd,
+    non_eth_collateral_usd = EXCLUDED.non_eth_collateral_usd,
+    non_eth_debt_usd = EXCLUDED.non_eth_debt_usd,
+    basis_risk_collateral_usd = EXCLUDED.basis_risk_collateral_usd,
+    eth_down_liq_price_usd = EXCLUDED.eth_down_liq_price_usd,
+    eth_up_liq_price_usd = EXCLUDED.eth_up_liq_price_usd,
+    eth_liq_mode = EXCLUDED.eth_liq_mode,
+    dominant_risk = EXCLUDED.dominant_risk,
+    assets_jsonb = EXCLUDED.assets_jsonb,
+    brief = EXCLUDED.brief,
+    cached_at = NOW();
+"""
+
+_SQL_GET_COMPOUND_EVENT_SNAPSHOTS = f"""
+SELECT
+    id, user_address, protocol, market, symbol, block_number, tx_hash, block_timestamp,
+    has_open_position, is_liquidatable, base_token, base_symbol, base_price_usd,
+    eth_price_usd, total_collateral_usd, total_debt_usd, discounted_collateral_usd,
+    liquidation_buffer_usd, health_factor, eth_sensitive_collateral_usd, eth_sensitive_debt_usd,
+    net_eth_exposure_usd, non_eth_collateral_usd, non_eth_debt_usd, basis_risk_collateral_usd,
+    eth_down_liq_price_usd, eth_up_liq_price_usd, eth_liq_mode, dominant_risk,
+    assets_jsonb, brief, cached_at
+FROM loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE}
+WHERE user_address = $1
+  AND protocol = $2
+  AND market = $3
+  AND block_timestamp BETWEEN $4 AND $5
+ORDER BY block_timestamp ASC
+"""
+
+
+_CANDIDATE_HISTORY_TIME_COLUMNS = (
+    "block_timestamp",
+    "timestamp",
+    "block_time",
+    "event_time",
+    "created_at",
+)
+_CANDIDATE_HISTORY_BLOCK_COLUMNS = ("block_number", "block_num")
+_CANDIDATE_HISTORY_TX_COLUMNS = ("tx_hash", "transaction_hash", "hash")
+_CANDIDATE_HISTORY_MARKET_COLUMNS = (
+    "market",
+    "market_address",
+    "comet",
+    "ctoken",
+    "to_address",
+)
+_CANDIDATE_HISTORY_USER_COLUMNS = (
+    "from_address",
+    "target_user_address",
+    "user_address",
+    "account",
+    "on_behalf_of",
+)
+_CANDIDATE_HISTORY_VERSION_COLUMNS = ("version", "protocol_version")
+_CANDIDATE_HISTORY_STATUS_COLUMNS = ("tx_status", "status")
+
+
+def _first_existing_column(
+    available_columns: dict[str, str],
+    candidates: tuple[str, ...],
+) -> str | None:
+    for name in candidates:
+        if name in available_columns:
+            return name
+    return None
+
+
+def _sql_value_expr_by_type(column_name: str, data_type: str, param_index: int) -> str:
+    if data_type == "bytea":
+        return f"{column_name} = ${param_index}::bytea"
+    return f"lower({column_name}::text) = lower(${param_index}::text)"
+
+
+async def fetch_compound_user_tx_history(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes,
+    protocol: str,
+    from_dt: datetime,
+    to_dt: datetime,
+    market: bytes | None = None,
+    only_success: bool = True,
+    user_column: str | None = None,
+) -> list[Any]:
+    protocol_version = "3" if protocol == "v3" else "2"
+    async with pool.acquire() as conn:
+        col_rows = await conn.fetch(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'compound'
+              AND table_name = 'compound_history'
+            """
+        )
+        if not col_rows:
+            raise RuntimeError("compound.compound_history not found")
+
+        column_types: dict[str, str] = {
+            str(row["column_name"]): str(row["data_type"]) for row in col_rows
+        }
+        time_col = _first_existing_column(column_types, _CANDIDATE_HISTORY_TIME_COLUMNS)
+        block_col = _first_existing_column(
+            column_types, _CANDIDATE_HISTORY_BLOCK_COLUMNS
+        )
+        tx_col = _first_existing_column(column_types, _CANDIDATE_HISTORY_TX_COLUMNS)
+        market_col = _first_existing_column(
+            column_types, _CANDIDATE_HISTORY_MARKET_COLUMNS
+        )
+        version_col = _first_existing_column(
+            column_types, _CANDIDATE_HISTORY_VERSION_COLUMNS
+        )
+        status_col = _first_existing_column(
+            column_types, _CANDIDATE_HISTORY_STATUS_COLUMNS
+        )
+        selected_user_col = user_column if user_column in column_types else None
+        if selected_user_col is None:
+            selected_user_col = _first_existing_column(
+                column_types, _CANDIDATE_HISTORY_USER_COLUMNS
+            )
+
+        if not time_col or not block_col or not tx_col or not selected_user_col:
+            raise RuntimeError(
+                "compound.compound_history missing required columns "
+                f"(time={time_col}, block={block_col}, tx={tx_col}, user={selected_user_col})"
+            )
+
+        where_clauses: list[str] = []
+        bind_values: list[Any] = []
+
+        if version_col is not None:
+            bind_values.append(protocol_version)
+            where_clauses.append(f"{version_col}::text = ${len(bind_values)}")
+        if only_success and status_col is not None:
+            bind_values.append(1)
+            where_clauses.append(f"{status_col} = ${len(bind_values)}")
+
+        bind_values.append(from_dt)
+        where_clauses.append(f"{time_col} >= ${len(bind_values)}::timestamptz")
+        bind_values.append(to_dt)
+        where_clauses.append(f"{time_col} <= ${len(bind_values)}::timestamptz")
+
+        bind_values.append(user_address)
+        where_clauses.append(
+            _sql_value_expr_by_type(
+                selected_user_col,
+                column_types[selected_user_col],
+                len(bind_values),
+            )
+        )
+
+        if market is not None and market_col is not None:
+            bind_values.append(market)
+            where_clauses.append(
+                _sql_value_expr_by_type(
+                    market_col,
+                    column_types[market_col],
+                    len(bind_values),
+                )
+            )
+
+        select_market = market_col if market_col is not None else "NULL"
+        select_method_id = "method_id" if "method_id" in column_types else "NULL"
+        sql = f"""
+            SELECT
+                {tx_col} AS tx_hash,
+                {block_col} AS block_number,
+                {time_col} AS block_timestamp,
+                {select_market} AS market,
+                {select_method_id} AS method_id
+            FROM compound.compound_history
+            WHERE {" AND ".join(where_clauses)}
+            ORDER BY {time_col} ASC, {block_col} ASC
+        """
+        return await conn.fetch(sql, *bind_values)
+
+
+async def fetch_compound_cached_event_keys(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes,
+    protocol: str,
+    from_dt: datetime,
+    to_dt: datetime,
+    market: bytes | None = None,
+) -> set[tuple[bytes, str]]:
+    sql = f"""
+        SELECT market, tx_hash
+        FROM loan.{_COMPOUND_EVENT_SNAPSHOT_TABLE}
+        WHERE user_address = $1
+          AND protocol = $2
+          AND block_timestamp BETWEEN $3 AND $4
+    """
+    args: list[Any] = [user_address, protocol, from_dt, to_dt]
+    if market is not None:
+        sql += " AND market = $5"
+        args.append(market)
+    rows = await pool.fetch(sql, *args)
+    return {
+        (
+            bytes(row["market"]),
+            str(row["tx_hash"]).strip().lower(),
+        )
+        for row in rows
+    }
 
 
 _USER_POSITION_TABLES = {
@@ -1721,6 +2044,81 @@ async def upsert_user_position_asset_rows(
                 columns=list(_USER_POSITION_ASSET_COLUMNS),
             )
     return len(rows)
+
+
+async def ensure_compound_event_snapshot_table(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT)
+        await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT_INDEXES)
+    logger.info(
+        "Compound event-driven snapshot table ready: loan.%s",
+        _COMPOUND_EVENT_SNAPSHOT_TABLE,
+    )
+
+
+async def upsert_compound_event_snapshots(
+    pool: asyncpg.Pool,
+    rows: list[CompoundEventPositionSnapshotRow],
+) -> int:
+    if not rows:
+        return 0
+    values = [
+        (
+            r.user_address,
+            r.protocol,
+            r.market,
+            r.symbol,
+            r.block_number,
+            r.tx_hash,
+            r.block_timestamp,
+            r.has_open_position,
+            r.is_liquidatable,
+            r.base_token,
+            r.base_symbol,
+            r.base_price_usd,
+            r.eth_price_usd,
+            r.total_collateral_usd,
+            r.total_debt_usd,
+            r.discounted_collateral_usd,
+            r.liquidation_buffer_usd,
+            r.health_factor,
+            r.eth_sensitive_collateral_usd,
+            r.eth_sensitive_debt_usd,
+            r.net_eth_exposure_usd,
+            r.non_eth_collateral_usd,
+            r.non_eth_debt_usd,
+            r.basis_risk_collateral_usd,
+            r.eth_down_liq_price_usd,
+            r.eth_up_liq_price_usd,
+            r.eth_liq_mode,
+            r.dominant_risk,
+            json.dumps(r.assets_jsonb, ensure_ascii=False),
+            r.brief,
+        )
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_SQL_UPSERT_COMPOUND_EVENT_SNAPSHOT, values)
+    return len(rows)
+
+
+async def get_compound_event_snapshots(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes,
+    protocol: str,
+    market: bytes,
+    from_ts: datetime,
+    to_ts: datetime,
+) -> list[Any]:
+    return await pool.fetch(
+        _SQL_GET_COMPOUND_EVENT_SNAPSHOTS,
+        user_address,
+        protocol,
+        market,
+        from_ts,
+        to_ts,
+    )
 
 
 def ensure_compound_v3_user_positions_table(engine):

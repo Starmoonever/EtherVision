@@ -10,7 +10,11 @@ from crawler_shared.logging import setup_cli_logging
 
 from .config import load_config
 from .crawler import run_crawler, run_v2_market_config_crawler
-from .db import create_pool, ensure_market_state_tables
+from .db import (
+    create_pool,
+    ensure_compound_event_snapshot_table,
+    ensure_market_state_tables,
+)
 from .watcher import run_watcher
 
 
@@ -182,6 +186,7 @@ def cmd_init_market_state(
                 protocol=protocol,
                 use_timescaledb=use_timescaledb,
             )
+            await ensure_compound_event_snapshot_table(pool)
         finally:
             await pool.close()
 

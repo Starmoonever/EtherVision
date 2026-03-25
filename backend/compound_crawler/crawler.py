@@ -113,6 +113,15 @@ async def _build_web3(cfg: AppConfig) -> AsyncWeb3:
     raise RuntimeError("All RPC endpoints are unavailable")
 
 
+async def close_web3(w3: AsyncWeb3 | None) -> None:
+    if w3 is None:
+        return
+    try:
+        await w3.provider.disconnect()
+    except Exception:
+        pass
+
+
 def _to_bytes(address: str) -> bytes:
     addr = address.strip().lower()
     if addr.startswith("0x"):
@@ -1955,6 +1964,7 @@ async def run_crawler(
         await write_queue.put(None)
         await write_queue.join()
         await writer_task
+        await close_web3(w3)
 
     logger.info(
         "Compound market_state crawl done: protocol=%s dry_run=%s market_rows=%s reserve_rows=%s config_rows=%s config_asset_rows=%s status_rows=%s",
@@ -2021,42 +2031,47 @@ async def run_v2_market_config_crawler(
         interval_hours,
         len(points),
     )
-    for point_ts in points:
-        point_markets = list(markets)
-        if skip_existing:
-            existing = await fetch_existing_v2_config_markets(
-                pool,
-                point_ts=point_ts,
-                markets=[_to_bytes(m) for m in point_markets if m.startswith("0x")],
-            )
-            point_markets = [
-                m
-                for m in point_markets
-                if not m.startswith("0x") or _to_bytes(m) not in existing
-            ]
-            if not point_markets:
-                continue
+    try:
+        for point_ts in points:
+            point_markets = list(markets)
+            if skip_existing:
+                existing = await fetch_existing_v2_config_markets(
+                    pool,
+                    point_ts=point_ts,
+                    markets=[_to_bytes(m) for m in point_markets if m.startswith("0x")],
+                )
+                point_markets = [
+                    m
+                    for m in point_markets
+                    if not m.startswith("0x") or _to_bytes(m) not in existing
+                ]
+                if not point_markets:
+                    continue
 
-        block_number = await _block_at_timestamp(
-            w3, int(point_ts.timestamp()), pool=pool
-        )
-        market_rows, protocol_rows = await _collect_v2_market_configs_at_block(
-            cfg,
-            w3,
-            point_ts=point_ts,
-            block_number=block_number,
-            markets=point_markets,
-            metadata_cache=metadata_cache,
-            deployment_cache=deployment_cache,
-        )
-        if dry_run:
-            total_market_config += len(market_rows)
-            total_protocol_config += len(protocol_rows)
-            continue
-        total_market_config += await upsert_v2_market_config_versions(pool, market_rows)
-        total_protocol_config += await upsert_v2_protocol_config_versions(
-            pool, protocol_rows
-        )
+            block_number = await _block_at_timestamp(
+                w3, int(point_ts.timestamp()), pool=pool
+            )
+            market_rows, protocol_rows = await _collect_v2_market_configs_at_block(
+                cfg,
+                w3,
+                point_ts=point_ts,
+                block_number=block_number,
+                markets=point_markets,
+                metadata_cache=metadata_cache,
+                deployment_cache=deployment_cache,
+            )
+            if dry_run:
+                total_market_config += len(market_rows)
+                total_protocol_config += len(protocol_rows)
+                continue
+            total_market_config += await upsert_v2_market_config_versions(
+                pool, market_rows
+            )
+            total_protocol_config += await upsert_v2_protocol_config_versions(
+                pool, protocol_rows
+            )
+    finally:
+        await close_web3(w3)
 
     logger.info(
         "Compound v2 market config crawl done: dry_run=%s market_config_rows=%s protocol_config_rows=%s",

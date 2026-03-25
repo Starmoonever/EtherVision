@@ -33,6 +33,7 @@ from .db import (
     ensure_tables,
 )
 from .rpc import build_web3
+from compound_crawler.db import ensure_compound_event_snapshot_table
 from compound_crawler.api.routes import router as compound_router
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     for _tables in (TABLES_V3, TABLES_V2, TABLES_V3_BORROW, TABLES_V2_BORROW):
         await ensure_tables(pool, _tables)
     await ensure_snapshot_cache_table(pool)
+    await ensure_compound_event_snapshot_table(pool)
     await ensure_eth_price_timestamp_table(pool)
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield

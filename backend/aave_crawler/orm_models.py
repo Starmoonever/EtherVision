@@ -967,3 +967,78 @@ class PositionSnapshotCache(Base):
     cached_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
+
+
+class CompoundPositionSnapshotCache(Base):
+    __tablename__ = "compound_position_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_address",
+            "protocol",
+            "market",
+            "tx_hash",
+            name="uq_compound_snapshot",
+        ),
+        {"schema": "loan"},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_address: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    protocol: Mapped[str] = mapped_column(Text, nullable=False)  # 'v2' | 'v3'
+    market: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tx_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    has_open_position: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_liquidatable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    base_token: Mapped[Optional[bytes]] = mapped_column(BYTEA, nullable=True)
+    base_symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    base_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_price_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    total_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    total_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    discounted_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    liquidation_buffer_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    health_factor: Mapped[Decimal] = mapped_column(Numeric(40, 18), nullable=False)
+    eth_sensitive_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    eth_sensitive_debt_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    net_eth_exposure_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    non_eth_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    non_eth_debt_usd: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    basis_risk_collateral_usd: Mapped[Decimal] = mapped_column(
+        Numeric(30, 8), nullable=False
+    )
+    eth_down_liq_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_up_liq_price_usd: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(30, 8), nullable=True
+    )
+    eth_liq_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    dominant_risk: Mapped[str] = mapped_column(Text, nullable=False)
+    assets_jsonb: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    brief: Mapped[str] = mapped_column(Text, nullable=False, server_default="''")
+    cached_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )

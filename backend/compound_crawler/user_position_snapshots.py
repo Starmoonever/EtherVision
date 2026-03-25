@@ -24,6 +24,7 @@ from .crawler import (
     _base_token_usd_price,
     _block_at_timestamp,
     _build_web3,
+    close_web3,
     _price_from_feed_direct,
     _price_from_oracle,
     _scale_to_decimals,
@@ -935,49 +936,57 @@ async def collect_market_user_snapshots(
         if not csv_path.exists():
             raise FileNotFoundError(f"missing user csv: {csv_path}")
         users = _load_users_from_csv(csv_path)
-    if point_ts is None:
-        point_w3 = await _build_web3(cfg)
-        latest_block = await point_w3.eth.get_block("latest")
-        latest_timestamp = latest_block.get("timestamp")
-        latest_number = latest_block.get("number")
-        if latest_timestamp is None or latest_number is None:
-            raise RuntimeError("latest block missing timestamp or number")
-        timestamp = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
-        block_number = int(latest_number)
-        w3 = point_w3
-    else:
-        timestamp = (
-            point_ts.replace(tzinfo=timezone.utc)
-            if point_ts.tzinfo is None
-            else point_ts.astimezone(timezone.utc)
+    w3: AsyncWeb3 | None = None
+    try:
+        if point_ts is None:
+            point_w3 = await _build_web3(cfg)
+            latest_block = await point_w3.eth.get_block("latest")
+            latest_timestamp = latest_block.get("timestamp")
+            latest_number = latest_block.get("number")
+            if latest_timestamp is None or latest_number is None:
+                raise RuntimeError("latest block missing timestamp or number")
+            timestamp = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
+            block_number = int(latest_number)
+            w3 = point_w3
+        else:
+            timestamp = (
+                point_ts.replace(tzinfo=timezone.utc)
+                if point_ts.tzinfo is None
+                else point_ts.astimezone(timezone.utc)
+            )
+            w3 = await _build_web3(cfg)
+            block_number = await _block_at_timestamp(
+                w3, int(timestamp.timestamp()), pool=pool
+            )
+
+        metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+        market_ctx, snapshot_rows, asset_rows, _ = await _collect_market_snapshot_rows(
+            w3,
+            cfg,
+            market=market_address,
+            point_ts=timestamp,
+            block_number=block_number,
+            users=users,
+            metadata_cache=metadata_cache,
         )
-        w3 = await _build_web3(cfg)
-        block_number = await _block_at_timestamp(
-            w3, int(timestamp.timestamp()), pool=pool
+
+        if persist:
+            await upsert_user_position_snapshots(
+                pool, snapshot_rows, protocol=cfg.protocol
+            )
+            await upsert_user_position_asset_rows(
+                pool, asset_rows, protocol=cfg.protocol
+            )
+
+        return CollectedMarketSnapshots(
+            timestamp=timestamp,
+            block_number=block_number,
+            market=market_ctx.market_address.lower(),
+            symbol=market_ctx.market_symbol,
+            snapshots=snapshot_rows,
         )
-
-    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
-    market_ctx, snapshot_rows, asset_rows, _ = await _collect_market_snapshot_rows(
-        w3,
-        cfg,
-        market=market_address,
-        point_ts=timestamp,
-        block_number=block_number,
-        users=users,
-        metadata_cache=metadata_cache,
-    )
-
-    if persist:
-        await upsert_user_position_snapshots(pool, snapshot_rows, protocol=cfg.protocol)
-        await upsert_user_position_asset_rows(pool, asset_rows, protocol=cfg.protocol)
-
-    return CollectedMarketSnapshots(
-        timestamp=timestamp,
-        block_number=block_number,
-        market=market_ctx.market_address.lower(),
-        symbol=market_ctx.market_symbol,
-        snapshots=snapshot_rows,
-    )
+    finally:
+        await close_web3(w3)
 
 
 async def run_user_position_backfill(
@@ -997,7 +1006,7 @@ async def run_user_position_backfill(
         protocol=cfg.protocol,
         use_timescaledb=cfg.market_state.use_timescaledb,
     )
-    w3 = await _build_web3(cfg)
+    w3: AsyncWeb3 | None = await _build_web3(cfg)
 
     now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     start_ts = start or now
@@ -1021,104 +1030,107 @@ async def run_user_position_backfill(
     pending_asset_rows: list[UserPositionAssetRow] = []
     write_snapshot_batch_size = max(1000, cfg.crawler.batch_size * 10)
     write_asset_batch_size = max(5000, cfg.crawler.batch_size * 50)
-    block_numbers = list(
-        await asyncio.gather(
-            *[
-                _block_at_timestamp(w3, int(point.timestamp()), pool=pool)
-                for point in points
-            ]
+    try:
+        block_numbers = list(
+            await asyncio.gather(
+                *[
+                    _block_at_timestamp(w3, int(point.timestamp()), pool=pool)
+                    for point in points
+                ]
+            )
         )
-    )
 
-    logger.info(
-        "Compound user position backfill invoked: markets=%s start=%s end=%s interval_days=%s dry_run=%s skip_existing=%s",
-        ",".join(markets),
-        start_ts.isoformat(),
-        end_ts.isoformat(),
-        interval_days,
-        dry_run,
-        skip_existing,
-    )
-    if not dry_run:
         logger.info(
-            "Compound user position write batching enabled: snapshot_batch_size=%s asset_batch_size=%s",
-            write_snapshot_batch_size,
-            write_asset_batch_size,
+            "Compound user position backfill invoked: markets=%s start=%s end=%s interval_days=%s dry_run=%s skip_existing=%s",
+            ",".join(markets),
+            start_ts.isoformat(),
+            end_ts.isoformat(),
+            interval_days,
+            dry_run,
+            skip_existing,
         )
-
-    for point, block_number in zip(points, block_numbers):
-        for market in markets:
-            users = market_users[market.lower()]
-            if not users:
-                continue
-            snapshot_rows, asset_rows = await _collect_market_point(
-                w3,
-                pool,
-                cfg,
-                market_name=market,
-                point_ts=point,
-                block_number=block_number,
-                users=users,
-                skip_existing=skip_existing,
-                dry_run=dry_run,
-                stats=stats,
-                metadata_cache=metadata_cache,
-            )
-            if dry_run:
-                stats.snapshots += len(snapshot_rows)
-                stats.assets += len(asset_rows)
-                continue
-
-            pending_snapshot_rows.extend(snapshot_rows)
-            pending_asset_rows.extend(asset_rows)
-            if (
-                len(pending_snapshot_rows) >= write_snapshot_batch_size
-                or len(pending_asset_rows) >= write_asset_batch_size
-            ):
-                if cfg.protocol != "v3":
-                    await _flush_backfill_write_batch(
-                        pool,
-                        protocol=cfg.protocol,
-                        snapshot_rows=pending_snapshot_rows,
-                        asset_rows=pending_asset_rows,
-                        stats=stats,
-                    )
-                else:
-                    await _flush_backfill_write_batch(
-                        pool,
-                        snapshot_rows=pending_snapshot_rows,
-                        asset_rows=pending_asset_rows,
-                        stats=stats,
-                    )
-                pending_snapshot_rows = []
-                pending_asset_rows = []
-
-    if not dry_run:
-        if cfg.protocol != "v3":
-            await _flush_backfill_write_batch(
-                pool,
-                protocol=cfg.protocol,
-                snapshot_rows=pending_snapshot_rows,
-                asset_rows=pending_asset_rows,
-                stats=stats,
-            )
-        else:
-            await _flush_backfill_write_batch(
-                pool,
-                snapshot_rows=pending_snapshot_rows,
-                asset_rows=pending_asset_rows,
-                stats=stats,
+        if not dry_run:
+            logger.info(
+                "Compound user position write batching enabled: snapshot_batch_size=%s asset_batch_size=%s",
+                write_snapshot_batch_size,
+                write_asset_batch_size,
             )
 
-    logger.info(
-        "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s skipped_empty=%s dry_run=%s",
-        stats.snapshots,
-        stats.assets,
-        stats.skipped_existing,
-        stats.skipped_empty,
-        dry_run,
-    )
-    return stats
+        for point, block_number in zip(points, block_numbers):
+            for market in markets:
+                users = market_users[market.lower()]
+                if not users:
+                    continue
+                snapshot_rows, asset_rows = await _collect_market_point(
+                    w3,
+                    pool,
+                    cfg,
+                    market_name=market,
+                    point_ts=point,
+                    block_number=block_number,
+                    users=users,
+                    skip_existing=skip_existing,
+                    dry_run=dry_run,
+                    stats=stats,
+                    metadata_cache=metadata_cache,
+                )
+                if dry_run:
+                    stats.snapshots += len(snapshot_rows)
+                    stats.assets += len(asset_rows)
+                    continue
+
+                pending_snapshot_rows.extend(snapshot_rows)
+                pending_asset_rows.extend(asset_rows)
+                if (
+                    len(pending_snapshot_rows) >= write_snapshot_batch_size
+                    or len(pending_asset_rows) >= write_asset_batch_size
+                ):
+                    if cfg.protocol != "v3":
+                        await _flush_backfill_write_batch(
+                            pool,
+                            protocol=cfg.protocol,
+                            snapshot_rows=pending_snapshot_rows,
+                            asset_rows=pending_asset_rows,
+                            stats=stats,
+                        )
+                    else:
+                        await _flush_backfill_write_batch(
+                            pool,
+                            snapshot_rows=pending_snapshot_rows,
+                            asset_rows=pending_asset_rows,
+                            stats=stats,
+                        )
+                    pending_snapshot_rows = []
+                    pending_asset_rows = []
+
+        if not dry_run:
+            if cfg.protocol != "v3":
+                await _flush_backfill_write_batch(
+                    pool,
+                    protocol=cfg.protocol,
+                    snapshot_rows=pending_snapshot_rows,
+                    asset_rows=pending_asset_rows,
+                    stats=stats,
+                )
+            else:
+                await _flush_backfill_write_batch(
+                    pool,
+                    snapshot_rows=pending_snapshot_rows,
+                    asset_rows=pending_asset_rows,
+                    stats=stats,
+                )
+
+        logger.info(
+            "Compound user position backfill done: snapshots=%s assets=%s skipped_existing=%s skipped_empty=%s dry_run=%s",
+            stats.snapshots,
+            stats.assets,
+            stats.skipped_existing,
+            stats.skipped_empty,
+            dry_run,
+        )
+        return stats
+    finally:
+        await close_web3(w3)
 
 
 __all__ = [
