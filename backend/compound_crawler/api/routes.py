@@ -9,6 +9,10 @@ from .schemas import (
     MarketGovernancePeriodResponse,
     MarketStatePeriodResponse,
     MarketStateResponse,
+    V2MarketConfigResponse,
+    V2MarketConfigPeriodResponse,
+    V2ProtocolConfigResponse,
+    V2ProtocolConfigPeriodResponse,
     UserPositionResponse,
 )
 from .service import (
@@ -17,6 +21,10 @@ from .service import (
     get_market_governance_period,
     get_market_state,
     get_market_state_period,
+    get_v2_market_config,
+    get_v2_market_config_period,
+    get_v2_protocol_config,
+    get_v2_protocol_config_period,
     get_positions,
 )
 from ..database import AsyncpgPool
@@ -191,6 +199,214 @@ async def market_governance_period(
         end=end,
         latest_only_per_day=latest_only_per_day,
         detail=detail,
+    )
+
+
+@router.get(
+    "/market/config",
+    response_model=V2MarketConfigResponse,
+    summary="Query Compound v2 market config",
+)
+async def market_config(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query(
+        "v2",
+        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+    ),
+    market: str = Query(
+        ...,
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
+    ),
+    date: str | None = Query(
+        None,
+        description="可选 UTC 小时时间；不传则返回最新配置版本。",
+    ),
+) -> V2MarketConfigResponse:
+    return await get_v2_market_config(
+        pool=pool,
+        version=version,
+        market=market,
+        date=date,
+    )
+
+
+@router.get(
+    "/{version}/market/config",
+    response_model=V2MarketConfigResponse,
+    summary="Query Compound v2 market config (version in path)",
+)
+async def market_config_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
+    market: str = Query(
+        ...,
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
+    ),
+    date: str | None = Query(
+        None,
+        description="可选 UTC 小时时间；不传则返回最新配置版本。",
+    ),
+) -> V2MarketConfigResponse:
+    return await get_v2_market_config(
+        pool=pool,
+        version=version,
+        market=market,
+        date=date,
+    )
+
+
+@router.get(
+    "/market/config/period",
+    response_model=V2MarketConfigPeriodResponse,
+    summary="Query Compound v2 market config changes over a period",
+)
+async def market_config_period(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query(
+        "v2",
+        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+    ),
+    market: str = Query(
+        ...,
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
+    ),
+    start: str = Query(..., description="UTC datetime at hour precision (start)"),
+    end: str = Query(..., description="UTC datetime at hour precision (end)"),
+    latest_only_per_day: bool = Query(
+        False,
+        description="若同一天内有多次配置变更，只返回当天最后一个版本。",
+    ),
+) -> V2MarketConfigPeriodResponse:
+    return await get_v2_market_config_period(
+        pool=pool,
+        version=version,
+        market=market,
+        start=start,
+        end=end,
+        latest_only_per_day=latest_only_per_day,
+    )
+
+
+@router.get(
+    "/{version}/market/config/period",
+    response_model=V2MarketConfigPeriodResponse,
+    summary="Query Compound v2 market config changes (version in path)",
+)
+async def market_config_period_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
+    market: str = Query(
+        ...,
+        description='市场地址或名称：`"0x..." | "<SYMBOL>"`',
+    ),
+    start: str = Query(..., description="UTC datetime at hour precision (start)"),
+    end: str = Query(..., description="UTC datetime at hour precision (end)"),
+    latest_only_per_day: bool = Query(
+        False,
+        description="若同一天内有多次配置变更，只返回当天最后一个版本。",
+    ),
+) -> V2MarketConfigPeriodResponse:
+    return await get_v2_market_config_period(
+        pool=pool,
+        version=version,
+        market=market,
+        start=start,
+        end=end,
+        latest_only_per_day=latest_only_per_day,
+    )
+
+
+@router.get(
+    "/protocol/config",
+    response_model=V2ProtocolConfigResponse,
+    summary="Query Compound v2 protocol config",
+)
+async def protocol_config(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query(
+        "v2",
+        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+    ),
+    date: str | None = Query(
+        None,
+        description="可选 UTC 小时时间；不传则返回最新配置版本。",
+    ),
+) -> V2ProtocolConfigResponse:
+    return await get_v2_protocol_config(
+        pool=pool,
+        version=version,
+        date=date,
+    )
+
+
+@router.get(
+    "/{version}/protocol/config",
+    response_model=V2ProtocolConfigResponse,
+    summary="Query Compound v2 protocol config (version in path)",
+)
+async def protocol_config_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
+    date: str | None = Query(
+        None,
+        description="可选 UTC 小时时间；不传则返回最新配置版本。",
+    ),
+) -> V2ProtocolConfigResponse:
+    return await get_v2_protocol_config(
+        pool=pool,
+        version=version,
+        date=date,
+    )
+
+
+@router.get(
+    "/protocol/config/period",
+    response_model=V2ProtocolConfigPeriodResponse,
+    summary="Query Compound v2 protocol config changes over a period",
+)
+async def protocol_config_period(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query(
+        "v2",
+        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+    ),
+    start: str = Query(..., description="UTC datetime at hour precision (start)"),
+    end: str = Query(..., description="UTC datetime at hour precision (end)"),
+    latest_only_per_day: bool = Query(
+        False,
+        description="若同一天内有多次配置变更，只返回当天最后一个版本。",
+    ),
+) -> V2ProtocolConfigPeriodResponse:
+    return await get_v2_protocol_config_period(
+        pool=pool,
+        version=version,
+        start=start,
+        end=end,
+        latest_only_per_day=latest_only_per_day,
+    )
+
+
+@router.get(
+    "/{version}/protocol/config/period",
+    response_model=V2ProtocolConfigPeriodResponse,
+    summary="Query Compound v2 protocol config changes (version in path)",
+)
+async def protocol_config_period_by_path(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"],
+    start: str = Query(..., description="UTC datetime at hour precision (start)"),
+    end: str = Query(..., description="UTC datetime at hour precision (end)"),
+    latest_only_per_day: bool = Query(
+        False,
+        description="若同一天内有多次配置变更，只返回当天最后一个版本。",
+    ),
+) -> V2ProtocolConfigPeriodResponse:
+    return await get_v2_protocol_config_period(
+        pool=pool,
+        version=version,
+        start=start,
+        end=end,
+        latest_only_per_day=latest_only_per_day,
     )
 
 

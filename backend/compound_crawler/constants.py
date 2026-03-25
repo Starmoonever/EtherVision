@@ -25,7 +25,6 @@ COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
 COMPOUND_V2_MARKETS: list[str] = [
     "0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643",  # cDAI
     "0x39AA39c021dfbaE8faC545936693aC917d5E7563",  # cUSDC
-    "0xf650c3d88d12db855b8bf7d11be2e55a4e07dcc9",  # cUSDT
     "0x4Ddc2D193948926D02f9B1fE9e1daa0718270ED5",  # cETH
     "0xccF4429DB6322D5C611ee964527D42E5d685DD6a",  # cWBTC
 ]
@@ -33,7 +32,6 @@ COMPOUND_V2_MARKETS: list[str] = [
 COMPOUND_V2_MARKET_NAMES: dict[str, str] = {
     "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643": "cDAI",
     "0x39aa39c021dfbae8fac545936693ac917d5e7563": "cUSDC",
-    "0xf650c3d88d12db855b8bf7d11be2e55a4e07dcc9": "cUSDT",
     "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5": "cETH",
     "0xccf4429db6322d5c611ee964527d42e5d685dd6a": "cWBTC",
 }
@@ -123,6 +121,13 @@ CTOKEN_V2_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [],
+        "name": "interestRateModel",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 COMPTROLLER_V2_ABI = [
@@ -132,7 +137,92 @@ COMPTROLLER_V2_ABI = [
         "outputs": [{"internalType": "address", "name": "", "type": "address"}],
         "stateMutability": "view",
         "type": "function",
-    }
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "markets",
+        "outputs": [
+            {"internalType": "bool", "name": "isListed", "type": "bool"},
+            {
+                "internalType": "uint256",
+                "name": "collateralFactorMantissa",
+                "type": "uint256",
+            },
+            {"internalType": "bool", "name": "isComped", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "closeFactorMantissa",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "liquidationIncentiveMantissa",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "pauseGuardian",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "transferGuardianPaused",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "seizeGuardianPaused",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "mintGuardianPaused",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "borrowGuardianPaused",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "borrowCaps",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "supplyCaps",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "isDeprecated",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 COMPOUND_V2_ORACLE_ABI = [

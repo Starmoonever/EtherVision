@@ -244,3 +244,53 @@ class MarketGovernancePeriodResponse(BaseModel):
     points: list[MarketGovernanceResponse] = Field(
         description="时间区间内发生治理参数变更的配置版本列表；只返回有变动的数据点。"
     )
+
+
+class V2MarketConfigResponse(BaseModel):
+    version: str
+    market: str
+    symbol: str | None
+    effective_timestamp: str
+    block_number: int
+    config_hash: str
+    comptroller: str | None
+    interest_rate_model: str | None
+    underlying: str | None
+    underlying_symbol: str | None
+    ctoken_decimals: int | None
+    underlying_decimals: int | None
+    collateral_factor: str | None
+    reserve_factor: str | None
+    liquidation_threshold: str | None
+    borrow_cap: str | None
+    supply_cap: str | None
+    is_listed: bool
+    is_comped: bool
+    is_deprecated: bool
+    protocol_config_hash: str | None = None
+    mint_paused: bool | None = None
+    borrow_paused: bool | None = None
+
+
+class V2MarketConfigPeriodResponse(BaseModel):
+    points: list[V2MarketConfigResponse]
+
+
+class V2ProtocolConfigResponse(BaseModel):
+    version: str
+    effective_timestamp: str
+    block_number: int
+    config_hash: str
+    comptroller: str
+    price_oracle: str | None
+    close_factor: str | None
+    liquidation_incentive: str | None
+    pause_guardian: str | None
+    transfer_paused: bool
+    seize_paused: bool
+    mint_paused: bool
+    borrow_paused: bool
+
+
+class V2ProtocolConfigPeriodResponse(BaseModel):
+    points: list[V2ProtocolConfigResponse]

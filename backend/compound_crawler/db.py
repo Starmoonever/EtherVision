@@ -186,6 +186,47 @@ class MarketStatusSnapshotRow:
     raw_status_jsonb: dict[str, Any]
 
 
+@dataclass
+class V2MarketConfigVersionRow:
+    market: bytes
+    symbol: str | None
+    effective_timestamp: datetime
+    block_number: int
+    config_hash: str
+    comptroller: bytes | None
+    interest_rate_model: bytes | None
+    underlying: bytes | None
+    underlying_symbol: str | None
+    ctoken_decimals: int | None
+    underlying_decimals: int | None
+    collateral_factor: Decimal | None
+    reserve_factor: Decimal | None
+    liquidation_threshold: Decimal | None
+    borrow_cap: Decimal | None
+    supply_cap: Decimal | None
+    is_listed: bool
+    is_comped: bool
+    is_deprecated: bool
+    raw_config_jsonb: dict[str, Any]
+
+
+@dataclass
+class V2ProtocolConfigVersionRow:
+    effective_timestamp: datetime
+    block_number: int
+    config_hash: str
+    comptroller: bytes
+    price_oracle: bytes | None
+    close_factor: Decimal | None
+    liquidation_incentive: Decimal | None
+    pause_guardian: bytes | None
+    transfer_paused: bool
+    seize_paused: bool
+    mint_paused: bool
+    borrow_paused: bool
+    raw_config_jsonb: dict[str, Any]
+
+
 _DDL_MARKET = """
 CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"    TIMESTAMPTZ     NOT NULL,
@@ -341,6 +382,8 @@ ON CONFLICT ("timestamp", market, reserve) DO UPDATE SET
 _MARKET_CONFIG_TABLE = "compound_v3_market_config_versions"
 _MARKET_CONFIG_ASSET_TABLE = "compound_v3_market_config_assets"
 _MARKET_STATUS_TABLE = "compound_v3_market_status_snapshots"
+_V2_MARKET_CONFIG_TABLE = "compound_v2_market_config_versions"
+_V2_PROTOCOL_CONFIG_TABLE = "compound_v2_protocol_config_versions"
 
 _DDL_MARKET_CONFIG = f"""
 CREATE TABLE IF NOT EXISTS loan.{_MARKET_CONFIG_TABLE} (
@@ -549,6 +592,133 @@ ON CONFLICT ("timestamp", market) DO UPDATE SET
     total_borrow_base = EXCLUDED.total_borrow_base,
     last_accrual_time = EXCLUDED.last_accrual_time,
     raw_status_jsonb = EXCLUDED.raw_status_jsonb,
+    created_at = NOW();
+"""
+
+
+_DDL_V2_MARKET_CONFIG = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_MARKET_CONFIG_TABLE} (
+    market                 BYTEA           NOT NULL,
+    symbol                 TEXT            NULL,
+    effective_timestamp    TIMESTAMPTZ     NOT NULL,
+    block_number           BIGINT          NOT NULL,
+    config_hash            TEXT            NOT NULL,
+    comptroller            BYTEA           NULL,
+    interest_rate_model    BYTEA           NULL,
+    underlying             BYTEA           NULL,
+    underlying_symbol      TEXT            NULL,
+    ctoken_decimals        INTEGER         NULL,
+    underlying_decimals    INTEGER         NULL,
+    collateral_factor      NUMERIC(20, 18) NULL,
+    reserve_factor         NUMERIC(20, 18) NULL,
+    liquidation_threshold  NUMERIC(20, 18) NULL,
+    borrow_cap             NUMERIC(38, 18) NULL,
+    supply_cap             NUMERIC(38, 18) NULL,
+    is_listed              BOOLEAN         NOT NULL DEFAULT TRUE,
+    is_comped              BOOLEAN         NOT NULL DEFAULT FALSE,
+    is_deprecated          BOOLEAN         NOT NULL DEFAULT FALSE,
+    raw_config_jsonb       JSONB           NOT NULL,
+    created_at             TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market, config_hash)
+);
+"""
+
+_DDL_V2_MARKET_CONFIG_INDEX = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_MARKET_CONFIG_TABLE}_market_effective_ts
+    ON loan.{_V2_MARKET_CONFIG_TABLE} (market, effective_timestamp DESC);
+"""
+
+_DDL_V2_PROTOCOL_CONFIG = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_PROTOCOL_CONFIG_TABLE} (
+    effective_timestamp    TIMESTAMPTZ     NOT NULL,
+    block_number           BIGINT          NOT NULL,
+    config_hash            TEXT            NOT NULL PRIMARY KEY,
+    comptroller            BYTEA           NOT NULL,
+    price_oracle           BYTEA           NULL,
+    close_factor           NUMERIC(20, 18) NULL,
+    liquidation_incentive  NUMERIC(20, 18) NULL,
+    pause_guardian         BYTEA           NULL,
+    transfer_paused        BOOLEAN         NOT NULL DEFAULT FALSE,
+    seize_paused           BOOLEAN         NOT NULL DEFAULT FALSE,
+    mint_paused            BOOLEAN         NOT NULL DEFAULT FALSE,
+    borrow_paused          BOOLEAN         NOT NULL DEFAULT FALSE,
+    raw_config_jsonb       JSONB           NOT NULL,
+    created_at             TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+"""
+
+_DDL_V2_PROTOCOL_CONFIG_INDEX = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_PROTOCOL_CONFIG_TABLE}_effective_ts
+    ON loan.{_V2_PROTOCOL_CONFIG_TABLE} (effective_timestamp DESC);
+"""
+
+_UPSERT_V2_MARKET_CONFIG = f"""
+INSERT INTO loan.{_V2_MARKET_CONFIG_TABLE} (
+    market, symbol, effective_timestamp, block_number, config_hash,
+    comptroller, interest_rate_model, underlying, underlying_symbol,
+    ctoken_decimals, underlying_decimals, collateral_factor, reserve_factor,
+    liquidation_threshold, borrow_cap, supply_cap, is_listed, is_comped, is_deprecated,
+    raw_config_jsonb
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14, $15, $16, $17, $18, $19,
+    $20
+)
+ON CONFLICT (market, config_hash) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
+    effective_timestamp = LEAST(loan.compound_v2_market_config_versions.effective_timestamp, EXCLUDED.effective_timestamp),
+    block_number = CASE
+        WHEN EXCLUDED.effective_timestamp < loan.compound_v2_market_config_versions.effective_timestamp
+        THEN EXCLUDED.block_number
+        ELSE loan.compound_v2_market_config_versions.block_number
+    END,
+    comptroller = EXCLUDED.comptroller,
+    interest_rate_model = EXCLUDED.interest_rate_model,
+    underlying = EXCLUDED.underlying,
+    underlying_symbol = EXCLUDED.underlying_symbol,
+    ctoken_decimals = EXCLUDED.ctoken_decimals,
+    underlying_decimals = EXCLUDED.underlying_decimals,
+    collateral_factor = EXCLUDED.collateral_factor,
+    reserve_factor = EXCLUDED.reserve_factor,
+    liquidation_threshold = EXCLUDED.liquidation_threshold,
+    borrow_cap = EXCLUDED.borrow_cap,
+    supply_cap = EXCLUDED.supply_cap,
+    is_listed = EXCLUDED.is_listed,
+    is_comped = EXCLUDED.is_comped,
+    is_deprecated = EXCLUDED.is_deprecated,
+    raw_config_jsonb = EXCLUDED.raw_config_jsonb,
+    created_at = NOW();
+"""
+
+_UPSERT_V2_PROTOCOL_CONFIG = f"""
+INSERT INTO loan.{_V2_PROTOCOL_CONFIG_TABLE} (
+    effective_timestamp, block_number, config_hash, comptroller, price_oracle,
+    close_factor, liquidation_incentive, pause_guardian, transfer_paused, seize_paused,
+    mint_paused, borrow_paused, raw_config_jsonb
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12, $13
+)
+ON CONFLICT (config_hash) DO UPDATE SET
+    effective_timestamp = LEAST(loan.compound_v2_protocol_config_versions.effective_timestamp, EXCLUDED.effective_timestamp),
+    block_number = CASE
+        WHEN EXCLUDED.effective_timestamp < loan.compound_v2_protocol_config_versions.effective_timestamp
+        THEN EXCLUDED.block_number
+        ELSE loan.compound_v2_protocol_config_versions.block_number
+    END,
+    comptroller = EXCLUDED.comptroller,
+    price_oracle = EXCLUDED.price_oracle,
+    close_factor = EXCLUDED.close_factor,
+    liquidation_incentive = EXCLUDED.liquidation_incentive,
+    pause_guardian = EXCLUDED.pause_guardian,
+    transfer_paused = EXCLUDED.transfer_paused,
+    seize_paused = EXCLUDED.seize_paused,
+    mint_paused = EXCLUDED.mint_paused,
+    borrow_paused = EXCLUDED.borrow_paused,
+    raw_config_jsonb = EXCLUDED.raw_config_jsonb,
     created_at = NOW();
 """
 
@@ -981,6 +1151,11 @@ async def ensure_market_state_tables(
                 await conn.execute(_DDL_MARKET_CONFIG_ASSET_INDEX)
                 await conn.execute(_DDL_MARKET_STATUS)
                 await conn.execute(_DDL_MARKET_STATUS_INDEX)
+            if p == "v2":
+                await conn.execute(_DDL_V2_MARKET_CONFIG)
+                await conn.execute(_DDL_V2_MARKET_CONFIG_INDEX)
+                await conn.execute(_DDL_V2_PROTOCOL_CONFIG)
+                await conn.execute(_DDL_V2_PROTOCOL_CONFIG_INDEX)
 
             if use_timescaledb:
                 await _try_enable_hypertable(conn, market_table)
@@ -1000,6 +1175,12 @@ async def ensure_market_state_tables(
                     _MARKET_CONFIG_TABLE,
                     _MARKET_CONFIG_ASSET_TABLE,
                     _MARKET_STATUS_TABLE,
+                )
+            if p == "v2":
+                logger.info(
+                    "Compound v2 config tables ready: %s, %s",
+                    _V2_MARKET_CONFIG_TABLE,
+                    _V2_PROTOCOL_CONFIG_TABLE,
                 )
 
 
@@ -1151,6 +1332,27 @@ async def fetch_existing_governance_markets(
     )
 
 
+async def fetch_existing_v2_config_markets(
+    pool: asyncpg.Pool,
+    point_ts: datetime,
+    markets: list[bytes],
+) -> set[bytes]:
+    if not markets:
+        return set()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT DISTINCT market
+            FROM loan.{_V2_MARKET_CONFIG_TABLE}
+            WHERE market = ANY($1::bytea[])
+              AND effective_timestamp <= $2
+            """,
+            markets,
+            point_ts,
+        )
+    return {bytes(row["market"]) for row in rows}
+
+
 async def upsert_market_config_versions(
     pool: asyncpg.Pool,
     rows: list[MarketConfigVersionRow],
@@ -1251,6 +1453,71 @@ async def upsert_market_status_snapshots(
     ]
     async with pool.acquire() as conn:
         await conn.executemany(_UPSERT_MARKET_STATUS, values)
+    return len(rows)
+
+
+async def upsert_v2_market_config_versions(
+    pool: asyncpg.Pool,
+    rows: list[V2MarketConfigVersionRow],
+) -> int:
+    if not rows:
+        return 0
+    values = [
+        (
+            r.market,
+            r.symbol,
+            r.effective_timestamp,
+            r.block_number,
+            r.config_hash,
+            r.comptroller,
+            r.interest_rate_model,
+            r.underlying,
+            r.underlying_symbol,
+            r.ctoken_decimals,
+            r.underlying_decimals,
+            r.collateral_factor,
+            r.reserve_factor,
+            r.liquidation_threshold,
+            r.borrow_cap,
+            r.supply_cap,
+            r.is_listed,
+            r.is_comped,
+            r.is_deprecated,
+            json.dumps(r.raw_config_jsonb, ensure_ascii=False),
+        )
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_MARKET_CONFIG, values)
+    return len(rows)
+
+
+async def upsert_v2_protocol_config_versions(
+    pool: asyncpg.Pool,
+    rows: list[V2ProtocolConfigVersionRow],
+) -> int:
+    if not rows:
+        return 0
+    values = [
+        (
+            r.effective_timestamp,
+            r.block_number,
+            r.config_hash,
+            r.comptroller,
+            r.price_oracle,
+            r.close_factor,
+            r.liquidation_incentive,
+            r.pause_guardian,
+            r.transfer_paused,
+            r.seize_paused,
+            r.mint_paused,
+            r.borrow_paused,
+            json.dumps(r.raw_config_jsonb, ensure_ascii=False),
+        )
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_PROTOCOL_CONFIG, values)
     return len(rows)
 
 

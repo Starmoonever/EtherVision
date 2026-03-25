@@ -35,13 +35,18 @@ from .db import (
     MarketConfigVersionRow,
     MarketStatusSnapshotRow,
     ReserveSnapshotRow,
+    V2MarketConfigVersionRow,
+    V2ProtocolConfigVersionRow,
     ensure_market_state_tables,
     fetch_existing_governance_markets,
+    fetch_existing_v2_config_markets,
     market_table_name,
     upsert_market_config_asset_rows,
     upsert_market_config_versions,
     upsert_market_snapshots,
     upsert_market_status_snapshots,
+    upsert_v2_market_config_versions,
+    upsert_v2_protocol_config_versions,
     upsert_reserve_snapshots,
 )
 
@@ -503,6 +508,306 @@ async def _collect_v2_market_at_block(
         )
     ]
     return market_row, reserve_rows
+
+
+async def _safe_contract_call(fn: Any, *, default: Any = None) -> Any:
+    try:
+        return await fn()
+    except Exception:
+        return default
+
+
+async def _collect_v2_protocol_config_at_block(
+    w3: AsyncWeb3,
+    comptroller_address: str,
+    point_ts: datetime,
+    block_number: int,
+) -> V2ProtocolConfigVersionRow:
+    comptroller = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(comptroller_address),
+        abi=COMPTROLLER_V2_ABI,
+    )
+    (
+        oracle_raw,
+        close_factor_raw,
+        liq_incentive_raw,
+        pause_guardian_raw,
+    ) = await asyncio.gather(
+        _safe_contract_call(
+            lambda: comptroller.functions.oracle().call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.closeFactorMantissa().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.liquidationIncentiveMantissa().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.pauseGuardian().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
+    )
+    transfer_paused, seize_paused = await asyncio.gather(
+        _safe_contract_call(
+            lambda: comptroller.functions.transferGuardianPaused().call(
+                block_identifier=block_number
+            ),
+            default=False,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.seizeGuardianPaused().call(
+                block_identifier=block_number
+            ),
+            default=False,
+        ),
+    )
+    close_factor = (
+        Decimal(int(close_factor_raw)) / COMET_FACTOR_SCALE
+        if close_factor_raw is not None
+        else None
+    )
+    liq_incentive = (
+        Decimal(int(liq_incentive_raw)) / COMET_FACTOR_SCALE
+        if liq_incentive_raw is not None
+        else None
+    )
+
+    payload = {
+        "comptroller": _normalize_address_text(comptroller_address),
+        "price_oracle": _normalize_address_text(str(oracle_raw))
+        if oracle_raw
+        else None,
+        "close_factor": str(close_factor) if close_factor is not None else None,
+        "liquidation_incentive": (
+            str(liq_incentive) if liq_incentive is not None else None
+        ),
+        "pause_guardian": (
+            _normalize_address_text(str(pause_guardian_raw))
+            if pause_guardian_raw
+            else None
+        ),
+        "transfer_paused": bool(transfer_paused),
+        "seize_paused": bool(seize_paused),
+    }
+    return V2ProtocolConfigVersionRow(
+        effective_timestamp=point_ts,
+        block_number=block_number,
+        config_hash=_governance_config_hash(payload),
+        comptroller=_to_bytes(comptroller_address),
+        price_oracle=(
+            _optional_to_bytes(str(oracle_raw)) if oracle_raw is not None else None
+        ),
+        close_factor=close_factor,
+        liquidation_incentive=liq_incentive,
+        pause_guardian=(
+            _optional_to_bytes(str(pause_guardian_raw))
+            if pause_guardian_raw is not None
+            else None
+        ),
+        transfer_paused=bool(transfer_paused),
+        seize_paused=bool(seize_paused),
+        mint_paused=False,
+        borrow_paused=False,
+        raw_config_jsonb=payload,
+    )
+
+
+async def _collect_v2_market_config_at_block(
+    w3: AsyncWeb3,
+    protocol: str,
+    market_address: str,
+    point_ts: datetime,
+    block_number: int,
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> tuple[V2MarketConfigVersionRow, V2ProtocolConfigVersionRow]:
+    ctoken = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(market_address),
+        abi=CTOKEN_V2_ABI,
+    )
+    (
+        symbol_raw,
+        comptroller_raw,
+        reserve_factor_raw,
+        interest_rate_model_raw,
+        ctoken_decimals_raw,
+    ) = await asyncio.gather(
+        _safe_contract_call(
+            lambda: ctoken.functions.symbol().call(block_identifier=block_number),
+            default=_resolve_market_name(protocol, market_address),
+        ),
+        ctoken.functions.comptroller().call(block_identifier=block_number),
+        _safe_contract_call(
+            lambda: ctoken.functions.reserveFactorMantissa().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: ctoken.functions.interestRateModel().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: ctoken.functions.decimals().call(block_identifier=block_number),
+            default=None,
+        ),
+    )
+    comptroller_address = str(comptroller_raw)
+    comptroller = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(comptroller_address),
+        abi=COMPTROLLER_V2_ABI,
+    )
+
+    try:
+        underlying_address = str(
+            await ctoken.functions.underlying().call(block_identifier=block_number)
+        )
+        underlying_symbol, underlying_decimals_meta = await _token_metadata(
+            w3, underlying_address, block_number, metadata_cache
+        )
+        underlying_decimals = int(underlying_decimals_meta or 18)
+    except Exception:
+        underlying_address = WETH_MAINNET
+        underlying_symbol = "ETH"
+        underlying_decimals = 18
+
+    markets_raw = await _safe_contract_call(
+        lambda: comptroller.functions.markets(
+            AsyncWeb3.to_checksum_address(market_address)
+        ).call(block_identifier=block_number),
+        default=(False, 0, False),
+    )
+    is_listed = bool(markets_raw[0])
+    collateral_factor = Decimal(int(markets_raw[1])) / COMET_FACTOR_SCALE
+    is_comped = bool(markets_raw[2])
+    reserve_factor = (
+        Decimal(int(reserve_factor_raw)) / COMET_FACTOR_SCALE
+        if reserve_factor_raw is not None
+        else None
+    )
+
+    (
+        borrow_cap_raw,
+        supply_cap_raw,
+        is_deprecated_raw,
+        mint_paused_raw,
+        borrow_paused_raw,
+    ) = await asyncio.gather(
+        _safe_contract_call(
+            lambda: comptroller.functions.borrowCaps(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.supplyCaps(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.isDeprecated(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=False,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.mintGuardianPaused(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=False,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.borrowGuardianPaused(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=False,
+        ),
+    )
+    cap_scale = Decimal(10) ** underlying_decimals
+    borrow_cap = (
+        Decimal(int(borrow_cap_raw)) / cap_scale if borrow_cap_raw is not None else None
+    )
+    supply_cap = (
+        Decimal(int(supply_cap_raw)) / cap_scale if supply_cap_raw is not None else None
+    )
+
+    protocol_row = await _collect_v2_protocol_config_at_block(
+        w3,
+        comptroller_address=comptroller_address,
+        point_ts=point_ts,
+        block_number=block_number,
+    )
+    protocol_payload = dict(protocol_row.raw_config_jsonb)
+    protocol_payload["mint_paused"] = bool(mint_paused_raw)
+    protocol_payload["borrow_paused"] = bool(borrow_paused_raw)
+    protocol_row.mint_paused = bool(mint_paused_raw)
+    protocol_row.borrow_paused = bool(borrow_paused_raw)
+    protocol_row.config_hash = _governance_config_hash(protocol_payload)
+    protocol_row.raw_config_jsonb = protocol_payload
+
+    market_symbol = str(symbol_raw) if symbol_raw is not None else None
+    market_payload = {
+        "market": _normalize_address_text(market_address),
+        "symbol": market_symbol,
+        "comptroller": _normalize_address_text(comptroller_address),
+        "interest_rate_model": (
+            _normalize_address_text(str(interest_rate_model_raw))
+            if interest_rate_model_raw is not None
+            else None
+        ),
+        "underlying": _normalize_address_text(underlying_address),
+        "underlying_symbol": underlying_symbol,
+        "ctoken_decimals": int(ctoken_decimals_raw) if ctoken_decimals_raw else None,
+        "underlying_decimals": underlying_decimals,
+        "collateral_factor": str(collateral_factor),
+        "reserve_factor": str(reserve_factor) if reserve_factor is not None else None,
+        "borrow_cap": str(borrow_cap) if borrow_cap is not None else None,
+        "supply_cap": str(supply_cap) if supply_cap is not None else None,
+        "is_listed": is_listed,
+        "is_comped": is_comped,
+        "is_deprecated": bool(is_deprecated_raw),
+        "mint_paused": bool(mint_paused_raw),
+        "borrow_paused": bool(borrow_paused_raw),
+        "protocol_config_hash": protocol_row.config_hash,
+    }
+    market_row = V2MarketConfigVersionRow(
+        market=_to_bytes(market_address),
+        symbol=market_symbol,
+        effective_timestamp=point_ts,
+        block_number=block_number,
+        config_hash=_governance_config_hash(market_payload),
+        comptroller=_optional_to_bytes(comptroller_address),
+        interest_rate_model=(
+            _optional_to_bytes(str(interest_rate_model_raw))
+            if interest_rate_model_raw is not None
+            else None
+        ),
+        underlying=_optional_to_bytes(underlying_address),
+        underlying_symbol=underlying_symbol,
+        ctoken_decimals=int(ctoken_decimals_raw) if ctoken_decimals_raw else None,
+        underlying_decimals=underlying_decimals,
+        collateral_factor=collateral_factor,
+        reserve_factor=reserve_factor,
+        liquidation_threshold=None,
+        borrow_cap=borrow_cap,
+        supply_cap=supply_cap,
+        is_listed=is_listed,
+        is_comped=is_comped,
+        is_deprecated=bool(is_deprecated_raw),
+        raw_config_jsonb=market_payload,
+    )
+    return market_row, protocol_row
 
 
 async def _collect_v3_governance_rows_at_block(
@@ -1106,6 +1411,61 @@ async def _collect_v2_markets_at_block(
     return market_rows, reserve_rows
 
 
+async def _collect_v2_market_configs_at_block(
+    cfg: AppConfig,
+    w3: AsyncWeb3,
+    point_ts: datetime,
+    block_number: int,
+    markets: Sequence[str],
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]],
+) -> tuple[list[V2MarketConfigVersionRow], list[V2ProtocolConfigVersionRow]]:
+    sem = asyncio.Semaphore(max(1, cfg.crawler.concurrency))
+
+    async def _one_market(
+        market: str,
+    ) -> tuple[V2MarketConfigVersionRow | None, V2ProtocolConfigVersionRow | None]:
+        async with sem:
+            try:
+                if market.startswith("0x") and not await _is_contract_deployed_at_block(
+                    w3, market, block_number, deployment_cache
+                ):
+                    logger.info(
+                        "Skip undeployed v2 market config market=%s ts=%s block=%s",
+                        market,
+                        point_ts.isoformat(),
+                        block_number,
+                    )
+                    return None, None
+                return await _collect_v2_market_config_at_block(
+                    w3,
+                    protocol=cfg.protocol,
+                    market_address=market,
+                    point_ts=point_ts,
+                    block_number=block_number,
+                    metadata_cache=metadata_cache,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to collect v2 market config market=%s ts=%s block=%s: %s",
+                    market,
+                    point_ts.isoformat(),
+                    block_number,
+                    exc,
+                )
+                return None, None
+
+    results = await asyncio.gather(*(_one_market(market) for market in markets))
+    market_rows: list[V2MarketConfigVersionRow] = []
+    protocol_rows_by_hash: dict[str, V2ProtocolConfigVersionRow] = {}
+    for market_row, protocol_row in results:
+        if market_row is not None:
+            market_rows.append(market_row)
+        if protocol_row is not None:
+            protocol_rows_by_hash[protocol_row.config_hash] = protocol_row
+    return market_rows, list(protocol_rows_by_hash.values())
+
+
 async def _filter_pending_markets(
     cfg: AppConfig,
     pool: asyncpg.Pool,
@@ -1573,4 +1933,102 @@ async def run_crawler(
         totals["config"],
         totals["config_asset"],
         totals["status"],
+    )
+
+
+async def run_v2_market_config_crawler(
+    cfg: AppConfig,
+    pool,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    interval_hours: int = 1,
+    skip_existing: bool = False,
+    dry_run: bool = False,
+) -> None:
+    if cfg.protocol != "v2":
+        raise ValueError("run_v2_market_config_crawler only supports protocol=v2")
+    await ensure_market_state_tables(
+        pool,
+        protocol="v2",
+        use_timescaledb=cfg.market_state.use_timescaledb,
+    )
+    now_utc = datetime.now(timezone.utc)
+    interval = timedelta(hours=interval_hours)
+    if start_at is None and end_at is None:
+        start = now_utc.replace(minute=0, second=0, microsecond=0)
+        end = start
+    else:
+        start = start_at or end_at or now_utc
+        end = end_at or start_at or start
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+    if start > end:
+        raise ValueError("end_at must be greater than or equal to start_at")
+
+    points: list[datetime] = []
+    cursor = start
+    while cursor <= end:
+        points.append(cursor)
+        cursor += interval
+
+    markets = _market_addresses(cfg)
+    w3 = await _build_web3(cfg)
+    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    deployment_cache: dict[str, dict[str, int]] = {}
+    total_market_config = 0
+    total_protocol_config = 0
+
+    logger.info(
+        "Compound v2 market config crawl invoked: dry_run=%s skip_existing=%s start=%s end=%s interval_hours=%s points=%s",
+        dry_run,
+        skip_existing,
+        start.isoformat(),
+        end.isoformat(),
+        interval_hours,
+        len(points),
+    )
+    for point_ts in points:
+        point_markets = list(markets)
+        if skip_existing:
+            existing = await fetch_existing_v2_config_markets(
+                pool,
+                point_ts=point_ts,
+                markets=[_to_bytes(m) for m in point_markets if m.startswith("0x")],
+            )
+            point_markets = [
+                m
+                for m in point_markets
+                if not m.startswith("0x") or _to_bytes(m) not in existing
+            ]
+            if not point_markets:
+                continue
+
+        block_number = await _block_at_timestamp(
+            w3, int(point_ts.timestamp()), pool=pool
+        )
+        market_rows, protocol_rows = await _collect_v2_market_configs_at_block(
+            cfg,
+            w3,
+            point_ts=point_ts,
+            block_number=block_number,
+            markets=point_markets,
+            metadata_cache=metadata_cache,
+            deployment_cache=deployment_cache,
+        )
+        if dry_run:
+            total_market_config += len(market_rows)
+            total_protocol_config += len(protocol_rows)
+            continue
+        total_market_config += await upsert_v2_market_config_versions(pool, market_rows)
+        total_protocol_config += await upsert_v2_protocol_config_versions(
+            pool, protocol_rows
+        )
+
+    logger.info(
+        "Compound v2 market config crawl done: dry_run=%s market_config_rows=%s protocol_config_rows=%s",
+        dry_run,
+        total_market_config,
+        total_protocol_config,
     )

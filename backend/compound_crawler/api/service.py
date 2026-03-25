@@ -19,6 +19,10 @@ from .schemas import (
     GovernanceAssetResponse,
     MarketGovernanceResponse,
     MarketGovernancePeriodResponse,
+    V2MarketConfigResponse,
+    V2MarketConfigPeriodResponse,
+    V2ProtocolConfigResponse,
+    V2ProtocolConfigPeriodResponse,
     MarketStatePeriodResponse,
     MarketStateReserveResponse,
     MarketStateResponse,
@@ -31,6 +35,8 @@ _SECONDS_PER_YEAR = Decimal("31536000")
 _USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
 _GOVERNANCE_TABLE = "compound_v3_market_config_versions"
 _GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
+_V2_MARKET_CONFIG_TABLE = "compound_v2_market_config_versions"
+_V2_PROTOCOL_CONFIG_TABLE = "compound_v2_protocol_config_versions"
 
 
 def get_markets(version: str) -> MarketsResponse:
@@ -378,6 +384,166 @@ async def get_market_governance_period(
     )
 
 
+async def get_v2_market_config(
+    pool,
+    version: str,
+    market: str,
+    date: str | None = None,
+) -> V2MarketConfigResponse:
+    if version != "v2":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
+    market_address = _market_to_address("v2", market)
+    market_bytes = _address_to_bytes(market_address)
+    point_ts = _parse_hour_utc(date) if date is not None else None
+    async with pool.acquire() as conn:
+        if point_ts is None:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_V2_MARKET_CONFIG_TABLE}
+                WHERE market = $1
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                market_bytes,
+            )
+        else:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_V2_MARKET_CONFIG_TABLE}
+                WHERE market = $1
+                  AND effective_timestamp <= $2
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                market_bytes,
+                point_ts,
+            )
+    if row is None:
+        raise HTTPException(status_code=404, detail="未找到该市场的 v2 配置")
+    return _map_v2_market_config_row(row)
+
+
+async def get_v2_market_config_period(
+    pool,
+    version: str,
+    market: str,
+    start: str,
+    end: str,
+    latest_only_per_day: bool = False,
+) -> V2MarketConfigPeriodResponse:
+    if version != "v2":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
+    start_dt = _parse_hour_utc(start)
+    end_dt = _parse_hour_utc(end)
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start 必须小于等于 end")
+    market_address = _market_to_address("v2", market)
+    market_bytes = _address_to_bytes(market_address)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT *
+            FROM loan.{_V2_MARKET_CONFIG_TABLE}
+            WHERE market = $1
+              AND effective_timestamp >= $2
+              AND effective_timestamp <= $3
+            ORDER BY effective_timestamp, block_number, config_hash
+            """,
+            market_bytes,
+            start_dt,
+            end_dt,
+        )
+    if not rows:
+        return V2MarketConfigPeriodResponse(points=[])
+    selected_rows = list(rows)
+    if latest_only_per_day:
+        rows_by_day: dict[date, Any] = {}
+        for row in selected_rows:
+            ts = _row_get(row, "effective_timestamp")
+            day = ts.astimezone(timezone.utc).date()
+            rows_by_day[day] = row
+        selected_rows = [rows_by_day[day] for day in sorted(rows_by_day)]
+    return V2MarketConfigPeriodResponse(
+        points=[_map_v2_market_config_row(row) for row in selected_rows]
+    )
+
+
+async def get_v2_protocol_config(
+    pool,
+    version: str,
+    date: str | None = None,
+) -> V2ProtocolConfigResponse:
+    if version != "v2":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
+    point_ts = _parse_hour_utc(date) if date is not None else None
+    async with pool.acquire() as conn:
+        if point_ts is None:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_V2_PROTOCOL_CONFIG_TABLE}
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """
+            )
+        else:
+            row = await conn.fetchrow(
+                f"""
+                SELECT *
+                FROM loan.{_V2_PROTOCOL_CONFIG_TABLE}
+                WHERE effective_timestamp <= $1
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                point_ts,
+            )
+    if row is None:
+        raise HTTPException(status_code=404, detail="未找到 v2 协议配置")
+    return _map_v2_protocol_config_row(row)
+
+
+async def get_v2_protocol_config_period(
+    pool,
+    version: str,
+    start: str,
+    end: str,
+    latest_only_per_day: bool = False,
+) -> V2ProtocolConfigPeriodResponse:
+    if version != "v2":
+        raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
+    start_dt = _parse_hour_utc(start)
+    end_dt = _parse_hour_utc(end)
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start 必须小于等于 end")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT *
+            FROM loan.{_V2_PROTOCOL_CONFIG_TABLE}
+            WHERE effective_timestamp >= $1
+              AND effective_timestamp <= $2
+            ORDER BY effective_timestamp, block_number, config_hash
+            """,
+            start_dt,
+            end_dt,
+        )
+    if not rows:
+        return V2ProtocolConfigPeriodResponse(points=[])
+    selected_rows = list(rows)
+    if latest_only_per_day:
+        rows_by_day: dict[date, Any] = {}
+        for row in selected_rows:
+            ts = _row_get(row, "effective_timestamp")
+            day = ts.astimezone(timezone.utc).date()
+            rows_by_day[day] = row
+        selected_rows = [rows_by_day[day] for day in sorted(rows_by_day)]
+    return V2ProtocolConfigPeriodResponse(
+        points=[_map_v2_protocol_config_row(row) for row in selected_rows]
+    )
+
+
 async def get_sorted_positions(limit: int) -> list[PositionResponse]:
     _ = limit
     return []
@@ -720,6 +886,74 @@ def _map_market_governance_row(
         assets=[_map_governance_asset_row(item) for item in asset_rows]
         if detail
         else None,
+    )
+
+
+def _map_v2_market_config_row(row: Any) -> V2MarketConfigResponse:
+    raw_config = _row_get(row, "raw_config_jsonb", {})
+    raw_config_dict = raw_config if isinstance(raw_config, dict) else {}
+    return V2MarketConfigResponse(
+        version="v2",
+        market=_bytea_to_address(_require_bytes(_row_get(row, "market"), "market")),
+        symbol=_row_get(row, "symbol"),
+        effective_timestamp=_timestamp_to_utc_string(
+            _row_get(row, "effective_timestamp")
+        ),
+        block_number=_require_int(_row_get(row, "block_number"), "block_number"),
+        config_hash=str(_row_get(row, "config_hash")),
+        comptroller=_bytea_to_optional_address(_row_get(row, "comptroller")),
+        interest_rate_model=_bytea_to_optional_address(
+            _row_get(row, "interest_rate_model")
+        ),
+        underlying=_bytea_to_optional_address(_row_get(row, "underlying")),
+        underlying_symbol=_row_get(row, "underlying_symbol"),
+        ctoken_decimals=_row_get(row, "ctoken_decimals"),
+        underlying_decimals=_row_get(row, "underlying_decimals"),
+        collateral_factor=_fmt_optional(_row_get(row, "collateral_factor")),
+        reserve_factor=_fmt_optional(_row_get(row, "reserve_factor")),
+        liquidation_threshold=_fmt_optional(_row_get(row, "liquidation_threshold")),
+        borrow_cap=_fmt_optional(_row_get(row, "borrow_cap")),
+        supply_cap=_fmt_optional(_row_get(row, "supply_cap")),
+        is_listed=bool(_row_get(row, "is_listed")),
+        is_comped=bool(_row_get(row, "is_comped")),
+        is_deprecated=bool(_row_get(row, "is_deprecated")),
+        protocol_config_hash=(
+            str(raw_config_dict.get("protocol_config_hash"))
+            if raw_config_dict.get("protocol_config_hash")
+            else None
+        ),
+        mint_paused=(
+            bool(raw_config_dict.get("mint_paused"))
+            if "mint_paused" in raw_config_dict
+            else None
+        ),
+        borrow_paused=(
+            bool(raw_config_dict.get("borrow_paused"))
+            if "borrow_paused" in raw_config_dict
+            else None
+        ),
+    )
+
+
+def _map_v2_protocol_config_row(row: Any) -> V2ProtocolConfigResponse:
+    return V2ProtocolConfigResponse(
+        version="v2",
+        effective_timestamp=_timestamp_to_utc_string(
+            _row_get(row, "effective_timestamp")
+        ),
+        block_number=_require_int(_row_get(row, "block_number"), "block_number"),
+        config_hash=str(_row_get(row, "config_hash")),
+        comptroller=_bytea_to_address(
+            _require_bytes(_row_get(row, "comptroller"), "comptroller")
+        ),
+        price_oracle=_bytea_to_optional_address(_row_get(row, "price_oracle")),
+        close_factor=_fmt_optional(_row_get(row, "close_factor")),
+        liquidation_incentive=_fmt_optional(_row_get(row, "liquidation_incentive")),
+        pause_guardian=_bytea_to_optional_address(_row_get(row, "pause_guardian")),
+        transfer_paused=bool(_row_get(row, "transfer_paused")),
+        seize_paused=bool(_row_get(row, "seize_paused")),
+        mint_paused=bool(_row_get(row, "mint_paused")),
+        borrow_paused=bool(_row_get(row, "borrow_paused")),
     )
 
 

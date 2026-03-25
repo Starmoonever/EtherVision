@@ -9,7 +9,7 @@ import click
 from crawler_shared.logging import setup_cli_logging
 
 from .config import load_config
-from .crawler import run_crawler
+from .crawler import run_crawler, run_v2_market_config_crawler
 from .db import create_pool, ensure_market_state_tables
 from .watcher import run_watcher
 
@@ -181,6 +181,86 @@ def cmd_init_market_state(
                 pool,
                 protocol=protocol,
                 use_timescaledb=use_timescaledb,
+            )
+        finally:
+            await pool.close()
+
+    asyncio.run(_run())
+
+
+@cli.command("crawl_market_config")
+@click.option("--config", "-c", default=None, help="config.yaml path")
+@click.option(
+    "--protocol",
+    "-p",
+    default="v2",
+    type=click.Choice(["v2"]),
+    show_default=True,
+    help="Compound protocol version",
+)
+@click.option(
+    "--start",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"]),
+    default=None,
+    help="Range start in UTC",
+)
+@click.option(
+    "--end",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"]),
+    default=None,
+    help="Range end in UTC (inclusive)",
+)
+@click.option(
+    "--interval",
+    "-i",
+    type=click.IntRange(min=1),
+    default=24,
+    show_default=True,
+    help="Sampling interval in hours",
+)
+@click.option(
+    "--skip-existing",
+    is_flag=True,
+    default=False,
+    help="Skip markets with existing config before point timestamp",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Do not write to database")
+@click.option(
+    "--verbose", "-v", is_flag=True, default=False, help="Enable DEBUG logging"
+)
+def cmd_crawl_market_config(
+    config: str | None,
+    protocol: str,
+    start: datetime | None,
+    end: datetime | None,
+    interval: int,
+    skip_existing: bool,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """Collect Compound v2 market/protocol config snapshots in a time range."""
+    _setup_logging(verbose)
+    cfg = load_config(config)
+    cfg.protocol = protocol
+
+    start_at = (
+        start.replace(tzinfo=timezone.utc) if start and start.tzinfo is None else start
+    )
+    end_at = end.replace(tzinfo=timezone.utc) if end and end.tzinfo is None else end
+    if start_at and end_at and start_at > end_at:
+        raise click.BadParameter("--end must be greater than or equal to --start")
+
+    async def _run() -> None:
+        pool = await create_pool(cfg.postgres)
+        try:
+            await run_v2_market_config_crawler(
+                cfg,
+                pool,
+                start_at=start_at,
+                end_at=end_at,
+                interval_hours=interval,
+                skip_existing=skip_existing,
+                dry_run=dry_run,
             )
         finally:
             await pool.close()
