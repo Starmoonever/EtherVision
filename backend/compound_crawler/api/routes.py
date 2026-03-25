@@ -185,7 +185,7 @@ async def position_by_path(
         "按交易粒度回放用户在 Compound 的历史仓位。\n\n"
         "- 先查缓存表 `loan.compound_position_snapshots`\n"
         "- 对于缓存缺失点：`version=v3` 自动在线补采并写回缓存\n"
-        "- 对于缓存缺失点：`version=v2` 目前仅支持读缓存，不做在线补采\n"
+        "- 对于缓存缺失点：`version=v2` 也会自动在线补采并写回缓存\n"
         "- `detail=true` 时返回资产明细"
     ),
 )

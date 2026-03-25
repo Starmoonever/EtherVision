@@ -17,7 +17,10 @@ from compound_crawler.constants import (
     COMPOUND_V2_MARKET_NAMES,
     COMPOUND_V3_MARKET_NAMES,
 )
-from compound_crawler.db import UserPositionSnapshotRow
+from compound_crawler.db import (
+    CompoundEventPositionSnapshotRow,
+    UserPositionSnapshotRow,
+)
 from compound_crawler.user_position_snapshots import (
     CollectedMarketSnapshots,
     collect_market_user_snapshots,
@@ -519,3 +522,81 @@ def test_market_to_address_accepts_mixed_case_known_addresses() -> None:
     for address in COMPOUND_V2_MARKET_NAMES:
         mixed = "0x" + address[2:].upper()
         assert service._market_to_address("v2", mixed) == address.lower()
+
+
+@pytest.mark.asyncio
+async def test_collect_and_cache_replay_misses_supports_v2_realtime_backfill() -> None:
+    user_address = bytes.fromhex("11" * 20)
+    market = bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5")
+    ts = datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc)
+    misses = [
+        {
+            "market": market,
+            "tx_hash": "0x" + "aa" * 32,
+            "method_id": "2608f818",
+            "block_number": 123,
+            "block_timestamp": ts,
+        }
+    ]
+    v2_snapshot = CompoundEventPositionSnapshotRow(
+        user_address=user_address,
+        protocol="v2",
+        market=market,
+        symbol="cETH",
+        block_number=123,
+        tx_hash="",
+        block_timestamp=ts,
+        has_open_position=True,
+        is_liquidatable=False,
+        base_token=bytes.fromhex(
+            "c02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"[2:].lower()
+        ),
+        base_symbol="ETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("1000"),
+        total_debt_usd=Decimal("100"),
+        discounted_collateral_usd=Decimal("600"),
+        liquidation_buffer_usd=Decimal("500"),
+        health_factor=Decimal("6"),
+        eth_sensitive_collateral_usd=Decimal("1000"),
+        eth_sensitive_debt_usd=Decimal("100"),
+        net_eth_exposure_usd=Decimal("900"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("0"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=Decimal("1000"),
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="down",
+        dominant_risk="eth_down",
+        assets_jsonb=[],
+        brief="",
+    )
+
+    with (
+        patch.object(
+            service,
+            "_load_compound_replay_briefs",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            service,
+            "_collect_v2_replay_snapshot_row",
+            new=AsyncMock(return_value=v2_snapshot),
+        ) as mocked_collect_v2,
+        patch.object(
+            service,
+            "upsert_compound_event_snapshots",
+            new=AsyncMock(return_value=1),
+        ) as mocked_upsert,
+    ):
+        await service._collect_and_cache_replay_misses(
+            pool=_FakePool(),
+            version="v2",
+            user_address=user_address,
+            misses=misses,
+            w3=object(),
+        )
+
+    mocked_collect_v2.assert_awaited_once()
+    mocked_upsert.assert_awaited_once()
