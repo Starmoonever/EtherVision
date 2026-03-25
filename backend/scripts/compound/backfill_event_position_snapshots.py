@@ -16,13 +16,25 @@ from typing import Any
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from crawler_shared.logging import setup_cli_logging
+from web3 import AsyncWeb3
 
 from compound_crawler.config import load_config
 from compound_crawler.constants import (
     COMPOUND_V2_MARKET_NAMES,
     COMPOUND_V3_MARKET_NAMES,
+    CTOKEN_V2_ABI,
+    COMPTROLLER_V2_ABI,
 )
-from compound_crawler.crawler import _build_web3, close_web3
+from compound_crawler.crawler import (
+    COMET_FACTOR_SCALE,
+    ETH_USD_PRICE_FEED,
+    WETH_MAINNET,
+    _build_web3,
+    _price_from_feed_direct,
+    _token_metadata,
+    _v2_underlying_price_usd,
+    close_web3,
+)
 from compound_crawler.db import (
     CompoundEventPositionSnapshotRow,
     create_pool,
@@ -76,6 +88,56 @@ METHOD_BRIEF_MAP: dict[str, dict[str, str]] = {
         "c3cecfd2": "吸收清算",
     },
 }
+ETH_CORRELATED_SYMBOLS = {"ETH", "WETH", "WSTETH", "RETH", "CBETH"}
+MAX_HF = Decimal("1e18")
+CTOKEN_V2_USER_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "borrowBalanceStored",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "exchangeRateStored",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+COMPTROLLER_V2_USER_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "getAssetsIn",
+        "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+COMPTROLLER_V2_MARKETS_LEGACY_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "markets",
+        "outputs": [
+            {"internalType": "bool", "name": "isListed", "type": "bool"},
+            {
+                "internalType": "uint256",
+                "name": "collateralFactorMantissa",
+                "type": "uint256",
+            },
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
 
 
 @dataclass
@@ -182,6 +244,311 @@ def _resolve_v3_market_filter(market: str) -> str | None:
         if symbol.lower() == value:
             return addr
     raise ValueError(f"unknown v3 market: {market}")
+
+
+def _resolve_v2_market_filter(market: str) -> str | None:
+    value = market.strip().lower()
+    if value == "all":
+        return None
+    if value.startswith("0x") and len(value) == 42:
+        return value
+    for addr, symbol in COMPOUND_V2_MARKET_NAMES.items():
+        if symbol.lower() == value:
+            return addr
+    raise ValueError(f"unknown v2 market: {market}")
+
+
+async def _collect_v2_account_snapshot_row(
+    w3: Any,
+    *,
+    user_address: bytes,
+    event_market: str,
+    block_number: int,
+    point_ts: datetime,
+    metadata_cache: dict[str, tuple[str | None, int | None]],
+) -> CompoundEventPositionSnapshotRow:
+    user_checksum = AsyncWeb3.to_checksum_address("0x" + user_address.hex())
+    market_addresses = list(COMPOUND_V2_MARKET_NAMES.keys())
+    event_market_lc = event_market.lower()
+
+    first_market = event_market_lc
+    first_ctoken = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(first_market),
+        abi=CTOKEN_V2_ABI,
+    )
+    comptroller_address = await first_ctoken.functions.comptroller().call(
+        block_identifier=block_number
+    )
+    comptroller = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(str(comptroller_address)),
+        abi=COMPTROLLER_V2_ABI + COMPTROLLER_V2_USER_ABI,
+    )
+    assets_in = await comptroller.functions.getAssetsIn(user_checksum).call(
+        block_identifier=block_number
+    )
+    collateral_markets = {str(addr).lower() for addr in assets_in}
+
+    market_rows: list[dict[str, Any]] = []
+    legacy_comptroller = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(str(comptroller_address)),
+        abi=COMPTROLLER_V2_MARKETS_LEGACY_ABI,
+    )
+    for market in market_addresses:
+        market_checksum = AsyncWeb3.to_checksum_address(market)
+        code = await w3.eth.get_code(market_checksum, block_identifier=block_number)
+        if not code:
+            continue
+        ctoken = w3.eth.contract(address=market_checksum, abi=CTOKEN_V2_USER_ABI)
+        ctoken_meta = w3.eth.contract(address=market_checksum, abi=CTOKEN_V2_ABI)
+        symbol = COMPOUND_V2_MARKET_NAMES.get(market, market)
+
+        try:
+            underlying = await ctoken_meta.functions.underlying().call(
+                block_identifier=block_number
+            )
+            underlying_symbol, underlying_dec_meta = await _token_metadata(
+                w3, str(underlying), block_number, metadata_cache
+            )
+            underlying_decimals = int(underlying_dec_meta or 18)
+            underlying_address = str(underlying)
+        except Exception:
+            underlying_address = WETH_MAINNET
+            underlying_symbol = "ETH"
+            underlying_decimals = 18
+
+        try:
+            price_usd = await _v2_underlying_price_usd(
+                w3,
+                ctoken_address=market,
+                comptroller_address=str(comptroller_address),
+                underlying_decimals=underlying_decimals,
+                block_number=block_number,
+            )
+        except Exception:
+            if underlying_address.lower() == WETH_MAINNET.lower():
+                price_usd = await _price_from_feed_direct(
+                    w3, ETH_USD_PRICE_FEED, block_number
+                )
+            else:
+                price_usd = Decimal("0")
+
+        balance_raw, borrow_raw, exchange_rate_raw = await asyncio.gather(
+            ctoken.functions.balanceOf(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken.functions.borrowBalanceStored(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken.functions.exchangeRateStored().call(block_identifier=block_number),
+        )
+        try:
+            markets_tuple = await comptroller.functions.markets(market_checksum).call(
+                block_identifier=block_number
+            )
+            collateral_factor_raw = int(markets_tuple[1])
+        except Exception:
+            legacy_tuple = await legacy_comptroller.functions.markets(
+                market_checksum
+            ).call(block_identifier=block_number)
+            collateral_factor_raw = int(legacy_tuple[1])
+
+        underlying_scale = Decimal(10) ** underlying_decimals
+        supply_underlying = (
+            Decimal(int(balance_raw))
+            * Decimal(int(exchange_rate_raw))
+            / COMET_FACTOR_SCALE
+            / underlying_scale
+        )
+        borrow_underlying = Decimal(int(borrow_raw)) / underlying_scale
+        collateral_factor = Decimal(collateral_factor_raw) / COMET_FACTOR_SCALE
+        market_rows.append(
+            {
+                "market": market,
+                "symbol": symbol,
+                "underlying": underlying_address.lower(),
+                "underlying_symbol": underlying_symbol or symbol,
+                "supply": supply_underlying,
+                "borrow": borrow_underlying,
+                "price_usd": price_usd,
+                "collateral_factor": collateral_factor,
+                "is_collateral": market.lower() in collateral_markets,
+            }
+        )
+
+    if not market_rows:
+        raise RuntimeError(f"no deployed v2 markets at block={block_number}")
+
+    eth_price_usd = Decimal("0")
+    for row in market_rows:
+        if (
+            row["underlying_symbol"]
+            and str(row["underlying_symbol"]).upper() in ETH_CORRELATED_SYMBOLS
+        ):
+            eth_price_usd = row["price_usd"]
+            break
+    if eth_price_usd <= 0:
+        eth_price_usd = await _price_from_feed_direct(
+            w3, ETH_USD_PRICE_FEED, block_number
+        )
+
+    total_collateral_usd = Decimal("0")
+    discounted_collateral_usd = Decimal("0")
+    total_debt_usd = Decimal("0")
+    eth_sensitive_collateral_usd = Decimal("0")
+    eth_sensitive_discounted_collateral_usd = Decimal("0")
+    eth_sensitive_debt_usd = Decimal("0")
+    non_eth_collateral_usd = Decimal("0")
+    non_eth_discounted_collateral_usd = Decimal("0")
+    non_eth_debt_usd = Decimal("0")
+    assets_jsonb: list[dict[str, Any]] = []
+
+    for row in market_rows:
+        supply_usd = row["supply"] * row["price_usd"]
+        borrow_usd = row["borrow"] * row["price_usd"]
+        discounted_usd = (
+            supply_usd * row["collateral_factor"]
+            if row["is_collateral"]
+            else Decimal("0")
+        )
+        is_eth_corr = str(row["underlying_symbol"]).upper() in ETH_CORRELATED_SYMBOLS
+        if row["is_collateral"]:
+            total_collateral_usd += supply_usd
+            discounted_collateral_usd += discounted_usd
+            if is_eth_corr:
+                eth_sensitive_collateral_usd += supply_usd
+                eth_sensitive_discounted_collateral_usd += discounted_usd
+            else:
+                non_eth_collateral_usd += supply_usd
+                non_eth_discounted_collateral_usd += discounted_usd
+        total_debt_usd += borrow_usd
+        if is_eth_corr:
+            eth_sensitive_debt_usd += borrow_usd
+        else:
+            non_eth_debt_usd += borrow_usd
+
+        if row["supply"] > 0:
+            assets_jsonb.append(
+                {
+                    "asset": row["underlying"],
+                    "symbol": row["underlying_symbol"],
+                    "side": (
+                        "base_supply"
+                        if row["market"].lower() == event_market_lc
+                        else "collateral"
+                    ),
+                    "amount": str(row["supply"]),
+                    "price_in_base": None,
+                    "price_usd": str(row["price_usd"]),
+                    "value_usd": str(supply_usd),
+                    "discounted_value_usd": str(discounted_usd),
+                    "borrow_collateral_factor": None,
+                    "liquidate_collateral_factor": None,
+                    "liquidation_factor": None,
+                    "beta_to_eth": "1" if is_eth_corr else "0",
+                    "is_eth_correlated": is_eth_corr,
+                    "is_basis_risk_asset": False,
+                }
+            )
+        if row["borrow"] > 0:
+            assets_jsonb.append(
+                {
+                    "asset": row["underlying"],
+                    "symbol": row["underlying_symbol"],
+                    "side": "base_borrow",
+                    "amount": str(row["borrow"]),
+                    "price_in_base": None,
+                    "price_usd": str(row["price_usd"]),
+                    "value_usd": str(borrow_usd),
+                    "discounted_value_usd": "0",
+                    "borrow_collateral_factor": None,
+                    "liquidate_collateral_factor": None,
+                    "liquidation_factor": None,
+                    "beta_to_eth": "1" if is_eth_corr else "0",
+                    "is_eth_correlated": is_eth_corr,
+                    "is_basis_risk_asset": False,
+                }
+            )
+
+    liquidation_buffer_usd = discounted_collateral_usd - total_debt_usd
+    health_factor = (
+        MAX_HF if total_debt_usd <= 0 else discounted_collateral_usd / total_debt_usd
+    )
+    net_eth_exposure_usd = eth_sensitive_collateral_usd - eth_sensitive_debt_usd
+    basis_risk_collateral_usd = Decimal("0")
+    has_open_position = total_collateral_usd > 0 or total_debt_usd > 0
+    is_liquidatable = total_debt_usd > 0 and liquidation_buffer_usd < 0
+
+    eth_down_liq_price_usd: Decimal | None = None
+    eth_up_liq_price_usd: Decimal | None = None
+    eth_liq_mode = "neutral"
+    denom = eth_sensitive_discounted_collateral_usd - eth_sensitive_debt_usd
+    numer = non_eth_debt_usd - non_eth_discounted_collateral_usd
+    if eth_price_usd > 0 and denom != 0:
+        ratio = numer / denom
+        liq_price = eth_price_usd * ratio
+        if liq_price > 0:
+            if ratio < 1:
+                eth_down_liq_price_usd = liq_price
+                eth_liq_mode = "down"
+            elif ratio > 1:
+                eth_up_liq_price_usd = liq_price
+                eth_liq_mode = "up"
+
+    dominant_risk = "neutral"
+    if eth_liq_mode == "down":
+        dominant_risk = "eth_down"
+    elif eth_liq_mode == "up":
+        dominant_risk = "eth_up"
+
+    event_market_row = next(
+        (row for row in market_rows if row["market"].lower() == event_market_lc),
+        None,
+    )
+    if event_market_row is None:
+        logger.warning(
+            "event market not deployed at block, fallback base token to WETH: market=%s block=%s",
+            event_market_lc,
+            block_number,
+        )
+        event_market_row = {
+            "market": event_market_lc,
+            "symbol": COMPOUND_V2_MARKET_NAMES.get(event_market_lc, event_market_lc),
+            "underlying": WETH_MAINNET.lower(),
+            "underlying_symbol": "WETH",
+            "price_usd": eth_price_usd,
+        }
+    return CompoundEventPositionSnapshotRow(
+        user_address=user_address,
+        protocol="v2",
+        market=bytes.fromhex(event_market_lc[2:]),
+        symbol=event_market_row["symbol"],
+        block_number=block_number,
+        tx_hash="",
+        block_timestamp=point_ts,
+        has_open_position=has_open_position,
+        is_liquidatable=is_liquidatable,
+        base_token=bytes.fromhex(event_market_row["underlying"][2:]),
+        base_symbol=event_market_row["underlying_symbol"],
+        base_price_usd=event_market_row["price_usd"],
+        eth_price_usd=eth_price_usd,
+        total_collateral_usd=total_collateral_usd,
+        total_debt_usd=total_debt_usd,
+        discounted_collateral_usd=discounted_collateral_usd,
+        liquidation_buffer_usd=liquidation_buffer_usd,
+        health_factor=health_factor,
+        eth_sensitive_collateral_usd=eth_sensitive_collateral_usd,
+        eth_sensitive_debt_usd=eth_sensitive_debt_usd,
+        net_eth_exposure_usd=net_eth_exposure_usd,
+        non_eth_collateral_usd=non_eth_collateral_usd,
+        non_eth_debt_usd=non_eth_debt_usd,
+        basis_risk_collateral_usd=basis_risk_collateral_usd,
+        eth_down_liq_price_usd=eth_down_liq_price_usd,
+        eth_up_liq_price_usd=eth_up_liq_price_usd,
+        eth_liq_mode=eth_liq_mode,
+        dominant_risk=dominant_risk,
+        assets_jsonb=assets_jsonb,
+        brief="",
+    )
 
 
 def _row_to_event(
@@ -489,11 +856,6 @@ async def _collect_event_rows_for_user(
         processed_points = 0
         inserted = 0
         user_addresses = [address]
-        if protocol != "v3":
-            raise NotImplementedError(
-                "Event snapshot backfill currently supports only Compound v3."
-            )
-
         point_items = sorted(grouped.items())
         sem = asyncio.Semaphore(max(1, rpc_concurrency))
 
@@ -502,36 +864,83 @@ async def _collect_event_rows_for_user(
         ) -> list[CompoundEventPositionSnapshotRow]:
             (market, block_number), event_group = point_item
             async with sem:
-                market_ctx = await _load_market_context(
+                if protocol == "v3":
+                    market_ctx = await _load_market_context(
+                        w3,
+                        market_address=market,
+                        block_number=block_number,
+                        metadata_cache=metadata_cache,
+                    )
+                    batch_rows = await _collect_user_snapshots_batch(
+                        w3,
+                        market_ctx,
+                        user_addresses=user_addresses,
+                        point_ts=event_group[0].block_timestamp,
+                        block_number=block_number,
+                    )
+                    if not batch_rows:
+                        return []
+                    snapshot_row, _ = batch_rows[0]
+                    return [
+                        _snapshot_to_event_row(
+                            snapshot_row,
+                            protocol=protocol,
+                            tx_hash=event.tx_hash,
+                            block_timestamp=event.block_timestamp,
+                            brief=brief_map.get(
+                                event.tx_hash,
+                                _fallback_brief(event, protocol, snapshot_row.market),
+                            ),
+                        )
+                        for event in event_group
+                    ]
+
+                v2_row = await _collect_v2_account_snapshot_row(
                     w3,
-                    market_address=market,
+                    user_address=address,
+                    event_market=market,
                     block_number=block_number,
+                    point_ts=event_group[0].block_timestamp,
                     metadata_cache=metadata_cache,
                 )
-                batch_rows = await _collect_user_snapshots_batch(
-                    w3,
-                    market_ctx,
-                    user_addresses=user_addresses,
-                    point_ts=event_group[0].block_timestamp,
-                    block_number=block_number,
-                )
-            if not batch_rows:
-                return []
-
-            snapshot_row, _ = batch_rows[0]
-            return [
-                _snapshot_to_event_row(
-                    snapshot_row,
-                    protocol=protocol,
-                    tx_hash=event.tx_hash,
-                    block_timestamp=event.block_timestamp,
-                    brief=brief_map.get(
-                        event.tx_hash,
-                        _fallback_brief(event, protocol, snapshot_row.market),
-                    ),
-                )
-                for event in event_group
-            ]
+                return [
+                    CompoundEventPositionSnapshotRow(
+                        user_address=v2_row.user_address,
+                        protocol=v2_row.protocol,
+                        market=v2_row.market,
+                        symbol=v2_row.symbol,
+                        block_number=v2_row.block_number,
+                        tx_hash=event.tx_hash,
+                        block_timestamp=event.block_timestamp,
+                        has_open_position=v2_row.has_open_position,
+                        is_liquidatable=v2_row.is_liquidatable,
+                        base_token=v2_row.base_token,
+                        base_symbol=v2_row.base_symbol,
+                        base_price_usd=v2_row.base_price_usd,
+                        eth_price_usd=v2_row.eth_price_usd,
+                        total_collateral_usd=v2_row.total_collateral_usd,
+                        total_debt_usd=v2_row.total_debt_usd,
+                        discounted_collateral_usd=v2_row.discounted_collateral_usd,
+                        liquidation_buffer_usd=v2_row.liquidation_buffer_usd,
+                        health_factor=v2_row.health_factor,
+                        eth_sensitive_collateral_usd=v2_row.eth_sensitive_collateral_usd,
+                        eth_sensitive_debt_usd=v2_row.eth_sensitive_debt_usd,
+                        net_eth_exposure_usd=v2_row.net_eth_exposure_usd,
+                        non_eth_collateral_usd=v2_row.non_eth_collateral_usd,
+                        non_eth_debt_usd=v2_row.non_eth_debt_usd,
+                        basis_risk_collateral_usd=v2_row.basis_risk_collateral_usd,
+                        eth_down_liq_price_usd=v2_row.eth_down_liq_price_usd,
+                        eth_up_liq_price_usd=v2_row.eth_up_liq_price_usd,
+                        eth_liq_mode=v2_row.eth_liq_mode,
+                        dominant_risk=v2_row.dominant_risk,
+                        assets_jsonb=v2_row.assets_jsonb,
+                        brief=brief_map.get(
+                            event.tx_hash,
+                            _fallback_brief(event, protocol, v2_row.market),
+                        ),
+                    )
+                    for event in event_group
+                ]
 
         submit_batch_size = max(rpc_concurrency * 4, rpc_concurrency)
         for point_batch in _chunked(point_items, submit_batch_size):
@@ -644,8 +1053,8 @@ def main() -> None:
     market_filter = None
     if args.protocol == "v3":
         market_filter = _resolve_v3_market_filter(args.market)
-    elif args.market.strip().lower() != "all":
-        raise SystemExit("v2 currently supports only --market all")
+    else:
+        market_filter = _resolve_v2_market_filter(args.market)
 
     asyncio.run(
         _collect_event_rows_for_user(

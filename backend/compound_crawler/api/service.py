@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -11,9 +14,23 @@ from fastapi import HTTPException
 
 from ..config import load_config
 from ..constants import COMPOUND_V2_MARKET_NAMES, COMPOUND_V3_MARKET_NAMES
-from ..db import market_table_name, reserve_table_name
-from ..user_position_snapshots import collect_market_user_snapshots
+from ..crawler import _build_web3, close_web3
+from ..db import (
+    CompoundEventPositionSnapshotRow,
+    fetch_compound_user_tx_history,
+    get_compound_event_snapshots,
+    market_table_name,
+    reserve_table_name,
+    upsert_compound_event_snapshots,
+)
+from ..user_position_snapshots import (
+    _collect_user_snapshots_batch,
+    _load_market_context,
+    collect_market_user_snapshots,
+)
 from .schemas import (
+    CompoundPositionReplayPoint,
+    CompoundPositionReplayResponse,
     MarketItemResponse,
     MarketsResponse,
     GovernanceAssetResponse,
@@ -40,6 +57,46 @@ _GOVERNANCE_TABLE = "compound_v3_market_config_versions"
 _GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
 _V2_MARKET_CONFIG_TABLE = "compound_v2_market_config_versions"
 _V2_PROTOCOL_CONFIG_TABLE = "compound_v2_protocol_config_versions"
+_REPLAY_BATCH_SIZE = 100
+_REPLAY_RPC_CONCURRENCY = 8
+_REPLAY_POSITION_METHOD_IDS: dict[str, set[str]] = {
+    "v2": {
+        "2608f818",
+        "0e752702",
+        "852a12e3",
+        "a0712d68",
+        "db006a75",
+        "f5e3c462",
+        "c5ebeaec",
+    },
+    "v3": {
+        "f3fef3a3",
+        "c3b35a7e",
+        "f2b9fdb8",
+        "4232cd63",
+        "c3cecfd2",
+    },
+}
+_REPLAY_METHOD_BRIEF_MAP: dict[str, dict[str, str]] = {
+    "v2": {
+        "2608f818": "存入",
+        "0e752702": "赎回",
+        "852a12e3": "赎回",
+        "a0712d68": "借入",
+        "db006a75": "还款",
+        "f5e3c462": "代还",
+        "c5ebeaec": "清算",
+    },
+    "v3": {
+        "f3fef3a3": "存入",
+        "c3b35a7e": "代存",
+        "f2b9fdb8": "提取",
+        "4232cd63": "买入抵押品",
+        "c3cecfd2": "吸收清算",
+    },
+}
+
+logger = logging.getLogger(__name__)
 
 
 def get_markets(version: str) -> MarketsResponse:
@@ -275,6 +332,490 @@ async def get_positions(
         version=version,
         address=_bytea_to_address(user_address_bytes),
         positions=_sort_positions(positions),
+    )
+
+
+def _normalize_tx_hash(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return None
+        return text if text.startswith("0x") else f"0x{text}"
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        if not raw:
+            return None
+        return "0x" + raw.hex()
+    return None
+
+
+def _normalize_method_id(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return None
+        if text.startswith("0x"):
+            text = text[2:]
+        return text[:8] if len(text) >= 8 else None
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value).hex().lower()
+        return raw[:8] if raw else None
+    return None
+
+
+def _normalize_market_bytes(value: Any) -> bytes | None:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        return raw if len(raw) == 20 else None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text.startswith("0x") and len(text) == 42:
+            try:
+                return bytes.fromhex(text[2:])
+            except ValueError:
+                return None
+    return None
+
+
+def _position_method(protocol: str, method_id: str | None) -> bool:
+    if method_id is None:
+        return False
+    return method_id in _REPLAY_POSITION_METHOD_IDS.get(protocol, set())
+
+
+def _market_symbol(protocol: str, market: bytes) -> str:
+    addr = "0x" + market.hex()
+    if protocol == "v2":
+        return COMPOUND_V2_MARKET_NAMES.get(addr, addr)
+    return COMPOUND_V3_MARKET_NAMES.get(addr, addr)
+
+
+def _fallback_replay_brief(protocol: str, method_id: str | None, market: bytes) -> str:
+    action = _REPLAY_METHOD_BRIEF_MAP.get(protocol, {}).get(method_id or "", "仓位操作")
+    return f"{action} {_market_symbol(protocol, market)}"
+
+
+async def _load_compound_replay_briefs(
+    pool,
+    *,
+    protocol: str,
+    user_address: bytes,
+    tx_hashes: list[bytes],
+) -> dict[str, str]:
+    if not tx_hashes:
+        return {}
+    version_int = 3 if protocol == "v3" else 2
+    brief_map: dict[str, str] = {}
+    async with pool.acquire() as conn:
+        mint_rows = await conn.fetch(
+            """
+            SELECT tx_hash, market_address, underlying_amount_decimal, input_amount_decimal
+            FROM compound.compound_mint
+            WHERE version = $1
+              AND tx_hash = ANY($2::bytea[])
+              AND minter = $3
+            """,
+            version_int,
+            tx_hashes,
+            user_address,
+        )
+        for row in mint_rows:
+            txh = "0x" + bytes(row["tx_hash"]).hex()
+            symbol = _market_symbol(protocol, bytes(row["market_address"]))
+            amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
+            brief_map[txh] = (
+                f"存入 {amount:.6f} {symbol}"
+                if amount is not None
+                else f"存入 {symbol}"
+            )
+
+        redeem_rows = await conn.fetch(
+            """
+            SELECT tx_hash, market_address, underlying_amount_decimal, input_amount_decimal
+            FROM compound.compound_redeem
+            WHERE version = $1
+              AND tx_hash = ANY($2::bytea[])
+              AND redeemer = $3
+            """,
+            version_int,
+            tx_hashes,
+            user_address,
+        )
+        for row in redeem_rows:
+            txh = "0x" + bytes(row["tx_hash"]).hex()
+            symbol = _market_symbol(protocol, bytes(row["market_address"]))
+            amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
+            brief_map[txh] = (
+                f"提取 {amount:.6f} {symbol}"
+                if amount is not None
+                else f"提取 {symbol}"
+            )
+
+        borrow_rows = await conn.fetch(
+            """
+            SELECT tx_hash, market_address, underlying_amount_decimal, input_amount_decimal
+            FROM compound.compound_borrow
+            WHERE version = $1
+              AND tx_hash = ANY($2::bytea[])
+              AND borrower = $3
+            """,
+            version_int,
+            tx_hashes,
+            user_address,
+        )
+        for row in borrow_rows:
+            txh = "0x" + bytes(row["tx_hash"]).hex()
+            symbol = _market_symbol(protocol, bytes(row["market_address"]))
+            amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
+            brief_map[txh] = (
+                f"借入 {amount:.6f} {symbol}"
+                if amount is not None
+                else f"借入 {symbol}"
+            )
+
+        repay_rows = await conn.fetch(
+            """
+            SELECT tx_hash, market_address, underlying_amount_decimal, input_amount_decimal
+            FROM compound.compound_repay
+            WHERE version = $1
+              AND tx_hash = ANY($2::bytea[])
+              AND (payer = $3 OR borrower = $3)
+            """,
+            version_int,
+            tx_hashes,
+            user_address,
+        )
+        for row in repay_rows:
+            txh = "0x" + bytes(row["tx_hash"]).hex()
+            symbol = _market_symbol(protocol, bytes(row["market_address"]))
+            amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
+            brief_map[txh] = (
+                f"还款 {amount:.6f} {symbol}"
+                if amount is not None
+                else f"还款 {symbol}"
+            )
+    return brief_map
+
+
+def _chunked[T](items: list[T], size: int) -> list[list[T]]:
+    return [items[idx : idx + size] for idx in range(0, len(items), size)]
+
+
+async def _collect_and_cache_replay_misses(
+    pool,
+    *,
+    version: str,
+    user_address: bytes,
+    misses: list[dict[str, Any]],
+    w3: Any | None,
+) -> None:
+    if not misses:
+        return
+    if version != "v3":
+        raise HTTPException(
+            status_code=501,
+            detail="version=v2 的 replay 暂仅支持缓存读取，请先执行离线回填脚本",
+        )
+
+    tx_hash_bytes = [
+        bytes.fromhex(tx["tx_hash"][2:])
+        for tx in misses
+        if isinstance(tx["tx_hash"], str)
+    ]
+    brief_map = await _load_compound_replay_briefs(
+        pool,
+        protocol=version,
+        user_address=user_address,
+        tx_hashes=tx_hash_bytes,
+    )
+
+    own_w3 = False
+    active_w3 = w3
+    if active_w3 is None:
+        active_w3 = await _build_web3(load_config())
+        own_w3 = True
+    metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+    sem = asyncio.Semaphore(_REPLAY_RPC_CONCURRENCY)
+
+    grouped: dict[tuple[bytes, int], list[dict[str, Any]]] = defaultdict(list)
+    for tx in misses:
+        grouped[(tx["market"], tx["block_number"])].append(tx)
+
+    pending_rows: list[CompoundEventPositionSnapshotRow] = []
+    try:
+        for group_batch in _chunked(list(grouped.items()), _REPLAY_BATCH_SIZE):
+            tasks: list[asyncio.Task[list[CompoundEventPositionSnapshotRow]]] = []
+            for (market_bytes, block_number), tx_group in group_batch:
+
+                async def _one_group(
+                    market_bytes: bytes = market_bytes,
+                    block_number: int = block_number,
+                    tx_group: list[dict[str, Any]] = tx_group,
+                ) -> list[CompoundEventPositionSnapshotRow]:
+                    async with sem:
+                        market_address = "0x" + market_bytes.hex()
+                        market_ctx = await _load_market_context(
+                            active_w3,
+                            market_address=market_address,
+                            block_number=block_number,
+                            metadata_cache=metadata_cache,
+                        )
+                        snapshots = await _collect_user_snapshots_batch(
+                            active_w3,
+                            market_ctx=market_ctx,
+                            user_addresses=[user_address],
+                            point_ts=tx_group[0]["block_timestamp"],
+                            block_number=block_number,
+                        )
+                    if not snapshots:
+                        return []
+                    snapshot_row, _ = snapshots[0]
+                    out: list[CompoundEventPositionSnapshotRow] = []
+                    for tx in tx_group:
+                        out.append(
+                            CompoundEventPositionSnapshotRow(
+                                user_address=snapshot_row.user_address,
+                                protocol=version,
+                                market=snapshot_row.market,
+                                symbol=snapshot_row.symbol,
+                                block_number=snapshot_row.block_number,
+                                tx_hash=tx["tx_hash"],
+                                block_timestamp=tx["block_timestamp"],
+                                has_open_position=snapshot_row.has_open_position,
+                                is_liquidatable=snapshot_row.is_liquidatable,
+                                base_token=snapshot_row.base_token,
+                                base_symbol=snapshot_row.base_symbol,
+                                base_price_usd=snapshot_row.base_price_usd,
+                                eth_price_usd=snapshot_row.eth_price_usd,
+                                total_collateral_usd=snapshot_row.total_collateral_usd,
+                                total_debt_usd=snapshot_row.total_debt_usd,
+                                discounted_collateral_usd=snapshot_row.discounted_collateral_usd,
+                                liquidation_buffer_usd=snapshot_row.liquidation_buffer_usd,
+                                health_factor=snapshot_row.health_factor,
+                                eth_sensitive_collateral_usd=snapshot_row.eth_sensitive_collateral_usd,
+                                eth_sensitive_debt_usd=snapshot_row.eth_sensitive_debt_usd,
+                                net_eth_exposure_usd=snapshot_row.net_eth_exposure_usd,
+                                non_eth_collateral_usd=snapshot_row.non_eth_collateral_usd,
+                                non_eth_debt_usd=snapshot_row.non_eth_debt_usd,
+                                basis_risk_collateral_usd=snapshot_row.basis_risk_collateral_usd,
+                                eth_down_liq_price_usd=snapshot_row.eth_down_liq_price_usd,
+                                eth_up_liq_price_usd=snapshot_row.eth_up_liq_price_usd,
+                                eth_liq_mode=snapshot_row.eth_liq_mode,
+                                dominant_risk=snapshot_row.dominant_risk,
+                                assets_jsonb=snapshot_row.assets_jsonb,
+                                brief=brief_map.get(
+                                    tx["tx_hash"],
+                                    _fallback_replay_brief(
+                                        version,
+                                        tx.get("method_id"),
+                                        snapshot_row.market,
+                                    ),
+                                ),
+                            )
+                        )
+                    return out
+
+                tasks.append(asyncio.create_task(_one_group()))
+            for task in asyncio.as_completed(tasks):
+                pending_rows.extend(await task)
+                if len(pending_rows) >= _REPLAY_BATCH_SIZE:
+                    await upsert_compound_event_snapshots(pool, pending_rows)
+                    pending_rows = []
+        if pending_rows:
+            await upsert_compound_event_snapshots(pool, pending_rows)
+    finally:
+        if own_w3:
+            await close_web3(active_w3)
+
+
+async def get_position_replay(
+    pool,
+    version: str,
+    address: str,
+    from_ts: int,
+    to_ts: int,
+    use_cache: bool = True,
+    detail: bool = False,
+    w3: Any | None = None,
+) -> CompoundPositionReplayResponse:
+    version = version.lower()
+    if version not in ("v2", "v3"):
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
+    user_address = _parse_user_address(address)
+    from_dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
+    to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
+
+    tx_rows = await fetch_compound_user_tx_history(
+        pool,
+        user_address=user_address,
+        protocol=version,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        market=None,
+        only_success=True,
+        user_column="from_address",
+    )
+    txs: list[dict[str, Any]] = []
+    for row in tx_rows:
+        market = _normalize_market_bytes(_row_get(row, "market"))
+        tx_hash = _normalize_tx_hash(_row_get(row, "tx_hash"))
+        method_id = _normalize_method_id(_row_get(row, "method_id"))
+        if (
+            market is None
+            or tx_hash is None
+            or not _position_method(version, method_id)
+        ):
+            continue
+        block_number = int(_row_get(row, "block_number"))
+        block_timestamp = _row_get(row, "block_timestamp")
+        if not isinstance(block_timestamp, datetime):
+            continue
+        if block_timestamp.tzinfo is None:
+            block_timestamp = block_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            block_timestamp = block_timestamp.astimezone(timezone.utc)
+        txs.append(
+            {
+                "market": market,
+                "tx_hash": tx_hash,
+                "method_id": method_id,
+                "block_number": block_number,
+                "block_timestamp": block_timestamp,
+            }
+        )
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[bytes, str]] = set()
+    for tx in txs:
+        key = (tx["market"], tx["tx_hash"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(tx)
+    if not deduped:
+        return CompoundPositionReplayResponse(
+            address=_bytea_to_address(user_address),
+            version=version,
+            from_time=_timestamp_to_utc_string(from_dt),
+            to_time=_timestamp_to_utc_string(to_dt),
+            data_source="cache",
+            points=[],
+            total_points=0,
+            total_tx_count=0,
+            cache_hit_rate="1.00",
+        )
+
+    market_set = {tx["market"] for tx in deduped}
+    cached_map: dict[tuple[bytes, str], Any] = {}
+    if use_cache:
+        for market in market_set:
+            rows = await get_compound_event_snapshots(
+                pool,
+                user_address=user_address,
+                protocol=version,
+                market=market,
+                from_ts=from_dt,
+                to_ts=to_dt,
+            )
+            for row in rows:
+                tx_hash = _normalize_tx_hash(_row_get(row, "tx_hash"))
+                if tx_hash is None:
+                    continue
+                cached_map[(market, tx_hash)] = row
+
+    misses = [tx for tx in deduped if (tx["market"], tx["tx_hash"]) not in cached_map]
+    if misses:
+        await _collect_and_cache_replay_misses(
+            pool,
+            version=version,
+            user_address=user_address,
+            misses=misses,
+            w3=w3,
+        )
+        for market in {tx["market"] for tx in misses}:
+            rows = await get_compound_event_snapshots(
+                pool,
+                user_address=user_address,
+                protocol=version,
+                market=market,
+                from_ts=from_dt,
+                to_ts=to_dt,
+            )
+            for row in rows:
+                tx_hash = _normalize_tx_hash(_row_get(row, "tx_hash"))
+                if tx_hash is None:
+                    continue
+                cached_map[(market, tx_hash)] = row
+
+    points: list[CompoundPositionReplayPoint] = []
+    served_from_cache = 0
+    for tx in deduped:
+        key = (tx["market"], tx["tx_hash"])
+        row = cached_map.get(key)
+        if row is None:
+            continue
+        served_from_cache += 1
+        assets = []
+        if detail:
+            assets = [
+                _map_position_asset(item)
+                for item in _load_assets_payload(_row_get(row, "assets_jsonb"))
+            ]
+        points.append(
+            CompoundPositionReplayPoint(
+                tx_hash=tx["tx_hash"],
+                block_number=int(_row_get(row, "block_number")),
+                timestamp=_timestamp_to_utc_string(_row_get(row, "block_timestamp")),
+                market=_bytea_to_address(tx["market"]),
+                symbol=_row_get(row, "symbol"),
+                eth_price_usd=_fmt(_row_get(row, "eth_price_usd")),
+                total_collateral_usd=_fmt(_row_get(row, "total_collateral_usd")),
+                total_debt_usd=_fmt(_row_get(row, "total_debt_usd")),
+                discounted_collateral_usd=_fmt(
+                    _row_get(row, "discounted_collateral_usd")
+                ),
+                liquidation_buffer_usd=_fmt(_row_get(row, "liquidation_buffer_usd")),
+                health_factor=_fmt(_row_get(row, "health_factor")),
+                is_liquidatable=bool(_row_get(row, "is_liquidatable")),
+                eth_down_liq_price_usd=_fmt_optional(
+                    _row_get(row, "eth_down_liq_price_usd")
+                ),
+                eth_up_liq_price_usd=_fmt_optional(
+                    _row_get(row, "eth_up_liq_price_usd")
+                ),
+                eth_liq_mode=str(_row_get(row, "eth_liq_mode")),
+                dominant_risk=str(_row_get(row, "dominant_risk")),
+                brief=str(_row_get(row, "brief") or ""),
+                assets=assets,
+            )
+        )
+
+    total_tx = len(deduped)
+    cache_hit_rate = (
+        _fmt(Decimal(served_from_cache) / Decimal(total_tx)) if total_tx > 0 else "1.00"
+    )
+    if served_from_cache == total_tx:
+        data_source = "cache"
+    elif served_from_cache == 0:
+        data_source = "rpc"
+    else:
+        data_source = "mixed"
+
+    return CompoundPositionReplayResponse(
+        address=_bytea_to_address(user_address),
+        version=version,
+        from_time=_timestamp_to_utc_string(from_dt),
+        to_time=_timestamp_to_utc_string(to_dt),
+        data_source=data_source,
+        points=points,
+        total_points=len(points),
+        total_tx_count=total_tx,
+        cache_hit_rate=cache_hit_rate,
     )
 
 

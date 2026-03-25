@@ -1,9 +1,11 @@
 """FastAPI routes for Compound scaffold."""
 
 from __future__ import annotations
+from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from .schemas import (
+    CompoundPositionReplayResponse,
     MarketsResponse,
     MarketGovernanceResponse,
     MarketGovernancePeriodResponse,
@@ -26,11 +28,41 @@ from .service import (
     get_v2_protocol_config,
     get_v2_protocol_config_period,
     get_positions,
+    get_position_replay,
 )
 from ..database import AsyncpgPool
 
 
 router = APIRouter(prefix="/api/compound")
+_VERSION_DESC_BOTH = 'protocol version: "v2" | "v3" (both supported)'
+_VERSION_DESC_V3_ONLY = (
+    'protocol version: "v2" | "v3" (currently only v3 is supported; v2 returns 400)'
+)
+_VERSION_DESC_V2_ONLY = (
+    'protocol version: "v2" | "v3" (currently only v2 is supported; v3 returns 400)'
+)
+
+
+def _parse_utc_time(time_str: str) -> int:
+    formats = [
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ]
+    for fmt in formats:
+        try:
+            return int(
+                datetime.strptime(time_str, fmt)
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=400,
+        detail="date/time 格式无法识别，示例：2024-11-14T12:00:00Z、2024-11-14 12:00:00、2024-11-14",
+    )
 
 
 @router.get(
@@ -41,7 +73,7 @@ router = APIRouter(prefix="/api/compound")
 async def markets(
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3"',
+        description=_VERSION_DESC_BOTH,
     ),
 ) -> MarketsResponse:
     return get_markets(version)
@@ -82,7 +114,7 @@ async def position(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3"',
+        description=_VERSION_DESC_BOTH,
     ),
     market: str = Query(
         ...,
@@ -96,7 +128,7 @@ async def position(
         None,
         description=(
             "可选 UTC 日期，推荐格式 `YYYY-MM-DD`。若同时带有时分秒，将被忽略并自动归一到该日期的 `00:00:00Z`；"
-            "不传则返回链上实时数据。"
+            "不传则按 version 规则返回实时/快照数据。"
         ),
     ),
 ) -> UserPositionResponse:
@@ -146,6 +178,44 @@ async def position_by_path(
 
 
 @router.get(
+    "/position/replay",
+    response_model=CompoundPositionReplayResponse,
+    summary="Replay Compound user position by tx history",
+    description=(
+        "按交易粒度回放用户在 Compound 的历史仓位。\n\n"
+        "- 先查缓存表 `loan.compound_position_snapshots`\n"
+        "- 对于缓存缺失点：`version=v3` 自动在线补采并写回缓存\n"
+        "- 对于缓存缺失点：`version=v2` 目前仅支持读缓存，不做在线补采\n"
+        "- `detail=true` 时返回资产明细"
+    ),
+)
+async def position_replay(
+    request: Request,
+    pool: AsyncpgPool,
+    address: str = Query(..., description="用户地址（0x...）"),
+    start: str = Query(..., description="起始时间（UTC）"),
+    end: str = Query(..., description="结束时间（UTC）"),
+    version: Literal["v2", "v3"] = Query("v3", description=_VERSION_DESC_BOTH),
+    use_cache: bool = Query(True, description="是否优先使用缓存"),
+    detail: bool = Query(False, description="是否返回资产明细"),
+) -> CompoundPositionReplayResponse:
+    from_ts = _parse_utc_time(start)
+    to_ts = _parse_utc_time(end)
+    if from_ts > to_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+    return await get_position_replay(
+        pool=pool,
+        version=version,
+        address=address,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        use_cache=use_cache,
+        detail=detail,
+        w3=getattr(request.app.state, "w3", None),
+    )
+
+
+@router.get(
     "/market/governance",
     response_model=MarketGovernanceResponse,
     summary="Query Compound market governance parameters",
@@ -167,7 +237,7 @@ async def market_governance(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+        description=_VERSION_DESC_V3_ONLY,
     ),
     market: str = Query(
         ...,
@@ -212,7 +282,7 @@ async def market_governance_period(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3" (currently only v3 is supported)',
+        description=_VERSION_DESC_V3_ONLY,
     ),
     market: str = Query(
         ...,
@@ -249,7 +319,7 @@ async def market_config(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v2",
-        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+        description=_VERSION_DESC_V2_ONLY,
     ),
     market: str = Query(
         ...,
@@ -272,6 +342,7 @@ async def market_config(
     "/{version}/market/config",
     response_model=V2MarketConfigResponse,
     summary="Query Compound v2 market config (version in path)",
+    description="该端点当前仅支持 `version=v2`，传 `v3` 会返回 400。",
 )
 async def market_config_by_path(
     pool: AsyncpgPool,
@@ -302,7 +373,7 @@ async def market_config_period(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v2",
-        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+        description=_VERSION_DESC_V2_ONLY,
     ),
     market: str = Query(
         ...,
@@ -329,6 +400,7 @@ async def market_config_period(
     "/{version}/market/config/period",
     response_model=V2MarketConfigPeriodResponse,
     summary="Query Compound v2 market config changes (version in path)",
+    description="该端点当前仅支持 `version=v2`，传 `v3` 会返回 400。",
 )
 async def market_config_period_by_path(
     pool: AsyncpgPool,
@@ -363,7 +435,7 @@ async def protocol_config(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v2",
-        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+        description=_VERSION_DESC_V2_ONLY,
     ),
     date: str | None = Query(
         None,
@@ -381,6 +453,7 @@ async def protocol_config(
     "/{version}/protocol/config",
     response_model=V2ProtocolConfigResponse,
     summary="Query Compound v2 protocol config (version in path)",
+    description="该端点当前仅支持 `version=v2`，传 `v3` 会返回 400。",
 )
 async def protocol_config_by_path(
     pool: AsyncpgPool,
@@ -406,7 +479,7 @@ async def protocol_config_period(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v2",
-        description='protocol version: "v2" | "v3" (currently only v2 is supported)',
+        description=_VERSION_DESC_V2_ONLY,
     ),
     start: str = Query(..., description="UTC datetime at hour precision (start)"),
     end: str = Query(..., description="UTC datetime at hour precision (end)"),
@@ -428,6 +501,7 @@ async def protocol_config_period(
     "/{version}/protocol/config/period",
     response_model=V2ProtocolConfigPeriodResponse,
     summary="Query Compound v2 protocol config changes (version in path)",
+    description="该端点当前仅支持 `version=v2`，传 `v3` 会返回 400。",
 )
 async def protocol_config_period_by_path(
     pool: AsyncpgPool,
@@ -457,7 +531,7 @@ async def market_state_period(
     pool: AsyncpgPool,
     version: str = Query(
         "v3",
-        description='protocol version: "v2" | "v3"',
+        description=_VERSION_DESC_BOTH,
     ),
     market: str = Query(
         ...,
@@ -522,7 +596,7 @@ async def market_state(
     pool: AsyncpgPool,
     version: Literal["v2", "v3"] = Query(
         "v3",
-        description='protocol version: "v2" | "v3"',
+        description=_VERSION_DESC_BOTH,
     ),
     market: str = Query(
         ...,

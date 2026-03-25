@@ -128,3 +128,48 @@ def test_compound_position_route_requires_address() -> None:
         )
 
     assert resp.status_code == 422
+
+
+def test_compound_position_replay_route_ok() -> None:
+    payload = {
+        "address": "0x1111111111111111111111111111111111111111",
+        "version": "v3",
+        "from_time": "2026-03-01T00:00:00Z",
+        "to_time": "2026-03-10T00:00:00Z",
+        "data_source": "cache",
+        "points": [],
+        "total_points": 0,
+        "total_tx_count": 0,
+        "cache_hit_rate": "1.00",
+    }
+    with patch(
+        "compound_crawler.api.routes.get_position_replay",
+        new=AsyncMock(return_value=payload),
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get(
+                "/api/compound/position/replay",
+                params={
+                    "address": "0x1111111111111111111111111111111111111111",
+                    "start": "2026-03-01",
+                    "end": "2026-03-10",
+                    "version": "v3",
+                },
+            )
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_awaited_once()
+
+
+def test_compound_position_replay_route_rejects_invalid_time() -> None:
+    with _build_client() as client:
+        resp = client.get(
+            "/api/compound/position/replay",
+            params={
+                "address": "0x1111111111111111111111111111111111111111",
+                "start": "invalid",
+                "end": "2026-03-10",
+                "version": "v3",
+            },
+        )
+    assert resp.status_code == 400

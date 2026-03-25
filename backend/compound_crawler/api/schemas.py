@@ -294,3 +294,38 @@ class V2ProtocolConfigResponse(BaseModel):
 
 class V2ProtocolConfigPeriodResponse(BaseModel):
     points: list[V2ProtocolConfigResponse]
+
+
+class CompoundPositionReplayPoint(BaseModel):
+    tx_hash: str
+    block_number: int
+    timestamp: str
+    market: str
+    symbol: str | None
+    eth_price_usd: str
+    total_collateral_usd: str
+    total_debt_usd: str
+    discounted_collateral_usd: str
+    liquidation_buffer_usd: str
+    health_factor: str
+    is_liquidatable: bool
+    eth_down_liq_price_usd: str | None
+    eth_up_liq_price_usd: str | None
+    eth_liq_mode: str
+    dominant_risk: str
+    brief: str = ""
+    assets: list[PositionAssetResponse] = Field(default_factory=list)
+
+
+class CompoundPositionReplayResponse(BaseModel):
+    address: str
+    version: str
+    from_time: str
+    to_time: str
+    data_source: str = Field(
+        description="数据来源：cache（全缓存命中）| rpc（全在线回放）| mixed（混合）"
+    )
+    points: list[CompoundPositionReplayPoint]
+    total_points: int
+    total_tx_count: int
+    cache_hit_rate: str
