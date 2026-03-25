@@ -48,8 +48,8 @@ const emptyCompoundState = (): CompoundVersionState => ({
 });
 const aavePositionCache = new Map<string, AaveCacheEntry>();
 const compoundPositionCache = new Map<string, CompoundCacheEntry>();
-const compoundCacheKey = (address: string, market: string) =>
-  `v3:${address.toLowerCase()}:${market.toLowerCase()}`;
+const compoundCacheKey = (address: string, market: string, version: string) =>
+  `${version}:${address.toLowerCase()}:${market.toLowerCase()}`;
 
 const resultPanelStyle = {
   border: '1px solid #334155',
@@ -175,14 +175,9 @@ export default function App() {
     if (!compoundAddress || protocol !== 'compound' || activeTab !== 'personal') return;
 
     const loadCompound = async () => {
-      if (personalVersion === 'v2') {
-        setError('抱歉，暂无 Compound v2 数据');
-        setCompoundState({ data: null, loading: false, notFound: false });
-        return;
-      }
       setError('');
 
-      const cacheKey = compoundCacheKey(compoundAddress, compoundMarket);
+      const cacheKey = compoundCacheKey(compoundAddress, compoundMarket, personalVersion);
       const cached = compoundPositionCache.get(cacheKey);
       if (cached) {
         if (cached.kind === 'not_found') {
@@ -196,14 +191,14 @@ export default function App() {
       setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         setError('');
-        const response = await fetchCompoundUserPosition('v3', compoundMarket, compoundAddress);
+        const response = await fetchCompoundUserPosition(personalVersion, compoundMarket, compoundAddress);
         if (response.positions && response.positions.length > 0) {
           const position = response.positions[0];
 
           if (compoundMarket === 'all') {
             const foundMarkets = new Set<string>();
             for (const item of response.positions) {
-              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market), {
+              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market, personalVersion), {
                 kind: 'data',
                 data: item,
               });
@@ -211,7 +206,7 @@ export default function App() {
             }
             for (const item of compoundMarkets) {
               if (!foundMarkets.has(item.address.toLowerCase())) {
-                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address), {
+                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address, personalVersion), {
                   kind: 'not_found',
                 });
               }
@@ -424,12 +419,12 @@ export default function App() {
       />
       {renderError()}
 
-      {compoundAddress && personalVersion === 'v3' && (
+      {compoundAddress && (
         <div className="results-container" style={{ marginTop: '2rem' }}>
           <div style={resultPanelStyle}>
             <CompoundPersonalRiskDashboard
               address={compoundAddress}
-              version="v3"
+              version={personalVersion}
               market={selectedCompoundMarketSymbol}
               {...compoundState}
             />

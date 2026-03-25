@@ -87,7 +87,7 @@ export function CompoundMarketAssessment({
               {assetPrice !== null ? (
                 `$${assetPrice.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
-                  maximumFractionDigits: 4,
+                  maximumFractionDigits: 2,
                 })}`
               ) : (
                 <span style={{ fontSize: '1rem', color: '#64748b' }}>加载中...</span>

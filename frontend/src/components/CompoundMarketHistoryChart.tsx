@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   LineChart,
   Line,
@@ -107,6 +107,21 @@ export function CompoundMarketHistoryChart({
 
     fetchData();
   }, [version, market, timeRange, customStart, customEnd]);
+
+  const marketSizeAxis = useMemo(() => {
+    const maxValue = data.reduce((max, item) => Math.max(max, item.total_market_usd, item.borrow_usd), 0);
+    if (maxValue >= 1e9) return { divisor: 1e9, suffix: 'B' };
+    if (maxValue >= 1e6) return { divisor: 1e6, suffix: 'M' };
+    if (maxValue >= 1e3) return { divisor: 1e3, suffix: 'K' };
+    return { divisor: 1, suffix: '' };
+  }, [data]);
+
+  const formatMarketSizeTick = (value: number) => {
+    if (marketSizeAxis.divisor === 1) {
+      return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    }
+    return `$${(value / marketSizeAxis.divisor).toFixed(2)}${marketSizeAxis.suffix}`;
+  };
 
   if (loading)
     return (
@@ -238,7 +253,7 @@ export function CompoundMarketHistoryChart({
               <YAxis
                 yAxisId="left"
                 stroke="#64748b"
-                tickFormatter={(val) => `$${(val / 1e6).toFixed(0)}M`}
+                tickFormatter={formatMarketSizeTick}
                 width={60}
               />
               <YAxis
@@ -256,7 +271,7 @@ export function CompoundMarketHistoryChart({
                   else if (name === `${marketSymbol} 市场总值`) label = `${marketSymbol} 市场总值`;
                   else if (name === `${marketSymbol} 资产价格`) label = `${marketSymbol} 资产价格`;
                   return [
-                    `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+                    `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                     label,
                   ];
                 }}
@@ -327,7 +342,7 @@ export function CompoundMarketHistoryChart({
                 formatter={(value: any, name: any) => {
                   if (name === `${marketSymbol} 价格趋势`) {
                     return [
-                      `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+                      `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                       name,
                     ];
                   }

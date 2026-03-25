@@ -42,7 +42,7 @@ export function CompoundSummaryCard({
   const healthFactor = parseFloat(data.health_factor || '0');
 
   // Format health factor
-  let hfDisplay = healthFactor.toFixed(6);
+  let hfDisplay = healthFactor.toFixed(2);
   let hfColor = '#10b981'; // Green
   if (healthFactor < 1.0)
     hfColor = '#ef4444'; // Red
@@ -73,8 +73,8 @@ export function CompoundSummaryCard({
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
               $
               {discountedCollateral.toLocaleString(undefined, {
-                minimumFractionDigits: 6,
-                maximumFractionDigits: 6,
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
               })}
             </div>
 
@@ -92,7 +92,8 @@ export function CompoundSummaryCard({
                   .filter(
                     (a) =>
                       a.symbol.toUpperCase() !== market.toUpperCase() &&
-                      (a.side === 'collateral' || parseFloat(a.amount) > 0),
+                      (a.side === 'collateral' || parseFloat(a.amount) > 0) &&
+                      parseFloat(a.discounted_value_usd || '0') >= 0.004,
                   )
                   .map((asset, idx) => (
                     <div
@@ -109,8 +110,8 @@ export function CompoundSummaryCard({
                       <span style={{ color: '#10b981' }}>
                         $
                         {parseFloat(asset.discounted_value_usd || '0').toLocaleString(undefined, {
-                          minimumFractionDigits: 6,
-                          maximumFractionDigits: 6,
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </span>
                     </div>
@@ -136,8 +137,8 @@ export function CompoundSummaryCard({
               <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#ef4444' }}>
                 $
                 {totalDebt.toLocaleString(undefined, {
-                  minimumFractionDigits: 6,
-                  maximumFractionDigits: 6,
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
                 })}
               </div>
             </div>

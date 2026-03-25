@@ -130,3 +130,21 @@ export async function fetchCompoundUserPosition(
     `/compound/position?version=${version}&market=${market}&address=${address}`,
   );
 }
+
+export async function fetchCompoundMarketGovernanceV3(
+  market: string,
+  date: string,
+): Promise<any> {
+  return apiFetch<any>(
+    `/compound/market/governance?version=v3&market=${market}&date=${encodeURIComponent(date)}&detail=true`
+  );
+}
+
+export async function fetchCompoundMarketConfigV2(
+  market: string,
+  date: string,
+): Promise<any> {
+  return apiFetch<any>(
+    `/compound/market/config?version=v2&market=${market}&date=${encodeURIComponent(date)}`
+  );
+}
