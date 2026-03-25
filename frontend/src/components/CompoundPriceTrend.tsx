@@ -161,7 +161,7 @@ export function CompoundPriceTrend({ asset }: CompoundPriceTrendProps) {
                 }}
                 itemStyle={{ color: '#3b82f6' }}
                 formatter={(value: number | string | undefined) => [
-                  `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                  `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                   'Price',
                 ]}
               />

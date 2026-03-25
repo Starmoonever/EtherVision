@@ -145,8 +145,8 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                     </td>
                     <td className="right mono">
                       {parseFloat(r.balance).toLocaleString(undefined, {
-                        minimumFractionDigits: 6,
-                        maximumFractionDigits: 6,
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
                       })}
                     </td>
                     <td className="right mono bold">

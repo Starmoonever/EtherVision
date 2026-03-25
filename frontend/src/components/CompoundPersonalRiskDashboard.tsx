@@ -23,10 +23,10 @@ const toNum = (value: string | number | null | undefined) => {
   return Number.isFinite(num) ? num : 0;
 };
 
-const formatFixed6 = (value: string | number) => toNum(value).toFixed(6);
+const formatFixed2 = (value: string | number) => toNum(value).toFixed(2);
 
-const formatUsd6 = (value: string | number) =>
-  `$${toNum(value).toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 })}`;
+const formatUsd2 = (value: string | number) =>
+  `$${toNum(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const formatPrice = (value: string | number) =>
   `$${toNum(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -46,7 +46,7 @@ function parseHealthFactor(value: string | number): number {
 function formatHealthFactor(value: string | number): string {
   const hf = parseHealthFactor(value);
   if (!Number.isFinite(hf) || hf >= 1e12) return '∞';
-  return hf.toFixed(6);
+  return hf.toFixed(2);
 }
 
 function calcRiskScore(data: CompoundUserPositionItem): number {
@@ -101,10 +101,10 @@ function toRiskAssets(assets: CompoundUserAsset[]): RiskAssetRow[] {
 }
 
 function riskDirectionLabel(direction: RiskAssetRow['risk_direction']) {
-  if (direction === 'down') return '下跌敏感';
-  if (direction === 'up') return '上涨敏感';
-  if (direction === 'basis') return 'Basis 风险';
-  return '中性';
+  if (direction === 'down') return 'eth价格下跌';
+  if (direction === 'up') return 'eth价格上涨';
+  if (direction === 'basis') return '脱锚风险（eth流动性代币相对原生 eth 贬值）';
+  return '无风险';
 }
 
 function riskDirectionColor(direction: RiskAssetRow['risk_direction']) {
@@ -142,6 +142,7 @@ export function CompoundPersonalRiskDashboard({
   notFound,
 }: CompoundPersonalRiskDashboardProps) {
   const [showHelp, setShowHelp] = useState(false);
+  const [showTableHelp, setShowTableHelp] = useState(false);
   const [valueMode, setValueMode] = useState<'absolute' | 'ratio'>('absolute');
 
   if (loading) {
@@ -188,25 +189,47 @@ export function CompoundPersonalRiskDashboard({
     value: string | number,
     denominator: number = discountedCollateral,
   ) => {
-    if (valueMode === 'absolute') return formatUsd6(value);
-    return `${((toNum(value) / Math.max(denominator, 1)) * 100).toFixed(4)}%`;
+    if (valueMode === 'absolute') return formatUsd2(value);
+    return `${((toNum(value) / Math.max(denominator, 1)) * 100).toFixed(2)}%`;
   };
 
   const riskLevel = riskScore >= 75 ? '高风险' : riskScore >= 45 ? '中风险' : '低风险';
   const helpRows = [
     {
       k: 'ETH敏感风险评分',
-      v: '基于健康因子、清算缓冲、净ETH敞口、Basis敞口的组合评分（0-100）。',
+      v: '基于健康因子、清算缓冲、净ETH敞口、Basis敞口的综合评分（0-100），分数越高风险越大',
     },
-    { k: '主导风险', v: '后端判定的主风险来源：eth_down / eth_up / basis / mixed / neutral。' },
+    { k: '主导风险', v: '主要清算风险来源：eth价格下跌 / eth价格上涨 / 脱锚风险（eth流动性代币相对原生 eth 贬值） / 多市场综合性风险 / 无风险。' },
     {
-      k: 'ETH上下清算价',
-      v: '达到该价格时，账户在对应方向进入清算触发区间。价格字段保留为价格格式。',
+      k: 'ETH上涨 / 下跌清算价格',
+      v: '达到该价格时，账户进入清算触发区间',
     },
     { k: 'ETH敏感抵押/债务', v: '对ETH价格变化敏感的抵押与负债规模，单位USD。' },
     { k: '净ETH敞口', v: 'ETH敏感抵押减去ETH敏感债务，正值偏多，负值偏空。' },
-    { k: 'Basis Risk抵押', v: '与ETH相关但存在价差风险的抵押规模（如部分LST/LRT）。' },
-    { k: '资产风险贡献度', v: '按 discounted_value_usd × |beta_to_eth| 估算，便于排序与归因。' },
+    { k: '基差风险抵押资产规模', v: 'ETH 衍生资产，价格与原生 ETH 价格相关但存在价差风险的抵押资产（如wstETH）。' },
+    { k: '清算风险贡献度', v: ' ETH 价格波动，各抵押资产对账户清算风险贡献度 （按 |discounted_collateral_usd * beta_to_eth| 估算排序）' },
+  ];
+
+  const getDominantRiskLabel = (risk: string) => {
+    switch (risk) {
+      case 'eth_down':
+        return 'eth价格下跌';
+      case 'eth_up':
+        return 'eth价格上涨';
+      case 'basis':
+        return '脱锚风险（eth流动性代币相对原生 eth 贬值）';
+      case 'mixed':
+        return '多市场综合性风险';
+      case 'neutral':
+      default:
+        return '无风险';
+    }
+  };
+
+  const tableHelpRows = [
+    { k: '折扣后价值 (USD)', v: '该资产按清算折扣系数折算后的可用抵押价值' },
+    { k: 'ETH Beta', v: 'ETH 价格变动导致的该资产价格变动比例（衡量该资产价格受 ETH 价格影响程度）' },
+    { k: '风险贡献度', v: '该资产对账户清算风险的贡献度，按 折扣后价值 * ETH Beta 衡量' },
   ];
 
   return (
@@ -306,7 +329,7 @@ export function CompoundPersonalRiskDashboard({
           </div>
           <div className="metric-box">
             <span className="metric-label">主导风险</span>
-            <span className="metric-value">{data.dominant_risk}</span>
+            <span className="metric-value">{getDominantRiskLabel(data.dominant_risk)}</span>
           </div>
           <div className="metric-box">
             <span className="metric-label">健康因子</span>
@@ -314,7 +337,7 @@ export function CompoundPersonalRiskDashboard({
           </div>
           <div className="metric-box">
             <span className="metric-label">清算缓冲 (USD)</span>
-            <span className="metric-value">{formatUsd6(data.liquidation_buffer_usd)}</span>
+            <span className="metric-value">{formatUsd2(data.liquidation_buffer_usd)}</span>
           </div>
           <div className="metric-box">
             <span className="metric-label">是否可清算</span>
@@ -493,10 +516,62 @@ export function CompoundPersonalRiskDashboard({
 
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
-          <span className="card-title">资产风险贡献度</span>
-          <span className="badge" style={{ background: '#1e293b', color: '#94a3b8' }}>
-            按贡献度降序
-          </span>
+          <span className="card-title">各抵押资产清算风险贡献度</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="badge" style={{ background: '#1e293b', color: '#94a3b8' }}>
+              按贡献度降序
+            </span>
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => setShowTableHelp((v) => !v)}
+                onMouseEnter={() => setShowTableHelp(true)}
+                onMouseLeave={() => setShowTableHelp(false)}
+                style={{
+                  width: '26px',
+                  height: '26px',
+                  borderRadius: '999px',
+                  border: '1px solid #334155',
+                  background: showTableHelp ? '#334155' : '#0f172a',
+                  color: '#cbd5e1',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+                title="字段说明"
+              >
+                ?
+              </button>
+              {showTableHelp && (
+                <div
+                  onMouseEnter={() => setShowTableHelp(true)}
+                  onMouseLeave={() => setShowTableHelp(false)}
+                  style={{
+                    position: 'absolute',
+                    top: '32px',
+                    right: 0,
+                    width: 'min(400px, 80vw)',
+                    zIndex: 20,
+                    background: '#0b1220',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    padding: '0.85rem 1rem',
+                    boxShadow: '0 12px 24px rgba(2,6,23,0.55)',
+                    display: 'grid',
+                    gridTemplateColumns: '1fr',
+                    gap: '0.65rem',
+                  }}
+                >
+                  {tableHelpRows.map((item) => (
+                    <div key={item.k} style={{ fontSize: '0.8rem', lineHeight: 1.4 }}>
+                      <div style={{ color: '#e2e8f0', fontWeight: 700 }}>{item.k}</div>
+                      <div style={{ color: '#94a3b8' }}>{item.v}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="table-wrap">
@@ -507,10 +582,10 @@ export function CompoundPersonalRiskDashboard({
                 <th>仓位角色</th>
                 <th className="right">数量</th>
                 <th className="right">折扣后价值 (USD)</th>
-                <th className="right">Beta</th>
+                <th className="right"> ETH Beta</th>
                 <th className="right">风险贡献度</th>
                 <th className="right">贡献占比</th>
-                <th className="right">风险标签</th>
+                <th className="right">风险诱因</th>
               </tr>
             </thead>
             <tbody>
@@ -520,10 +595,10 @@ export function CompoundPersonalRiskDashboard({
                     <span className="token-symbol">{asset.symbol}</span>
                   </td>
                   <td>{asset.side}</td>
-                  <td className="right mono">{formatFixed6(asset.amount)}</td>
-                  <td className="right mono">{formatUsd6(asset.discounted_value_usd)}</td>
-                  <td className="right mono">{formatFixed6(asset.beta_to_eth)}</td>
-                  <td className="right mono">{formatUsd6(asset.risk_contribution_usd)}</td>
+                  <td className="right mono">{ formatFixed2(asset.amount) }</td>
+                  <td className="right mono">{ formatUsd2(asset.discounted_value_usd) }</td>
+                  <td className="right mono">{ formatFixed2(asset.beta_to_eth) }</td>
+                  <td className="right mono">{ formatUsd2(asset.risk_contribution_usd) }</td>
                   <td className="right">
                     <div
                       style={{
