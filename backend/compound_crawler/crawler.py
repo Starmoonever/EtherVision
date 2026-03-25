@@ -1818,6 +1818,7 @@ async def _writer_loop(
 async def run_crawler(
     cfg: AppConfig,
     pool,
+    w3: AsyncWeb3 | None = None,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
     interval_hours: int = 1,
@@ -1877,9 +1878,12 @@ async def run_crawler(
         "config_asset": 0,
         "status": 0,
     }
-    w3: AsyncWeb3 | None = None
-    if cfg.protocol in ("v2", "v3"):
+    own_w3 = False
+    if w3 is None and cfg.protocol in ("v2", "v3"):
         w3 = await _build_web3(cfg)
+        own_w3 = True
+    if w3 is None:
+        raise RuntimeError("web3 is required for run_crawler")
 
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
     deployment_cache: dict[str, dict[str, int]] = {}
@@ -1964,7 +1968,8 @@ async def run_crawler(
         await write_queue.put(None)
         await write_queue.join()
         await writer_task
-        await close_web3(w3)
+        if own_w3:
+            await close_web3(w3)
 
     logger.info(
         "Compound market_state crawl done: protocol=%s dry_run=%s market_rows=%s reserve_rows=%s config_rows=%s config_asset_rows=%s status_rows=%s",
@@ -1981,6 +1986,7 @@ async def run_crawler(
 async def run_v2_market_config_crawler(
     cfg: AppConfig,
     pool,
+    w3: AsyncWeb3 | None = None,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
     interval_hours: int = 1,
@@ -2016,7 +2022,12 @@ async def run_v2_market_config_crawler(
         cursor += interval
 
     markets = _market_addresses(cfg)
-    w3 = await _build_web3(cfg)
+    own_w3 = False
+    if w3 is None:
+        w3 = await _build_web3(cfg)
+        own_w3 = True
+    if w3 is None:
+        raise RuntimeError("web3 is required for run_v2_market_config_crawler")
     metadata_cache: dict[str, tuple[str | None, int | None]] = {}
     deployment_cache: dict[str, dict[str, int]] = {}
     total_market_config = 0
@@ -2071,7 +2082,8 @@ async def run_v2_market_config_crawler(
                 pool, protocol_rows
             )
     finally:
-        await close_web3(w3)
+        if own_w3:
+            await close_web3(w3)
 
     logger.info(
         "Compound v2 market config crawl done: dry_run=%s market_config_rows=%s protocol_config_rows=%s",

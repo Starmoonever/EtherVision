@@ -98,7 +98,7 @@ class PositionResponse(BaseModel):
 
 
 class UserPositionResponse(BaseModel):
-    version: str = Field(description="Compound 协议版本；当前仅支持 v3。")
+    version: str = Field(description="Compound 协议版本；支持 v2 / v3。")
     address: str = Field(description="用户地址。")
     positions: list[PositionResponse] = Field(
         description="该地址在命中市场下的仓位列表；`market=all` 时可能返回多个市场。"
@@ -111,7 +111,7 @@ class MarketItemResponse(BaseModel):
 
 
 class MarketsResponse(BaseModel):
-    version: str = Field(description="Compound 协议版本；当前仅支持 v3。")
+    version: str = Field(description="Compound 协议版本；支持 v2 / v3。")
     markets: list[MarketItemResponse] = Field(description="当前支持的市场列表。")
 
 

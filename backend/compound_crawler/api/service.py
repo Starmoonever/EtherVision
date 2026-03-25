@@ -32,7 +32,10 @@ from .schemas import (
 )
 
 _SECONDS_PER_YEAR = Decimal("31536000")
-_USER_POSITION_TABLE = "compound_v3_user_position_snapshots"
+_USER_POSITION_TABLES = {
+    "v2": "compound_v2_user_position_snapshots",
+    "v3": "compound_v3_user_position_snapshots",
+}
 _GOVERNANCE_TABLE = "compound_v3_market_config_versions"
 _GOVERNANCE_ASSET_TABLE = "compound_v3_market_config_assets"
 _V2_MARKET_CONFIG_TABLE = "compound_v2_market_config_versions"
@@ -192,15 +195,18 @@ async def get_positions(
     market: str,
     address: str,
     date: str | None = None,
+    w3: Any | None = None,
 ) -> UserPositionResponse:
-    if version != "v3":
-        raise HTTPException(status_code=400, detail="当前仅支持 version=v3")
+    version = version.lower()
+    if version not in ("v2", "v3"):
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
 
     market_addresses = _markets_to_addresses(version, market)
     market_bytes_list = [_address_to_bytes(item) for item in market_addresses]
     user_address_bytes = _parse_user_address(address)
+    position_table = _user_position_table(version)
 
-    if date is None:
+    if date is None and version == "v3":
         positions: list[PositionResponse] = []
         for market_address in market_addresses:
             collected = await collect_market_user_snapshots(
@@ -210,6 +216,7 @@ async def get_positions(
                 point_ts=None,
                 persist=False,
                 user_addresses=[user_address_bytes],
+                w3=w3,
             )
             positions.extend(_map_and_sort_positions(collected.snapshots))
         return UserPositionResponse(
@@ -218,11 +225,36 @@ async def get_positions(
             positions=_sort_positions(positions),
         )
 
+    if date is None:
+        rows = await _fetch_latest_position_rows(
+            pool,
+            position_table=position_table,
+            market_bytes_list=market_bytes_list,
+            user_address=user_address_bytes,
+        )
+        return UserPositionResponse(
+            version=version,
+            address=_bytea_to_address(user_address_bytes),
+            positions=_map_and_sort_positions(rows),
+        )
+
     point_ts = _parse_midnight_utc(date)
     rows = await _fetch_position_rows(
-        pool, point_ts, market_bytes_list, user_address_bytes
+        pool,
+        position_table=position_table,
+        point_ts=point_ts,
+        market_bytes_list=market_bytes_list,
+        user_address=user_address_bytes,
     )
     positions = _map_and_sort_positions(rows)
+
+    if version == "v2":
+        return UserPositionResponse(
+            version=version,
+            address=_bytea_to_address(user_address_bytes),
+            positions=_sort_positions(positions),
+        )
+
     existing_markets = {position.market.lower() for position in positions}
 
     for market_address in market_addresses:
@@ -235,6 +267,7 @@ async def get_positions(
             point_ts=point_ts,
             persist=True,
             user_addresses=[user_address_bytes],
+            w3=w3,
         )
         positions.extend(_map_and_sort_positions(collected.snapshots))
 
@@ -959,6 +992,8 @@ def _map_v2_protocol_config_row(row: Any) -> V2ProtocolConfigResponse:
 
 async def _fetch_position_rows(
     pool,
+    *,
+    position_table: str,
     point_ts: datetime,
     market_bytes_list: list[bytes],
     user_address: bytes,
@@ -994,7 +1029,7 @@ async def _fetch_position_rows(
                 eth_liq_mode,
                 dominant_risk,
                 assets_jsonb
-            FROM loan.{_USER_POSITION_TABLE}
+            FROM loan.{position_table}
             WHERE "timestamp" = $1
               AND market = ANY($2::bytea[])
               AND user_address = $3
@@ -1007,6 +1042,63 @@ async def _fetch_position_rows(
             user_address,
         )
     return list(rows)
+
+
+async def _fetch_latest_position_rows(
+    pool,
+    *,
+    position_table: str,
+    market_bytes_list: list[bytes],
+    user_address: bytes,
+) -> list[Any]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT DISTINCT ON (market)
+                "timestamp",
+                block_number,
+                market,
+                symbol,
+                user_address,
+                has_open_position,
+                is_liquidatable,
+                base_token,
+                base_symbol,
+                base_price_usd,
+                eth_price_usd,
+                total_collateral_usd,
+                total_debt_usd,
+                discounted_collateral_usd,
+                liquidation_buffer_usd,
+                health_factor,
+                eth_sensitive_collateral_usd,
+                eth_sensitive_debt_usd,
+                net_eth_exposure_usd,
+                non_eth_collateral_usd,
+                non_eth_debt_usd,
+                basis_risk_collateral_usd,
+                eth_down_liq_price_usd,
+                eth_up_liq_price_usd,
+                eth_liq_mode,
+                dominant_risk,
+                assets_jsonb
+            FROM loan.{position_table}
+            WHERE market = ANY($1::bytea[])
+              AND user_address = $2
+              AND has_open_position = TRUE
+            ORDER BY market, "timestamp" DESC, block_number DESC
+            """,
+            market_bytes_list,
+            user_address,
+        )
+    return list(rows)
+
+
+def _user_position_table(version: str) -> str:
+    table = _USER_POSITION_TABLES.get(version.lower())
+    if table is None:
+        raise HTTPException(status_code=400, detail="version 仅支持 v2 或 v3")
+    return table
 
 
 async def get_market_state(

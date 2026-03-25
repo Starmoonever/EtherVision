@@ -13,7 +13,10 @@ from fastapi import HTTPException
 
 from compound_crawler.api import service
 from compound_crawler.config import AppConfig
-from compound_crawler.constants import COMPOUND_V3_MARKET_NAMES
+from compound_crawler.constants import (
+    COMPOUND_V2_MARKET_NAMES,
+    COMPOUND_V3_MARKET_NAMES,
+)
 from compound_crawler.db import UserPositionSnapshotRow
 from compound_crawler.user_position_snapshots import (
     CollectedMarketSnapshots,
@@ -188,6 +191,27 @@ async def test_get_positions_reads_historical_snapshot_from_db() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_positions_v2_reads_historical_snapshot_from_db_only() -> None:
+    pool = _FakePool(rows=[_RecordLike(_snapshot_row_dict())])
+    with patch.object(
+        service,
+        "collect_market_user_snapshots",
+        new=AsyncMock(),
+    ) as mocked_collect:
+        response = await service.get_positions(
+            pool=pool,
+            version="v2",
+            market="ceth",
+            address="0x1111111111111111111111111111111111111111",
+            date="2026-03-21",
+        )
+
+    assert response.version == "v2"
+    assert len(response.positions) == 1
+    mocked_collect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_positions_collects_and_persists_when_history_missing() -> None:
     collected = CollectedMarketSnapshots(
         timestamp=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
@@ -285,6 +309,27 @@ async def test_get_positions_without_date_fetches_realtime() -> None:
     await_args = mocked_collect.await_args
     assert await_args is not None
     assert await_args.kwargs["persist"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_positions_v2_without_date_reads_latest_snapshot_only() -> None:
+    pool = _FakePool(rows=[_RecordLike(_snapshot_row_dict())])
+    with patch.object(
+        service,
+        "collect_market_user_snapshots",
+        new=AsyncMock(),
+    ) as mocked_collect:
+        response = await service.get_positions(
+            pool=pool,
+            version="v2",
+            market="all",
+            address="0x1111111111111111111111111111111111111111",
+            date=None,
+        )
+
+    assert response.version == "v2"
+    assert len(response.positions) == 1
+    mocked_collect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -471,3 +516,6 @@ def test_market_to_address_accepts_mixed_case_known_addresses() -> None:
     for address in COMPOUND_V3_MARKET_NAMES:
         mixed = "0x" + address[2:].upper()
         assert service._market_to_address(mixed) == address.lower()
+    for address in COMPOUND_V2_MARKET_NAMES:
+        mixed = "0x" + address[2:].upper()
+        assert service._market_to_address("v2", mixed) == address.lower()

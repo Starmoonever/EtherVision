@@ -9,7 +9,7 @@ import click
 from crawler_shared.logging import setup_cli_logging
 
 from .config import load_config
-from .crawler import run_crawler, run_v2_market_config_crawler
+from .crawler import _build_web3, close_web3, run_crawler, run_v2_market_config_crawler
 from .db import (
     create_pool,
     ensure_compound_event_snapshot_table,
@@ -91,10 +91,13 @@ def cmd_crawl_market_state(
 
     async def _run() -> None:
         pool = await create_pool(cfg.postgres)
+        w3 = None
         try:
+            w3 = await _build_web3(cfg)
             await run_crawler(
                 cfg,
                 pool,
+                w3=w3,
                 start_at=start_at,
                 end_at=end_at,
                 interval_hours=interval,
@@ -102,6 +105,7 @@ def cmd_crawl_market_state(
                 dry_run=dry_run,
             )
         finally:
+            await close_web3(w3)
             await pool.close()
 
     asyncio.run(_run())
@@ -257,10 +261,13 @@ def cmd_crawl_market_config(
 
     async def _run() -> None:
         pool = await create_pool(cfg.postgres)
+        w3 = None
         try:
+            w3 = await _build_web3(cfg)
             await run_v2_market_config_crawler(
                 cfg,
                 pool,
+                w3=w3,
                 start_at=start_at,
                 end_at=end_at,
                 interval_hours=interval,
@@ -268,6 +275,7 @@ def cmd_crawl_market_config(
                 dry_run=dry_run,
             )
         finally:
+            await close_web3(w3)
             await pool.close()
 
     asyncio.run(_run())

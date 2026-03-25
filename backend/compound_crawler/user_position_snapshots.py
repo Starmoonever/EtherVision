@@ -63,6 +63,7 @@ ETH_CORRELATED_SYMBOLS = frozenset(
         "ETHX",
     }
 )
+MARKET_CONTEXT_RPC_CONCURRENCY = 8
 
 
 @dataclass
@@ -322,53 +323,76 @@ async def _load_market_context(
         comet.functions.baseTokenPriceFeed().call(block_identifier=block_number),
         comet.functions.numAssets().call(block_identifier=block_number),
     )
-    base_symbol, base_decimals_meta = await _token_metadata(
-        w3, base_token, block_number, metadata_cache
+    (
+        (base_symbol, base_decimals_meta),
+        base_price_usd,
+        eth_price_usd,
+    ) = await asyncio.gather(
+        _token_metadata(w3, base_token, block_number, metadata_cache),
+        _base_token_usd_price(w3, comet, base_token, base_token_feed, block_number),
+        _price_from_feed_direct(w3, ETH_USD_PRICE_FEED, block_number),
     )
-    base_price_usd = await _base_token_usd_price(
-        w3, comet, base_token, base_token_feed, block_number
-    )
-    eth_price_usd = await _price_from_feed_direct(w3, ETH_USD_PRICE_FEED, block_number)
     base_decimals = (
         base_decimals_meta
         if base_decimals_meta is not None
         else _scale_to_decimals(int(base_scale))
     )
 
-    assets: list[AssetContext] = []
-    for i in range(int(num_assets)):
-        asset_info = await comet.functions.getAssetInfo(i).call(
-            block_identifier=block_number
-        )
+    asset_count = int(num_assets)
+    sem = asyncio.Semaphore(MARKET_CONTEXT_RPC_CONCURRENCY)
+
+    async def _get_asset_info(i: int) -> Any:
+        async with sem:
+            return await comet.functions.getAssetInfo(i).call(
+                block_identifier=block_number
+            )
+
+    asset_infos = list(
+        await asyncio.gather(*[_get_asset_info(i) for i in range(asset_count)])
+    )
+
+    async def _build_asset_context(asset_info: Any) -> AssetContext:
         asset_address = asset_info[1]
         asset_price_feed = asset_info[2]
         asset_scale = int(asset_info[3])
-        asset_symbol, asset_decimals_meta = await _token_metadata(
-            w3, asset_address, block_number, metadata_cache
-        )
-        price_in_base = await _price_from_oracle(
-            w3, comet, asset_price_feed, block_number
+
+        async def _token_meta() -> tuple[str | None, int | None]:
+            async with sem:
+                return await _token_metadata(
+                    w3, asset_address, block_number, metadata_cache
+                )
+
+        async def _oracle_price() -> Decimal:
+            async with sem:
+                return await _price_from_oracle(
+                    w3, comet, asset_price_feed, block_number
+                )
+
+        (asset_symbol, asset_decimals_meta), price_in_base = await asyncio.gather(
+            _token_meta(),
+            _oracle_price(),
         )
         symbol = asset_symbol or asset_address
-        assets.append(
-            AssetContext(
-                address=asset_address,
-                symbol=asset_symbol,
-                decimals=(
-                    asset_decimals_meta
-                    if asset_decimals_meta is not None
-                    else _scale_to_decimals(asset_scale)
-                ),
-                price_in_base=price_in_base,
-                price_usd=price_in_base * base_price_usd,
-                borrow_collateral_factor=Decimal(int(asset_info[4])) / Decimal(10**18),
-                liquidate_collateral_factor=Decimal(int(asset_info[5]))
-                / Decimal(10**18),
-                liquidation_factor=Decimal(int(asset_info[6])) / Decimal(10**18),
-                beta_to_eth=_beta_to_eth(symbol),
-                is_eth_correlated=(symbol.upper() in ETH_CORRELATED_SYMBOLS),
-            )
+        return AssetContext(
+            address=asset_address,
+            symbol=asset_symbol,
+            decimals=(
+                asset_decimals_meta
+                if asset_decimals_meta is not None
+                else _scale_to_decimals(asset_scale)
+            ),
+            price_in_base=price_in_base,
+            price_usd=price_in_base * base_price_usd,
+            borrow_collateral_factor=Decimal(int(asset_info[4])) / Decimal(10**18),
+            liquidate_collateral_factor=Decimal(int(asset_info[5])) / Decimal(10**18),
+            liquidation_factor=Decimal(int(asset_info[6])) / Decimal(10**18),
+            beta_to_eth=_beta_to_eth(symbol),
+            is_eth_correlated=(symbol.upper() in ETH_CORRELATED_SYMBOLS),
         )
+
+    assets = list(
+        await asyncio.gather(*[_build_asset_context(info) for info in asset_infos])
+    )
 
     return MarketContext(
         market_address=market_address,
@@ -916,6 +940,7 @@ async def collect_market_user_snapshots(
     persist: bool = False,
     derived_users_dir: Path | None = None,
     user_addresses: list[bytes] | None = None,
+    w3: AsyncWeb3 | None = None,
 ) -> CollectedMarketSnapshots:
     if persist:
         await ensure_user_position_snapshot_tables(
@@ -936,25 +961,28 @@ async def collect_market_user_snapshots(
         if not csv_path.exists():
             raise FileNotFoundError(f"missing user csv: {csv_path}")
         users = _load_users_from_csv(csv_path)
-    w3: AsyncWeb3 | None = None
+    own_w3 = False
     try:
         if point_ts is None:
-            point_w3 = await _build_web3(cfg)
-            latest_block = await point_w3.eth.get_block("latest")
+            if w3 is None:
+                w3 = await _build_web3(cfg)
+                own_w3 = True
+            latest_block = await w3.eth.get_block("latest")
             latest_timestamp = latest_block.get("timestamp")
             latest_number = latest_block.get("number")
             if latest_timestamp is None or latest_number is None:
                 raise RuntimeError("latest block missing timestamp or number")
             timestamp = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
             block_number = int(latest_number)
-            w3 = point_w3
         else:
             timestamp = (
                 point_ts.replace(tzinfo=timezone.utc)
                 if point_ts.tzinfo is None
                 else point_ts.astimezone(timezone.utc)
             )
-            w3 = await _build_web3(cfg)
+            if w3 is None:
+                w3 = await _build_web3(cfg)
+                own_w3 = True
             block_number = await _block_at_timestamp(
                 w3, int(timestamp.timestamp()), pool=pool
             )
@@ -986,7 +1014,8 @@ async def collect_market_user_snapshots(
             snapshots=snapshot_rows,
         )
     finally:
-        await close_web3(w3)
+        if own_w3:
+            await close_web3(w3)
 
 
 async def run_user_position_backfill(
@@ -1000,13 +1029,17 @@ async def run_user_position_backfill(
     interval_days: int = MIN_INTERVAL_DAYS,
     skip_existing: bool = False,
     dry_run: bool = False,
+    w3: AsyncWeb3 | None = None,
 ) -> BackfillStats:
     await ensure_user_position_snapshot_tables(
         pool,
         protocol=cfg.protocol,
         use_timescaledb=cfg.market_state.use_timescaledb,
     )
-    w3: AsyncWeb3 | None = await _build_web3(cfg)
+    own_w3 = False
+    if w3 is None:
+        w3 = await _build_web3(cfg)
+        own_w3 = True
 
     now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     start_ts = start or now
@@ -1130,7 +1163,8 @@ async def run_user_position_backfill(
         )
         return stats
     finally:
-        await close_web3(w3)
+        if own_w3:
+            await close_web3(w3)
 
 
 __all__ = [
