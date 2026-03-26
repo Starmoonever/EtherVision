@@ -267,6 +267,10 @@ class V2MarketConfigResponse(BaseModel):
     is_listed: bool
     is_comped: bool
     is_deprecated: bool
+    comp_supply_speed_raw: str | None = None
+    comp_borrow_speed_raw: str | None = None
+    exchange_rate_raw: str | None = None
+    exchange_rate: str | None = None
     protocol_config_hash: str | None = None
     mint_paused: bool | None = None
     borrow_paused: bool | None = None

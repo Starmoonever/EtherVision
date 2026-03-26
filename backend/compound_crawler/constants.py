@@ -218,6 +218,27 @@ COMPTROLLER_V2_ABI = [
     },
     {
         "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "compSupplySpeeds",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "compBorrowSpeeds",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
+        "name": "compSpeeds",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "cToken", "type": "address"}],
         "name": "isDeprecated",
         "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
         "stateMutability": "view",

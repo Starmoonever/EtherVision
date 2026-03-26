@@ -797,9 +797,13 @@ async def _collect_v2_market_config_at_block(
     (
         borrow_cap_raw,
         supply_cap_raw,
+        comp_supply_speed_raw,
+        comp_borrow_speed_raw,
+        comp_speed_legacy_raw,
         is_deprecated_raw,
         mint_paused_raw,
         borrow_paused_raw,
+        exchange_rate_raw,
     ) = await asyncio.gather(
         _safe_contract_call(
             lambda: comptroller.functions.borrowCaps(
@@ -809,6 +813,24 @@ async def _collect_v2_market_config_at_block(
         ),
         _safe_contract_call(
             lambda: comptroller.functions.supplyCaps(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.compSupplySpeeds(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.compBorrowSpeeds(
+                AsyncWeb3.to_checksum_address(market_address)
+            ).call(block_identifier=block_number),
+            default=None,
+        ),
+        _safe_contract_call(
+            lambda: comptroller.functions.compSpeeds(
                 AsyncWeb3.to_checksum_address(market_address)
             ).call(block_identifier=block_number),
             default=None,
@@ -831,6 +853,12 @@ async def _collect_v2_market_config_at_block(
             ).call(block_identifier=block_number),
             default=False,
         ),
+        _safe_contract_call(
+            lambda: ctoken.functions.exchangeRateStored().call(
+                block_identifier=block_number
+            ),
+            default=None,
+        ),
     )
     cap_scale = Decimal(10) ** underlying_decimals
     borrow_cap = (
@@ -839,6 +867,27 @@ async def _collect_v2_market_config_at_block(
     supply_cap = (
         Decimal(int(supply_cap_raw)) / cap_scale if supply_cap_raw is not None else None
     )
+    comp_supply_speed = (
+        Decimal(int(comp_supply_speed_raw))
+        if comp_supply_speed_raw is not None
+        else None
+    )
+    comp_borrow_speed = (
+        Decimal(int(comp_borrow_speed_raw))
+        if comp_borrow_speed_raw is not None
+        else None
+    )
+    if comp_supply_speed is None and comp_speed_legacy_raw is not None:
+        comp_supply_speed = Decimal(int(comp_speed_legacy_raw))
+    if comp_borrow_speed is None and comp_speed_legacy_raw is not None:
+        comp_borrow_speed = Decimal(int(comp_speed_legacy_raw))
+    exchange_rate = None
+    if exchange_rate_raw is not None and ctoken_decimals_raw is not None:
+        exchange_rate_scale = Decimal(10) ** max(
+            0,
+            18 + underlying_decimals - int(ctoken_decimals_raw),
+        )
+        exchange_rate = Decimal(int(exchange_rate_raw)) / exchange_rate_scale
 
     protocol_row = await _collect_v2_protocol_config_at_block(
         w3,
@@ -875,6 +924,16 @@ async def _collect_v2_market_config_at_block(
         "is_listed": is_listed,
         "is_comped": is_comped,
         "is_deprecated": bool(is_deprecated_raw),
+        "comp_supply_speed_raw": (
+            str(int(comp_supply_speed)) if comp_supply_speed is not None else None
+        ),
+        "comp_borrow_speed_raw": (
+            str(int(comp_borrow_speed)) if comp_borrow_speed is not None else None
+        ),
+        "exchange_rate_raw": (
+            str(int(exchange_rate_raw)) if exchange_rate_raw is not None else None
+        ),
+        "exchange_rate": str(exchange_rate) if exchange_rate is not None else None,
         "mint_paused": bool(mint_paused_raw),
         "borrow_paused": bool(borrow_paused_raw),
         "protocol_config_hash": protocol_row.config_hash,

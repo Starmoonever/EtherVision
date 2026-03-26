@@ -67,6 +67,10 @@ def _row() -> dict[str, object]:
             "protocol_config_hash": "p123",
             "mint_paused": False,
             "borrow_paused": True,
+            "comp_supply_speed_raw": "123456789",
+            "comp_borrow_speed_raw": "987654321",
+            "exchange_rate_raw": "212345678901234567890000000",
+            "exchange_rate": "0.021234567890123456789",
         },
     }
 
@@ -82,6 +86,10 @@ async def test_get_v2_market_config_ok() -> None:
     assert response.market == "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
     assert response.protocol_config_hash == "p123"
     assert response.borrow_paused is True
+    assert response.comp_supply_speed_raw == "123456789"
+    assert response.comp_borrow_speed_raw == "987654321"
+    assert response.exchange_rate_raw == "212345678901234567890000000"
+    assert response.exchange_rate == "0.021234567890123456789"
 
 
 @pytest.mark.asyncio

@@ -1943,6 +1943,26 @@ def _map_v2_market_config_row(row: Any) -> V2MarketConfigResponse:
         is_listed=bool(_row_get(row, "is_listed")),
         is_comped=bool(_row_get(row, "is_comped")),
         is_deprecated=bool(_row_get(row, "is_deprecated")),
+        comp_supply_speed_raw=(
+            str(raw_config_dict.get("comp_supply_speed_raw"))
+            if raw_config_dict.get("comp_supply_speed_raw") is not None
+            else None
+        ),
+        comp_borrow_speed_raw=(
+            str(raw_config_dict.get("comp_borrow_speed_raw"))
+            if raw_config_dict.get("comp_borrow_speed_raw") is not None
+            else None
+        ),
+        exchange_rate_raw=(
+            str(raw_config_dict.get("exchange_rate_raw"))
+            if raw_config_dict.get("exchange_rate_raw") is not None
+            else None
+        ),
+        exchange_rate=(
+            _fmt_optional(raw_config_dict.get("exchange_rate"))
+            if raw_config_dict.get("exchange_rate") is not None
+            else None
+        ),
         protocol_config_hash=(
             str(raw_config_dict.get("protocol_config_hash"))
             if raw_config_dict.get("protocol_config_hash")
