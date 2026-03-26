@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchAssetPrice } from '../api';
 import type { CompoundMarket } from '../api/compound';
+import { fetchCompoundMarketConfigV2 } from '../api/compound';
 import { CompoundPriceTrend } from './CompoundPriceTrend';
 import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
@@ -36,8 +37,25 @@ export function CompoundMarketAssessment({
 
     const fetchPrice = async () => {
       try {
-        const price = await fetchAssetPrice(activeMarketSymbol);
-        setAssetPrice(price);
+        if (marketVersion === 'v2') {
+          // For Compound v2 cTokens, we need to fetch the underlying token price and multiply by exchange_rate
+          const baseSymbol = activeMarketSymbol.replace(/^c/i, '');
+          const basePrice = await fetchAssetPrice(baseSymbol);
+          
+          const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
+          const configRes = await fetchCompoundMarketConfigV2(activeMarketSymbol, today);
+          
+          if (configRes && configRes.market_config && configRes.market_config.exchange_rate) {
+            const exchangeRate = parseFloat(configRes.market_config.exchange_rate);
+            setAssetPrice(basePrice * exchangeRate);
+          } else {
+            setAssetPrice(basePrice); // fallback if exchange rate fails
+          }
+        } else {
+          // Compound v3 handles regular tokens
+          const price = await fetchAssetPrice(activeMarketSymbol);
+          setAssetPrice(price);
+        }
       } catch (err) {
         setAssetPrice(null);
         console.error(`Fetch ${activeMarketSymbol} price error:`, err);
@@ -47,7 +65,7 @@ export function CompoundMarketAssessment({
     fetchPrice(); // Initial fetch
     const interval = setInterval(fetchPrice, 600000); // Poll every 10 minutes
     return () => clearInterval(interval);
-  }, [activeMarketSymbol]);
+  }, [activeMarketSymbol, activeMarketAddress, marketVersion]);
 
   if (!activeMarketAddress) {
     return (

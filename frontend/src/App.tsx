@@ -121,8 +121,18 @@ export default function App() {
   useEffect(() => {
     const loadCompoundMarkets = async () => {
       try {
-        const markets = await fetchCompoundMarkets('v3');
+        const version = activeTab === 'personal' ? personalVersion : marketVersion;
+        const markets = await fetchCompoundMarkets(version);
         setCompoundMarkets(markets);
+        // Ensure compoundMarket points to a valid address after version change
+        if (markets.length > 0) {
+          if (compoundMarket !== 'all' && !markets.find((m) => m.address === compoundMarket)) {
+            setCompoundMarket(markets[0].address);
+          } else if (compoundMarket === 'all' && version === 'v2') {
+            // Compound v2 doesn't support 'all', so default to first market
+            setCompoundMarket(markets[0].address);
+          }
+        }
       } catch (loadError) {
         console.error(loadError);
         setError('无法加载 Compound 市场列表');
@@ -130,7 +140,7 @@ export default function App() {
     };
 
     loadCompoundMarkets();
-  }, []);
+  }, [marketVersion, personalVersion, activeTab]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
@@ -326,13 +336,15 @@ export default function App() {
             {item.symbol}
           </button>
         ))}
-        <button
-          onClick={() => setCompoundMarket('all')}
-          className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
-          type="button"
-        >
-          ALL
-        </button>
+        {personalVersion === 'v3' && (
+          <button
+            onClick={() => setCompoundMarket('all')}
+            className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
+            type="button"
+          >
+            ALL
+          </button>
+        )}
       </div>
     </div>
   );
@@ -450,8 +462,8 @@ export default function App() {
   const renderCompoundMarket = () => (
     <>
       <div className="hero">
-        <h1 className="hero-title">Compound 宏观借贷市场评估</h1>
-        <p className="hero-sub">Compound 借贷市场状态分析</p>
+        <h1 className="hero-title">Compound 宏观借贷抵押市场评估</h1>
+        <p className="hero-sub">Compound 借贷抵押市场分析</p>
         {renderMarketVersionSwitch()}
         {renderCompoundMarketSwitch()}
       </div>
