@@ -38,6 +38,7 @@ from ..crawler import (
     COMET_FACTOR_SCALE,
     ETH_USD_PRICE_FEED,
     WETH_MAINNET,
+    _is_contract_deployed_at_block,
     _price_from_feed_direct,
     _token_metadata,
     _v2_underlying_price_usd,
@@ -658,12 +659,27 @@ async def _collect_v2_replay_snapshot_row(
 ) -> CompoundEventPositionSnapshotRow:
     user_checksum = AsyncWeb3.to_checksum_address("0x" + user_address.hex())
     event_market_address = "0x" + event_market.hex()
-    event_market_checksum = AsyncWeb3.to_checksum_address(event_market_address)
     market_addresses = list(
         dict.fromkeys([event_market_address, *COMPOUND_V2_MARKET_NAMES.keys()])
     )
+    deployment_cache: dict[str, dict[str, int]] = {}
+    deployed_markets: list[str] = []
+    for market in market_addresses:
+        if await _is_contract_deployed_at_block(
+            w3,
+            market,
+            block_number,
+            deployment_cache,
+        ):
+            deployed_markets.append(market)
 
-    first_ctoken = w3.eth.contract(address=event_market_checksum, abi=CTOKEN_V2_ABI)
+    if not deployed_markets:
+        raise RuntimeError(f"no deployed v2 markets at block={block_number}")
+
+    first_ctoken = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(deployed_markets[0]),
+        abi=CTOKEN_V2_ABI,
+    )
     comptroller_address = await first_ctoken.functions.comptroller().call(
         block_identifier=block_number
     )
@@ -681,12 +697,8 @@ async def _collect_v2_replay_snapshot_row(
     collateral_markets = {str(addr).lower() for addr in assets_in}
 
     market_rows: list[dict[str, Any]] = []
-    for market in market_addresses:
+    for market in deployed_markets:
         market_checksum = AsyncWeb3.to_checksum_address(market)
-        code = await w3.eth.get_code(market_checksum, block_identifier=block_number)
-        if not code:
-            continue
-
         ctoken_user = w3.eth.contract(address=market_checksum, abi=_CTOKEN_V2_USER_ABI)
         ctoken_meta = w3.eth.contract(address=market_checksum, abi=CTOKEN_V2_ABI)
         symbol = COMPOUND_V2_MARKET_NAMES.get(market, market)
@@ -764,9 +776,6 @@ async def _collect_v2_replay_snapshot_row(
                 "is_collateral": market.lower() in collateral_markets,
             }
         )
-
-    if not market_rows:
-        raise RuntimeError(f"no deployed v2 markets at block={block_number}")
 
     eth_price_usd = Decimal("0")
     for row in market_rows:

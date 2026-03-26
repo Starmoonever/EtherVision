@@ -125,6 +125,46 @@ class _FakeV2Contract:
         )
 
 
+class _ReplayFakeFunctions:
+    def __init__(self, mapping: dict[str, object]):
+        self._mapping = mapping
+
+    def __getattr__(self, name: str):
+        def _callable(*_args, **_kwargs):
+            value = self._mapping[name]
+            return _FakeCall(value)
+
+        return _callable
+
+
+class _ReplayFakeContract:
+    def __init__(self, mapping: dict[str, object]):
+        self.functions = _ReplayFakeFunctions(mapping)
+
+
+class _ReplayFakeEth:
+    def __init__(
+        self, contracts: dict[str, _ReplayFakeContract], codes: dict[str, bytes]
+    ):
+        self._contracts = contracts
+        self._codes = codes
+
+    def contract(self, *, address, abi):
+        del abi
+        return self._contracts[str(address).lower()]
+
+    async def get_code(self, address, block_identifier=None):
+        del block_identifier
+        return self._codes.get(str(address).lower(), b"")
+
+
+class _ReplayFakeWeb3:
+    def __init__(
+        self, contracts: dict[str, _ReplayFakeContract], codes: dict[str, bytes]
+    ):
+        self.eth = _ReplayFakeEth(contracts, codes)
+
+
 def _snapshot_row_dict() -> dict[str, object]:
     return {
         "timestamp": datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
@@ -799,3 +839,85 @@ async def test_load_v2_accrued_balances_falls_back_to_stored_calls() -> None:
     assert balance_raw == 200
     assert borrow_raw == 50
     assert exchange_rate_raw == 3_000_000_000_000_000_000_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_collect_v2_replay_snapshot_row_skips_undeployed_event_market() -> None:
+    comptroller = "0x1111111111111111111111111111111111111111"
+    deployed_market = "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
+    undeployed_event_market = "0x39aa39c021dfbae8fac545936693ac917d5e7563"
+    underlying = "0x2222222222222222222222222222222222222222"
+    user_address = bytes.fromhex("33" * 20)
+    user_checksum = "0x" + user_address.hex()
+
+    contracts = {
+        deployed_market: _ReplayFakeContract({"comptroller": comptroller}),
+        comptroller: _ReplayFakeContract(
+            {
+                "getAssetsIn": [],
+                "markets": (True, 0, False),
+            }
+        ),
+    }
+    codes = {
+        deployed_market: b"\x01",
+        comptroller: b"\x01",
+    }
+    w3 = _ReplayFakeWeb3(contracts, codes)
+
+    with (
+        patch.object(
+            service,
+            "_is_contract_deployed_at_block",
+            new=AsyncMock(
+                side_effect=lambda _w3, address, *_args: (
+                    address.lower() == deployed_market
+                )
+            ),
+        ),
+        patch.object(
+            service,
+            "_token_metadata",
+            new=AsyncMock(return_value=("DAI", 18)),
+        ),
+        patch.object(
+            service,
+            "_v2_underlying_price_usd",
+            new=AsyncMock(return_value=Decimal("1")),
+        ),
+        patch.object(
+            service,
+            "_load_v2_accrued_balances",
+            new=AsyncMock(
+                return_value=(
+                    10**8,
+                    0,
+                    2 * 10**28,
+                )
+            ),
+        ),
+        patch.object(
+            service,
+            "_price_from_feed_direct",
+            new=AsyncMock(return_value=Decimal("2000")),
+        ),
+    ):
+        contracts[deployed_market] = _ReplayFakeContract(
+            {
+                "comptroller": comptroller,
+                "underlying": underlying,
+            }
+        )
+        row = await service._collect_v2_replay_snapshot_row(
+            w3,
+            user_address=user_address,
+            event_market=bytes.fromhex(undeployed_event_market[2:]),
+            block_number=123,
+            point_ts=datetime(2026, 3, 26, tzinfo=timezone.utc),
+            metadata_cache={},
+        )
+
+    assert user_checksum.startswith("0x")
+    assert row.market == bytes.fromhex(undeployed_event_market[2:])
+    assert row.symbol == COMPOUND_V2_MARKET_NAMES[undeployed_event_market]
+    assert row.total_collateral_usd > 0

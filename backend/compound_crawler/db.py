@@ -6,6 +6,7 @@ import logging
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import date as date_type
 from decimal import Decimal
 from collections import defaultdict
 from typing import Any
@@ -117,6 +118,20 @@ class UserPositionAssetRow:
     beta_to_eth: Decimal
     is_eth_correlated: bool
     is_basis_risk_asset: bool
+
+
+@dataclass
+class CompoundV2ActiveUserRow:
+    user_address: bytes
+    is_active: bool
+    activated_at: datetime | None
+    last_event_at: datetime | None
+    last_snapshot_at: datetime | None
+    deactivated_at: datetime | None
+    deactivate_reason: str | None
+    last_total_collateral_usd: Decimal
+    last_total_debt_usd: Decimal
+    last_health_factor: Decimal
 
 
 @dataclass
@@ -1056,6 +1071,9 @@ _USER_POSITION_ASSET_TABLES = {
     "v3": "compound_v3_user_position_snapshot_assets",
 }
 
+_V2_ACTIVE_USER_TABLE = "compound_v2_active_users"
+_V2_ACTIVE_RUN_STATE_TABLE = "compound_v2_active_run_state"
+
 _DDL_USER_POSITION = """
 CREATE TABLE IF NOT EXISTS loan.{table_name} (
     "timestamp"                  TIMESTAMPTZ     NOT NULL,
@@ -1134,6 +1152,87 @@ CREATE INDEX IF NOT EXISTS {index_name}
 _DDL_USER_POSITION_ASSET_INDEX_MARKET_TS = """
 CREATE INDEX IF NOT EXISTS {index_name}
     ON loan.{table_name} (market, "timestamp" DESC);
+"""
+
+_DDL_V2_ACTIVE_USER = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_ACTIVE_USER_TABLE} (
+    user_address               BYTEA            PRIMARY KEY,
+    is_active                  BOOLEAN          NOT NULL DEFAULT TRUE,
+    activated_at               TIMESTAMPTZ      NULL,
+    last_event_at              TIMESTAMPTZ      NULL,
+    last_snapshot_at           TIMESTAMPTZ      NULL,
+    deactivated_at             TIMESTAMPTZ      NULL,
+    deactivate_reason          TEXT             NULL,
+    last_total_collateral_usd  NUMERIC(30, 8)   NOT NULL DEFAULT 0,
+    last_total_debt_usd        NUMERIC(30, 8)   NOT NULL DEFAULT 0,
+    last_health_factor         NUMERIC(40, 18)  NOT NULL DEFAULT 0,
+    created_at                 TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    updated_at                 TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+);
+"""
+
+_DDL_V2_ACTIVE_USER_INDEXES = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_ACTIVE_USER_TABLE}_active
+    ON loan.{_V2_ACTIVE_USER_TABLE} (is_active, last_event_at DESC NULLS LAST);
+"""
+
+_DDL_V2_ACTIVE_RUN_STATE = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_ACTIVE_RUN_STATE_TABLE} (
+    runner_name           TEXT            PRIMARY KEY,
+    last_processed_date   DATE            NOT NULL,
+    updated_at            TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+"""
+
+_UPSERT_V2_ACTIVE_USER = f"""
+INSERT INTO loan.{_V2_ACTIVE_USER_TABLE} (
+    user_address, is_active, activated_at, last_event_at, last_snapshot_at,
+    deactivated_at, deactivate_reason, last_total_collateral_usd,
+    last_total_debt_usd, last_health_factor
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8,
+    $9, $10
+)
+ON CONFLICT (user_address) DO UPDATE SET
+    is_active = EXCLUDED.is_active,
+    activated_at = COALESCE(
+        loan.compound_v2_active_users.activated_at,
+        EXCLUDED.activated_at
+    ),
+    last_event_at = COALESCE(
+        GREATEST(
+            loan.compound_v2_active_users.last_event_at,
+            EXCLUDED.last_event_at
+        ),
+        loan.compound_v2_active_users.last_event_at,
+        EXCLUDED.last_event_at
+    ),
+    last_snapshot_at = COALESCE(
+        GREATEST(
+            loan.compound_v2_active_users.last_snapshot_at,
+            EXCLUDED.last_snapshot_at
+        ),
+        loan.compound_v2_active_users.last_snapshot_at,
+        EXCLUDED.last_snapshot_at
+    ),
+    deactivated_at = EXCLUDED.deactivated_at,
+    deactivate_reason = EXCLUDED.deactivate_reason,
+    last_total_collateral_usd = EXCLUDED.last_total_collateral_usd,
+    last_total_debt_usd = EXCLUDED.last_total_debt_usd,
+    last_health_factor = EXCLUDED.last_health_factor,
+    updated_at = NOW();
+"""
+
+_UPSERT_V2_ACTIVE_RUN_STATE = f"""
+INSERT INTO loan.{_V2_ACTIVE_RUN_STATE_TABLE} (
+    runner_name, last_processed_date
+) VALUES (
+    $1, $2
+)
+ON CONFLICT (runner_name) DO UPDATE SET
+    last_processed_date = EXCLUDED.last_processed_date,
+    updated_at = NOW();
 """
 
 _UPSERT_USER_POSITION = """
@@ -1892,6 +1991,292 @@ async def ensure_user_position_snapshot_tables(
     )
 
 
+async def ensure_compound_v2_active_user_table(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_V2_ACTIVE_USER)
+        await conn.execute(_DDL_V2_ACTIVE_USER_INDEXES)
+    logger.info(
+        "Compound v2 active user table ready: loan.%s",
+        _V2_ACTIVE_USER_TABLE,
+    )
+
+
+async def ensure_compound_v2_active_run_state_table(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_V2_ACTIVE_RUN_STATE)
+    logger.info(
+        "Compound v2 run-state table ready: loan.%s",
+        _V2_ACTIVE_RUN_STATE_TABLE,
+    )
+
+
+async def fetch_compound_v2_active_users(
+    pool: asyncpg.Pool,
+    *,
+    include_inactive: bool = False,
+) -> list[bytes]:
+    where_clause = "" if include_inactive else "WHERE is_active = TRUE"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT user_address
+            FROM loan.{_V2_ACTIVE_USER_TABLE}
+            {where_clause}
+            ORDER BY last_event_at DESC NULLS LAST, user_address
+            """
+        )
+    return [bytes(row["user_address"]) for row in rows]
+
+
+async def activate_compound_v2_users(
+    pool: asyncpg.Pool,
+    user_addresses: list[bytes],
+    *,
+    event_timestamp: datetime | None = None,
+) -> int:
+    unique_addresses = list(dict.fromkeys(user_addresses))
+    if not unique_addresses:
+        return 0
+    rows = [
+        (
+            user_address,
+            True,
+            event_timestamp,
+            event_timestamp,
+            None,
+            None,
+            None,
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+        )
+        for user_address in unique_addresses
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_ACTIVE_USER, rows)
+    return len(unique_addresses)
+
+
+async def activate_compound_v2_users_with_event_rows(
+    pool: asyncpg.Pool,
+    event_rows: list[tuple[bytes, datetime]],
+) -> int:
+    if not event_rows:
+        return 0
+    # Deduplicate by user and keep latest event time per day-window.
+    latest_event_by_user: dict[bytes, datetime] = {}
+    for user_address, event_timestamp in event_rows:
+        existing = latest_event_by_user.get(user_address)
+        if existing is None or event_timestamp > existing:
+            latest_event_by_user[user_address] = event_timestamp
+
+    rows = [
+        (
+            user_address,
+            True,
+            event_timestamp,
+            event_timestamp,
+            None,
+            None,
+            None,
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+        )
+        for user_address, event_timestamp in latest_event_by_user.items()
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_ACTIVE_USER, rows)
+    return len(rows)
+
+
+async def fetch_compound_v2_users_from_history_day(
+    pool: asyncpg.Pool,
+    *,
+    day_start: datetime,
+    day_end: datetime,
+) -> list[tuple[bytes, datetime]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT from_address AS user_address, MAX(block_timestamp) AS last_event_at
+            FROM compound.compound_history
+            WHERE version = 2
+              AND from_address IS NOT NULL
+              AND block_timestamp >= $1
+              AND block_timestamp <= $2
+            GROUP BY from_address
+            ORDER BY last_event_at DESC
+            """,
+            day_start,
+            day_end,
+        )
+    return [
+        (bytes(row["user_address"]), row["last_event_at"])
+        for row in rows
+        if row["user_address"] is not None
+        and isinstance(row["last_event_at"], datetime)
+    ]
+
+
+async def refresh_compound_v2_active_users_from_snapshots(
+    pool: asyncpg.Pool,
+    snapshot_rows: list[UserPositionSnapshotRow],
+    *,
+    point_ts: datetime,
+    dust_threshold_usd: Decimal = Decimal("1"),
+) -> int:
+    if not snapshot_rows:
+        return 0
+
+    aggregated: dict[bytes, tuple[bool, Decimal, Decimal, Decimal]] = {}
+    for row in snapshot_rows:
+        total_collateral = Decimal(row.total_collateral_usd)
+        total_debt = Decimal(row.total_debt_usd)
+        health_factor = Decimal(row.health_factor)
+        is_active = bool(
+            row.has_open_position
+            and (
+                total_collateral > dust_threshold_usd or total_debt > dust_threshold_usd
+            )
+        )
+        existing = aggregated.get(row.user_address)
+        if existing is None:
+            aggregated[row.user_address] = (
+                is_active,
+                total_collateral,
+                total_debt,
+                health_factor,
+            )
+            continue
+        aggregated[row.user_address] = (
+            existing[0] or is_active,
+            max(existing[1], total_collateral),
+            max(existing[2], total_debt),
+            max(existing[3], health_factor),
+        )
+
+    upsert_rows = []
+    for user_address, (
+        is_active,
+        total_collateral,
+        total_debt,
+        health_factor,
+    ) in aggregated.items():
+        upsert_rows.append(
+            (
+                user_address,
+                is_active,
+                point_ts if is_active else None,
+                None,
+                point_ts,
+                None if is_active else point_ts,
+                None if is_active else "closed_after_snapshot",
+                total_collateral,
+                total_debt,
+                health_factor,
+            )
+        )
+
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_ACTIVE_USER, upsert_rows)
+    return len(upsert_rows)
+
+
+_SELECT_V2_AFFECTED_USERS_FROM_EVENTS = """
+WITH affected AS (
+    SELECT minter AS user_address, block_timestamp
+    FROM compound.compound_mint
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT redeemer AS user_address, block_timestamp
+    FROM compound.compound_redeem
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT borrower AS user_address, block_timestamp
+    FROM compound.compound_borrow
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT borrower AS user_address, block_timestamp
+    FROM compound.compound_repay
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT payer AS user_address, block_timestamp
+    FROM compound.compound_repay
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT borrower AS user_address, block_timestamp
+    FROM compound.compound_liquidate
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+    UNION ALL
+    SELECT liquidator AS user_address, block_timestamp
+    FROM compound.compound_liquidate
+    WHERE version = 2
+      AND block_timestamp >= $1
+      AND block_timestamp <= $2
+)
+SELECT user_address, MAX(block_timestamp) AS last_event_at
+FROM affected
+WHERE user_address IS NOT NULL
+GROUP BY user_address
+"""
+
+
+async def activate_compound_v2_users_from_events(
+    pool: asyncpg.Pool,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+) -> int:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_SELECT_V2_AFFECTED_USERS_FROM_EVENTS, from_dt, to_dt)
+    if not rows:
+        return 0
+    upsert_rows = [
+        (
+            bytes(row["user_address"]),
+            True,
+            row["last_event_at"],
+            row["last_event_at"],
+            None,
+            None,
+            None,
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+        )
+        for row in rows
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(_UPSERT_V2_ACTIVE_USER, upsert_rows)
+    return len(upsert_rows)
+
+
+async def fetch_compound_v2_users_affected_by_events(
+    pool: asyncpg.Pool,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+) -> list[bytes]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_SELECT_V2_AFFECTED_USERS_FROM_EVENTS, from_dt, to_dt)
+    return [
+        bytes(row["user_address"]) for row in rows if row["user_address"] is not None
+    ]
+
+
 async def fetch_existing_user_position_addresses(
     pool: asyncpg.Pool,
     point_ts: datetime,
@@ -1916,6 +2301,136 @@ async def fetch_existing_user_position_addresses(
             user_addresses,
         )
     return {bytes(row["user_address"]) for row in rows}
+
+
+async def fetch_user_position_snapshots_at_timestamp(
+    pool: asyncpg.Pool,
+    *,
+    point_ts: datetime,
+    protocol: str = "v3",
+) -> list[UserPositionSnapshotRow]:
+    user_table = user_position_table_name(protocol)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT *
+            FROM loan.{user_table}
+            WHERE "timestamp" = $1
+            ORDER BY market, user_address
+            """,
+            point_ts,
+        )
+    return [
+        UserPositionSnapshotRow(
+            timestamp=row["timestamp"],
+            block_number=int(row["block_number"]),
+            market=bytes(row["market"]),
+            symbol=row["symbol"],
+            user_address=bytes(row["user_address"]),
+            has_open_position=bool(row["has_open_position"]),
+            is_liquidatable=bool(row["is_liquidatable"]),
+            base_token=bytes(row["base_token"])
+            if row["base_token"] is not None
+            else b"",
+            base_symbol=row["base_symbol"],
+            base_price_usd=Decimal(row["base_price_usd"] or 0),
+            eth_price_usd=Decimal(row["eth_price_usd"]),
+            total_collateral_usd=Decimal(row["total_collateral_usd"]),
+            total_debt_usd=Decimal(row["total_debt_usd"]),
+            discounted_collateral_usd=Decimal(row["discounted_collateral_usd"]),
+            liquidation_buffer_usd=Decimal(row["liquidation_buffer_usd"]),
+            health_factor=Decimal(row["health_factor"]),
+            eth_sensitive_collateral_usd=Decimal(row["eth_sensitive_collateral_usd"]),
+            eth_sensitive_debt_usd=Decimal(row["eth_sensitive_debt_usd"]),
+            net_eth_exposure_usd=Decimal(row["net_eth_exposure_usd"]),
+            non_eth_collateral_usd=Decimal(row["non_eth_collateral_usd"]),
+            non_eth_debt_usd=Decimal(row["non_eth_debt_usd"]),
+            basis_risk_collateral_usd=Decimal(row["basis_risk_collateral_usd"]),
+            eth_down_liq_price_usd=(
+                Decimal(row["eth_down_liq_price_usd"])
+                if row["eth_down_liq_price_usd"] is not None
+                else None
+            ),
+            eth_up_liq_price_usd=(
+                Decimal(row["eth_up_liq_price_usd"])
+                if row["eth_up_liq_price_usd"] is not None
+                else None
+            ),
+            eth_liq_mode=str(row["eth_liq_mode"]),
+            dominant_risk=str(row["dominant_risk"]),
+            assets_jsonb=(
+                json.loads(row["assets_jsonb"])
+                if isinstance(row["assets_jsonb"], str)
+                else list(row["assets_jsonb"])
+            ),
+        )
+        for row in rows
+    ]
+
+
+async def fetch_latest_user_position_snapshot_timestamp(
+    pool: asyncpg.Pool,
+    *,
+    protocol: str = "v3",
+) -> datetime | None:
+    user_table = user_position_table_name(protocol)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f'SELECT MAX("timestamp") AS max_ts FROM loan.{user_table}'
+        )
+    value = row["max_ts"] if row is not None else None
+    return value if isinstance(value, datetime) else None
+
+
+async def fetch_earliest_compound_event_timestamp(
+    pool: asyncpg.Pool,
+    *,
+    protocol: str,
+) -> datetime | None:
+    version = 2 if protocol == "v2" else 3
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT MIN(block_timestamp) AS min_ts
+            FROM compound.compound_history
+            WHERE version = $1
+            """,
+            version,
+        )
+    value = row["min_ts"] if row is not None else None
+    return value if isinstance(value, datetime) else None
+
+
+async def fetch_compound_v2_run_watermark(
+    pool: asyncpg.Pool,
+    *,
+    runner_name: str,
+) -> date_type | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""
+            SELECT last_processed_date
+            FROM loan.{_V2_ACTIVE_RUN_STATE_TABLE}
+            WHERE runner_name = $1
+            """,
+            runner_name,
+        )
+    value = row["last_processed_date"] if row is not None else None
+    return value if isinstance(value, date_type) else None
+
+
+async def upsert_compound_v2_run_watermark(
+    pool: asyncpg.Pool,
+    *,
+    runner_name: str,
+    processed_date: date_type,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _UPSERT_V2_ACTIVE_RUN_STATE,
+            runner_name,
+            processed_date,
+        )
 
 
 async def upsert_user_position_snapshots(
