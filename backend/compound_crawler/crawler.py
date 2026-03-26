@@ -234,18 +234,43 @@ async def _price_from_feed_direct(
     price_feed: str,
     block_number: int,
 ) -> Decimal:
+    feed_address = AsyncWeb3.to_checksum_address(price_feed)
     feed = w3.eth.contract(
-        address=AsyncWeb3.to_checksum_address(price_feed),
+        address=feed_address,
         abi=CHAINLINK_AGGREGATOR_V3_ABI,
     )
-    decimals, round_data = await asyncio.gather(
-        feed.functions.decimals().call(block_identifier=block_number),
-        feed.functions.latestRoundData().call(block_identifier=block_number),
-    )
-    answer = int(round_data[1])
-    if answer <= 0:
-        return Decimal("0")
-    return Decimal(answer) / (Decimal(10) ** int(decimals))
+
+    async def _read_latest(*, use_block: bool) -> Decimal:
+        if use_block:
+            decimals, round_data = await asyncio.gather(
+                feed.functions.decimals().call(block_identifier=block_number),
+                feed.functions.latestRoundData().call(block_identifier=block_number),
+            )
+        else:
+            decimals, round_data = await asyncio.gather(
+                feed.functions.decimals().call(),
+                feed.functions.latestRoundData().call(),
+            )
+        answer = int(round_data[1])
+        if answer <= 0:
+            return Decimal("0")
+        return Decimal(answer) / (Decimal(10) ** int(decimals))
+
+    try:
+        code = await w3.eth.get_code(feed_address, block_identifier=block_number)
+        if bytes(code) == b"":
+            raise RuntimeError(
+                f"feed not deployed at block={block_number}: {price_feed}"
+            )
+        return await _read_latest(use_block=True)
+    except Exception as exc:
+        logger.warning(
+            "historical feed read failed feed=%s block=%s, fallback to latest: %s",
+            price_feed,
+            block_number,
+            exc,
+        )
+        return await _read_latest(use_block=False)
 
 
 async def _price_from_comet(
@@ -349,7 +374,7 @@ async def _token_metadata(
     return cache[key]
 
 
-async def _v2_underlying_price_usd(
+async def _v2_underlying_price_eth(
     w3: AsyncWeb3,
     ctoken_address: str,
     comptroller_address: str,
@@ -374,6 +399,38 @@ async def _v2_underlying_price_usd(
     if price_int <= 0:
         return Decimal("0")
     return Decimal(price_int) / (Decimal(10) ** max(0, 36 - underlying_decimals))
+
+
+async def _v2_underlying_price_usd(
+    w3: AsyncWeb3,
+    ctoken_address: str,
+    comptroller_address: str,
+    underlying_decimals: int,
+    block_number: int,
+    *,
+    eth_price_usd: Decimal | None = None,
+) -> Decimal:
+    # Compound v2 oracle price is ETH-quoted for Open Price Feed.
+    # Convert to USD so downstream fields named `*_usd` are semantically correct.
+    price_in_eth = await _v2_underlying_price_eth(
+        w3,
+        ctoken_address=ctoken_address,
+        comptroller_address=comptroller_address,
+        underlying_decimals=underlying_decimals,
+        block_number=block_number,
+    )
+    if price_in_eth <= 0:
+        return Decimal("0")
+    resolved_eth_price_usd = eth_price_usd
+    if resolved_eth_price_usd is None:
+        resolved_eth_price_usd = await _price_from_feed_direct(
+            w3,
+            ETH_USD_PRICE_FEED,
+            block_number,
+        )
+    if resolved_eth_price_usd <= 0:
+        return Decimal("0")
+    return price_in_eth * resolved_eth_price_usd
 
 
 async def _collect_v2_market_at_block(

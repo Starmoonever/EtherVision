@@ -2277,6 +2277,26 @@ async def fetch_compound_v2_users_affected_by_events(
     ]
 
 
+async def fetch_compound_v2_users_from_detail_tables_day(
+    pool: asyncpg.Pool,
+    *,
+    day_start: datetime,
+    day_end: datetime,
+) -> list[tuple[bytes, datetime]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            _SELECT_V2_AFFECTED_USERS_FROM_EVENTS,
+            day_start,
+            day_end,
+        )
+    return [
+        (bytes(row["user_address"]), row["last_event_at"])
+        for row in rows
+        if row["user_address"] is not None
+        and isinstance(row["last_event_at"], datetime)
+    ]
+
+
 async def fetch_existing_user_position_addresses(
     pool: asyncpg.Pool,
     point_ts: datetime,

@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -45,6 +46,7 @@ from compound_crawler.db import (
     ensure_user_position_snapshot_tables,
     fetch_compound_v2_active_users,
     fetch_compound_v2_run_watermark,
+    fetch_compound_v2_users_from_detail_tables_day,
     fetch_compound_v2_users_from_history_day,
     fetch_earliest_compound_event_timestamp,
     refresh_compound_v2_active_users_from_snapshots,
@@ -221,6 +223,18 @@ async def _resolve_start_day(pool: Any) -> datetime:
     return _floor_utc_day(earliest)
 
 
+def _merge_event_rows(
+    *sources: list[tuple[bytes, datetime]],
+) -> list[tuple[bytes, datetime]]:
+    latest_by_user: dict[bytes, datetime] = {}
+    for rows in sources:
+        for user_address, event_timestamp in rows:
+            existing = latest_by_user.get(user_address)
+            if existing is None or event_timestamp > existing:
+                latest_by_user[user_address] = event_timestamp
+    return [(user, ts) for user, ts in latest_by_user.items()]
+
+
 async def run(
     *,
     config_path: str | None,
@@ -256,28 +270,40 @@ async def run(
         w3 = await _build_web3(cfg)
         cursor = start_day
         while cursor <= end_day:
+            day_started_at = time.perf_counter()
             day_start = cursor
             day_end = cursor + timedelta(days=1) - timedelta(seconds=1)
             point_ts = day_end
-
+            active_before = len(await fetch_compound_v2_active_users(pool))
             history_events = await fetch_compound_v2_users_from_history_day(
                 pool,
                 day_start=day_start,
                 day_end=day_end,
             )
-            activated = await activate_compound_v2_users_with_event_rows(
-                pool, history_events
+            detail_events = await fetch_compound_v2_users_from_detail_tables_day(
+                pool,
+                day_start=day_start,
+                day_end=day_end,
             )
+            merged_events = _merge_event_rows(history_events, detail_events)
+            activated = await activate_compound_v2_users_with_event_rows(
+                pool, merged_events
+            )
+            active_after_activation = len(await fetch_compound_v2_active_users(pool))
             active_users = await fetch_compound_v2_active_users(pool)
             if limit:
                 active_users = active_users[:limit]
 
             print(
-                "day=%s history_users=%d activated=%d active_to_scan=%d"
+                "day=%s stage=activation history_users=%d detail_users=%d merged_users=%d activated=%d active_before=%d active_after_activation=%d active_to_scan=%d"
                 % (
                     cursor.date().isoformat(),
                     len(history_events),
+                    len(detail_events),
+                    len(merged_events),
                     activated,
+                    active_before,
+                    active_after_activation,
                     len(active_users),
                 )
             )
@@ -316,6 +342,11 @@ async def run(
             pending_assets: list[UserPositionAssetRow] = []
             day_snapshot_written = 0
             day_asset_written = 0
+            day_rows_collected = 0
+            day_refreshed_users = 0
+            scanned_user_set: set[bytes] = set()
+            open_user_set: set[bytes] = set()
+            liquidatable_user_set: set[bytes] = set()
 
             async def _one_user(user_address: bytes) -> list[UserPositionSnapshotRow]:
                 async with sem:
@@ -342,12 +373,20 @@ async def run(
                     await asyncio.gather(*tasks, return_exceptions=True)
                     raise
 
-                await refresh_compound_v2_active_users_from_snapshots(
+                refreshed = await refresh_compound_v2_active_users_from_snapshots(
                     pool,
                     batch_rows,
                     point_ts=point_ts,
                     dust_threshold_usd=dust_threshold_usd,
                 )
+                day_refreshed_users += refreshed
+                day_rows_collected += len(batch_rows)
+                for row in batch_rows:
+                    scanned_user_set.add(row.user_address)
+                    if row.has_open_position:
+                        open_user_set.add(row.user_address)
+                    if row.is_liquidatable:
+                        liquidatable_user_set.add(row.user_address)
                 pending_snapshots.extend(batch_rows)
                 for row in batch_rows:
                     pending_assets.extend(_to_asset_rows(row))
@@ -382,9 +421,24 @@ async def run(
                 runner_name=RUNNER_NAME,
                 processed_date=cursor.date(),
             )
+            active_after_refresh = len(await fetch_compound_v2_active_users(pool))
             print(
-                "day=%s snapshots_written=%d assets_written=%d"
-                % (cursor.date().isoformat(), day_snapshot_written, day_asset_written)
+                "day=%s stage=summary block=%d deployed_markets=%d scanned_users=%d unique_users_seen=%d open_users=%d liquidatable_users=%d rows_collected=%d refreshed_users=%d snapshots_written=%d assets_written=%d active_after_refresh=%d elapsed_sec=%.2f"
+                % (
+                    cursor.date().isoformat(),
+                    block_number,
+                    len(deployed_markets),
+                    len(active_users),
+                    len(scanned_user_set),
+                    len(open_user_set),
+                    len(liquidatable_user_set),
+                    day_rows_collected,
+                    day_refreshed_users,
+                    day_snapshot_written,
+                    day_asset_written,
+                    active_after_refresh,
+                    time.perf_counter() - day_started_at,
+                )
             )
             cursor += timedelta(days=1)
     finally:

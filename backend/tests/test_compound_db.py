@@ -15,6 +15,7 @@ from compound_crawler.db import (
     activate_compound_v2_users_with_event_rows,
     fetch_compound_v2_run_watermark,
     fetch_compound_v2_active_users,
+    fetch_compound_v2_users_from_detail_tables_day,
     fetch_compound_v2_users_from_history_day,
     fetch_compound_v2_users_affected_by_events,
     refresh_compound_v2_active_users_from_snapshots,
@@ -221,6 +222,30 @@ async def test_fetch_compound_v2_users_from_history_day_returns_addresses_with_t
     assert rows == [
         (bytes.fromhex("11" * 20), ts_a),
         (bytes.fromhex("22" * 20), ts_b),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_v2_users_from_detail_tables_day_returns_addresses_with_ts() -> (
+    None
+):
+    conn = _FakeConn()
+    ts_a = datetime(2019, 5, 7, 11, 0, 0, tzinfo=timezone.utc)
+    ts_b = datetime(2019, 5, 7, 12, 0, 0, tzinfo=timezone.utc)
+    conn.fetch_rows = [
+        {"user_address": bytes.fromhex("33" * 20), "last_event_at": ts_a},
+        {"user_address": bytes.fromhex("44" * 20), "last_event_at": ts_b},
+    ]
+
+    rows = await fetch_compound_v2_users_from_detail_tables_day(
+        cast(asyncpg.Pool, _FakePool(conn)),
+        day_start=datetime(2019, 5, 7, 0, 0, 0, tzinfo=timezone.utc),
+        day_end=datetime(2019, 5, 7, 23, 59, 59, tzinfo=timezone.utc),
+    )
+
+    assert rows == [
+        (bytes.fromhex("33" * 20), ts_a),
+        (bytes.fromhex("44" * 20), ts_b),
     ]
 
 

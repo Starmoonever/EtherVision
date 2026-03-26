@@ -695,6 +695,11 @@ async def _collect_v2_replay_snapshot_row(
         block_identifier=block_number
     )
     collateral_markets = {str(addr).lower() for addr in assets_in}
+    eth_price_usd_from_feed = await _price_from_feed_direct(
+        w3,
+        ETH_USD_PRICE_FEED,
+        block_number,
+    )
 
     market_rows: list[dict[str, Any]] = []
     for market in deployed_markets:
@@ -727,14 +732,11 @@ async def _collect_v2_replay_snapshot_row(
                 comptroller_address=str(comptroller_address),
                 underlying_decimals=underlying_decimals,
                 block_number=block_number,
+                eth_price_usd=eth_price_usd_from_feed,
             )
         except Exception:
             if underlying_address.lower() == WETH_MAINNET.lower():
-                price_usd = await _price_from_feed_direct(
-                    w3,
-                    ETH_USD_PRICE_FEED,
-                    block_number,
-                )
+                price_usd = eth_price_usd_from_feed
             else:
                 price_usd = Decimal("0")
 
@@ -786,9 +788,7 @@ async def _collect_v2_replay_snapshot_row(
             eth_price_usd = row["price_usd"]
             break
     if eth_price_usd <= 0:
-        eth_price_usd = await _price_from_feed_direct(
-            w3, ETH_USD_PRICE_FEED, block_number
-        )
+        eth_price_usd = eth_price_usd_from_feed
 
     total_collateral_usd = Decimal("0")
     discounted_collateral_usd = Decimal("0")
