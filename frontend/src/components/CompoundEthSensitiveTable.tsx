@@ -17,7 +17,7 @@ export function CompoundEthSensitiveTable({
 
   const formatUsdValue = (val: string | number) => {
     const num = typeof val === 'string' ? parseFloat(val || '0') : val;
-    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 })}`;
+    return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   const formatPrice = (val: string | number) => {
@@ -27,7 +27,7 @@ export function CompoundEthSensitiveTable({
 
   const formatAmount = (val: string | number) => {
     const num = typeof val === 'string' ? parseFloat(val || '0') : val;
-    return num.toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6 });
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Asset filtering: exclude small dust assets (< $0.004)
@@ -193,7 +193,7 @@ export function CompoundEthSensitiveTable({
                           {formatUsdValue(asset.discounted_value_usd)}
                         </td>
                         <td style={{ textAlign: 'right', color: '#10b981' }}>
-                          {parseFloat(asset.beta_to_eth || '0').toFixed(6)}
+                          {parseFloat(asset.beta_to_eth || '0').toFixed(2)}
                         </td>
                       </tr>
                     ))}
@@ -253,7 +253,7 @@ export function CompoundEthSensitiveTable({
                           {formatUsdValue(asset.discounted_value_usd)}
                         </td>
                         <td style={{ textAlign: 'right', color: '#f59e0b' }}>
-                          {parseFloat(asset.beta_to_eth || '0').toFixed(6)}
+                          {parseFloat(asset.beta_to_eth || '0').toFixed(2)}
                         </td>
                       </tr>
                     ))}

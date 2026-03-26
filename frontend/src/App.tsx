@@ -48,8 +48,8 @@ const emptyCompoundState = (): CompoundVersionState => ({
 });
 const aavePositionCache = new Map<string, AaveCacheEntry>();
 const compoundPositionCache = new Map<string, CompoundCacheEntry>();
-const compoundCacheKey = (address: string, market: string) =>
-  `v3:${address.toLowerCase()}:${market.toLowerCase()}`;
+const compoundCacheKey = (address: string, market: string, version: string) =>
+  `${version}:${address.toLowerCase()}:${market.toLowerCase()}`;
 
 const resultPanelStyle = {
   border: '1px solid #334155',
@@ -121,8 +121,18 @@ export default function App() {
   useEffect(() => {
     const loadCompoundMarkets = async () => {
       try {
-        const markets = await fetchCompoundMarkets('v3');
+        const version = activeTab === 'personal' ? personalVersion : marketVersion;
+        const markets = await fetchCompoundMarkets(version);
         setCompoundMarkets(markets);
+        // Ensure compoundMarket points to a valid address after version change
+        if (markets.length > 0) {
+          if (compoundMarket !== 'all' && !markets.find((m) => m.address === compoundMarket)) {
+            setCompoundMarket(markets[0].address);
+          } else if (compoundMarket === 'all' && version === 'v2') {
+            // Compound v2 doesn't support 'all', so default to first market
+            setCompoundMarket(markets[0].address);
+          }
+        }
       } catch (loadError) {
         console.error(loadError);
         setError('无法加载 Compound 市场列表');
@@ -130,7 +140,7 @@ export default function App() {
     };
 
     loadCompoundMarkets();
-  }, []);
+  }, [marketVersion, personalVersion, activeTab]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
@@ -175,14 +185,9 @@ export default function App() {
     if (!compoundAddress || protocol !== 'compound' || activeTab !== 'personal') return;
 
     const loadCompound = async () => {
-      if (personalVersion === 'v2') {
-        setError('抱歉，暂无 Compound v2 数据');
-        setCompoundState({ data: null, loading: false, notFound: false });
-        return;
-      }
       setError('');
 
-      const cacheKey = compoundCacheKey(compoundAddress, compoundMarket);
+      const cacheKey = compoundCacheKey(compoundAddress, compoundMarket, personalVersion);
       const cached = compoundPositionCache.get(cacheKey);
       if (cached) {
         if (cached.kind === 'not_found') {
@@ -196,14 +201,14 @@ export default function App() {
       setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         setError('');
-        const response = await fetchCompoundUserPosition('v3', compoundMarket, compoundAddress);
+        const response = await fetchCompoundUserPosition(personalVersion, compoundMarket, compoundAddress);
         if (response.positions && response.positions.length > 0) {
           const position = response.positions[0];
 
           if (compoundMarket === 'all') {
             const foundMarkets = new Set<string>();
             for (const item of response.positions) {
-              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market), {
+              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market, personalVersion), {
                 kind: 'data',
                 data: item,
               });
@@ -211,7 +216,7 @@ export default function App() {
             }
             for (const item of compoundMarkets) {
               if (!foundMarkets.has(item.address.toLowerCase())) {
-                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address), {
+                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address, personalVersion), {
                   kind: 'not_found',
                 });
               }
@@ -331,13 +336,15 @@ export default function App() {
             {item.symbol}
           </button>
         ))}
-        <button
-          onClick={() => setCompoundMarket('all')}
-          className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
-          type="button"
-        >
-          ALL
-        </button>
+        {personalVersion === 'v3' && (
+          <button
+            onClick={() => setCompoundMarket('all')}
+            className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
+            type="button"
+          >
+            ALL
+          </button>
+        )}
       </div>
     </div>
   );
@@ -424,12 +431,12 @@ export default function App() {
       />
       {renderError()}
 
-      {compoundAddress && personalVersion === 'v3' && (
+      {compoundAddress && (
         <div className="results-container" style={{ marginTop: '2rem' }}>
           <div style={resultPanelStyle}>
             <CompoundPersonalRiskDashboard
               address={compoundAddress}
-              version="v3"
+              version={personalVersion}
               market={selectedCompoundMarketSymbol}
               {...compoundState}
             />
@@ -455,8 +462,8 @@ export default function App() {
   const renderCompoundMarket = () => (
     <>
       <div className="hero">
-        <h1 className="hero-title">Compound 宏观借贷市场评估</h1>
-        <p className="hero-sub">Compound 借贷市场状态分析</p>
+        <h1 className="hero-title">Compound 宏观借贷抵押市场评估</h1>
+        <p className="hero-sub">Compound 借贷抵押市场分析</p>
         {renderMarketVersionSwitch()}
         {renderCompoundMarketSwitch()}
       </div>
