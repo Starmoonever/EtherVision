@@ -54,13 +54,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_START = "2020-01-01"
 POSITION_METHOD_IDS: dict[str, set[str]] = {
     "v2": {
-        "2608f818",  # mint
-        "0e752702",  # redeemUnderlying
+        "a0712d68",  # mint(uint256)
+        "db006a75",  # redeem(uint256)
         "852a12e3",  # redeem
-        "a0712d68",  # borrow
-        "db006a75",  # repayBorrow
-        "f5e3c462",  # repayBorrowBehalf
-        "c5ebeaec",  # liquidateBorrow
+        "c5ebeaec",  # borrow(uint256)
+        "0e752702",  # repayBorrow(uint256)
+        "2608f818",  # repayBorrowBehalf(address,uint256)
+        "f5e3c462",  # liquidateBorrow(address,uint256,address)
     },
     "v3": {
         "f3fef3a3",  # supply
@@ -72,13 +72,13 @@ POSITION_METHOD_IDS: dict[str, set[str]] = {
 }
 METHOD_BRIEF_MAP: dict[str, dict[str, str]] = {
     "v2": {
-        "2608f818": "存入",
-        "0e752702": "赎回",
+        "a0712d68": "存入",
+        "db006a75": "赎回",
         "852a12e3": "赎回",
-        "a0712d68": "借入",
-        "db006a75": "还款",
-        "f5e3c462": "代还",
-        "c5ebeaec": "清算",
+        "c5ebeaec": "借入",
+        "0e752702": "还款",
+        "2608f818": "代还",
+        "f5e3c462": "清算",
     },
     "v3": {
         "f3fef3a3": "存入",
@@ -86,6 +86,19 @@ METHOD_BRIEF_MAP: dict[str, dict[str, str]] = {
         "f2b9fdb8": "提取",
         "4232cd63": "买入抵押品",
         "c3cecfd2": "吸收清算",
+    },
+}
+SELF_IMPACT_METHOD_IDS: dict[str, set[str]] = {
+    "v2": {
+        "a0712d68",  # mint(uint256)
+        "db006a75",  # redeem(uint256)
+        "852a12e3",  # redeem
+        "c5ebeaec",  # borrow(uint256)
+        "0e752702",  # repayBorrow(uint256)
+    },
+    "v3": {
+        "f3fef3a3",  # supply
+        "f2b9fdb8",  # withdraw
     },
 }
 ETH_CORRELATED_SYMBOLS = {"ETH", "WETH", "WSTETH", "RETH", "CBETH"}
@@ -106,10 +119,24 @@ CTOKEN_V2_USER_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "borrowBalanceCurrent",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
         "inputs": [],
         "name": "exchangeRateStored",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "exchangeRateCurrent",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "nonpayable",
         "type": "function",
     },
 ]
@@ -213,6 +240,42 @@ def _is_position_method(protocol: str, method_id: str | None) -> bool:
     if method_id is None:
         return False
     return method_id in POSITION_METHOD_IDS.get(protocol, set())
+
+
+def _is_self_impact_method(protocol: str, method_id: str | None) -> bool:
+    if method_id is None:
+        return False
+    return method_id in SELF_IMPACT_METHOD_IDS.get(protocol, set())
+
+
+async def _load_v2_accrued_balances(
+    ctoken: Any,
+    *,
+    user_checksum: str,
+    block_number: int,
+) -> tuple[int, int, int]:
+    balance_raw = int(
+        await ctoken.functions.balanceOf(user_checksum).call(
+            block_identifier=block_number
+        )
+    )
+
+    try:
+        borrow_raw, exchange_rate_raw = await asyncio.gather(
+            ctoken.functions.borrowBalanceCurrent(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken.functions.exchangeRateCurrent().call(block_identifier=block_number),
+        )
+    except Exception:
+        borrow_raw, exchange_rate_raw = await asyncio.gather(
+            ctoken.functions.borrowBalanceStored(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken.functions.exchangeRateStored().call(block_identifier=block_number),
+        )
+
+    return balance_raw, int(borrow_raw), int(exchange_rate_raw)
 
 
 def _market_symbol(protocol: str, market: bytes) -> str:
@@ -332,14 +395,10 @@ async def _collect_v2_account_snapshot_row(
             else:
                 price_usd = Decimal("0")
 
-        balance_raw, borrow_raw, exchange_rate_raw = await asyncio.gather(
-            ctoken.functions.balanceOf(user_checksum).call(
-                block_identifier=block_number
-            ),
-            ctoken.functions.borrowBalanceStored(user_checksum).call(
-                block_identifier=block_number
-            ),
-            ctoken.functions.exchangeRateStored().call(block_identifier=block_number),
+        balance_raw, borrow_raw, exchange_rate_raw = await _load_v2_accrued_balances(
+            ctoken,
+            user_checksum=user_checksum,
+            block_number=block_number,
         )
         try:
             markets_tuple = await comptroller.functions.markets(market_checksum).call(
@@ -832,6 +891,29 @@ async def _collect_event_rows_for_user(
                 logger.info("All tx rows already cached, nothing to do.")
                 return
 
+        tx_hash_bytes = [bytes.fromhex(event.tx_hash[2:]) for event in events]
+        brief_map = await _load_briefs_from_detail_tables(
+            pool,
+            protocol=protocol,
+            user_address=address,
+            tx_hashes=tx_hash_bytes,
+        )
+        before_impact_filter = len(events)
+        events = [
+            event
+            for event in events
+            if _is_self_impact_method(protocol, event.method_id)
+        ]
+        if len(events) != before_impact_filter:
+            logger.info(
+                "Filtered non-impact tx rows: dropped=%s remaining=%s",
+                before_impact_filter - len(events),
+                len(events),
+            )
+        if not events:
+            logger.info("No position-impact tx events remain after impact filter.")
+            return
+
         grouped = defaultdict(list)
         for event in events:
             grouped[(event.market, event.block_number)].append(event)
@@ -840,14 +922,6 @@ async def _collect_event_rows_for_user(
             "Loaded tx events: total=%s grouped_points=%s",
             len(events),
             len(grouped),
-        )
-
-        tx_hash_bytes = [bytes.fromhex(event.tx_hash[2:]) for event in events]
-        brief_map = await _load_briefs_from_detail_tables(
-            pool,
-            protocol=protocol,
-            user_address=address,
-            tx_hashes=tx_hash_bytes,
         )
 
         w3 = await _build_web3(cfg)

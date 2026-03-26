@@ -77,13 +77,13 @@ _MAX_HEALTH_FACTOR = Decimal("1e18")
 _ETH_CORRELATED_SYMBOLS = {"ETH", "WETH", "WSTETH", "RETH", "CBETH"}
 _REPLAY_POSITION_METHOD_IDS: dict[str, set[str]] = {
     "v2": {
-        "2608f818",
-        "0e752702",
-        "852a12e3",
-        "a0712d68",
-        "db006a75",
-        "f5e3c462",
-        "c5ebeaec",
+        "a0712d68",  # mint(uint256)
+        "db006a75",  # redeem(uint256)
+        "852a12e3",  # redeemUnderlying(uint256)
+        "c5ebeaec",  # borrow(uint256)
+        "0e752702",  # repayBorrow(uint256)
+        "2608f818",  # repayBorrowBehalf(address,uint256)
+        "f5e3c462",  # liquidateBorrow(address,uint256,address)
     },
     "v3": {
         "f3fef3a3",
@@ -91,6 +91,19 @@ _REPLAY_POSITION_METHOD_IDS: dict[str, set[str]] = {
         "f2b9fdb8",
         "4232cd63",
         "c3cecfd2",
+    },
+}
+_REPLAY_SELF_IMPACT_METHOD_IDS: dict[str, set[str]] = {
+    "v2": {
+        "a0712d68",  # mint(uint256)
+        "db006a75",  # redeem(uint256)
+        "852a12e3",  # redeemUnderlying(uint256)
+        "c5ebeaec",  # borrow(uint256)
+        "0e752702",  # repayBorrow(uint256)
+    },
+    "v3": {
+        "f3fef3a3",  # supply
+        "f2b9fdb8",  # withdraw
     },
 }
 _CTOKEN_V2_USER_ABI = [
@@ -109,10 +122,24 @@ _CTOKEN_V2_USER_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "borrowBalanceCurrent",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
         "inputs": [],
         "name": "exchangeRateStored",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "exchangeRateCurrent",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "nonpayable",
         "type": "function",
     },
 ]
@@ -143,13 +170,13 @@ _COMPTROLLER_V2_MARKETS_LEGACY_ABI = [
 ]
 _REPLAY_METHOD_BRIEF_MAP: dict[str, dict[str, str]] = {
     "v2": {
-        "2608f818": "存入",
-        "0e752702": "赎回",
+        "a0712d68": "存入",
+        "db006a75": "赎回",
         "852a12e3": "赎回",
-        "a0712d68": "借入",
-        "db006a75": "还款",
-        "f5e3c462": "代还",
-        "c5ebeaec": "清算",
+        "c5ebeaec": "借入",
+        "0e752702": "还款",
+        "2608f818": "代还",
+        "f5e3c462": "清算",
     },
     "v3": {
         "f3fef3a3": "存入",
@@ -465,6 +492,46 @@ def _fallback_replay_brief(protocol: str, method_id: str | None, market: bytes) 
     return f"{action} {_market_symbol(protocol, market)}"
 
 
+def _is_replay_self_impact_method(protocol: str, method_id: str | None) -> bool:
+    if method_id is None:
+        return False
+    return method_id in _REPLAY_SELF_IMPACT_METHOD_IDS.get(protocol, set())
+
+
+async def _load_v2_accrued_balances(
+    ctoken_user: Any,
+    *,
+    user_checksum: str,
+    block_number: int,
+) -> tuple[int, int, int]:
+    balance_raw = int(
+        await ctoken_user.functions.balanceOf(user_checksum).call(
+            block_identifier=block_number
+        )
+    )
+
+    try:
+        borrow_raw, exchange_rate_raw = await asyncio.gather(
+            ctoken_user.functions.borrowBalanceCurrent(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken_user.functions.exchangeRateCurrent().call(
+                block_identifier=block_number
+            ),
+        )
+    except Exception:
+        borrow_raw, exchange_rate_raw = await asyncio.gather(
+            ctoken_user.functions.borrowBalanceStored(user_checksum).call(
+                block_identifier=block_number
+            ),
+            ctoken_user.functions.exchangeRateStored().call(
+                block_identifier=block_number
+            ),
+        )
+
+    return balance_raw, int(borrow_raw), int(exchange_rate_raw)
+
+
 async def _load_compound_replay_briefs(
     pool,
     *,
@@ -650,16 +717,10 @@ async def _collect_v2_replay_snapshot_row(
             else:
                 price_usd = Decimal("0")
 
-        balance_raw, borrow_raw, exchange_rate_raw = await asyncio.gather(
-            ctoken_user.functions.balanceOf(user_checksum).call(
-                block_identifier=block_number
-            ),
-            ctoken_user.functions.borrowBalanceStored(user_checksum).call(
-                block_identifier=block_number
-            ),
-            ctoken_user.functions.exchangeRateStored().call(
-                block_identifier=block_number
-            ),
+        balance_raw, borrow_raw, exchange_rate_raw = await _load_v2_accrued_balances(
+            ctoken_user,
+            user_checksum=user_checksum,
+            block_number=block_number,
         )
         try:
             markets_tuple = await comptroller.functions.markets(market_checksum).call(
@@ -1064,6 +1125,12 @@ async def get_position_replay(
             continue
         seen.add(key)
         deduped.append(tx)
+
+    deduped = [
+        tx
+        for tx in deduped
+        if _is_replay_self_impact_method(version, tx.get("method_id"))
+    ]
     if not deduped:
         return CompoundPositionReplayResponse(
             address=_bytea_to_address(user_address),

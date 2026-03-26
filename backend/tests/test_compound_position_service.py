@@ -72,6 +72,59 @@ class _RecordLike:
         return self._payload[key]
 
 
+class _FakeCall:
+    def __init__(self, result: object = None, error: Exception | None = None):
+        self._result = result
+        self._error = error
+
+    async def call(self, *, block_identifier: int):
+        assert block_identifier > 0
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class _FakeV2Functions:
+    def __init__(
+        self, *, balance: int, borrow: int, exchange_rate: int, use_current: bool
+    ):
+        self._balance = balance
+        self._borrow = borrow
+        self._exchange_rate = exchange_rate
+        self._use_current = use_current
+
+    def balanceOf(self, _user: str) -> _FakeCall:
+        return _FakeCall(self._balance)
+
+    def borrowBalanceCurrent(self, _user: str) -> _FakeCall:
+        if self._use_current:
+            return _FakeCall(self._borrow)
+        return _FakeCall(error=RuntimeError("current unavailable"))
+
+    def exchangeRateCurrent(self) -> _FakeCall:
+        if self._use_current:
+            return _FakeCall(self._exchange_rate)
+        return _FakeCall(error=RuntimeError("current unavailable"))
+
+    def borrowBalanceStored(self, _user: str) -> _FakeCall:
+        return _FakeCall(self._borrow)
+
+    def exchangeRateStored(self) -> _FakeCall:
+        return _FakeCall(self._exchange_rate)
+
+
+class _FakeV2Contract:
+    def __init__(
+        self, *, balance: int, borrow: int, exchange_rate: int, use_current: bool
+    ):
+        self.functions = _FakeV2Functions(
+            balance=balance,
+            borrow=borrow,
+            exchange_rate=exchange_rate,
+            use_current=use_current,
+        )
+
+
 def _snapshot_row_dict() -> dict[str, object]:
     return {
         "timestamp": datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
@@ -525,6 +578,90 @@ def test_market_to_address_accepts_mixed_case_known_addresses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_position_replay_filters_non_impact_transactions() -> None:
+    user_address = "0x1111111111111111111111111111111111111111"
+    ts = datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc)
+    market_keep = bytes.fromhex("a17581a9e3356d9a858b789d68b4d866e593ae94")
+    market_drop = bytes.fromhex("3afdc9bca9213a35503b077a6072f3d0d5ab0840")
+    tx_rows = [
+        {
+            "market": market_keep,
+            "tx_hash": "0x" + "aa" * 32,
+            "method_id": "f3fef3a3",  # self-impact method
+            "block_number": 100,
+            "block_timestamp": ts,
+        },
+        {
+            "market": market_drop,
+            "tx_hash": "0x" + "bb" * 32,
+            "method_id": "c3b35a7e",  # supplyTo, non-self-impact
+            "block_number": 101,
+            "block_timestamp": ts,
+        },
+    ]
+    cached_rows = [
+        _RecordLike(
+            {
+                "tx_hash": "0x" + "aa" * 32,
+                "block_number": 100,
+                "block_timestamp": ts,
+                "symbol": "WETH",
+                "eth_price_usd": Decimal("2000"),
+                "total_collateral_usd": Decimal("1000"),
+                "total_debt_usd": Decimal("100"),
+                "discounted_collateral_usd": Decimal("700"),
+                "liquidation_buffer_usd": Decimal("600"),
+                "health_factor": Decimal("7"),
+                "is_liquidatable": False,
+                "eth_down_liq_price_usd": Decimal("1000"),
+                "eth_up_liq_price_usd": None,
+                "eth_liq_mode": "down",
+                "dominant_risk": "eth_down",
+                "brief": "存入 1.000000 WETH",
+                "assets_jsonb": "[]",
+            }
+        )
+    ]
+    with (
+        patch.object(
+            service,
+            "fetch_compound_user_tx_history",
+            new=AsyncMock(return_value=tx_rows),
+        ),
+        patch.object(
+            service,
+            "_load_compound_replay_briefs",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            service,
+            "get_compound_event_snapshots",
+            new=AsyncMock(return_value=cached_rows),
+        ),
+        patch.object(
+            service,
+            "_collect_and_cache_replay_misses",
+            new=AsyncMock(),
+        ) as mocked_collect_miss,
+    ):
+        response = await service.get_position_replay(
+            pool=_FakePool(),
+            version="v3",
+            address=user_address,
+            from_ts=int(ts.timestamp()),
+            to_ts=int(ts.timestamp()),
+            use_cache=True,
+            detail=False,
+        )
+
+    assert response.address == user_address
+    assert response.total_tx_count == 1
+    assert len(response.points) == 1
+    assert response.points[0].tx_hash == "0x" + "aa" * 32
+    mocked_collect_miss.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_collect_and_cache_replay_misses_supports_v2_realtime_backfill() -> None:
     user_address = bytes.fromhex("11" * 20)
     market = bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5")
@@ -600,3 +737,51 @@ async def test_collect_and_cache_replay_misses_supports_v2_realtime_backfill() -
 
     mocked_collect_v2.assert_awaited_once()
     mocked_upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_load_v2_accrued_balances_prefers_current_calls() -> None:
+    contract = _FakeV2Contract(
+        balance=100,
+        borrow=25,
+        exchange_rate=2_000_000_000_000_000_000_000_000_000,
+        use_current=True,
+    )
+
+    (
+        balance_raw,
+        borrow_raw,
+        exchange_rate_raw,
+    ) = await service._load_v2_accrued_balances(
+        contract,
+        user_checksum="0x" + "11" * 20,
+        block_number=123,
+    )
+
+    assert balance_raw == 100
+    assert borrow_raw == 25
+    assert exchange_rate_raw == 2_000_000_000_000_000_000_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_load_v2_accrued_balances_falls_back_to_stored_calls() -> None:
+    contract = _FakeV2Contract(
+        balance=200,
+        borrow=50,
+        exchange_rate=3_000_000_000_000_000_000_000_000_000,
+        use_current=False,
+    )
+
+    (
+        balance_raw,
+        borrow_raw,
+        exchange_rate_raw,
+    ) = await service._load_v2_accrued_balances(
+        contract,
+        user_checksum="0x" + "22" * 20,
+        block_number=456,
+    )
+
+    assert balance_raw == 200
+    assert borrow_raw == 50
+    assert exchange_rate_raw == 3_000_000_000_000_000_000_000_000_000
