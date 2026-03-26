@@ -175,7 +175,7 @@ export function CompoundCollateralHistoryChart({
     if (!selectedSymbol) return;
     const fetchFactor = async () => {
       try {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
         if (version === 'v3') {
           const res = await fetchCompoundMarketGovernanceV3(market, today);
           if (res && res.assets && Array.isArray(res.assets)) {
