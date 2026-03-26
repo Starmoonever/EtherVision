@@ -285,6 +285,23 @@ def _market_symbol(protocol: str, market: bytes) -> str:
     return COMPOUND_V3_MARKET_NAMES.get(address, address)
 
 
+def _format_compound_brief(
+    protocol: str,
+    action: str,
+    symbol: str,
+    *,
+    amount: Decimal | None = None,
+) -> str:
+    base = (
+        f"{action} {_fmt_amount(amount)} {symbol}"
+        if amount is not None
+        else f"{action} {symbol}"
+    )
+    if protocol == "v3":
+        return f"{base} @{symbol}"
+    return base
+
+
 def _fmt_amount(value: Decimal | None) -> str:
     if value is None:
         return ""
@@ -711,7 +728,9 @@ async def _load_briefs_from_detail_tables(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = f"存入 {_fmt_amount(amount)} {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "存入", symbol, amount=amount
+            )
 
         redeem_rows = await conn.fetch(
             """
@@ -729,7 +748,9 @@ async def _load_briefs_from_detail_tables(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = f"提取 {_fmt_amount(amount)} {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "提取", symbol, amount=amount
+            )
 
         borrow_rows = await conn.fetch(
             """
@@ -747,7 +768,9 @@ async def _load_briefs_from_detail_tables(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = f"借入 {_fmt_amount(amount)} {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "借入", symbol, amount=amount
+            )
 
         repay_rows = await conn.fetch(
             """
@@ -765,7 +788,9 @@ async def _load_briefs_from_detail_tables(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = f"还款 {_fmt_amount(amount)} {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "还款", symbol, amount=amount
+            )
 
         liq_rows = await conn.fetch(
             """
@@ -783,13 +808,13 @@ async def _load_briefs_from_detail_tables(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             role = "被清算" if bytes(row["borrower"]) == user_address else "执行清算"
-            brief_map[txh] = f"{role} {symbol}"
+            brief_map[txh] = _format_compound_brief(protocol, role, symbol)
     return brief_map
 
 
 def _fallback_brief(event: UserTxEvent, protocol: str, market: bytes) -> str:
     action = METHOD_BRIEF_MAP.get(protocol, {}).get(event.method_id or "", "仓位操作")
-    return f"{action} {_market_symbol(protocol, market)}"
+    return _format_compound_brief(protocol, action, _market_symbol(protocol, market))
 
 
 async def _collect_event_rows_for_user(

@@ -487,9 +487,26 @@ def _market_symbol(protocol: str, market: bytes) -> str:
     return COMPOUND_V3_MARKET_NAMES.get(addr, addr)
 
 
+def _format_compound_brief(
+    protocol: str,
+    action: str,
+    symbol: str,
+    *,
+    amount: Decimal | None = None,
+) -> str:
+    base = (
+        f"{action} {amount:.6f} {symbol}"
+        if amount is not None
+        else f"{action} {symbol}"
+    )
+    if protocol == "v3":
+        return f"{base} @{symbol}"
+    return base
+
+
 def _fallback_replay_brief(protocol: str, method_id: str | None, market: bytes) -> str:
     action = _REPLAY_METHOD_BRIEF_MAP.get(protocol, {}).get(method_id or "", "仓位操作")
-    return f"{action} {_market_symbol(protocol, market)}"
+    return _format_compound_brief(protocol, action, _market_symbol(protocol, market))
 
 
 def _is_replay_self_impact_method(protocol: str, method_id: str | None) -> bool:
@@ -560,10 +577,8 @@ async def _load_compound_replay_briefs(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = (
-                f"存入 {amount:.6f} {symbol}"
-                if amount is not None
-                else f"存入 {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "存入", symbol, amount=amount
             )
 
         redeem_rows = await conn.fetch(
@@ -582,10 +597,8 @@ async def _load_compound_replay_briefs(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = (
-                f"提取 {amount:.6f} {symbol}"
-                if amount is not None
-                else f"提取 {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "提取", symbol, amount=amount
             )
 
         borrow_rows = await conn.fetch(
@@ -604,10 +617,8 @@ async def _load_compound_replay_briefs(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = (
-                f"借入 {amount:.6f} {symbol}"
-                if amount is not None
-                else f"借入 {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "借入", symbol, amount=amount
             )
 
         repay_rows = await conn.fetch(
@@ -626,10 +637,8 @@ async def _load_compound_replay_briefs(
             txh = "0x" + bytes(row["tx_hash"]).hex()
             symbol = _market_symbol(protocol, bytes(row["market_address"]))
             amount = row["underlying_amount_decimal"] or row["input_amount_decimal"]
-            brief_map[txh] = (
-                f"还款 {amount:.6f} {symbol}"
-                if amount is not None
-                else f"还款 {symbol}"
+            brief_map[txh] = _format_compound_brief(
+                protocol, "还款", symbol, amount=amount
             )
     return brief_map
 

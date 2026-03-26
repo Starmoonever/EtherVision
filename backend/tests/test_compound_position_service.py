@@ -577,6 +577,20 @@ def test_market_to_address_accepts_mixed_case_known_addresses() -> None:
         assert service._market_to_address("v2", mixed) == address.lower()
 
 
+def test_format_compound_brief_keeps_v2_brief_plain() -> None:
+    assert (
+        service._format_compound_brief("v2", "借入", "cDAI", amount=Decimal("100"))
+        == "借入 100.000000 cDAI"
+    )
+
+
+def test_format_compound_brief_appends_v3_market_suffix() -> None:
+    assert (
+        service._format_compound_brief("v3", "提取", "USDC", amount=Decimal("15.5"))
+        == "提取 15.500000 USDC @USDC"
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_position_replay_filters_non_impact_transactions() -> None:
     user_address = "0x1111111111111111111111111111111111111111"
