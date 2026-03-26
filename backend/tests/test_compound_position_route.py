@@ -80,32 +80,16 @@ def test_compound_position_route_v2_ok() -> None:
     assert await_args.kwargs["version"] == "v2"
 
 
-def test_compound_position_route_by_path_ok() -> None:
-    payload = {
-        "version": "v2",
-        "address": "0x1111111111111111111111111111111111111111",
-        "positions": [],
-    }
-
-    with patch(
-        "compound_crawler.api.routes.get_positions",
-        new=AsyncMock(return_value=payload),
-    ) as mocked_service:
-        with _build_client() as client:
-            resp = client.get(
-                "/api/compound/v2/position",
-                params={
-                    "market": "all",
-                    "address": "0x1111111111111111111111111111111111111111",
-                },
-            )
-
-    assert resp.status_code == 200
-    assert resp.json() == payload
-    mocked_service.assert_awaited_once()
-    await_args = mocked_service.await_args
-    assert await_args is not None
-    assert await_args.kwargs["version"] == "v2"
+def test_compound_position_route_path_version_removed() -> None:
+    with _build_client() as client:
+        resp = client.get(
+            "/api/compound/v2/position",
+            params={
+                "market": "all",
+                "address": "0x1111111111111111111111111111111111111111",
+            },
+        )
+    assert resp.status_code == 404
 
 
 def test_compound_position_route_requires_market() -> None:

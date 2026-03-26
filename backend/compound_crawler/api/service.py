@@ -1415,6 +1415,7 @@ async def get_v2_market_config(
     version: str,
     market: str,
     date: str | None = None,
+    w3: Any | None = None,
 ) -> V2MarketConfigResponse:
     if version != "v2":
         raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
@@ -1446,6 +1447,7 @@ async def get_v2_market_config(
                 market_bytes,
                 point_ts,
             )
+        row = await _enrich_v2_market_config_row(conn, row, w3=w3)
     if row is None:
         raise HTTPException(status_code=404, detail="未找到该市场的 v2 配置")
     return _map_v2_market_config_row(row)
@@ -1458,6 +1460,7 @@ async def get_v2_market_config_period(
     start: str,
     end: str,
     latest_only_per_day: bool = False,
+    w3: Any | None = None,
 ) -> V2MarketConfigPeriodResponse:
     if version != "v2":
         raise HTTPException(status_code=400, detail="当前仅支持 version=v2")
@@ -1481,6 +1484,7 @@ async def get_v2_market_config_period(
             start_dt,
             end_dt,
         )
+        rows = [await _enrich_v2_market_config_row(conn, row, w3=w3) for row in rows]
     if not rows:
         return V2MarketConfigPeriodResponse(points=[])
     selected_rows = list(rows)
@@ -1629,6 +1633,103 @@ def _fmt_optional(value: Decimal | float | int | str | None) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+async def _enrich_v2_market_config_row(
+    conn: Any, row: Any, *, w3: Any | None = None
+) -> Any:
+    if row is None:
+        return None
+    raw_config = _row_get(row, "raw_config_jsonb", {})
+    raw_config_dict = dict(raw_config) if isinstance(raw_config, dict) else {}
+    updated = False
+    ctoken_decimals = _row_get(row, "ctoken_decimals")
+    underlying_decimals = _row_get(row, "underlying_decimals")
+
+    scale: Decimal | None = None
+    if ctoken_decimals is not None and underlying_decimals is not None:
+        try:
+            scale = Decimal(10) ** max(
+                0,
+                18 + int(underlying_decimals) - int(ctoken_decimals),
+            )
+        except Exception:
+            scale = None
+
+    if not raw_config_dict.get("protocol_config_hash"):
+        market_effective_ts = _row_get(row, "effective_timestamp")
+        if isinstance(market_effective_ts, datetime):
+            protocol_row = await conn.fetchrow(
+                f"""
+                SELECT config_hash
+                FROM loan.{_V2_PROTOCOL_CONFIG_TABLE}
+                WHERE effective_timestamp <= $1
+                ORDER BY effective_timestamp DESC, block_number DESC
+                LIMIT 1
+                """,
+                market_effective_ts,
+            )
+            if protocol_row is not None and protocol_row["config_hash"] is not None:
+                raw_config_dict["protocol_config_hash"] = str(
+                    protocol_row["config_hash"]
+                )
+                updated = True
+
+    # 先用表字段兜底，避免旧行 raw_config_jsonb 不完整导致返回缺失。
+    if raw_config_dict.get("exchange_rate") is None:
+        exchange_rate_col = _row_get(row, "exchange_rate")
+        if exchange_rate_col is not None:
+            raw_config_dict["exchange_rate"] = _fmt_optional(exchange_rate_col)
+            updated = True
+
+    exchange_rate_raw = raw_config_dict.get("exchange_rate_raw")
+    if exchange_rate_raw is None and scale is not None:
+        exchange_rate_value = raw_config_dict.get("exchange_rate")
+        if exchange_rate_value is not None:
+            try:
+                raw_config_dict["exchange_rate_raw"] = str(
+                    int(Decimal(str(exchange_rate_value)) * scale)
+                )
+                exchange_rate_raw = raw_config_dict["exchange_rate_raw"]
+                updated = True
+            except Exception:
+                exchange_rate_raw = None
+
+    if exchange_rate_raw is None and w3 is not None:
+        market_bytes = _row_get(row, "market")
+        block_number = _row_get(row, "block_number")
+        if isinstance(market_bytes, (bytes, bytearray)) and isinstance(
+            block_number, int
+        ):
+            try:
+                market_address = _bytea_to_address(bytes(market_bytes))
+                ctoken = w3.eth.contract(
+                    address=AsyncWeb3.to_checksum_address(market_address),
+                    abi=CTOKEN_V2_ABI,
+                )
+                exchange_rate_raw = await ctoken.functions.exchangeRateStored().call(
+                    block_identifier=block_number
+                )
+                raw_config_dict["exchange_rate_raw"] = str(int(exchange_rate_raw))
+                updated = True
+            except Exception:
+                exchange_rate_raw = None
+
+    if raw_config_dict.get("exchange_rate") is None:
+        if exchange_rate_raw is not None and scale is not None:
+            try:
+                raw = Decimal(str(exchange_rate_raw))
+                raw_config_dict["exchange_rate"] = str(raw / scale)
+                updated = True
+            except Exception:
+                pass
+
+    if not updated:
+        return row
+
+    row_dict = dict(row)
+    row_dict["raw_config_jsonb"] = raw_config_dict
+    return row_dict
 
 
 def _annualize_rate(value: Decimal | float | int | None) -> str:
@@ -1918,6 +2019,28 @@ def _map_market_governance_row(
 def _map_v2_market_config_row(row: Any) -> V2MarketConfigResponse:
     raw_config = _row_get(row, "raw_config_jsonb", {})
     raw_config_dict = raw_config if isinstance(raw_config, dict) else {}
+    collateral_factor = raw_config_dict.get("collateral_factor")
+    if collateral_factor is None:
+        collateral_factor = _row_get(row, "collateral_factor")
+    reserve_factor = raw_config_dict.get("reserve_factor")
+    if reserve_factor is None:
+        reserve_factor = _row_get(row, "reserve_factor")
+    borrow_cap = raw_config_dict.get("borrow_cap")
+    if borrow_cap is None:
+        borrow_cap = _row_get(row, "borrow_cap")
+    supply_cap = raw_config_dict.get("supply_cap")
+    if supply_cap is None:
+        supply_cap = _row_get(row, "supply_cap")
+    is_listed = raw_config_dict.get("is_listed")
+    if is_listed is None:
+        is_listed = _row_get(row, "is_listed")
+    is_comped = raw_config_dict.get("is_comped")
+    if is_comped is None:
+        is_comped = _row_get(row, "is_comped")
+    is_deprecated = raw_config_dict.get("is_deprecated")
+    if is_deprecated is None:
+        is_deprecated = _row_get(row, "is_deprecated")
+
     return V2MarketConfigResponse(
         version="v2",
         market=_bytea_to_address(_require_bytes(_row_get(row, "market"), "market")),
@@ -1935,14 +2058,14 @@ def _map_v2_market_config_row(row: Any) -> V2MarketConfigResponse:
         underlying_symbol=_row_get(row, "underlying_symbol"),
         ctoken_decimals=_row_get(row, "ctoken_decimals"),
         underlying_decimals=_row_get(row, "underlying_decimals"),
-        collateral_factor=_fmt_optional(_row_get(row, "collateral_factor")),
-        reserve_factor=_fmt_optional(_row_get(row, "reserve_factor")),
+        collateral_factor=_fmt_optional(collateral_factor),
+        reserve_factor=_fmt_optional(reserve_factor),
         liquidation_threshold=_fmt_optional(_row_get(row, "liquidation_threshold")),
-        borrow_cap=_fmt_optional(_row_get(row, "borrow_cap")),
-        supply_cap=_fmt_optional(_row_get(row, "supply_cap")),
-        is_listed=bool(_row_get(row, "is_listed")),
-        is_comped=bool(_row_get(row, "is_comped")),
-        is_deprecated=bool(_row_get(row, "is_deprecated")),
+        borrow_cap=_fmt_optional(borrow_cap),
+        supply_cap=_fmt_optional(supply_cap),
+        is_listed=bool(is_listed),
+        is_comped=bool(is_comped),
+        is_deprecated=bool(is_deprecated),
         comp_supply_speed_raw=(
             str(raw_config_dict.get("comp_supply_speed_raw"))
             if raw_config_dict.get("comp_supply_speed_raw") is not None

@@ -251,7 +251,7 @@ def test_market_state_period_supports_v2() -> None:
     assert data["points"][0]["version"] == "v2"
 
 
-def test_market_state_period_supports_v2_path_version() -> None:
+def test_market_state_period_path_version_removed() -> None:
     ts1 = datetime(2026, 3, 10, 0, 0, 0, tzinfo=timezone.utc)
     rows = [
         {
@@ -280,7 +280,4 @@ def test_market_state_period_supports_v2_path_version() -> None:
                 "detail": "false",
             },
         )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data["points"]) == 1
-    assert data["points"][0]["version"] == "v2"
+    assert resp.status_code == 404

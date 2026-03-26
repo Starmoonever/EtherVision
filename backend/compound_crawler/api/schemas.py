@@ -300,6 +300,16 @@ class V2ProtocolConfigPeriodResponse(BaseModel):
     points: list[V2ProtocolConfigResponse]
 
 
+class CompoundMarketConfigResponse(BaseModel):
+    version: str
+    market_config: V2MarketConfigResponse | MarketGovernanceResponse
+    protocol_config: V2ProtocolConfigResponse | None = None
+
+
+class CompoundMarketConfigPeriodResponse(BaseModel):
+    points: list[CompoundMarketConfigResponse]
+
+
 class CompoundPositionReplayPoint(BaseModel):
     tx_hash: str
     block_number: int

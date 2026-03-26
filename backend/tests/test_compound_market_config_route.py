@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from compound_crawler.api.routes import router as compound_router
@@ -55,48 +56,21 @@ def test_compound_market_config_route_ok() -> None:
                 params={"version": "v2", "market": "cDAI"},
             )
     assert resp.status_code == 200
-    assert resp.json() == payload
+    body = resp.json()
+    assert body["version"] == "v2"
+    assert body["protocol_config"] is None
+    assert body["market_config"]["config_hash"] == "abc123"
+    assert body["market_config"]["market"] == payload["market"]
     mocked_service.assert_awaited_once()
 
 
-def test_compound_market_config_route_ok_with_version_path() -> None:
-    payload = {
-        "version": "v2",
-        "market": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
-        "symbol": "cDAI",
-        "effective_timestamp": "2026-03-24T00:00:00Z",
-        "block_number": 24723660,
-        "config_hash": "abc123",
-        "comptroller": None,
-        "interest_rate_model": None,
-        "underlying": None,
-        "underlying_symbol": None,
-        "ctoken_decimals": 8,
-        "underlying_decimals": 18,
-        "collateral_factor": None,
-        "reserve_factor": None,
-        "liquidation_threshold": None,
-        "borrow_cap": None,
-        "supply_cap": None,
-        "is_listed": True,
-        "is_comped": False,
-        "is_deprecated": False,
-        "protocol_config_hash": None,
-        "mint_paused": None,
-        "borrow_paused": None,
-    }
-    with patch(
-        "compound_crawler.api.routes.get_v2_market_config",
-        new=AsyncMock(return_value=payload),
-    ) as mocked_service:
-        with _build_client() as client:
-            resp = client.get(
-                "/api/compound/v2/market/config",
-                params={"market": "cDAI"},
-            )
-    assert resp.status_code == 200
-    assert resp.json() == payload
-    mocked_service.assert_awaited_once()
+def test_compound_market_config_route_path_version_removed() -> None:
+    with _build_client() as client:
+        resp = client.get(
+            "/api/compound/v2/market/config",
+            params={"market": "cDAI"},
+        )
+    assert resp.status_code == 404
 
 
 def test_compound_market_config_period_route_ok() -> None:
@@ -131,7 +105,7 @@ def test_compound_market_config_period_route_ok() -> None:
     }
     with patch(
         "compound_crawler.api.routes.get_v2_market_config_period",
-        new=AsyncMock(return_value=payload),
+        new=AsyncMock(return_value=SimpleNamespace(points=payload["points"])),
     ) as mocked_service:
         with _build_client() as client:
             resp = client.get(
@@ -144,5 +118,9 @@ def test_compound_market_config_period_route_ok() -> None:
                 },
             )
     assert resp.status_code == 200
-    assert resp.json() == payload
+    body = resp.json()
+    assert len(body["points"]) == 1
+    assert body["points"][0]["version"] == "v2"
+    assert body["points"][0]["protocol_config"] is None
+    assert body["points"][0]["market_config"]["config_hash"] == "abc123"
     mocked_service.assert_awaited_once()

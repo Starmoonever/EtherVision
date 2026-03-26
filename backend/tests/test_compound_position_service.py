@@ -854,7 +854,7 @@ async def test_collect_v2_replay_snapshot_row_skips_undeployed_event_market() ->
         deployed_market: _ReplayFakeContract({"comptroller": comptroller}),
         comptroller: _ReplayFakeContract(
             {
-                "getAssetsIn": [],
+                "getAssetsIn": [deployed_market],
                 "markets": (True, 0, False),
             }
         ),

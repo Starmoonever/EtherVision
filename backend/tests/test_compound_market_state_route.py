@@ -177,7 +177,7 @@ def test_market_state_supports_v2() -> None:
     assert data["market"] == "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
 
 
-def test_market_state_supports_v2_path_version() -> None:
+def test_market_state_path_version_removed() -> None:
     row = {
         "timestamp": datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc),
         "market": bytes.fromhex("5d3a536e4d6dbd6114cc1ead35777bab948e3643"),
@@ -200,10 +200,7 @@ def test_market_state_supports_v2_path_version() -> None:
                 "date": "2026-03-19T12:00:00Z",
             },
         )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["version"] == "v2"
-    assert data["market"] == "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
+    assert resp.status_code == 404
 
 
 def test_market_state_reject_non_hour_date() -> None:

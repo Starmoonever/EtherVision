@@ -119,3 +119,17 @@ async def test_get_v2_market_config_period_ok() -> None:
         end="2026-03-25T00:00:00Z",
     )
     assert [item.config_hash for item in response.points] == ["abc123", "def456"]
+
+
+@pytest.mark.asyncio
+async def test_get_v2_market_config_backfills_exchange_rate_from_columns() -> None:
+    row = _row()
+    row["raw_config_jsonb"] = {"protocol_config_hash": "p123"}
+    row["exchange_rate"] = Decimal("0.021234567890123456")
+    response = await service.get_v2_market_config(
+        pool=_FakePool(row=row),
+        version="v2",
+        market="cDAI",
+    )
+    assert response.exchange_rate == "0.021234567890123456"
+    assert response.exchange_rate_raw == "212345678901234560000000000"
