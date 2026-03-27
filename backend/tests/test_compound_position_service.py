@@ -18,6 +18,7 @@ from compound_crawler.constants import (
     COMPOUND_V3_MARKET_NAMES,
 )
 from compound_crawler.db import (
+    CompoundCurrentPositionRow,
     CompoundEventPositionSnapshotRow,
     UserPositionSnapshotRow,
 )
@@ -263,6 +264,94 @@ def _snapshot_dataclass() -> UserPositionSnapshotRow:
             }
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_simulate_liquidation_uses_current_positions_for_v3() -> None:
+    rows = [
+        CompoundCurrentPositionRow(
+            market=bytes.fromhex("a17581a9e3356d9a858b789d68b4d866e593ae94"),
+            user_address=bytes.fromhex("11" * 20),
+            symbol="WETH",
+            last_block_number=123,
+            last_block_timestamp=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            last_tx_hash=None,
+            has_open_position=True,
+            is_liquidatable=False,
+            base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+            base_symbol="WETH",
+            base_price_usd=Decimal("2000"),
+            eth_price_usd=Decimal("2000"),
+            total_collateral_usd=Decimal("5000"),
+            total_debt_usd=Decimal("2000"),
+            discounted_collateral_usd=Decimal("4200"),
+            liquidation_buffer_usd=Decimal("2200"),
+            health_factor=Decimal("2.1"),
+            eth_sensitive_collateral_usd=Decimal("3000"),
+            eth_sensitive_debt_usd=Decimal("1000"),
+            net_eth_exposure_usd=Decimal("2000"),
+            non_eth_collateral_usd=Decimal("2000"),
+            non_eth_debt_usd=Decimal("1000"),
+            basis_risk_collateral_usd=Decimal("0"),
+            eth_down_liq_price_usd=Decimal("1500"),
+            eth_up_liq_price_usd=None,
+            eth_liq_mode="down",
+            dominant_risk="eth_down",
+            assets_jsonb=[],
+            created_at=None,
+            updated_at=None,
+        ),
+        CompoundCurrentPositionRow(
+            market=bytes.fromhex("c3d688b66703497daa19211eedff47f25384cdc3"),
+            user_address=bytes.fromhex("22" * 20),
+            symbol="USDC",
+            last_block_number=123,
+            last_block_timestamp=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            last_tx_hash=None,
+            has_open_position=True,
+            is_liquidatable=False,
+            base_token=bytes.fromhex("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
+            base_symbol="USDC",
+            base_price_usd=Decimal("1"),
+            eth_price_usd=Decimal("2000"),
+            total_collateral_usd=Decimal("1000"),
+            total_debt_usd=Decimal("400"),
+            discounted_collateral_usd=Decimal("700"),
+            liquidation_buffer_usd=Decimal("300"),
+            health_factor=Decimal("1.75"),
+            eth_sensitive_collateral_usd=Decimal("0"),
+            eth_sensitive_debt_usd=Decimal("0"),
+            net_eth_exposure_usd=Decimal("0"),
+            non_eth_collateral_usd=Decimal("1000"),
+            non_eth_debt_usd=Decimal("400"),
+            basis_risk_collateral_usd=Decimal("0"),
+            eth_down_liq_price_usd=None,
+            eth_up_liq_price_usd=None,
+            eth_liq_mode="neutral",
+            dominant_risk="neutral",
+            assets_jsonb=[],
+            created_at=None,
+            updated_at=None,
+        ),
+    ]
+
+    with patch.object(
+        service,
+        "fetch_compound_v3_current_positions",
+        new=AsyncMock(return_value=rows),
+    ):
+        result = await service.simulate_liquidation(
+            object(),
+            version="v3",
+            eth_price=Decimal("1400"),
+            market="all",
+        )
+
+    assert result.version == "v3"
+    assert result.positions_cnt == "1"
+    assert result.positions[0].address == "0x" + "11" * 20
+    assert result.total_eth_sensitive_collateral_usd == "3000"
+    assert result.total_liquidation_usd == "2000"
 
 
 @pytest.mark.asyncio

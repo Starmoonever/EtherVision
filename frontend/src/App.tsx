@@ -201,24 +201,34 @@ export default function App() {
       setCompoundState((prev) => ({ ...prev, loading: true, notFound: false }));
       try {
         setError('');
-        const response = await fetchCompoundUserPosition(personalVersion, compoundMarket, compoundAddress);
+        const response = await fetchCompoundUserPosition(
+          personalVersion,
+          compoundMarket,
+          compoundAddress,
+        );
         if (response.positions && response.positions.length > 0) {
           const position = response.positions[0];
 
           if (compoundMarket === 'all') {
             const foundMarkets = new Set<string>();
             for (const item of response.positions) {
-              compoundPositionCache.set(compoundCacheKey(compoundAddress, item.market, personalVersion), {
-                kind: 'data',
-                data: item,
-              });
+              compoundPositionCache.set(
+                compoundCacheKey(compoundAddress, item.market, personalVersion),
+                {
+                  kind: 'data',
+                  data: item,
+                },
+              );
               foundMarkets.add(item.market.toLowerCase());
             }
             for (const item of compoundMarkets) {
               if (!foundMarkets.has(item.address.toLowerCase())) {
-                compoundPositionCache.set(compoundCacheKey(compoundAddress, item.address, personalVersion), {
-                  kind: 'not_found',
-                });
+                compoundPositionCache.set(
+                  compoundCacheKey(compoundAddress, item.address, personalVersion),
+                  {
+                    kind: 'not_found',
+                  },
+                );
               }
             }
           }

@@ -22,7 +22,9 @@ from ..constants import (
 )
 from ..crawler import _build_web3, close_web3
 from ..db import (
+    CompoundCurrentPositionRow,
     CompoundEventPositionSnapshotRow,
+    fetch_compound_v3_current_positions,
     fetch_compound_user_tx_history,
     get_compound_event_snapshots,
     market_table_name,
@@ -44,6 +46,8 @@ from ..crawler import (
     _v2_underlying_price_usd,
 )
 from .schemas import (
+    CompoundLiquidationSimItem,
+    CompoundLiquidationSimResponse,
     CompoundPositionReplayPoint,
     CompoundPositionReplayResponse,
     MarketItemResponse,
@@ -76,6 +80,12 @@ _REPLAY_BATCH_SIZE = 100
 _REPLAY_RPC_CONCURRENCY = 8
 _MAX_HEALTH_FACTOR = Decimal("1e18")
 _ETH_CORRELATED_SYMBOLS = {"ETH", "WETH", "WSTETH", "RETH", "CBETH"}
+_COMPOUND_LIQ_SORT_COLS = {
+    "liq_price": "liq_price",
+    "eth_sensitive_collateral_usd": "eth_sensitive_collateral_usd",
+    "total_collateral_usd": "total_collateral_usd",
+    "total_debt_usd": "total_debt_usd",
+}
 _REPLAY_POSITION_METHOD_IDS: dict[str, set[str]] = {
     "v2": {
         "a0712d68",  # mint(uint256)
@@ -1900,6 +1910,127 @@ def _sort_positions(positions: list[PositionResponse]) -> list[PositionResponse]
         )
     )
     return positions
+
+
+def _simulated_eth_sensitive_collateral_usd(
+    row: CompoundCurrentPositionRow,
+    *,
+    eth_price: Decimal,
+) -> Decimal:
+    current_eth_price = Decimal(str(row.eth_price_usd))
+    current_sensitive_usd = Decimal(str(row.eth_sensitive_collateral_usd))
+    if current_eth_price <= 0:
+        return current_sensitive_usd
+    simulated = current_sensitive_usd * eth_price / current_eth_price
+    return simulated if simulated > 0 else Decimal("0")
+
+
+async def simulate_liquidation(
+    pool,
+    *,
+    version: str,
+    eth_price: Decimal,
+    market: str = "all",
+    orderby: str = "liq_price",
+    order: str = "desc",
+    limit: int = 100,
+    offset: int = 0,
+) -> CompoundLiquidationSimResponse:
+    version = version.lower()
+    eth_price = Decimal(str(eth_price))
+    if version != "v3":
+        raise HTTPException(
+            status_code=400,
+            detail="compound/liquidate 当前仅支持 v3",
+        )
+
+    market_filter = (
+        None
+        if market.strip().lower() == "all"
+        else _address_to_bytes(_market_to_address(version, market))
+    )
+    rows = await fetch_compound_v3_current_positions(pool, market=market_filter)
+
+    items: list[
+        tuple[CompoundLiquidationSimItem, Decimal, Decimal, Decimal, Decimal]
+    ] = []
+    total_sensitive_collateral_usd = Decimal("0")
+    total_liquidation_usd = Decimal("0")
+
+    for row in rows:
+        if not row.has_open_position or row.is_liquidatable:
+            continue
+
+        total_debt_usd = Decimal(str(row.total_debt_usd))
+        liq_price = row.eth_down_liq_price_usd
+        if total_debt_usd <= 0 or liq_price is None:
+            continue
+
+        liq_price_dec = Decimal(str(liq_price))
+        if liq_price_dec <= 0 or liq_price_dec < eth_price:
+            continue
+
+        eth_sensitive_collateral_usd = Decimal(str(row.eth_sensitive_collateral_usd))
+        simulated_sensitive_usd = _simulated_eth_sensitive_collateral_usd(
+            row,
+            eth_price=eth_price,
+        )
+        liquidation_usd = min(total_debt_usd, simulated_sensitive_usd)
+
+        total_sensitive_collateral_usd += eth_sensitive_collateral_usd
+        total_liquidation_usd += liquidation_usd
+        items.append(
+            (
+                CompoundLiquidationSimItem(
+                    address=_bytea_to_address(row.user_address),
+                    market=_bytea_to_address(row.market),
+                    symbol=row.symbol,
+                    liq_price=_fmt(liq_price_dec),
+                    eth_sensitive_collateral_usd=_fmt(eth_sensitive_collateral_usd),
+                    total_collateral_usd=_fmt(row.total_collateral_usd),
+                    total_debt_usd=_fmt(total_debt_usd),
+                ),
+                liq_price_dec,
+                eth_sensitive_collateral_usd,
+                Decimal(str(row.total_collateral_usd)),
+                total_debt_usd,
+            )
+        )
+
+    sort_key = _COMPOUND_LIQ_SORT_COLS.get(orderby, "liq_price")
+    reverse = order.lower() == "desc"
+    key_map = {
+        "liq_price": lambda item: item[1],
+        "eth_sensitive_collateral_usd": lambda item: item[2],
+        "total_collateral_usd": lambda item: item[3],
+        "total_debt_usd": lambda item: item[4],
+    }
+    items.sort(key=key_map[sort_key], reverse=reverse)
+
+    total_count = len(items)
+    page_start = min(offset, total_count)
+    paged_items = [item[0] for item in items[page_start : page_start + limit]]
+    page_note = (
+        f"；本次返回第 {page_start + 1} - {page_start + len(paged_items)} 条"
+        if total_count > 0
+        else "；本次返回 0 条"
+    )
+    note = (
+        f"共 {total_count} 个 Compound v3 仓位将在 ETH=${eth_price} 时触发下跌清算"
+        f"{page_note}；"
+        "仅统计 eth_down_liq_price_usd > 0 且当前尚未进入 is_liquidatable 的仓位；"
+        "total_liquidation_usd 采用 min(总债务USD, 模拟价格下 ETH 敏感抵押USD) 估算。"
+    )
+
+    return CompoundLiquidationSimResponse(
+        version=version,
+        simulated_eth_price=_fmt(eth_price),
+        positions=paged_items,
+        positions_cnt=str(total_count),
+        total_eth_sensitive_collateral_usd=_fmt(total_sensitive_collateral_usd),
+        total_liquidation_usd=_fmt(total_liquidation_usd),
+        note=note,
+    )
 
 
 def _map_market_reserve_row(row: Any) -> MarketStateReserveResponse:

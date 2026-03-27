@@ -157,3 +157,31 @@ def test_compound_position_replay_route_rejects_invalid_time() -> None:
             },
         )
     assert resp.status_code == 400
+
+
+def test_compound_liquidate_route_ok() -> None:
+    payload = {
+        "version": "v3",
+        "simulated_eth_price": "1500",
+        "positions": [],
+        "positions_cnt": "0",
+        "total_eth_sensitive_collateral_usd": "0",
+        "total_liquidation_usd": "0",
+        "note": "",
+    }
+    with patch(
+        "compound_crawler.api.routes.simulate_liquidation",
+        new=AsyncMock(return_value=payload),
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get(
+                "/api/compound/liquidate",
+                params={
+                    "version": "v3",
+                    "eth_price": 1500,
+                    "market": "all",
+                },
+            )
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_awaited_once()

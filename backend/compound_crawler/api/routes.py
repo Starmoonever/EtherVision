@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from .schemas import (
+    CompoundLiquidationSimResponse,
     CompoundMarketConfigPeriodResponse,
     CompoundMarketConfigResponse,
     CompoundPositionReplayResponse,
@@ -25,6 +27,7 @@ from .service import (
     get_markets,
     get_position_replay,
     get_positions,
+    simulate_liquidation,
     get_v2_market_config,
     get_v2_market_config_period,
     get_v2_protocol_config,
@@ -118,6 +121,38 @@ async def position_replay(
         use_cache=use_cache,
         detail=detail,
         w3=getattr(request.app.state, "w3", None),
+    )
+
+
+@router.get(
+    "/liquidate",
+    response_model=CompoundLiquidationSimResponse,
+    summary="Simulate Compound v3 ETH downside liquidation risk",
+)
+async def liquidate_simulation(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query("v3", description=_VERSION_DESC_BOTH),
+    eth_price: float = Query(..., gt=0, description="模拟的 ETH 价格（USD）"),
+    market: str = Query("all", description="市场地址或名称，也支持 `all`"),
+    limit: int = Query(100, ge=1, le=1000, description="返回的仓位数量"),
+    offset: int = Query(0, ge=0, description="分页偏移量"),
+    orderby: Literal[
+        "liq_price",
+        "eth_sensitive_collateral_usd",
+        "total_collateral_usd",
+        "total_debt_usd",
+    ] = Query("liq_price", description="排序字段"),
+    order: Literal["asc", "desc"] = Query("desc", description="排序方向"),
+) -> CompoundLiquidationSimResponse:
+    return await simulate_liquidation(
+        pool,
+        version=version,
+        eth_price=Decimal(str(eth_price)),
+        market=market,
+        limit=limit,
+        offset=offset,
+        orderby=orderby,
+        order=order,
     )
 
 

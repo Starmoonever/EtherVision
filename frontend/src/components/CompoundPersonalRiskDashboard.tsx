@@ -199,15 +199,24 @@ export function CompoundPersonalRiskDashboard({
       k: 'ETH敏感风险评分',
       v: '基于健康因子、清算缓冲、净ETH敞口、Basis敞口的综合评分（0-100），分数越高风险越大',
     },
-    { k: '主导风险', v: '主要清算风险来源：eth价格下跌 / eth价格上涨 / 脱锚风险（eth流动性代币相对原生 eth 贬值） / 多市场综合性风险 / 无风险。' },
+    {
+      k: '主导风险',
+      v: '主要清算风险来源：eth价格下跌 / eth价格上涨 / 脱锚风险（eth流动性代币相对原生 eth 贬值） / 多市场综合性风险 / 无风险。',
+    },
     {
       k: 'ETH上涨 / 下跌清算价格',
       v: '达到该价格时，账户进入清算触发区间',
     },
     { k: 'ETH敏感抵押/债务', v: '对ETH价格变化敏感的抵押与负债规模，单位USD。' },
     { k: '净ETH敞口', v: 'ETH敏感抵押减去ETH敏感债务，正值偏多，负值偏空。' },
-    { k: '基差风险抵押资产规模', v: 'ETH 衍生资产，价格与原生 ETH 价格相关但存在价差风险的抵押资产（如wstETH）。' },
-    { k: '清算风险贡献度', v: ' ETH 价格波动，各抵押资产对账户清算风险贡献度 （按 |discounted_collateral_usd * beta_to_eth| 估算排序）' },
+    {
+      k: '基差风险抵押资产规模',
+      v: 'ETH 衍生资产，价格与原生 ETH 价格相关但存在价差风险的抵押资产（如wstETH）。',
+    },
+    {
+      k: '清算风险贡献度',
+      v: ' ETH 价格波动，各抵押资产对账户清算风险贡献度 （按 |discounted_collateral_usd * beta_to_eth| 估算排序）',
+    },
   ];
 
   const getDominantRiskLabel = (risk: string) => {
@@ -228,7 +237,10 @@ export function CompoundPersonalRiskDashboard({
 
   const tableHelpRows = [
     { k: '折扣后价值 (USD)', v: '该资产按清算折扣系数折算后的可用抵押价值' },
-    { k: 'ETH Beta', v: 'ETH 价格变动导致的该资产价格变动比例（衡量该资产价格受 ETH 价格影响程度）' },
+    {
+      k: 'ETH Beta',
+      v: 'ETH 价格变动导致的该资产价格变动比例（衡量该资产价格受 ETH 价格影响程度）',
+    },
     { k: '风险贡献度', v: '该资产对账户清算风险的贡献度，按 折扣后价值 * ETH Beta 衡量' },
   ];
 
@@ -595,10 +607,10 @@ export function CompoundPersonalRiskDashboard({
                     <span className="token-symbol">{asset.symbol}</span>
                   </td>
                   <td>{asset.side}</td>
-                  <td className="right mono">{ formatFixed2(asset.amount) }</td>
-                  <td className="right mono">{ formatUsd2(asset.discounted_value_usd) }</td>
-                  <td className="right mono">{ formatFixed2(asset.beta_to_eth) }</td>
-                  <td className="right mono">{ formatUsd2(asset.risk_contribution_usd) }</td>
+                  <td className="right mono">{formatFixed2(asset.amount)}</td>
+                  <td className="right mono">{formatUsd2(asset.discounted_value_usd)}</td>
+                  <td className="right mono">{formatFixed2(asset.beta_to_eth)}</td>
+                  <td className="right mono">{formatUsd2(asset.risk_contribution_usd)}</td>
                   <td className="right">
                     <div
                       style={{

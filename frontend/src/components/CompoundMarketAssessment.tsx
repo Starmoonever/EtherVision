@@ -41,10 +41,10 @@ export function CompoundMarketAssessment({
           // For Compound v2 cTokens, we need to fetch the underlying token price and multiply by exchange_rate
           const baseSymbol = activeMarketSymbol.replace(/^c/i, '');
           const basePrice = await fetchAssetPrice(baseSymbol);
-          
+
           const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
           const configRes = await fetchCompoundMarketConfigV2(activeMarketSymbol, today);
-          
+
           if (configRes && configRes.market_config && configRes.market_config.exchange_rate) {
             const exchangeRate = parseFloat(configRes.market_config.exchange_rate);
             setAssetPrice(basePrice * exchangeRate);

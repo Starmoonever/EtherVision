@@ -107,7 +107,7 @@ export function CompoundMarketHistoryChart({
         const finalData: ChartPoint[] = points.map((pt) => {
           const supplyUsd = parseFloat(pt.supply_usd || '0');
           const borrowUsd = parseFloat(pt.borrow_usd || '0');
-          
+
           const baseSupplyApr = parseFloat(pt.supply_apr || '0') * 100;
           const baseBorrowApr = parseFloat(pt.borrow_apr || '0') * 100;
 
@@ -116,10 +116,16 @@ export function CompoundMarketHistoryChart({
 
           if (version === 'v3' && trackingIndexScale > 0) {
             if (supplyUsd > 0) {
-              rewardSupplyApr = (baseTrackingSupplySpeed * SECONDS_PER_YEAR / trackingIndexScale * compPrice / supplyUsd) * 100;
+              rewardSupplyApr =
+                ((((baseTrackingSupplySpeed * SECONDS_PER_YEAR) / trackingIndexScale) * compPrice) /
+                  supplyUsd) *
+                100;
             }
             if (borrowUsd > 0) {
-              rewardBorrowApr = (baseTrackingBorrowSpeed * SECONDS_PER_YEAR / trackingIndexScale * compPrice / borrowUsd) * 100;
+              rewardBorrowApr =
+                ((((baseTrackingBorrowSpeed * SECONDS_PER_YEAR) / trackingIndexScale) * compPrice) /
+                  borrowUsd) *
+                100;
             }
           }
 
@@ -153,7 +159,10 @@ export function CompoundMarketHistoryChart({
   }, [version, market, timeRange, customStart, customEnd]);
 
   const marketSizeAxis = useMemo(() => {
-    const maxValue = data.reduce((max, item) => Math.max(max, item.total_market_usd, item.borrow_usd), 0);
+    const maxValue = data.reduce(
+      (max, item) => Math.max(max, item.total_market_usd, item.borrow_usd),
+      0,
+    );
     if (maxValue >= 1e9) return { divisor: 1e9, suffix: 'B' };
     if (maxValue >= 1e6) return { divisor: 1e6, suffix: 'M' };
     if (maxValue >= 1e3) return { divisor: 1e3, suffix: 'K' };
@@ -311,8 +320,10 @@ export function CompoundMarketHistoryChart({
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                 formatter={(value: any, name: any) => {
                   let label = name;
-                  if (name === `实际借出 ${marketSymbol} 总值`) label = `实际借出 ${marketSymbol} 总值`;
-                  else if (name === `${marketSymbol} 市场可借出总值`) label = `${marketSymbol} 市场可借出总值`;
+                  if (name === `实际借出 ${marketSymbol} 总值`)
+                    label = `实际借出 ${marketSymbol} 总值`;
+                  else if (name === `${marketSymbol} 市场可借出总值`)
+                    label = `${marketSymbol} 市场可借出总值`;
                   else if (name === `${marketSymbol} 资产价格`) label = `${marketSymbol} 资产价格`;
                   return [
                     `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,

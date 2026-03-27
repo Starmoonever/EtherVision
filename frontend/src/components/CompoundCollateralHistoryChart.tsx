@@ -11,7 +11,11 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { fetchCompoundMarketHistory, fetchCompoundMarketGovernanceV3, fetchCompoundMarketConfigV2 } from '../api/compound';
+import {
+  fetchCompoundMarketHistory,
+  fetchCompoundMarketGovernanceV3,
+  fetchCompoundMarketConfigV2,
+} from '../api/compound';
 import type { CompoundMarketPoint } from '../api/compound';
 
 interface CompoundCollateralHistoryChartProps {
@@ -208,7 +212,7 @@ export function CompoundCollateralHistoryChart({
       .map((pt): CollateralChartPoint | null => {
         const reserve = pt.reserves?.find((r) => r.symbol === selectedSymbol);
         if (!reserve) return null;
-        
+
         const supplyUsd = parseFloat(reserve.supply_usd || '0');
 
         return {
@@ -223,7 +227,10 @@ export function CompoundCollateralHistoryChart({
   }, [data, selectedSymbol, collateralFactor]);
 
   const collateralAxis = useMemo(() => {
-    const maxValue = chartData.reduce((max, item) => Math.max(max, item.effective_collateral_usd), 0);
+    const maxValue = chartData.reduce(
+      (max, item) => Math.max(max, item.effective_collateral_usd),
+      0,
+    );
 
     if (maxValue >= 1e9) return { divisor: 1e9, suffix: 'B' };
     if (maxValue >= 1e6) return { divisor: 1e6, suffix: 'M' };
@@ -463,7 +470,9 @@ export function CompoundCollateralHistoryChart({
           className="card-header"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span className="card-title">{selectedSymbol} 对 {marketSymbol} 汇率与抵押规模</span>
+          <span className="card-title">
+            {selectedSymbol} 对 {marketSymbol} 汇率与抵押规模
+          </span>
         </div>
         <div style={{ height: 400 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -489,8 +498,17 @@ export function CompoundCollateralHistoryChart({
                   const numericValue = typeof value === 'number' ? value : Number(value);
                   const label = String(name);
                   if (label === `${selectedSymbol} 有效抵押总值 (USD)`)
-                    return [`$${numericValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label];
-                  return [numericValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), label];
+                    return [
+                      `$${numericValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                      label,
+                    ];
+                  return [
+                    numericValue.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    }),
+                    label,
+                  ];
                 }}
               />
               <Legend />
