@@ -116,7 +116,7 @@ export function CompoundMarketAssessment({
           <hr style={{ border: 'none', borderTop: '1px solid #1e293b', margin: 0 }} />
 
           {/* Historical trend */}
-          <CompoundPriceTrend asset={activeMarketSymbol} />
+          <CompoundPriceTrend asset={activeMarketSymbol} version={marketVersion} />
         </div>
 
         {/* Right: Historical Data Panel */}

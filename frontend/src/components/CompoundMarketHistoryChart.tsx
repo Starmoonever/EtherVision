@@ -9,8 +9,8 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { fetchCompoundMarketHistory, fetchCompoundMarketGovernanceV3 } from '../api/compound';
-import { fetchAssetPrice } from '../api/price';
+import { fetchCompoundMarketHistory, fetchCompoundMarketGovernanceV3, fetchCompoundMarketConfigPeriodV2 } from '../api/compound';
+import { fetchAssetPrice, fetchAssetPricePeriod } from '../api/price';
 
 interface CompoundMarketHistoryChartProps {
   version: 'v2' | 'v3';
@@ -64,12 +64,6 @@ export function CompoundMarketHistoryChart({
       setLoading(true);
       setError('');
       try {
-        if (version === 'v2') {
-          setError('暂无Compound v2 借贷市场数据');
-          setLoading(false);
-          return;
-        }
-
         const startDate = new Date(`${customStart}T00:00:00`);
         const endDate = new Date(`${customEnd}T23:00:00`);
         if (startDate.getTime() > endDate.getTime()) {
@@ -80,8 +74,76 @@ export function CompoundMarketHistoryChart({
 
         const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
         const end = endDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
+        
+        let interval = 60;
+        if (timeRange === '3M') interval = 360;
+        else if (timeRange === '6M') interval = 720;
+        else if (timeRange === '1Y') interval = 1440;
 
-        const points = await fetchCompoundMarketHistory(version, market, start, end);
+        if (version === 'v2') {
+          const baseSymbol = marketSymbol.replace(/^c/i, '');
+          const [priceItems, configRes, points] = await Promise.all([
+            fetchAssetPricePeriod(baseSymbol, start, end, interval),
+            fetchCompoundMarketConfigPeriodV2(marketSymbol, start, end),
+            fetchCompoundMarketHistory(version, market, start, end),
+          ]);
+
+          const rateMap = new Map<string, number>();
+          if (configRes && Array.isArray(configRes.points)) {
+            configRes.points.forEach((pt: any) => {
+              if (pt.market_config && pt.market_config.exchange_rate) {
+                const dateKey = pt.market_config.effective_timestamp.split('T')[0];
+                rateMap.set(dateKey, parseFloat(pt.market_config.exchange_rate));
+              }
+            });
+          }
+
+          let lastKnownRate = 1;
+          const priceMap = new Map<string, number>();
+          
+          if (priceItems && Array.isArray(priceItems)) {
+            priceItems.forEach((item: any) => {
+              const dateKey = item.timestamp.split('T')[0];
+              const rate = rateMap.get(dateKey) || lastKnownRate;
+              if (rateMap.has(dateKey)) {
+                lastKnownRate = rate;
+              }
+              // Store the cToken price by timestamp
+              priceMap.set(item.timestamp.replace('T', ' ').slice(0, 13) + ':00:00', parseFloat(item.price_usd) * rate);
+            });
+          }
+
+          const finalData: ChartPoint[] = points.map((pt: any) => {
+            const supplyUsd = parseFloat(pt.supply_usd || '0');
+            const borrowUsd = parseFloat(pt.borrow_usd || '0');
+            const baseSupplyApr = parseFloat(pt.supply_apr || '0') * 100;
+            const baseBorrowApr = parseFloat(pt.borrow_apr || '0') * 100;
+
+            const timeKey = pt.timestamp.replace('T', ' ').slice(0, 13) + ':00:00';
+            const cTokenPrice = priceMap.get(timeKey) || parseFloat(pt.price_usd || '0');
+
+            return {
+              timestamp: pt.timestamp.replace('T', ' '),
+              borrow_usd: borrowUsd,
+              total_market_usd: Math.max(0, supplyUsd),
+              asset_price_usd: cTokenPrice,
+              borrow_apr: baseBorrowApr,
+              supply_apr: baseSupplyApr,
+              utilization: parseFloat(pt.utilization || '0') * 100,
+              total_supply_apr: baseSupplyApr,
+              total_borrow_apr: baseBorrowApr,
+            };
+          });
+
+          setData(
+            finalData.sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            )
+          );
+          return;
+        }
+
+        const pointsV3 = await fetchCompoundMarketHistory(version, market, start, end);
 
         let compPrice = 0;
         let trackingIndexScale = 1e15;
@@ -104,7 +166,7 @@ export function CompoundMarketHistoryChart({
 
         const SECONDS_PER_YEAR = 60 * 60 * 24 * 365;
 
-        const finalData: ChartPoint[] = points.map((pt) => {
+        const finalDataV3: ChartPoint[] = pointsV3.map((pt: any) => {
           const supplyUsd = parseFloat(pt.supply_usd || '0');
           const borrowUsd = parseFloat(pt.borrow_usd || '0');
 
@@ -143,8 +205,8 @@ export function CompoundMarketHistoryChart({
         });
 
         setData(
-          finalData.sort(
-            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+          finalDataV3.sort(
+            (a: ChartPoint, b: ChartPoint) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           ),
         );
       } catch (err) {

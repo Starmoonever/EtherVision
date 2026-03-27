@@ -142,3 +142,57 @@ export async function fetchCompoundMarketConfigV2(market: string, date: string):
     `/compound/market/config?version=v2&market=${market}&date=${encodeURIComponent(date)}`,
   );
 }
+
+export async function fetchCompoundMarketConfigPeriodV2(
+  market: string,
+  start: string,
+  end: string,
+): Promise<any> {
+  return apiFetch<any>(
+    `/compound/market/config/period?version=v2&market=${market}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+  );
+}
+
+export interface CompoundPositionReplayPoint {
+  tx_hash: string;
+  block_number: number;
+  timestamp: string;
+  market: string;
+  symbol: string;
+  eth_price_usd: string;
+  total_collateral_usd: string;
+  total_debt_usd: string;
+  discounted_collateral_usd: string;
+  liquidation_buffer_usd: string;
+  health_factor: string;
+  is_liquidatable: boolean;
+  eth_down_liq_price_usd: string;
+  eth_up_liq_price_usd: string;
+  eth_liq_mode: string;
+  dominant_risk: string;
+  brief: string;
+  assets: CompoundUserAsset[];
+}
+
+export interface CompoundPositionReplayResponse {
+  address: string;
+  version: string;
+  from_time: string;
+  to_time: string;
+  data_source: string;
+  points: CompoundPositionReplayPoint[];
+  total_points: number;
+  total_tx_count: number;
+  cache_hit_rate: string;
+}
+
+export async function fetchCompoundPositionReplay(
+  address: string,
+  start: string,
+  end: string,
+  version: string,
+): Promise<CompoundPositionReplayResponse> {
+  return apiFetch<CompoundPositionReplayResponse>(
+    `/compound/position/replay?address=${address}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&version=${version}`
+  );
+}

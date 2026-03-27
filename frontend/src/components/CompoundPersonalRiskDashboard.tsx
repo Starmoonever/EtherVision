@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { CompoundUserAsset, CompoundUserPositionItem } from '../api/compound';
+import { CompoundPositionReplayChart } from './CompoundPositionReplayChart';
 
 interface CompoundPersonalRiskDashboardProps {
   address: string;
@@ -663,6 +664,8 @@ export function CompoundPersonalRiskDashboard({
           </table>
         </div>
       </div>
+
+      <CompoundPositionReplayChart address={address} version={version as 'v2' | 'v3'} />
     </div>
   );
 }
