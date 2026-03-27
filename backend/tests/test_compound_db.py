@@ -10,14 +10,18 @@ import asyncpg
 import pytest
 
 from compound_crawler.db import (
+    UserPositionAssetRow,
     UserPositionSnapshotRow,
     activate_compound_v2_users,
     activate_compound_v2_users_with_event_rows,
+    ensure_compound_v3_current_position_tables,
     fetch_compound_v2_run_watermark,
     fetch_compound_v2_active_users,
+    fetch_compound_v3_current_positions,
     fetch_compound_v2_users_from_detail_tables_day,
     fetch_compound_v2_users_from_history_day,
     fetch_compound_v2_users_affected_by_events,
+    refresh_compound_v3_current_positions,
     refresh_compound_v2_active_users_from_snapshots,
     upsert_compound_v2_run_watermark,
 )
@@ -34,14 +38,25 @@ class _AcquireCtx:
         return False
 
 
+class _TransactionCtx:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 class _FakeConn:
     def __init__(self):
         self.fetch_rows = []
+        self.fetch_results: list[list[dict[str, Any]]] = []
         self.fetchrow_result: Any | None = None
         self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
         self.executemany_calls: list[tuple[str, list[tuple[object, ...]]]] = []
 
     async def fetch(self, _sql: str, *_args):
+        if self.fetch_results:
+            return self.fetch_results.pop(0)
         return self.fetch_rows
 
     async def executemany(self, sql: str, rows: list[tuple[object, ...]]):
@@ -52,6 +67,9 @@ class _FakeConn:
 
     async def execute(self, sql: str, *args):
         self.execute_calls.append((sql, args))
+
+    def transaction(self):
+        return _TransactionCtx()
 
 
 class _FakePool:
@@ -287,3 +305,198 @@ async def test_compound_v2_run_watermark_roundtrip() -> None:
 
     assert watermark == date(2019, 5, 7)
     assert len(conn.execute_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_compound_v3_current_position_tables_executes_ddl() -> None:
+    conn = _FakeConn()
+
+    await ensure_compound_v3_current_position_tables(
+        cast(asyncpg.Pool, _FakePool(conn))
+    )
+
+    assert len(conn.execute_calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_refresh_compound_v3_current_positions_replaces_open_rows() -> None:
+    conn = _FakeConn()
+    conn.fetch_results = [[]]
+    pool = cast(asyncpg.Pool, _FakePool(conn))
+    ts = datetime(2026, 3, 27, 0, 0, 0, tzinfo=timezone.utc)
+    market = bytes.fromhex("aa" * 20)
+    user = bytes.fromhex("11" * 20)
+    base_token = bytes.fromhex("22" * 20)
+    asset = bytes.fromhex("33" * 20)
+
+    touched = await refresh_compound_v3_current_positions(
+        pool,
+        snapshot_rows=[
+            UserPositionSnapshotRow(
+                timestamp=ts,
+                block_number=100,
+                market=market,
+                symbol="USDC",
+                user_address=user,
+                has_open_position=True,
+                is_liquidatable=False,
+                base_token=base_token,
+                base_symbol="USDC",
+                base_price_usd=Decimal("1"),
+                eth_price_usd=Decimal("3000"),
+                total_collateral_usd=Decimal("100"),
+                total_debt_usd=Decimal("25"),
+                discounted_collateral_usd=Decimal("80"),
+                liquidation_buffer_usd=Decimal("55"),
+                health_factor=Decimal("3.2"),
+                eth_sensitive_collateral_usd=Decimal("0"),
+                eth_sensitive_debt_usd=Decimal("0"),
+                net_eth_exposure_usd=Decimal("0"),
+                non_eth_collateral_usd=Decimal("100"),
+                non_eth_debt_usd=Decimal("25"),
+                basis_risk_collateral_usd=Decimal("0"),
+                eth_down_liq_price_usd=None,
+                eth_up_liq_price_usd=None,
+                eth_liq_mode="neutral",
+                dominant_risk="neutral",
+                assets_jsonb=[{"symbol": "USDC"}],
+            )
+        ],
+        asset_rows=[
+            UserPositionAssetRow(
+                timestamp=ts,
+                block_number=100,
+                market=market,
+                user_address=user,
+                asset=asset,
+                symbol="USDC",
+                side="base_supply",
+                decimals=6,
+                amount=Decimal("100"),
+                price_in_base=Decimal("1"),
+                price_usd=Decimal("1"),
+                value_usd=Decimal("100"),
+                discounted_value_usd=Decimal("80"),
+                borrow_collateral_factor=Decimal("0.8"),
+                liquidate_collateral_factor=Decimal("0.85"),
+                liquidation_factor=Decimal("0.92"),
+                beta_to_eth=Decimal("0"),
+                is_eth_correlated=False,
+                is_basis_risk_asset=False,
+            )
+        ],
+    )
+
+    assert touched == 1
+    assert len(conn.execute_calls) == 1
+    assert len(conn.executemany_calls) == 2
+    assert conn.executemany_calls[0][1][0][0] == market
+    assert conn.executemany_calls[0][1][0][1] == user
+    assert conn.executemany_calls[1][1][0][0] == market
+    assert conn.executemany_calls[1][1][0][1] == user
+    assert conn.executemany_calls[1][1][0][2] == asset
+
+
+@pytest.mark.asyncio
+async def test_refresh_compound_v3_current_positions_skips_stale_rows() -> None:
+    conn = _FakeConn()
+    ts_existing = datetime(2026, 3, 27, 0, 0, 1, tzinfo=timezone.utc)
+    market = bytes.fromhex("aa" * 20)
+    user = bytes.fromhex("11" * 20)
+    conn.fetch_results = [
+        [
+            {
+                "market": market,
+                "user_address": user,
+                "last_block_number": 200,
+                "last_block_timestamp": ts_existing,
+            }
+        ]
+    ]
+
+    touched = await refresh_compound_v3_current_positions(
+        cast(asyncpg.Pool, _FakePool(conn)),
+        snapshot_rows=[
+            UserPositionSnapshotRow(
+                timestamp=datetime(2026, 3, 27, 0, 0, 0, tzinfo=timezone.utc),
+                block_number=100,
+                market=market,
+                symbol="USDC",
+                user_address=user,
+                has_open_position=True,
+                is_liquidatable=False,
+                base_token=bytes.fromhex("22" * 20),
+                base_symbol="USDC",
+                base_price_usd=Decimal("1"),
+                eth_price_usd=Decimal("3000"),
+                total_collateral_usd=Decimal("100"),
+                total_debt_usd=Decimal("25"),
+                discounted_collateral_usd=Decimal("80"),
+                liquidation_buffer_usd=Decimal("55"),
+                health_factor=Decimal("3.2"),
+                eth_sensitive_collateral_usd=Decimal("0"),
+                eth_sensitive_debt_usd=Decimal("0"),
+                net_eth_exposure_usd=Decimal("0"),
+                non_eth_collateral_usd=Decimal("100"),
+                non_eth_debt_usd=Decimal("25"),
+                basis_risk_collateral_usd=Decimal("0"),
+                eth_down_liq_price_usd=None,
+                eth_up_liq_price_usd=None,
+                eth_liq_mode="neutral",
+                dominant_risk="neutral",
+                assets_jsonb=[],
+            )
+        ],
+        asset_rows=[],
+    )
+
+    assert touched == 0
+    assert not conn.execute_calls
+    assert not conn.executemany_calls
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_v3_current_positions_maps_rows() -> None:
+    conn = _FakeConn()
+    conn.fetch_rows = [
+        {
+            "market": bytes.fromhex("aa" * 20),
+            "user_address": bytes.fromhex("11" * 20),
+            "symbol": "USDC",
+            "last_block_number": 100,
+            "last_block_timestamp": datetime(2026, 3, 27, tzinfo=timezone.utc),
+            "last_tx_hash": "0x" + "ab" * 32,
+            "has_open_position": True,
+            "is_liquidatable": False,
+            "base_token": bytes.fromhex("22" * 20),
+            "base_symbol": "USDC",
+            "base_price_usd": Decimal("1"),
+            "eth_price_usd": Decimal("3000"),
+            "total_collateral_usd": Decimal("100"),
+            "total_debt_usd": Decimal("25"),
+            "discounted_collateral_usd": Decimal("80"),
+            "liquidation_buffer_usd": Decimal("55"),
+            "health_factor": Decimal("3.2"),
+            "eth_sensitive_collateral_usd": Decimal("0"),
+            "eth_sensitive_debt_usd": Decimal("0"),
+            "net_eth_exposure_usd": Decimal("0"),
+            "non_eth_collateral_usd": Decimal("100"),
+            "non_eth_debt_usd": Decimal("25"),
+            "basis_risk_collateral_usd": Decimal("0"),
+            "eth_down_liq_price_usd": None,
+            "eth_up_liq_price_usd": None,
+            "eth_liq_mode": "neutral",
+            "dominant_risk": "neutral",
+            "assets_jsonb": '[{"symbol":"USDC"}]',
+            "created_at": datetime(2026, 3, 27, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 3, 27, tzinfo=timezone.utc),
+        }
+    ]
+
+    rows = await fetch_compound_v3_current_positions(
+        cast(asyncpg.Pool, _FakePool(conn))
+    )
+
+    assert len(rows) == 1
+    assert rows[0].last_tx_hash == "0x" + "ab" * 32
+    assert rows[0].assets_jsonb == [{"symbol": "USDC"}]

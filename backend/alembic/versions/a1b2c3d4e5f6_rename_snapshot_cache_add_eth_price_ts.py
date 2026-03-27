@@ -39,6 +39,9 @@ def upgrade() -> None:
             IF EXISTS (
                 SELECT 1 FROM pg_indexes
                 WHERE schemaname = 'loan' AND indexname = 'idx_psc_user_ts'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'loan' AND indexname = 'idx_aps_user_ts'
             ) THEN
                 ALTER INDEX loan.idx_psc_user_ts RENAME TO idx_aps_user_ts;
             END IF;
@@ -49,6 +52,9 @@ def upgrade() -> None:
             IF EXISTS (
                 SELECT 1 FROM pg_indexes
                 WHERE schemaname = 'loan' AND indexname = 'idx_psc_block'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'loan' AND indexname = 'idx_aps_block'
             ) THEN
                 ALTER INDEX loan.idx_psc_block RENAME TO idx_aps_block;
             END IF;
@@ -84,6 +90,9 @@ def downgrade() -> None:
             IF EXISTS (
                 SELECT 1 FROM pg_indexes
                 WHERE schemaname = 'loan' AND indexname = 'idx_aps_user_ts'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'loan' AND indexname = 'idx_psc_user_ts'
             ) THEN
                 ALTER INDEX loan.idx_aps_user_ts RENAME TO idx_psc_user_ts;
             END IF;
@@ -94,6 +103,9 @@ def downgrade() -> None:
             IF EXISTS (
                 SELECT 1 FROM pg_indexes
                 WHERE schemaname = 'loan' AND indexname = 'idx_aps_block'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'loan' AND indexname = 'idx_psc_block'
             ) THEN
                 ALTER INDEX loan.idx_aps_block RENAME TO idx_psc_block;
             END IF;
