@@ -371,64 +371,8 @@ def upgrade() -> None:
             schema="loan",
         )
 
-    if not _table_exists("compound_v2_user_memberships"):
-        op.create_table(
-            "compound_v2_user_memberships",
-            sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
-            sa.Column("block_number", sa.BigInteger(), nullable=False),
-            sa.Column("user_address", postgresql.BYTEA(), nullable=False),
-            sa.Column("market", postgresql.BYTEA(), nullable=False),
-            sa.Column("symbol", sa.Text(), nullable=True),
-            sa.Column("is_entered", sa.Boolean(), nullable=False),
-            sa.Column(
-                "raw_membership_jsonb",
-                postgresql.JSONB(astext_type=sa.Text()),
-                nullable=True,
-            ),
-            sa.Column(
-                "created_at",
-                sa.DateTime(timezone=True),
-                nullable=False,
-                server_default=sa.text("now()"),
-            ),
-            sa.PrimaryKeyConstraint("timestamp", "user_address", "market"),
-            schema="loan",
-        )
-    if not _index_exists(
-        "compound_v2_user_memberships", "idx_compound_v2_user_memberships_market_ts"
-    ):
-        op.create_index(
-            "idx_compound_v2_user_memberships_market_ts",
-            "compound_v2_user_memberships",
-            ["market", "timestamp"],
-            unique=False,
-            schema="loan",
-        )
-    if not _index_exists(
-        "compound_v2_user_memberships", "idx_compound_v2_user_memberships_user_ts"
-    ):
-        op.create_index(
-            "idx_compound_v2_user_memberships_user_ts",
-            "compound_v2_user_memberships",
-            ["user_address", "timestamp"],
-            unique=False,
-            schema="loan",
-        )
-
 
 def downgrade() -> None:
-    op.drop_index(
-        "idx_compound_v2_user_memberships_user_ts",
-        table_name="compound_v2_user_memberships",
-        schema="loan",
-    )
-    op.drop_index(
-        "idx_compound_v2_user_memberships_market_ts",
-        table_name="compound_v2_user_memberships",
-        schema="loan",
-    )
-    op.drop_table("compound_v2_user_memberships", schema="loan")
-
     op.drop_index(
         "idx_compound_v2_protocol_config_versions_effective_ts",
         table_name="compound_v2_protocol_config_versions",

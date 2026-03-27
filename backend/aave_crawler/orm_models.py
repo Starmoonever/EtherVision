@@ -736,24 +736,6 @@ class CompoundV2ProtocolConfigVersion(Base):
     )
 
 
-class CompoundV2UserMembership(Base):
-    __tablename__ = "compound_v2_user_memberships"
-    __table_args__ = {"schema": "loan"}
-
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
-    user_address: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
-    market: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
-    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    symbol: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    is_entered: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    raw_membership_jsonb: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default="now()"
-    )
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 区块时间戳缓存表
 # ──────────────────────────────────────────────────────────────────────────────
