@@ -1,6 +1,13 @@
 # aave-crawler（后端）
 
-以太主网 **Aave V2 / V3** 后端，提供四项功能：
+当前后端是一个 **统一服务**：
+
+- **Aave V2 / V3**：地址同步、全量快照、增量监听、历史回放、清算分析
+- **Compound V2 / V3**：市场状态 / 治理参数查询、用户仓位回放等 API 能力
+
+其中 Aave 仍然是当前 README 的主体，Compound 相关能力在后文补充概览。
+
+Aave 部分提供四项核心功能：
 
 1. **地址同步**（`sync-addresses`）：从本地链上历史事件表（`aave.aave_history`）派生用户地址，写入来源表，替代 subgraph 外部依赖
 2. **批量快照**（`crawl`）：从来源表读取所有用户地址，并发拉取链上仓位数据，持久化为可查询快照
@@ -116,7 +123,7 @@ cp config.yaml.example config.yaml
 编辑 `config.yaml`：
 
 ```yaml
-rpc_url: 'http://your-rpc-node:port/' # 留空则自动使用公共以太主网节点
+rpc_url: 'http://your-rpc-node:port/' # 建议填归档节点；留空时按代码默认逻辑处理
 
 postgres:
   host: '127.0.0.1'
@@ -137,6 +144,8 @@ watcher:
 ```
 
 > `config.yaml` 已加入 `.gitignore`，不会提交到版本控制。
+>
+> `config.yaml.example` 只保留了最小必填项；未显式填写的字段会回退到 `aave_crawler/config.py` 与 `crawler_shared/config.py` 中的默认值。
 
 ---
 
@@ -238,6 +247,45 @@ nohup uv run aave-crawler watch -p v3_borrow -l 60 > nohup_v3_borrow.log 2>&1 &
 
 ---
 
+### `aave-crawler collect-daily` — 采集日级历史快照
+
+按 UTC 日期粒度回放历史仓位，并写入 `loan.aave_v{2|3}_eth_daily_positions`。该命令会合并抵押端和借贷端结果，适合做日频面板、区间统计和历史分布分析。
+
+```bash
+# v3：从指定日期采到昨日
+uv run aave-crawler collect-daily --start 2025-02-10
+
+# 指定闭区间
+uv run aave-crawler collect-daily --start 2025-02-10 --end 2025-02-28
+
+# 断点续传：跳过已有日期
+uv run aave-crawler collect-daily --start 2025-02-10 --skip-existing
+
+# 仅预览，不落库
+uv run aave-crawler collect-daily --start 2025-02-10 --dry-run
+
+# v2
+uv run aave-crawler collect-daily --start 2025-02-10 -p v2
+```
+
+| 选项              | 说明                                    |
+| ----------------- | --------------------------------------- |
+| `--config / -c`   | 配置文件路径                            |
+| `--protocol / -p` | `v2` / `v3`（默认）                     |
+| `--start`         | 起始日期（UTC，含），格式 `YYYY-MM-DD`  |
+| `--end`           | 结束日期（UTC，含）；省略时默认为昨日   |
+| `--dry-run`       | 只查询，不写入数据库                    |
+| `--skip-existing` | 跳过已有数据的日期，适合补跑 / 断点续传 |
+| `--verbose / -v`  | 输出 DEBUG 日志                         |
+
+**实现说明**：
+
+- 用户来源为 `positions_collateral ∪ positions_borrow` 的当前活跃地址
+- 每个 UTC 日期取 `00:00:00` 对应最近区块，通常要求 **archive RPC**
+- 同一行同时保存 `liq_price`（ETH 下跌风险）和 `liq_price_rise`（ETH 上涨风险）
+
+---
+
 ### `aave-crawler check` — 调试单个地址
 
 ```bash
@@ -263,7 +311,10 @@ uv run aave-crawler crawl -p v3_borrow
 nohup uv run aave-crawler watch -p v3        > nohup_v3.log 2>&1 &
 nohup uv run aave-crawler watch -p v3_borrow > nohup_v3_borrow.log 2>&1 &
 
-# 4. 启动 API
+# 4. 可选：补采日级历史快照
+uv run aave-crawler collect-daily --start 2025-02-10 --skip-existing
+
+# 5. 启动 API
 uv run api
 ```
 
@@ -286,6 +337,12 @@ uv run api --port 8080
 # 生产多进程
 uv run api --workers 4
 ```
+
+当前 `api` 命令启动的是 **统一后端 API**，会同时注册：
+
+- Aave 路由：`/api/aave/*`
+- 通用价格路由：`/api/price*`
+- Compound 路由：`/api/compound/*`
 
 启动后访问 `http://localhost:8000/docs` 查看交互式 Swagger 文档。
 
@@ -318,9 +375,22 @@ uv run api --workers 4
 
 #### 通用
 
-| 方法 | 路径           | 说明         |
-| ---- | -------------- | ------------ |
-| GET  | `/aave/health` | 服务健康检查 |
+| 方法 | 路径               | 说明                  |
+| ---- | ------------------ | --------------------- |
+| GET  | `/aave/health`     | 服务健康检查          |
+| GET  | `/compound/health` | Compound 服务健康检查 |
+
+#### Compound（统一 API，当前仅概览）
+
+| 方法 | 路径                                 | 说明                     |
+| ---- | ------------------------------------ | ------------------------ |
+| GET  | `/api/compound/markets`              | 列出支持的 Compound 市场 |
+| GET  | `/api/compound/position`             | 查询单用户仓位           |
+| GET  | `/api/compound/position/replay`      | 按交易历史回放用户仓位   |
+| GET  | `/api/compound/market/state`         | 查询指定时刻市场状态     |
+| GET  | `/api/compound/market/state/period`  | 查询市场状态时间序列     |
+| GET  | `/api/compound/market/config`        | 查询市场治理 / 配置      |
+| GET  | `/api/compound/market/config/period` | 查询配置变更时间序列     |
 
 ---
 
@@ -779,14 +849,14 @@ backend/
 ├── pyproject.toml
 ├── config.yaml.example
 ├── config.yaml              # 本地配置（gitignored）
-├── scripts/                 # 研究/一次性脚本
-│   ├── derive_users_from_events.py   # 从链上事件派生用户地址（对比分析）
-│   ├── check_data_range.py           # ULID 时间戳范围检查
-│   └── recalc_liq_price*.py          # 重新计算大批量清算价
+├── scripts/
+│   ├── aave/                # Aave 回填、校验、诊断、批处理脚本
+│   └── compound/            # Compound 回填、治理、活跃用户脚本
 ├── derived_users/           # derive 脚本的 CSV 输出（gitignored）
 ├── tests/
 │   ├── conftest.py          # pytest fixtures & mock 数据
-│   └── test_routes.py       # 路由单元测试（全 mock，无需真实 DB/RPC）
+│   ├── test_routes.py       # Aave 路由测试
+│   └── test_compound_*.py   # Compound API / 回放 / 配置相关测试
 └── aave_crawler/
     ├── cli.py               # Click CLI 入口（aave-crawler 命令）
     ├── server.py            # FastAPI app 工厂 + uvicorn 入口（api 命令）
@@ -801,6 +871,15 @@ backend/
         ├── schemas.py       # Pydantic 响应模型
         ├── service.py       # 业务逻辑（仓位查询、清算价计算、模拟清算、价格序列）
         └── routes.py        # FastAPI 路由
+├── compound_crawler/
+│   ├── cli.py               # Compound CLI 入口（compound-crawler 命令）
+│   ├── crawler.py           # 市场状态 / 配置采集
+│   ├── watcher.py           # 增量监听
+│   ├── db.py                # Compound 表结构与读写
+│   └── api/
+│       ├── service.py       # Compound API 业务逻辑
+│       └── routes.py        # Compound FastAPI 路由
+└── crawler_shared/          # Aave / Compound 共享配置与日志工具
 ```
 
 ---
@@ -831,3 +910,10 @@ uv run python your_script.py  # 在项目虚拟环境中运行脚本
 | Aave V2 Pool        | `0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9` |
 | V2 PoolDataProvider | `0x057835Ad21a177dbdd3090bB1CAE03EaCF78Fc6d` |
 | V2 Aave Oracle      | `0xA50ba011c48153De246E5192C8f9258A2ba79Ca9` |
+
+---
+
+## 补充说明
+
+- `backend/pyproject.toml` 中的项目描述文字仍有早期遗留表述，但当前代码实际运行的是 **Ethereum Mainnet 上的 Aave + Compound 统一后端**。
+- 历史回放、`collect-daily`、部分价格查询通常需要 **archive RPC**；如果只有普通节点，实时 API 仍可运行，但历史能力可能受限。
