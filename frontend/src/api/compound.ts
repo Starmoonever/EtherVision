@@ -133,7 +133,7 @@ export async function fetchCompoundUserPosition(
 
 export async function fetchCompoundMarketGovernanceV3(market: string, date: string): Promise<any> {
   return apiFetch<any>(
-    `/compound/market/governance?version=v3&market=${market}&date=${encodeURIComponent(date)}&detail=true`,
+    `/compound/market/config?version=v3&market=${market}&date=${encodeURIComponent(date)}&detail=true`,
   );
 }
 
