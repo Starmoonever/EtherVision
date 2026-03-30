@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import type { TooltipValueType } from 'recharts';
 import { apiFetch } from '../api/client';
 
 interface MarketHistoryChartProps {
@@ -67,18 +68,24 @@ function formatPriceTick(value: number) {
   return `$${value.toFixed(0)}`;
 }
 
-function formatTooltipValue(value: number | string | undefined, name: string | undefined) {
-  const numericValue = Number(value ?? 0);
-  const label = name ?? '';
+function formatTooltipValue(
+  value: TooltipValueType | undefined,
+  name: string | number | undefined,
+) {
+  const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));
+  const label = String(name ?? '');
   if (label === 'ETH 历史价格') {
     return [`$${numericValue.toLocaleString()}`, label] as [string, string];
   }
   return [`$${numericValue.toLocaleString()}`, label] as [string, string];
 }
 
-function formatRateTooltipValue(value: number | string | undefined, name: string | undefined) {
-  const numericValue = Number(value ?? 0);
-  const label = name ?? '';
+function formatRateTooltipValue(
+  value: TooltipValueType | undefined,
+  name: string | number | undefined,
+) {
+  const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));
+  const label = String(name ?? '');
   if (label === 'ETH 历史价格') {
     return [`$${numericValue.toLocaleString()}`, label] as [string, string];
   }

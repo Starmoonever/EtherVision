@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
+import type { TooltipValueType } from 'recharts';
 import { fetchWaterfallLiquidation } from '../api/liquidation';
 import type { WaterfallResponse } from '../api/liquidation';
 
@@ -618,14 +619,18 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                       color: '#e2e8f0',
                     }}
                     itemStyle={{ fontSize: '0.9rem' }}
-                    formatter={(value: number | string | undefined, name: string | undefined) => {
+                    formatter={(
+                      value: TooltipValueType | undefined,
+                      name: string | number | undefined,
+                    ) => {
+                      const normalizedValue = Array.isArray(value) ? value[0] : value;
                       const numericValue =
-                        typeof value === 'number'
-                          ? value
-                          : value === undefined
+                        typeof normalizedValue === 'number'
+                          ? normalizedValue
+                          : normalizedValue === undefined
                             ? 0
-                            : Number.parseFloat(value);
-                      const label = name ?? '';
+                            : Number.parseFloat(String(normalizedValue));
+                      const label = String(name ?? '');
 
                       if (label === 'ethPriceNum')
                         return [
@@ -637,7 +642,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                           `$${numericValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
                           '该轮清算 ETH 价值',
                         ];
-                      return [String(value ?? ''), label];
+                      return [String(normalizedValue ?? ''), label];
                     }}
                     labelFormatter={(label) => `${label}`}
                   />

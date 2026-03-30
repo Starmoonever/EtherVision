@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import type { TooltipValueType } from 'recharts';
 import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
 import { fetchUserPosition } from '../api';
 import type { LiquidationDetailResponse as LiquidationData } from '../api';
@@ -444,15 +445,17 @@ export function LiquidationChart({
               }}
               itemStyle={{ color: '#f87171' }}
               formatter={(
-                value: number | string | (number | string)[] | undefined,
-                name: string | undefined,
+                value: TooltipValueType | undefined,
+                name: string | number | undefined,
               ) => {
-                if (name === 'liquidationAmount')
+                const normalizedValue = Array.isArray(value) ? value[0] : value;
+                const label = String(name ?? '');
+                if (label === 'liquidationAmount')
                   return [
-                    `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ETH`,
+                    `${Number(normalizedValue).toLocaleString(undefined, { maximumFractionDigits: 2 })} ETH`,
                     '清算数量',
                   ];
-                return [`$${Number(value).toLocaleString()}`, '清算价值'];
+                return [`$${Number(normalizedValue ?? 0).toLocaleString()}`, '清算价值'];
               }}
               labelFormatter={(label, payload) => {
                 if (payload && payload.length > 0) {
