@@ -46,6 +46,11 @@ export interface CompoundMarketHistoryResponse {
   points: CompoundMarketPoint[];
 }
 
+interface FetchCompoundMarketHistoryOptions {
+  interval?: number;
+  detail?: boolean;
+}
+
 export interface CompoundUserAsset {
   asset: string;
   symbol: string;
@@ -111,9 +116,22 @@ export async function fetchCompoundMarketHistory(
   market: string,
   start: string,
   end: string,
+  options: FetchCompoundMarketHistoryOptions = {},
 ): Promise<CompoundMarketPoint[]> {
+  const params = new URLSearchParams({
+    version,
+    market,
+    start,
+    end,
+    detail: String(options.detail ?? true),
+  });
+
+  if (options.interval !== undefined) {
+    params.set('interval', String(options.interval));
+  }
+
   const data = await apiFetch<CompoundMarketHistoryResponse>(
-    `/compound/market/state/period?version=${version}&market=${market}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&detail=true`,
+    `/compound/market/state/period?${params.toString()}`,
   );
   if (!data.points || !Array.isArray(data.points)) {
     throw new Error('Invalid Compound market history response format');

@@ -30,6 +30,37 @@ interface ChartPoint {
   total_borrow_apr: number;
 }
 
+function parseUtcDateBoundary(date: string, endOfDay = false): number {
+  return Date.parse(`${date}T${endOfDay ? '23' : '00'}:00:00Z`);
+}
+
+function formatUtcDateBoundary(date: string, endOfDay = false): string {
+  return `${date} ${endOfDay ? '23' : '00'}:00:00`;
+}
+
+function getPriceIntervalMinutes(timeRange: '3M' | '6M' | '1Y' | null): number {
+  if (timeRange === '3M') return 360;
+  if (timeRange === '6M') return 720;
+  if (timeRange === '1Y') return 1440;
+  return 60;
+}
+
+function getMarketStateIntervalHours(
+  version: 'v2' | 'v3',
+  timeRange: '3M' | '6M' | '1Y' | null,
+  startTs: number,
+  endTs: number,
+): number {
+  if (version === 'v2') return 1;
+  if (timeRange === '3M') return 24;
+  if (timeRange === '6M') return 48;
+  if (timeRange === '1Y') return 96;
+
+  const totalHours = Math.max(1, Math.ceil((endTs - startTs) / (1000 * 60 * 60)));
+  const targetPoints = 120;
+  return Math.min(168, Math.max(1, Math.ceil(totalHours / targetPoints)));
+}
+
 export function CompoundMarketHistoryChart({
   version,
   market,
@@ -64,28 +95,37 @@ export function CompoundMarketHistoryChart({
       setLoading(true);
       setError('');
       try {
-        const startDate = new Date(`${customStart}T00:00:00`);
-        const endDate = new Date(`${customEnd}T23:00:00`);
-        if (startDate.getTime() > endDate.getTime()) {
+        const startTs = parseUtcDateBoundary(customStart);
+        const endTs = parseUtcDateBoundary(customEnd, true);
+        if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
+          setError('时间格式无效');
+          setLoading(false);
+          return;
+        }
+        if (startTs > endTs) {
           setError('自选时间区间无效：开始日期不能晚于结束日期');
           setLoading(false);
           return;
         }
 
-        const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
-        const end = endDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
-        
-        let interval = 60;
-        if (timeRange === '3M') interval = 360;
-        else if (timeRange === '6M') interval = 720;
-        else if (timeRange === '1Y') interval = 1440;
+        const start = formatUtcDateBoundary(customStart);
+        const end = formatUtcDateBoundary(customEnd, true);
+        const priceInterval = getPriceIntervalMinutes(timeRange);
+        const marketStateInterval = getMarketStateIntervalHours(
+          version,
+          timeRange,
+          startTs,
+          endTs,
+        );
 
         if (version === 'v2') {
           const baseSymbol = marketSymbol.replace(/^c/i, '');
           const [priceItems, configRes, points] = await Promise.all([
-            fetchAssetPricePeriod(baseSymbol, start, end, interval),
+            fetchAssetPricePeriod(baseSymbol, start, end, priceInterval),
             fetchCompoundMarketConfigPeriodV2(marketSymbol, start, end),
-            fetchCompoundMarketHistory(version, market, start, end),
+            fetchCompoundMarketHistory(version, market, start, end, {
+              interval: marketStateInterval,
+            }),
           ]);
 
           const rateMap = new Map<string, number>();
@@ -143,7 +183,9 @@ export function CompoundMarketHistoryChart({
           return;
         }
 
-        const pointsV3 = await fetchCompoundMarketHistory(version, market, start, end);
+        const pointsV3 = await fetchCompoundMarketHistory(version, market, start, end, {
+          interval: marketStateInterval,
+        });
 
         let compPrice = 0;
         let trackingIndexScale = 1e15;

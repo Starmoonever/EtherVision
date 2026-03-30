@@ -37,6 +37,38 @@ interface CompositionPoint {
   [symbol: string]: string | number;
 }
 
+interface V2StructurePoint {
+  timestamp: string;
+  cash_usd: number;
+  borrow_usd: number;
+  supply_usd: number;
+  reserves_usd: number;
+  utilization_pct: number;
+  reserve_share_pct: number;
+}
+
+function parseUtcDateBoundary(date: string, endOfDay = false): number {
+  return Date.parse(`${date}T${endOfDay ? '23' : '00'}:00:00Z`);
+}
+
+function formatUtcDateBoundary(date: string, endOfDay = false): string {
+  return `${date} ${endOfDay ? '23' : '00'}:00:00`;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatPercent(value: number): string {
+  return `${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
 export function CompoundCollateralHistoryChart({
   version,
   market,
@@ -45,6 +77,7 @@ export function CompoundCollateralHistoryChart({
   const [data, setData] = useState<CompoundMarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [v2Config, setV2Config] = useState<any | null>(null);
   const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y' | null>('3M');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
   const [customStart, setCustomStart] = useState(() => {
@@ -70,24 +103,25 @@ export function CompoundCollateralHistoryChart({
       setLoading(true);
       setError('');
       try {
-        if (version === 'v2') {
-          setError('暂无Compound v2 借贷市场数据');
+        const startTs = parseUtcDateBoundary(customStart);
+        const endTs = parseUtcDateBoundary(customEnd, true);
+        if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
+          setError('时间格式无效');
           setLoading(false);
           return;
         }
-
-        const startDate = new Date(`${customStart}T00:00:00`);
-        const endDate = new Date(`${customEnd}T23:00:00`);
-        if (startDate.getTime() > endDate.getTime()) {
+        if (startTs > endTs) {
           setError('自选时间区间无效：开始日期不能晚于结束日期');
           setLoading(false);
           return;
         }
 
-        const start = startDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
-        const end = endDate.toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
+        const start = formatUtcDateBoundary(customStart);
+        const end = formatUtcDateBoundary(customEnd, true);
 
-        const points = await fetchCompoundMarketHistory(version, market, start, end);
+        const points = await fetchCompoundMarketHistory(version, market, start, end, {
+          interval: version === 'v2' ? 1 : 24,
+        });
 
         // Sort data by time
         const sortedPoints = points.sort(
@@ -104,6 +138,35 @@ export function CompoundCollateralHistoryChart({
 
     fetchData();
   }, [version, market, timeRange, customStart, customEnd]);
+
+  useEffect(() => {
+    if (version !== 'v2') {
+      setV2Config(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchV2Config = async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
+        const response = await fetchCompoundMarketConfigV2(marketSymbol, today);
+        if (!cancelled) {
+          setV2Config(response?.market_config ?? response ?? null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setV2Config(null);
+        }
+        console.error('Error fetching Compound v2 market config:', err);
+      }
+    };
+
+    fetchV2Config();
+    return () => {
+      cancelled = true;
+    };
+  }, [marketSymbol, version]);
 
   // Extract all available collateral symbols
   const availableSymbols = useMemo(() => {
@@ -166,6 +229,33 @@ export function CompoundCollateralHistoryChart({
   }, [compositionData, availableSymbols]);
 
   const [collateralFactor, setCollateralFactor] = useState<number>(1);
+
+  const v2StructureData = useMemo<V2StructurePoint[]>(() => {
+    if (version !== 'v2' || !data.length) return [];
+
+    return data.map((pt) => {
+      const cashUsd = parseFloat(pt.collateral_usd || '0');
+      const borrowUsd = parseFloat(pt.borrow_usd || '0');
+      const supplyUsd = parseFloat(pt.supply_usd || '0');
+      const reservesUsd = Math.max(0, cashUsd + borrowUsd - supplyUsd);
+      const reserveSharePct = supplyUsd > 0 ? (reservesUsd / supplyUsd) * 100 : 0;
+
+      return {
+        timestamp: pt.timestamp.split('T')[0].split(' ')[0],
+        cash_usd: cashUsd,
+        borrow_usd: borrowUsd,
+        supply_usd: supplyUsd,
+        reserves_usd: reservesUsd,
+        utilization_pct: parseFloat(pt.utilization || '0') * 100,
+        reserve_share_pct: reserveSharePct,
+      };
+    });
+  }, [data, version]);
+
+  const latestV2Point = useMemo(() => {
+    if (!v2StructureData.length) return null;
+    return v2StructureData[v2StructureData.length - 1];
+  }, [v2StructureData]);
 
   // Set default selected symbol if none is selected
   useEffect(() => {
@@ -245,6 +335,26 @@ export function CompoundCollateralHistoryChart({
     return `$${(value / collateralAxis.divisor).toFixed(2)}${collateralAxis.suffix}`;
   };
 
+  const v2Axis = useMemo(() => {
+    const maxValue = v2StructureData.reduce(
+      (max, item) =>
+        Math.max(max, item.cash_usd, item.borrow_usd, item.supply_usd, item.reserves_usd),
+      0,
+    );
+
+    if (maxValue >= 1e9) return { divisor: 1e9, suffix: 'B' };
+    if (maxValue >= 1e6) return { divisor: 1e6, suffix: 'M' };
+    if (maxValue >= 1e3) return { divisor: 1e3, suffix: 'K' };
+    return { divisor: 1, suffix: '' };
+  }, [v2StructureData]);
+
+  const formatV2UsdTick = (value: number) => {
+    if (v2Axis.divisor === 1) {
+      return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    }
+    return `$${(value / v2Axis.divisor).toFixed(2)}${v2Axis.suffix}`;
+  };
+
   if (loading)
     return (
       <div
@@ -277,6 +387,301 @@ export function CompoundCollateralHistoryChart({
         {error}
       </div>
     );
+
+  if (version === 'v2') {
+    if (!data.length || !v2StructureData.length)
+      return (
+        <div
+          className="card"
+          style={{
+            height: 400,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94a3b8',
+            marginTop: '1.5rem',
+          }}
+        >
+          暂无 Compound v2 市场结构数据
+        </div>
+      );
+
+    const summaryCards = [
+      {
+        label: '可用流动性',
+        value: formatUsd(latestV2Point?.cash_usd ?? 0),
+        tone: '#22c55e',
+      },
+      {
+        label: '未偿借款',
+        value: formatUsd(latestV2Point?.borrow_usd ?? 0),
+        tone: '#f59e0b',
+      },
+      {
+        label: '利用率',
+        value: formatPercent(latestV2Point?.utilization_pct ?? 0),
+        tone: '#60a5fa',
+      },
+      {
+        label: '协议储备',
+        value: formatUsd(latestV2Point?.reserves_usd ?? 0),
+        tone: '#c084fc',
+      },
+    ];
+
+    if (v2Config?.collateral_factor) {
+      summaryCards.push({
+        label: '抵押系数',
+        value: formatPercent(parseFloat(v2Config.collateral_factor) * 100),
+        tone: '#f97316',
+      });
+    }
+    if (v2Config?.reserve_factor) {
+      summaryCards.push({
+        label: '储备因子',
+        value: formatPercent(parseFloat(v2Config.reserve_factor) * 100),
+        tone: '#14b8a6',
+      });
+    }
+
+    return (
+      <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '0.5rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
+              {marketSymbol} v2 市场结构回顾
+            </span>
+            <span
+              style={{
+                fontSize: '0.75rem',
+                color: '#93c5fd',
+                background: 'rgba(37, 99, 235, 0.14)',
+                border: '1px solid rgba(96, 165, 250, 0.28)',
+                borderRadius: '999px',
+                padding: '0.2rem 0.65rem',
+              }}
+            >
+              单资产 cToken 市场
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {(['3M', '6M', '1Y'] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => setTimeRange(r)}
+                style={{
+                  background: timeRange === r ? '#3b82f6' : 'transparent',
+                  color: timeRange === r ? '#fff' : '#94a3b8',
+                  border: '1px solid #334155',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            color: '#94a3b8',
+            fontSize: '0.9rem',
+            lineHeight: 1.6,
+            background: 'rgba(15, 23, 42, 0.68)',
+            border: '1px solid #1e293b',
+            borderRadius: '10px',
+            padding: '0.85rem 1rem',
+          }}
+        >
+          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。
+          这里改为展示该 cToken 市场的资金结构、流动性利用率和协议储备演化。
+        </div>
+
+        <div
+          style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '-0.5rem' }}
+        >
+          <input
+            type="date"
+            value={customStart}
+            onChange={(e) => {
+              setTimeRange(null);
+              setCustomStart(e.target.value);
+            }}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#cbd5e1',
+              borderRadius: '4px',
+              padding: '2px 6px',
+              fontSize: '0.75rem',
+            }}
+          />
+          <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
+          <input
+            type="date"
+            value={customEnd}
+            onChange={(e) => {
+              setTimeRange(null);
+              setCustomEnd(e.target.value);
+            }}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#cbd5e1',
+              borderRadius: '4px',
+              padding: '2px 6px',
+              fontSize: '0.75rem',
+            }}
+          />
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+            gap: '0.75rem',
+          }}
+        >
+          {summaryCards.map((item) => (
+            <div
+              key={item.label}
+              className="card"
+              style={{
+                padding: '1rem',
+                background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.72))',
+              }}
+            >
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.45rem' }}>
+                {item.label}
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 700, color: item.tone }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card">
+          <div
+            className="card-header"
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
+            <span className="card-title">{marketSymbol} 资金结构</span>
+          </div>
+          <div style={{ height: 400 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={v2StructureData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
+                <YAxis yAxisId="left" stroke="#64748b" tickFormatter={formatV2UsdTick} width={70} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  formatter={(value: unknown, name: unknown) => [
+                    formatUsd(Number(value)),
+                    String(name),
+                  ]}
+                />
+                <Legend />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="cash_usd"
+                  name="可用流动性"
+                  stroke="#22c55e"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="borrow_usd"
+                  name="未偿借款"
+                  stroke="#f59e0b"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="supply_usd"
+                  name="供应规模"
+                  stroke="#60a5fa"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="reserves_usd"
+                  name="协议储备"
+                  stroke="#c084fc"
+                  dot={false}
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div
+            className="card-header"
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
+            <span className="card-title">{marketSymbol} 市场效率与储备占比</span>
+          </div>
+          <div style={{ height: 360 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={v2StructureData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
+                <YAxis
+                  stroke="#64748b"
+                  tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                  width={60}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  formatter={(value: unknown, name: unknown) => [
+                    formatPercent(Number(value)),
+                    String(name),
+                  ]}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="utilization_pct"
+                  name="利用率"
+                  stroke="#38bdf8"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="reserve_share_pct"
+                  name="储备占供应规模比例"
+                  stroke="#f97316"
+                  dot={false}
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!data.length || !chartData.length)
     return (
