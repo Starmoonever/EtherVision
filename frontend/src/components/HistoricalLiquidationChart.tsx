@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
+import type { TooltipValueType } from 'recharts';
 import { fetchHistoricalLiquidation, fetchHistoricalLiquidationDetail } from '../api/liquidation';
 import { fetchHistoricalUserPosition } from '../api';
 import type {
@@ -437,11 +438,11 @@ export function HistoricalLiquidationChart({
               }}
               itemStyle={{ fontSize: '0.9rem' }}
               formatter={(
-                value: number | undefined,
-                name: string | undefined,
+                value: TooltipValueType | undefined,
+                name: string | number | undefined,
               ): [string, string] => {
-                const v = value ?? 0;
-                const n = name ?? '';
+                const v = Number(Array.isArray(value) ? value[0] : (value ?? 0));
+                const n = String(name ?? '');
                 if (n === '模拟ETH价格' || n === 'sim_eth_price_num')
                   return [`$${v}`, '模拟ETH价格'];
                 if (n === '该模拟价格下清算的抵押 ETH 总值' || n === 'total_eth_collateral_usd_num')

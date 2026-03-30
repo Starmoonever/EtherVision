@@ -8,6 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import type { TooltipValueType } from 'recharts';
 import { fetchEthPricePeriod } from '../api';
 import type { PricePeriodItem } from '../api';
 
@@ -155,10 +156,13 @@ export function EthPriceTrend() {
                   color: '#e2e8f0',
                 }}
                 itemStyle={{ color: '#3b82f6' }}
-                formatter={(value: number | string | undefined) => [
-                  `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-                  'Price',
-                ]}
+                formatter={(value: TooltipValueType | undefined) => {
+                  const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));
+                  return [
+                    `$${numericValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                    'Price',
+                  ];
+                }}
               />
               <Line
                 type="monotone"
