@@ -19,7 +19,6 @@ dist/
 .pytest_cache/
 
 *.log
-watchers.pid
-parsed_example.json
+temp.json
 
 derived_users/
