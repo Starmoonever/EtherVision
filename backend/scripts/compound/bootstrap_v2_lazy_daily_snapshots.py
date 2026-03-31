@@ -457,7 +457,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user-batch-size", type=int, default=20)
     parser.add_argument("--rpc-concurrency", type=int, default=8)
     parser.add_argument("--write-snapshot-batch-size", type=int, default=500)
-    parser.add_argument("--write-asset-batch-size", type=int, default=5000)
+    parser.add_argument("--write-asset-batch-size", type=int, default=3000)
     parser.add_argument("--verbose", "-v", action="store_true", default=False)
     return parser
 
