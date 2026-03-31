@@ -8,7 +8,6 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import type { TooltipValueType } from 'recharts';
 import { fetchEthPricePeriod } from '../api';
 import type { PricePeriodItem } from '../api';
 
@@ -16,6 +15,8 @@ interface PricePoint {
   time: string;
   price: number;
 }
+
+type ChartTooltipValue = string | number | Array<string | number>;
 
 // 模块级内存缓存：key = 时间段，value = { fetchedAt, points }
 // 页面刷新后自动清空，无持久化坏数据风险
@@ -156,7 +157,7 @@ export function EthPriceTrend() {
                   color: '#e2e8f0',
                 }}
                 itemStyle={{ color: '#3b82f6' }}
-                formatter={(value: TooltipValueType | undefined) => {
+                formatter={(value: ChartTooltipValue | undefined) => {
                   const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));
                   return [
                     `$${numericValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,

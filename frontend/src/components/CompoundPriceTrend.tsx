@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fetchAssetPricePeriod } from '../api';
-import { fetchCompoundMarketConfigPeriodV2 } from '../api/compound';
+import { fetchCompoundMarketConfigPeriodV2, getCompoundV2BaseAssetSymbol } from '../api/compound';
 import type { PricePeriodItem } from '../api';
 
 interface PricePoint {
@@ -72,10 +72,14 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
         let finalData: PricePoint[] = [];
 
         if (version === 'v2') {
-          const baseSymbol = asset.replace(/^c/i, '');
+          const baseSymbol = getCompoundV2BaseAssetSymbol(asset);
           const [priceItems, configRes] = await Promise.all([
             fetchAssetPricePeriod(baseSymbol, startStr, endStr, interval),
-            fetchCompoundMarketConfigPeriodV2(asset, startStr.slice(0, 10) + ' 00:00:00', endStr.slice(0, 10) + ' 00:00:00'),
+            fetchCompoundMarketConfigPeriodV2(
+              asset,
+              startStr.slice(0, 10) + ' 00:00:00',
+              endStr.slice(0, 10) + ' 00:00:00',
+            ),
           ]);
 
           // Create a map of timestamp -> exchange_rate
@@ -91,7 +95,7 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
           }
 
           let lastKnownRate = 1;
-          
+
           finalData = priceItems.map((item: PricePeriodItem) => {
             const dateKey = item.timestamp.split('T')[0];
             const rate = rateMap.get(dateKey) || lastKnownRate;
@@ -218,7 +222,8 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
                 itemStyle={{ color: '#3b82f6' }}
                 formatter={(value: any, name: any) => {
                   if (name === 'price') {
-                    const label = version === 'v2' ? `${asset.replace(/^c/i, '')} 价格` : '价格';
+                    const label =
+                      version === 'v2' ? `${getCompoundV2BaseAssetSymbol(asset)} 价格` : '价格';
                     return [
                       `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                       label,
@@ -226,7 +231,10 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
                   }
                   if (name === 'exchange_rate') {
                     return [
-                      Number(value).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }),
+                      Number(value).toLocaleString(undefined, {
+                        minimumFractionDigits: 4,
+                        maximumFractionDigits: 6,
+                      }),
                       `${asset} 兑换率`,
                     ];
                   }

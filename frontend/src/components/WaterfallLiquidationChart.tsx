@@ -10,7 +10,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import type { TooltipValueType } from 'recharts';
 import { fetchWaterfallLiquidation } from '../api/liquidation';
 import type { WaterfallResponse } from '../api/liquidation';
 
@@ -30,6 +29,8 @@ interface WaterfallChartPoint {
   eth_price: string;
   eth_price_decline: string;
 }
+
+type ChartTooltipValue = string | number | Array<string | number>;
 
 export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChartProps) {
   const [data, setData] = useState<WaterfallResponse | null>(null);
@@ -620,7 +621,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                     }}
                     itemStyle={{ fontSize: '0.9rem' }}
                     formatter={(
-                      value: TooltipValueType | undefined,
+                      value: ChartTooltipValue | undefined,
                       name: string | number | undefined,
                     ) => {
                       const normalizedValue = Array.isArray(value) ? value[0] : value;
