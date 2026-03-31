@@ -10,7 +10,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import type { TooltipValueType } from 'recharts';
 import { fetchHistoricalLiquidation, fetchHistoricalLiquidationDetail } from '../api/liquidation';
 import { fetchHistoricalUserPosition } from '../api';
 import type {
@@ -26,6 +25,8 @@ interface HistoricalLiquidationChartProps {
   endDate: string;
   priceChange: number;
 }
+
+type ChartTooltipValue = string | number | Array<string | number>;
 
 type SortField =
   | 'liq_price'
@@ -438,7 +439,7 @@ export function HistoricalLiquidationChart({
               }}
               itemStyle={{ fontSize: '0.9rem' }}
               formatter={(
-                value: TooltipValueType | undefined,
+                value: ChartTooltipValue | undefined,
                 name: string | number | undefined,
               ): [string, string] => {
                 const v = Number(Array.isArray(value) ? value[0] : (value ?? 0));

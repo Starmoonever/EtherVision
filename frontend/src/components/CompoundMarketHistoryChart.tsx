@@ -9,7 +9,12 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { fetchCompoundMarketHistory, fetchCompoundMarketGovernanceV3, fetchCompoundMarketConfigPeriodV2 } from '../api/compound';
+import {
+  fetchCompoundMarketHistory,
+  fetchCompoundMarketGovernanceV3,
+  fetchCompoundMarketConfigPeriodV2,
+  getCompoundV2BaseAssetSymbol,
+} from '../api/compound';
 import { fetchAssetPrice, fetchAssetPricePeriod } from '../api/price';
 
 interface CompoundMarketHistoryChartProps {
@@ -111,15 +116,10 @@ export function CompoundMarketHistoryChart({
         const start = formatUtcDateBoundary(customStart);
         const end = formatUtcDateBoundary(customEnd, true);
         const priceInterval = getPriceIntervalMinutes(timeRange);
-        const marketStateInterval = getMarketStateIntervalHours(
-          version,
-          timeRange,
-          startTs,
-          endTs,
-        );
+        const marketStateInterval = getMarketStateIntervalHours(version, timeRange, startTs, endTs);
 
         if (version === 'v2') {
-          const baseSymbol = marketSymbol.replace(/^c/i, '');
+          const baseSymbol = getCompoundV2BaseAssetSymbol(marketSymbol);
           const [priceItems, configRes, points] = await Promise.all([
             fetchAssetPricePeriod(baseSymbol, start, end, priceInterval),
             fetchCompoundMarketConfigPeriodV2(marketSymbol, start, end),
@@ -140,7 +140,7 @@ export function CompoundMarketHistoryChart({
 
           let lastKnownRate = 1;
           const priceMap = new Map<string, number>();
-          
+
           if (priceItems && Array.isArray(priceItems)) {
             priceItems.forEach((item: any) => {
               const dateKey = item.timestamp.split('T')[0];
@@ -149,7 +149,10 @@ export function CompoundMarketHistoryChart({
                 lastKnownRate = rate;
               }
               // Store the cToken price by timestamp
-              priceMap.set(item.timestamp.replace('T', ' ').slice(0, 13) + ':00:00', parseFloat(item.price_usd) * rate);
+              priceMap.set(
+                item.timestamp.replace('T', ' ').slice(0, 13) + ':00:00',
+                parseFloat(item.price_usd) * rate,
+              );
             });
           }
 
@@ -177,8 +180,8 @@ export function CompoundMarketHistoryChart({
 
           setData(
             finalData.sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-            )
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            ),
           );
           return;
         }
@@ -248,7 +251,8 @@ export function CompoundMarketHistoryChart({
 
         setData(
           finalDataV3.sort(
-            (a: ChartPoint, b: ChartPoint) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            (a: ChartPoint, b: ChartPoint) =>
+              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           ),
         );
       } catch (err) {

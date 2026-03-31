@@ -259,30 +259,32 @@ export function CompoundCollateralHistoryChart({
 
   // Set default selected symbol if none is selected
   useEffect(() => {
+    if (version !== 'v3') {
+      setSelectedSymbol('');
+      return;
+    }
+
     if (availableSymbols.length > 0 && !availableSymbols.includes(selectedSymbol)) {
       setSelectedSymbol(availableSymbols[0]);
     }
-  }, [availableSymbols, selectedSymbol]);
+  }, [availableSymbols, selectedSymbol, version]);
 
   // Fetch collateral factor
   useEffect(() => {
+    if (version !== 'v3') {
+      setCollateralFactor(1);
+      return;
+    }
     if (!selectedSymbol) return;
+
     const fetchFactor = async () => {
       try {
         const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
-        if (version === 'v3') {
-          const res = await fetchCompoundMarketGovernanceV3(market, today);
-          if (res && res.assets && Array.isArray(res.assets)) {
-            const assetInfo = res.assets.find((a: any) => a.symbol === selectedSymbol);
-            if (assetInfo && assetInfo.borrow_collateral_factor) {
-              setCollateralFactor(parseFloat(assetInfo.borrow_collateral_factor));
-              return;
-            }
-          }
-        } else if (version === 'v2') {
-          const res = await fetchCompoundMarketConfigV2(selectedSymbol, today);
-          if (res && res.collateral_factor) {
-            setCollateralFactor(parseFloat(res.collateral_factor));
+        const res = await fetchCompoundMarketGovernanceV3(market, today);
+        if (res && res.assets && Array.isArray(res.assets)) {
+          const assetInfo = res.assets.find((a: any) => a.symbol === selectedSymbol);
+          if (assetInfo && assetInfo.borrow_collateral_factor) {
+            setCollateralFactor(parseFloat(assetInfo.borrow_collateral_factor));
             return;
           }
         }
@@ -503,12 +505,17 @@ export function CompoundCollateralHistoryChart({
             padding: '0.85rem 1rem',
           }}
         >
-          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。
-          这里改为展示该 cToken 市场的资金结构、流动性利用率和协议储备演化。
+          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里改为展示该 cToken
+          市场的资金结构、流动性利用率和协议储备演化。
         </div>
 
         <div
-          style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '-0.5rem' }}
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '0.5rem',
+            marginTop: '-0.5rem',
+          }}
         >
           <input
             type="date"
@@ -558,7 +565,8 @@ export function CompoundCollateralHistoryChart({
               className="card"
               style={{
                 padding: '1rem',
-                background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.72))',
+                background:
+                  'linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.72))',
               }}
             >
               <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.45rem' }}>
@@ -582,7 +590,12 @@ export function CompoundCollateralHistoryChart({
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={v2StructureData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
+                <XAxis
+                  dataKey="timestamp"
+                  stroke="#64748b"
+                  tick={{ fontSize: 12 }}
+                  minTickGap={30}
+                />
                 <YAxis yAxisId="left" stroke="#64748b" tickFormatter={formatV2UsdTick} width={70} />
                 <Tooltip
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
@@ -645,7 +658,12 @@ export function CompoundCollateralHistoryChart({
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={v2StructureData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="timestamp" stroke="#64748b" tick={{ fontSize: 12 }} minTickGap={30} />
+                <XAxis
+                  dataKey="timestamp"
+                  stroke="#64748b"
+                  tick={{ fontSize: 12 }}
+                  minTickGap={30}
+                />
                 <YAxis
                   stroke="#64748b"
                   tickFormatter={(value) => `${Number(value).toFixed(0)}%`}

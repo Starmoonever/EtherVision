@@ -9,7 +9,6 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { TooltipValueType } from 'recharts';
 import { apiFetch } from '../api/client';
 
 interface MarketHistoryChartProps {
@@ -42,6 +41,8 @@ interface MarketPoint {
 
 type TimeRangePreset = '3M' | '6M' | '1Y';
 
+type ChartTooltipValue = string | number | Array<string | number>;
+
 function formatDateInput(date: Date) {
   return date.toISOString().split('T')[0];
 }
@@ -69,7 +70,7 @@ function formatPriceTick(value: number) {
 }
 
 function formatTooltipValue(
-  value: TooltipValueType | undefined,
+  value: ChartTooltipValue | undefined,
   name: string | number | undefined,
 ) {
   const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));
@@ -81,7 +82,7 @@ function formatTooltipValue(
 }
 
 function formatRateTooltipValue(
-  value: TooltipValueType | undefined,
+  value: ChartTooltipValue | undefined,
   name: string | number | undefined,
 ) {
   const numericValue = Number(Array.isArray(value) ? value[0] : (value ?? 0));

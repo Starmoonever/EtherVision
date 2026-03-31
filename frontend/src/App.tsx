@@ -90,14 +90,19 @@ export default function App() {
   const [v3State, setV3State] = useState<VersionState>(emptyState());
 
   const [compoundMarkets, setCompoundMarkets] = useState<CompoundMarket[]>([]);
+  const [compoundMarketsVersion, setCompoundMarketsVersion] = useState<'v2' | 'v3' | null>(null);
   const [compoundMarket, setCompoundMarket] = useState<string>('all');
   const [compoundAddress, setCompoundAddress] = useState('');
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
+  const activeCompoundMarketsVersion = activeTab === 'personal' ? personalVersion : marketVersion;
+  const visibleCompoundMarkets =
+    compoundMarketsVersion === activeCompoundMarketsVersion ? compoundMarkets : [];
 
   const selectedCompoundMarketSymbol =
     compoundMarket === 'all'
       ? 'all'
-      : (compoundMarkets.find((item) => item.address === compoundMarket)?.symbol ?? compoundMarket);
+      : (visibleCompoundMarkets.find((item) => item.address === compoundMarket)?.symbol ??
+        compoundMarket);
 
   const handleSearch = (address: string) => {
     setError('');
@@ -119,11 +124,17 @@ export default function App() {
   }, [compoundAddress, compoundMarket]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadCompoundMarkets = async () => {
       try {
-        const version = activeTab === 'personal' ? personalVersion : marketVersion;
+        const version = activeCompoundMarketsVersion;
+        setCompoundMarketsVersion(null);
+        setCompoundMarkets([]);
         const markets = await fetchCompoundMarkets(version);
+        if (cancelled) return;
         setCompoundMarkets(markets);
+        setCompoundMarketsVersion(version);
         // Ensure compoundMarket points to a valid address after version change
         if (markets.length > 0) {
           if (compoundMarket !== 'all' && !markets.find((m) => m.address === compoundMarket)) {
@@ -140,7 +151,10 @@ export default function App() {
     };
 
     loadCompoundMarkets();
-  }, [marketVersion, personalVersion, activeTab]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCompoundMarketsVersion]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
@@ -336,7 +350,7 @@ export default function App() {
   const renderCompoundAssetSwitch = () => (
     <div className="hero-switch">
       <div className="switch-group">
-        {compoundMarkets.map((item) => (
+        {visibleCompoundMarkets.map((item) => (
           <button
             key={item.address}
             onClick={() => setCompoundMarket(item.address)}
@@ -362,7 +376,7 @@ export default function App() {
   const renderCompoundMarketSwitch = () => (
     <div className="hero-switch">
       <div className="switch-group">
-        {compoundMarkets.map((item) => (
+        {visibleCompoundMarkets.map((item) => (
           <button
             key={item.address}
             onClick={() => setCompoundMarket(item.address)}
@@ -480,7 +494,7 @@ export default function App() {
       <Suspense fallback={<ChartFallback minHeight="420px" />}>
         <CompoundMarketAssessment
           marketVersion={marketVersion}
-          markets={compoundMarkets}
+          markets={visibleCompoundMarkets}
           selectedMarket={compoundMarket}
           onMarketChange={setCompoundMarket}
         />
