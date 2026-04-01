@@ -9,12 +9,16 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fetchAssetPricePeriod } from '../api';
-import { fetchCompoundMarketConfigPeriodV2, getCompoundV2BaseAssetSymbol } from '../api/compound';
+import {
+  fetchCompoundMarketConfigPeriodV2,
+  fetchCompoundMarketConfigV2,
+  getCompoundV2BaseAssetSymbol,
+} from '../api/compound';
 import type { PricePeriodItem } from '../api';
 
 interface PricePoint {
   time: string;
-  price: number; // For v3: asset price. For v2: base asset price
+  price: number; // For v3: asset price. For v2: cToken price
   exchange_rate?: number; // Only used in v2
 }
 
@@ -73,13 +77,15 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
 
         if (version === 'v2') {
           const baseSymbol = getCompoundV2BaseAssetSymbol(asset);
-          const [priceItems, configRes] = await Promise.all([
+          const baselineConfigDate = startStr.slice(0, 10) + ' 00:00:00';
+          const [priceItems, configRes, baselineConfig] = await Promise.all([
             fetchAssetPricePeriod(baseSymbol, startStr, endStr, interval),
             fetchCompoundMarketConfigPeriodV2(
               asset,
-              startStr.slice(0, 10) + ' 00:00:00',
+              baselineConfigDate,
               endStr.slice(0, 10) + ' 00:00:00',
             ),
+            fetchCompoundMarketConfigV2(asset, baselineConfigDate),
           ]);
 
           // Create a map of timestamp -> exchange_rate
@@ -94,7 +100,7 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
             });
           }
 
-          let lastKnownRate = 1;
+          let lastKnownRate = parseFloat(baselineConfig?.market_config?.exchange_rate || '1');
 
           finalData = priceItems.map((item: PricePeriodItem) => {
             const dateKey = item.timestamp.split('T')[0];
@@ -110,7 +116,7 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
                 hour: '2-digit',
                 minute: '2-digit',
               }),
-              price: parseFloat(item.price_usd),
+              price: parseFloat(item.price_usd) * rate,
               exchange_rate: rate,
             };
           });
@@ -222,8 +228,7 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
                 itemStyle={{ color: '#3b82f6' }}
                 formatter={(value: any, name: any) => {
                   if (name === 'price') {
-                    const label =
-                      version === 'v2' ? `${getCompoundV2BaseAssetSymbol(asset)} 价格` : '价格';
+                    const label = version === 'v2' ? `${asset} 价格` : '价格';
                     return [
                       `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                       label,

@@ -12,6 +12,7 @@ import {
 import {
   fetchCompoundMarketHistory,
   fetchCompoundMarketGovernanceV3,
+  fetchCompoundMarketConfigV2,
   fetchCompoundMarketConfigPeriodV2,
   getCompoundV2BaseAssetSymbol,
 } from '../api/compound';
@@ -64,6 +65,62 @@ function getMarketStateIntervalHours(
   const totalHours = Math.max(1, Math.ceil((endTs - startTs) / (1000 * 60 * 60)));
   const targetPoints = 120;
   return Math.min(168, Math.max(1, Math.ceil(totalHours / targetPoints)));
+}
+
+function buildV2RateResolver(
+  configPoints: any[],
+  baselineRate: number,
+): (timestamp: string) => number {
+  const sortedRates = (configPoints || [])
+    .filter((pt) => pt?.market_config?.effective_timestamp && pt?.market_config?.exchange_rate)
+    .map((pt) => ({
+      ts: Date.parse(pt.market_config.effective_timestamp),
+      rate: parseFloat(pt.market_config.exchange_rate),
+    }))
+    .filter((item) => !Number.isNaN(item.ts) && !Number.isNaN(item.rate))
+    .sort((a, b) => a.ts - b.ts);
+
+  return (timestamp: string) => {
+    const targetTs = Date.parse(timestamp);
+    if (Number.isNaN(targetTs)) return baselineRate;
+
+    let rate = baselineRate;
+    for (const point of sortedRates) {
+      if (point.ts <= targetTs) {
+        rate = point.rate;
+      } else {
+        break;
+      }
+    }
+    return rate;
+  };
+}
+
+function buildUnderlyingPriceResolver(priceItems: any[]): (timestamp: string) => number | null {
+  const sortedPrices = (priceItems || [])
+    .map((item) => ({
+      ts: Date.parse(item.timestamp),
+      price: parseFloat(item.price_usd),
+    }))
+    .filter((item) => !Number.isNaN(item.ts) && !Number.isNaN(item.price))
+    .sort((a, b) => a.ts - b.ts);
+
+  return (timestamp: string) => {
+    const targetTs = Date.parse(timestamp);
+    if (!sortedPrices.length || Number.isNaN(targetTs)) return null;
+
+    let lastPrice: number | null = null;
+    for (const point of sortedPrices) {
+      if (point.ts <= targetTs) {
+        lastPrice = point.price;
+      } else {
+        break;
+      }
+    }
+
+    if (lastPrice !== null) return lastPrice;
+    return sortedPrices[0].price;
+  };
 }
 
 export function CompoundMarketHistoryChart({
@@ -120,13 +177,15 @@ export function CompoundMarketHistoryChart({
 
         if (version === 'v2') {
           const baseSymbol = getCompoundV2BaseAssetSymbol(marketSymbol);
-          const [priceItems, configRes, points] = await Promise.all([
+          const baselineConfigDate = `${customStart} 00:00:00`;
+          const [priceItems, configRes, baselineConfig] = await Promise.all([
             fetchAssetPricePeriod(baseSymbol, start, end, priceInterval),
             fetchCompoundMarketConfigPeriodV2(marketSymbol, start, end),
-            fetchCompoundMarketHistory(version, market, start, end, {
-              interval: marketStateInterval,
-            }),
+            fetchCompoundMarketConfigV2(marketSymbol, baselineConfigDate),
           ]);
+          const statePoints = await fetchCompoundMarketHistory(version, market, start, end, {
+            interval: marketStateInterval,
+          });
 
           const rateMap = new Map<string, number>();
           if (configRes && Array.isArray(configRes.points)) {
@@ -138,32 +197,21 @@ export function CompoundMarketHistoryChart({
             });
           }
 
-          let lastKnownRate = 1;
-          const priceMap = new Map<string, number>();
+          const baselineRate = parseFloat(baselineConfig?.market_config?.exchange_rate || '1');
+          const resolveRateAt = buildV2RateResolver(configRes?.points || [], baselineRate);
+          const resolveUnderlyingPriceAt = buildUnderlyingPriceResolver(priceItems || []);
 
-          if (priceItems && Array.isArray(priceItems)) {
-            priceItems.forEach((item: any) => {
-              const dateKey = item.timestamp.split('T')[0];
-              const rate = rateMap.get(dateKey) || lastKnownRate;
-              if (rateMap.has(dateKey)) {
-                lastKnownRate = rate;
-              }
-              // Store the cToken price by timestamp
-              priceMap.set(
-                item.timestamp.replace('T', ' ').slice(0, 13) + ':00:00',
-                parseFloat(item.price_usd) * rate,
-              );
-            });
-          }
-
-          const finalData: ChartPoint[] = points.map((pt: any) => {
+          const finalData: ChartPoint[] = statePoints.map((pt: any) => {
             const supplyUsd = parseFloat(pt.supply_usd || '0');
             const borrowUsd = parseFloat(pt.borrow_usd || '0');
             const baseSupplyApr = parseFloat(pt.supply_apr || '0') * 100;
             const baseBorrowApr = parseFloat(pt.borrow_apr || '0') * 100;
-
-            const timeKey = pt.timestamp.replace('T', ' ').slice(0, 13) + ':00:00';
-            const cTokenPrice = priceMap.get(timeKey) || parseFloat(pt.price_usd || '0');
+            const underlyingPrice = resolveUnderlyingPriceAt(pt.timestamp);
+            const exchangeRate = resolveRateAt(pt.timestamp);
+            const cTokenPrice =
+              underlyingPrice !== null
+                ? underlyingPrice * exchangeRate
+                : parseFloat(pt.price_usd || '0') * exchangeRate;
 
             return {
               timestamp: pt.timestamp.replace('T', ' '),
