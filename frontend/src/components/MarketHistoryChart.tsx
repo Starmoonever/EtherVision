@@ -41,7 +41,7 @@ interface MarketPoint {
 
 type TimeRangePreset = '3M' | '6M' | '1Y';
 
-type ChartTooltipValue = string | number | Array<string | number>;
+type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 function formatDateInput(date: Date) {
   return date.toISOString().split('T')[0];

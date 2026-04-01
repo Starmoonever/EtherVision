@@ -40,7 +40,7 @@ interface ChartDataPoint {
   isCurrent: boolean;
 }
 
-type ChartTooltipValue = string | number | Array<string | number>;
+type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 const PAGE_SIZE = 20;
 

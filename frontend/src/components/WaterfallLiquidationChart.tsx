@@ -30,7 +30,7 @@ interface WaterfallChartPoint {
   eth_price_decline: string;
 }
 
-type ChartTooltipValue = string | number | Array<string | number>;
+type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChartProps) {
   const [data, setData] = useState<WaterfallResponse | null>(null);

@@ -26,7 +26,7 @@ interface HistoricalLiquidationChartProps {
   priceChange: number;
 }
 
-type ChartTooltipValue = string | number | Array<string | number>;
+type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 type SortField =
   | 'liq_price'

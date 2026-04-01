@@ -16,7 +16,7 @@ interface PricePoint {
   price: number;
 }
 
-type ChartTooltipValue = string | number | Array<string | number>;
+type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 // 模块级内存缓存：key = 时间段，value = { fetchedAt, points }
 // 页面刷新后自动清空，无持久化坏数据风险
