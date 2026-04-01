@@ -42,6 +42,21 @@ type CompoundCacheEntry =
   | { kind: 'data'; data: CompoundUserPositionItem[] }
   | { kind: 'not_found' };
 
+const COMPOUND_V2_PERSONAL_MARKETS = new Set(['ceth', 'cwbtc', 'cusdt', 'cdai']);
+
+function getVisibleCompoundMarkets(
+  activeTab: 'personal' | 'market',
+  version: 'v2' | 'v3',
+  marketsVersion: 'v2' | 'v3' | null,
+  markets: CompoundMarket[],
+): CompoundMarket[] {
+  if (marketsVersion !== version) return [];
+  if (activeTab === 'personal' && version === 'v2') {
+    return markets.filter((item) => COMPOUND_V2_PERSONAL_MARKETS.has(item.symbol.toLowerCase()));
+  }
+  return markets;
+}
+
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 const emptyCompoundState = (): CompoundVersionState => ({
   data: null,
@@ -97,8 +112,12 @@ export default function App() {
   const [compoundAddress, setCompoundAddress] = useState('');
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
   const activeCompoundMarketsVersion = activeTab === 'personal' ? personalVersion : marketVersion;
-  const visibleCompoundMarkets =
-    compoundMarketsVersion === activeCompoundMarketsVersion ? compoundMarkets : [];
+  const visibleCompoundMarkets = getVisibleCompoundMarkets(
+    activeTab,
+    activeCompoundMarketsVersion,
+    compoundMarketsVersion,
+    compoundMarkets,
+  );
 
   const selectedCompoundMarketSymbol =
     compoundMarket === 'all'
@@ -134,13 +153,17 @@ export default function App() {
         setCompoundMarketsVersion(null);
         setCompoundMarkets([]);
         const markets = await fetchCompoundMarkets(version);
+        const visibleMarkets = getVisibleCompoundMarkets(activeTab, version, version, markets);
         if (cancelled) return;
         setCompoundMarkets(markets);
         setCompoundMarketsVersion(version);
         // Ensure compoundMarket points to a valid address after version change
-        if (markets.length > 0) {
-          if (compoundMarket !== 'all' && !markets.find((m) => m.address === compoundMarket)) {
-            setCompoundMarket(markets[0].address);
+        if (visibleMarkets.length > 0) {
+          if (
+            compoundMarket !== 'all' &&
+            !visibleMarkets.find((marketItem) => marketItem.address === compoundMarket)
+          ) {
+            setCompoundMarket(visibleMarkets[0].address);
           }
         }
       } catch (loadError) {
@@ -153,7 +176,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeCompoundMarketsVersion]);
+  }, [activeCompoundMarketsVersion, activeTab, compoundMarket]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
@@ -369,15 +392,13 @@ export default function App() {
             {item.symbol}
           </button>
         ))}
-        {personalVersion === 'v3' && (
-          <button
-            onClick={() => setCompoundMarket('all')}
-            className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
-            type="button"
-          >
-            ALL
-          </button>
-        )}
+        <button
+          onClick={() => setCompoundMarket('all')}
+          className={`switch-btn ${compoundMarket === 'all' ? 'active' : ''}`}
+          type="button"
+        >
+          ALL
+        </button>
       </div>
     </div>
   );
