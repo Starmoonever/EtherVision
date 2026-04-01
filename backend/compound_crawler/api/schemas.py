@@ -133,6 +133,17 @@ class CompoundLiquidationSimResponse(BaseModel):
     note: str = Field(default="", description="本次模拟的统计说明。")
 
 
+class CompoundLiquidationPeriodItem(BaseModel):
+    simulated_eth_price: str = Field(description="模拟 ETH 价格（USD）。")
+    positions_cnt: str = Field(description="在该价格下触发下跌清算的仓位数量。")
+    total_eth_sensitive_collateral_usd: str = Field(
+        description="在该模拟价格下，触发清算仓位的 ETH 敏感抵押总 USD 价值。"
+    )
+    total_liquidation_usd: str = Field(
+        description="估算可清算规模，按 min(总债务USD, 模拟价格下 ETH 敏感抵押USD) 逐仓累加。"
+    )
+
+
 class MarketItemResponse(BaseModel):
     address: str = Field(description="市场合约地址。")
     symbol: str = Field(description="市场符号，例如 USDC、WETH。")

@@ -46,6 +46,7 @@ from ..crawler import (
     _v2_underlying_price_usd,
 )
 from .schemas import (
+    CompoundLiquidationPeriodItem,
     CompoundLiquidationSimItem,
     CompoundLiquidationSimResponse,
     CompoundPositionReplayPoint,
@@ -383,6 +384,95 @@ async def get_positions(
             address=_bytea_to_address(user_address_bytes),
             positions=_sort_positions(positions),
         )
+
+    if date is None and version == "v2":
+        cfg = load_config()
+        cfg.protocol = "v2"
+        own_w3 = False
+        active_w3 = w3
+        try:
+            if active_w3 is None:
+                active_w3 = await _build_web3(cfg)
+                own_w3 = True
+
+            latest_block = await active_w3.eth.get_block("latest")
+            latest_timestamp = latest_block.get("timestamp")
+            latest_number = latest_block.get("number")
+            if latest_timestamp is None or latest_number is None:
+                raise RuntimeError("latest block missing timestamp or number")
+
+            point_ts = datetime.fromtimestamp(int(latest_timestamp), tz=timezone.utc)
+            block_number = int(latest_number)
+            metadata_cache: dict[str, tuple[str | None, int | None]] = {}
+            deployment_cache: dict[str, dict[str, int]] = {}
+            feed_price_cache: dict[tuple[str, int], Decimal] = {}
+
+            rows: list[dict[str, Any]] = []
+            for market_address in market_addresses:
+                snapshot_row = await _collect_v2_replay_snapshot_row(
+                    active_w3,
+                    user_address=user_address_bytes,
+                    event_market=bytes.fromhex(market_address[2:]),
+                    block_number=block_number,
+                    point_ts=point_ts,
+                    metadata_cache=metadata_cache,
+                    deployment_cache=deployment_cache,
+                    feed_price_cache=feed_price_cache,
+                )
+                if not snapshot_row.has_open_position:
+                    continue
+                rows.append(
+                    {
+                        "market": snapshot_row.market,
+                        "symbol": snapshot_row.symbol,
+                        "timestamp": snapshot_row.block_timestamp,
+                        "block_number": snapshot_row.block_number,
+                        "has_open_position": snapshot_row.has_open_position,
+                        "is_liquidatable": snapshot_row.is_liquidatable,
+                        "base_token": snapshot_row.base_token,
+                        "base_symbol": snapshot_row.base_symbol,
+                        "base_price_usd": snapshot_row.base_price_usd,
+                        "eth_price_usd": snapshot_row.eth_price_usd,
+                        "total_collateral_usd": snapshot_row.total_collateral_usd,
+                        "total_debt_usd": snapshot_row.total_debt_usd,
+                        "discounted_collateral_usd": snapshot_row.discounted_collateral_usd,
+                        "liquidation_buffer_usd": snapshot_row.liquidation_buffer_usd,
+                        "health_factor": snapshot_row.health_factor,
+                        "eth_sensitive_collateral_usd": snapshot_row.eth_sensitive_collateral_usd,
+                        "eth_sensitive_debt_usd": snapshot_row.eth_sensitive_debt_usd,
+                        "net_eth_exposure_usd": snapshot_row.net_eth_exposure_usd,
+                        "non_eth_collateral_usd": snapshot_row.non_eth_collateral_usd,
+                        "non_eth_debt_usd": snapshot_row.non_eth_debt_usd,
+                        "basis_risk_collateral_usd": snapshot_row.basis_risk_collateral_usd,
+                        "eth_down_liq_price_usd": snapshot_row.eth_down_liq_price_usd,
+                        "eth_up_liq_price_usd": snapshot_row.eth_up_liq_price_usd,
+                        "eth_liq_mode": snapshot_row.eth_liq_mode,
+                        "dominant_risk": snapshot_row.dominant_risk,
+                        "assets_jsonb": snapshot_row.assets_jsonb,
+                    }
+                )
+
+            if not rows:
+                fallback_rows = await _fetch_latest_position_rows(
+                    pool,
+                    position_table=position_table,
+                    market_bytes_list=market_bytes_list,
+                    user_address=user_address_bytes,
+                )
+                return UserPositionResponse(
+                    version=version,
+                    address=_bytea_to_address(user_address_bytes),
+                    positions=_map_and_sort_positions(fallback_rows),
+                )
+
+            return UserPositionResponse(
+                version=version,
+                address=_bytea_to_address(user_address_bytes),
+                positions=_map_and_sort_positions(rows),
+            )
+        finally:
+            if own_w3:
+                await close_web3(active_w3)
 
     if date is None:
         rows = await _fetch_latest_position_rows(
@@ -2041,6 +2131,87 @@ async def simulate_liquidation(
         total_liquidation_usd=_fmt(total_liquidation_usd),
         note=note,
     )
+
+
+async def simulate_liquidation_period(
+    pool,
+    *,
+    version: str,
+    start_price: Decimal,
+    end_price: Decimal,
+    interval: Decimal,
+    market: str = "all",
+) -> list[CompoundLiquidationPeriodItem]:
+    version = version.lower()
+    start_price = Decimal(str(start_price))
+    end_price = Decimal(str(end_price))
+    interval = Decimal(str(interval))
+
+    if version != "v3":
+        raise HTTPException(
+            status_code=400,
+            detail="compound/liquidate/period 当前仅支持 v3",
+        )
+    if start_price > end_price:
+        raise HTTPException(status_code=400, detail="start 必须 <= end")
+    if interval <= 0:
+        raise HTTPException(status_code=400, detail="interval 必须 > 0")
+
+    market_filter = (
+        None
+        if market.strip().lower() == "all"
+        else _address_to_bytes(_market_to_address(version, market))
+    )
+    rows = await fetch_compound_v3_current_positions(pool, market=market_filter)
+
+    candidate_positions: list[tuple[Decimal, Decimal, CompoundCurrentPositionRow]] = []
+    for row in rows:
+        if not row.has_open_position or row.is_liquidatable:
+            continue
+
+        total_debt_usd = Decimal(str(row.total_debt_usd))
+        liq_price = row.eth_down_liq_price_usd
+        if total_debt_usd <= 0 or liq_price is None:
+            continue
+
+        liq_price_dec = Decimal(str(liq_price))
+        if liq_price_dec <= 0:
+            continue
+
+        candidate_positions.append((liq_price_dec, total_debt_usd, row))
+
+    result: list[CompoundLiquidationPeriodItem] = []
+    price = start_price
+    while price <= end_price:
+        total_sensitive_collateral_usd = Decimal("0")
+        total_liquidation_usd = Decimal("0")
+        cnt = 0
+
+        for liq_price_dec, total_debt_usd, row in candidate_positions:
+            if liq_price_dec < price:
+                continue
+
+            simulated_sensitive_usd = _simulated_eth_sensitive_collateral_usd(
+                row,
+                eth_price=price,
+            )
+            liquidation_usd = min(total_debt_usd, simulated_sensitive_usd)
+
+            total_sensitive_collateral_usd += simulated_sensitive_usd
+            total_liquidation_usd += liquidation_usd
+            cnt += 1
+
+        result.append(
+            CompoundLiquidationPeriodItem(
+                simulated_eth_price=_fmt(price),
+                positions_cnt=str(cnt),
+                total_eth_sensitive_collateral_usd=_fmt(total_sensitive_collateral_usd),
+                total_liquidation_usd=_fmt(total_liquidation_usd),
+            )
+        )
+        price += interval
+
+    return result
 
 
 def _map_market_reserve_row(row: Any) -> MarketStateReserveResponse:

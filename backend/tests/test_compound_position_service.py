@@ -355,6 +355,101 @@ async def test_simulate_liquidation_uses_current_positions_for_v3() -> None:
 
 
 @pytest.mark.asyncio
+async def test_simulate_liquidation_period_uses_current_positions_for_v3() -> None:
+    rows = [
+        CompoundCurrentPositionRow(
+            market=bytes.fromhex("a17581a9e3356d9a858b789d68b4d866e593ae94"),
+            user_address=bytes.fromhex("11" * 20),
+            symbol="WETH",
+            last_block_number=123,
+            last_block_timestamp=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            last_tx_hash=None,
+            has_open_position=True,
+            is_liquidatable=False,
+            base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+            base_symbol="WETH",
+            base_price_usd=Decimal("2000"),
+            eth_price_usd=Decimal("2000"),
+            total_collateral_usd=Decimal("5000"),
+            total_debt_usd=Decimal("2000"),
+            discounted_collateral_usd=Decimal("4200"),
+            liquidation_buffer_usd=Decimal("2200"),
+            health_factor=Decimal("2.1"),
+            eth_sensitive_collateral_usd=Decimal("3000"),
+            eth_sensitive_debt_usd=Decimal("1000"),
+            net_eth_exposure_usd=Decimal("2000"),
+            non_eth_collateral_usd=Decimal("2000"),
+            non_eth_debt_usd=Decimal("1000"),
+            basis_risk_collateral_usd=Decimal("0"),
+            eth_down_liq_price_usd=Decimal("1500"),
+            eth_up_liq_price_usd=None,
+            eth_liq_mode="down",
+            dominant_risk="eth_down",
+            assets_jsonb=[],
+            created_at=None,
+            updated_at=None,
+        ),
+        CompoundCurrentPositionRow(
+            market=bytes.fromhex("c3d688b66703497daa19211eedff47f25384cdc3"),
+            user_address=bytes.fromhex("22" * 20),
+            symbol="USDC",
+            last_block_number=123,
+            last_block_timestamp=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            last_tx_hash=None,
+            has_open_position=True,
+            is_liquidatable=False,
+            base_token=bytes.fromhex("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"),
+            base_symbol="USDC",
+            base_price_usd=Decimal("1"),
+            eth_price_usd=Decimal("2000"),
+            total_collateral_usd=Decimal("1500"),
+            total_debt_usd=Decimal("700"),
+            discounted_collateral_usd=Decimal("900"),
+            liquidation_buffer_usd=Decimal("200"),
+            health_factor=Decimal("1.3"),
+            eth_sensitive_collateral_usd=Decimal("1000"),
+            eth_sensitive_debt_usd=Decimal("0"),
+            net_eth_exposure_usd=Decimal("1000"),
+            non_eth_collateral_usd=Decimal("500"),
+            non_eth_debt_usd=Decimal("700"),
+            basis_risk_collateral_usd=Decimal("0"),
+            eth_down_liq_price_usd=Decimal("1400"),
+            eth_up_liq_price_usd=None,
+            eth_liq_mode="down",
+            dominant_risk="eth_down",
+            assets_jsonb=[],
+            created_at=None,
+            updated_at=None,
+        ),
+    ]
+
+    with patch.object(
+        service,
+        "fetch_compound_v3_current_positions",
+        new=AsyncMock(return_value=rows),
+    ):
+        points = await service.simulate_liquidation_period(
+            object(),
+            version="v3",
+            start_price=Decimal("1400"),
+            end_price=Decimal("1500"),
+            interval=Decimal("100"),
+            market="all",
+        )
+
+    assert len(points) == 2
+    assert points[0].simulated_eth_price == "1400"
+    assert points[0].positions_cnt == "2"
+    assert points[0].total_eth_sensitive_collateral_usd == "2800"
+    assert points[0].total_liquidation_usd == "2700"
+
+    assert points[1].simulated_eth_price == "1500"
+    assert points[1].positions_cnt == "1"
+    assert points[1].total_eth_sensitive_collateral_usd == "2250"
+    assert points[1].total_liquidation_usd == "2000"
+
+
+@pytest.mark.asyncio
 async def test_get_positions_reads_historical_snapshot_from_db() -> None:
     pool = _FakePool(rows=[_RecordLike(_snapshot_row_dict())])
 
@@ -370,9 +465,80 @@ async def test_get_positions_reads_historical_snapshot_from_db() -> None:
     assert len(response.positions) == 1
     assert response.positions[0].market == "0xa17581a9e3356d9a858b789d68b4d866e593ae94"
     assert response.positions[0].symbol == "WETH"
-    assert response.positions[0].timestamp == "2026-03-21T00:00:00Z"
-    assert response.positions[0].liquidation_buffer_usd == "2200"
-    assert response.positions[0].assets[0].symbol == "WETH"
+
+
+@pytest.mark.asyncio
+async def test_get_positions_v2_realtime_uses_replay_snapshot() -> None:
+    fake_w3 = _FakeWeb3()
+    replay_row = CompoundEventPositionSnapshotRow(
+        user_address=bytes.fromhex("11" * 20),
+        protocol="v2",
+        market=bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5"),
+        symbol="cETH",
+        block_number=123,
+        tx_hash="",
+        block_timestamp=datetime(2026, 3, 28, tzinfo=timezone.utc),
+        has_open_position=True,
+        is_liquidatable=False,
+        base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        base_symbol="WETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("1000"),
+        total_debt_usd=Decimal("200"),
+        discounted_collateral_usd=Decimal("800"),
+        liquidation_buffer_usd=Decimal("600"),
+        health_factor=Decimal("4"),
+        eth_sensitive_collateral_usd=Decimal("1000"),
+        eth_sensitive_debt_usd=Decimal("0"),
+        net_eth_exposure_usd=Decimal("1000"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("200"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=Decimal("900"),
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="down",
+        dominant_risk="eth_down",
+        assets_jsonb=[],
+        brief="",
+    )
+
+    with (
+        patch.object(
+            service,
+            "load_config",
+            return_value=SimpleNamespace(protocol="v3"),
+        ),
+        patch.object(service, "_build_web3", new=AsyncMock(return_value=fake_w3)),
+        patch.object(service, "close_web3", new=AsyncMock()),
+        patch.object(
+            service,
+            "_collect_v2_replay_snapshot_row",
+            new=AsyncMock(return_value=replay_row),
+        ) as mocked_collect,
+        patch.object(
+            service,
+            "_fetch_latest_position_rows",
+            new=AsyncMock(return_value=[_RecordLike(_snapshot_row_dict())]),
+        ) as mocked_db,
+    ):
+        response = await service.get_positions(
+            pool=object(),
+            version="v2",
+            market="ceth",
+            address="0x1111111111111111111111111111111111111111",
+            date=None,
+            w3=None,
+        )
+
+    assert response.version == "v2"
+    assert len(response.positions) == 1
+    assert response.positions[0].symbol == "cETH"
+    mocked_collect.assert_awaited_once()
+    mocked_db.assert_not_awaited()
+    assert response.positions[0].timestamp == "2026-03-28T00:00:00Z"
+    assert response.positions[0].liquidation_buffer_usd == "600"
+    assert response.positions[0].assets == []
 
 
 @pytest.mark.asyncio
@@ -497,24 +663,74 @@ async def test_get_positions_without_date_fetches_realtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_positions_v2_without_date_reads_latest_snapshot_only() -> None:
-    pool = _FakePool(rows=[_RecordLike(_snapshot_row_dict())])
-    with patch.object(
-        service,
-        "collect_market_user_snapshots",
-        new=AsyncMock(),
-    ) as mocked_collect:
+async def test_get_positions_v2_without_date_uses_realtime_path() -> None:
+    fake_w3 = _FakeWeb3()
+    replay_row = CompoundEventPositionSnapshotRow(
+        user_address=bytes.fromhex("11" * 20),
+        protocol="v2",
+        market=bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5"),
+        symbol="cETH",
+        block_number=123,
+        tx_hash="",
+        block_timestamp=datetime(2026, 3, 28, tzinfo=timezone.utc),
+        has_open_position=False,
+        is_liquidatable=False,
+        base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        base_symbol="WETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("0"),
+        total_debt_usd=Decimal("0"),
+        discounted_collateral_usd=Decimal("0"),
+        liquidation_buffer_usd=Decimal("0"),
+        health_factor=Decimal("1e18"),
+        eth_sensitive_collateral_usd=Decimal("0"),
+        eth_sensitive_debt_usd=Decimal("0"),
+        net_eth_exposure_usd=Decimal("0"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("0"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=None,
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="neutral",
+        dominant_risk="neutral",
+        assets_jsonb=[],
+        brief="",
+    )
+
+    with (
+        patch.object(
+            service,
+            "load_config",
+            return_value=SimpleNamespace(protocol="v3"),
+        ),
+        patch.object(service, "_build_web3", new=AsyncMock(return_value=fake_w3)),
+        patch.object(service, "close_web3", new=AsyncMock()),
+        patch.object(
+            service,
+            "_collect_v2_replay_snapshot_row",
+            new=AsyncMock(return_value=replay_row),
+        ) as mocked_collect,
+        patch.object(
+            service,
+            "_fetch_latest_position_rows",
+            new=AsyncMock(return_value=[_RecordLike(_snapshot_row_dict())]),
+        ) as mocked_db,
+    ):
         response = await service.get_positions(
-            pool=pool,
+            pool=object(),
             version="v2",
             market="all",
             address="0x1111111111111111111111111111111111111111",
             date=None,
+            w3=None,
         )
 
     assert response.version == "v2"
     assert len(response.positions) == 1
-    mocked_collect.assert_not_awaited()
+    assert response.positions[0].symbol == "WETH"
+    assert mocked_collect.await_count == len(COMPOUND_V2_MARKET_NAMES)
+    mocked_db.assert_awaited_once()
 
 
 @pytest.mark.asyncio
