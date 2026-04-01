@@ -410,27 +410,19 @@ async def _v2_underlying_price_usd(
     *,
     eth_price_usd: Decimal | None = None,
 ) -> Decimal:
-    # Compound v2 oracle price is ETH-quoted for Open Price Feed.
-    # Convert to USD so downstream fields named `*_usd` are semantically correct.
-    price_in_eth = await _v2_underlying_price_eth(
+    # In practice, Compound v2 oracle returns USD-quoted price scaled by
+    # 10^(36-underlying_decimals). The helper below already normalizes scale.
+    # Keep the return value as USD directly to avoid double-multiplying by ETH price.
+    price_in_usd = await _v2_underlying_price_eth(
         w3,
         ctoken_address=ctoken_address,
         comptroller_address=comptroller_address,
         underlying_decimals=underlying_decimals,
         block_number=block_number,
     )
-    if price_in_eth <= 0:
+    if price_in_usd <= 0:
         return Decimal("0")
-    resolved_eth_price_usd = eth_price_usd
-    if resolved_eth_price_usd is None:
-        resolved_eth_price_usd = await _price_from_feed_direct(
-            w3,
-            ETH_USD_PRICE_FEED,
-            block_number,
-        )
-    if resolved_eth_price_usd <= 0:
-        return Decimal("0")
-    return price_in_eth * resolved_eth_price_usd
+    return price_in_usd
 
 
 async def _collect_v2_market_at_block(
@@ -681,9 +673,9 @@ async def _collect_v2_protocol_config_at_block(
 
     payload = {
         "comptroller": _normalize_address_text(comptroller_address),
-        "price_oracle": _normalize_address_text(str(oracle_raw))
-        if oracle_raw
-        else None,
+        "price_oracle": (
+            _normalize_address_text(str(oracle_raw)) if oracle_raw else None
+        ),
         "close_factor": str(close_factor) if close_factor is not None else None,
         "liquidation_incentive": (
             str(liq_incentive) if liq_incentive is not None else None
