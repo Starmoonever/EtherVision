@@ -14,12 +14,16 @@ import { fetchCompoundPositionReplay, CompoundPositionReplayPoint } from '../api
 interface CompoundPositionReplayProps {
   address: string;
   version: 'v2' | 'v3';
+  marketFilter?: string;
+  marketLabel?: string;
 }
 
 interface ReplayPointExt extends CompoundPositionReplayPoint {
   operation_type: string;
   liq_price: number;
 }
+
+const replayCache = new Map<string, ReplayPointExt[]>();
 
 const safeParse = (val: any) => {
   const num = parseFloat(val);
@@ -73,7 +77,12 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-export function CompoundPositionReplayChart({ address, version }: CompoundPositionReplayProps) {
+export function CompoundPositionReplayChart({
+  address,
+  version,
+  marketFilter,
+  marketLabel,
+}: CompoundPositionReplayProps) {
   const [fullData, setFullData] = useState<ReplayPointExt[]>([]);
   const [data, setData] = useState<ReplayPointExt[]>([]);
   const [loading, setLoading] = useState(false);
@@ -99,6 +108,15 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
       setLoading(true);
       setError('');
       try {
+        const cacheKey = `${version}:${address.toLowerCase()}`;
+        const cached = replayCache.get(cacheKey);
+        if (cached) {
+          setFullData(cached);
+          setData(cached);
+          setLoading(false);
+          return;
+        }
+
         const defaultStart = '2020-12-01 00:00:00';
         const now = new Date();
         const year = now.getUTCFullYear();
@@ -158,6 +176,7 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
           })
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
+        replayCache.set(cacheKey, formattedData);
         setFullData(formattedData);
         setData(formattedData);
       } catch (err) {
@@ -187,12 +206,17 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
       return ptTs >= startTs && ptTs <= endTs;
     });
 
+    if (marketFilter) {
+      const normalizedMarket = marketFilter.toLowerCase();
+      filtered = filtered.filter((pt) => pt.market.toLowerCase() === normalizedMarket);
+    }
+
     if (selectedType !== 'all') {
       filtered = filtered.filter((pt) => pt.operation_type === selectedType);
     }
 
     setData(filtered);
-  }, [appliedRange, fullData, selectedType]);
+  }, [appliedRange, fullData, marketFilter, selectedType]);
 
   const handleSearch = () => {
     setAppliedRange({ start: startTime, end: endTime });
@@ -229,7 +253,9 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
         className="card-header"
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
       >
-        <span className="card-title">历史交易与头寸变化记录</span>
+        <span className="card-title">
+          {marketLabel ? `${marketLabel} 历史交易与头寸变化记录` : '历史交易与头寸变化记录'}
+        </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
             <input

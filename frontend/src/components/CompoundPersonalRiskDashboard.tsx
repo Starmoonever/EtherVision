@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import type { CompoundUserAsset, CompoundUserPositionItem } from '../api/compound';
+import type { CompoundMarket, CompoundUserAsset, CompoundUserPositionItem } from '../api/compound';
 import { CompoundPositionReplayChart } from './CompoundPositionReplayChart';
 
 interface CompoundPersonalRiskDashboardProps {
   address: string;
-  version: string;
+  version: 'v2' | 'v3';
   market: string;
-  data: CompoundUserPositionItem | null;
+  markets: CompoundMarket[];
+  data: CompoundUserPositionItem[] | null;
   loading: boolean;
   notFound: boolean;
 }
@@ -14,6 +15,13 @@ interface CompoundPersonalRiskDashboardProps {
 interface RiskAssetRow extends CompoundUserAsset {
   risk_contribution_usd: number;
   risk_direction: 'down' | 'up' | 'basis' | 'neutral';
+}
+
+interface SingleMarketRiskViewProps {
+  address: string;
+  version: 'v2' | 'v3';
+  marketLabel: string;
+  data: CompoundUserPositionItem;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -134,37 +142,28 @@ function distanceToLiqPercent(currentEthPrice: number, liqPrice: number, directi
   return `${(((liqPrice - currentEthPrice) / currentEthPrice) * 100).toFixed(2)}%`;
 }
 
-export function CompoundPersonalRiskDashboard({
+function NoPositionCard({
   address,
   version,
-  market,
-  data,
-  loading,
-  notFound,
-}: CompoundPersonalRiskDashboardProps) {
+  marketLabel,
+}: {
+  address: string;
+  version: 'v2' | 'v3';
+  marketLabel: string;
+}) {
+  return (
+    <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+      <p>
+        该地址 ({address}) 在 Compound {version.toUpperCase()} {marketLabel} 市场不存在非空仓位。
+      </p>
+    </div>
+  );
+}
+
+function SingleMarketRiskView({ address, version, marketLabel, data }: SingleMarketRiskViewProps) {
   const [showHelp, setShowHelp] = useState(false);
   const [showTableHelp, setShowTableHelp] = useState(false);
   const [valueMode, setValueMode] = useState<'absolute' | 'ratio'>('absolute');
-
-  if (loading) {
-    return (
-      <div className="card" style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
-        <div className="spinner"></div>
-      </div>
-    );
-  }
-
-  if (notFound || (data && !data.has_open_position)) {
-    return (
-      <div className="card" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
-        <p>
-          该地址 ({address}) 在 Compound {version.toUpperCase()} {market} 市场不存在非空仓位。
-        </p>
-      </div>
-    );
-  }
-
-  if (!data) return null;
 
   const riskScore = calcRiskScore(data);
   const riskScoreColor = riskScore >= 75 ? '#ef4444' : riskScore >= 45 ? '#f59e0b' : '#10b981';
@@ -252,7 +251,7 @@ export function CompoundPersonalRiskDashboard({
           <h2 className="card-title">ETH 敏感风险总览</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <div className="badge" style={{ background: '#1e3a8a', color: '#bfdbfe' }}>
-              Compound {version.toUpperCase()} - {market}
+              Compound {version.toUpperCase()} - {marketLabel}
             </div>
             <div style={{ position: 'relative' }}>
               <button
@@ -603,7 +602,7 @@ export function CompoundPersonalRiskDashboard({
             </thead>
             <tbody>
               {assets.map((asset) => (
-                <tr key={`${asset.asset}-${asset.side}`}>
+                <tr key={`${data.market}-${asset.asset}-${asset.side}`}>
                   <td>
                     <span className="token-symbol">{asset.symbol}</span>
                   </td>
@@ -665,7 +664,93 @@ export function CompoundPersonalRiskDashboard({
         </div>
       </div>
 
-      <CompoundPositionReplayChart address={address} version={version as 'v2' | 'v3'} />
+      <CompoundPositionReplayChart
+        address={address}
+        version={version}
+        marketFilter={data.market}
+        marketLabel={marketLabel}
+      />
     </div>
+  );
+}
+
+export function CompoundPersonalRiskDashboard({
+  address,
+  version,
+  market,
+  markets,
+  data,
+  loading,
+  notFound,
+}: CompoundPersonalRiskDashboardProps) {
+  if (loading) {
+    return (
+      <div className="card" style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+        <div className="spinner"></div>
+      </div>
+    );
+  }
+
+  const positions = (data ?? []).filter((item) => item.has_open_position);
+  const positionByMarket = new Map(positions.map((item) => [item.market.toLowerCase(), item]));
+
+  if (market === 'all') {
+    const renderedMarketKeys = new Set(markets.map((item) => item.address.toLowerCase()));
+    const unmatchedPositions = positions.filter(
+      (item) => !renderedMarketKeys.has(item.market.toLowerCase()),
+    );
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {markets.map((item) => {
+          const position = positionByMarket.get(item.address.toLowerCase());
+          return position ? (
+            <SingleMarketRiskView
+              key={item.address}
+              address={address}
+              version={version}
+              marketLabel={item.symbol}
+              data={position}
+            />
+          ) : (
+            <NoPositionCard
+              key={item.address}
+              address={address}
+              version={version}
+              marketLabel={item.symbol}
+            />
+          );
+        })}
+        {unmatchedPositions.map((item) => (
+          <SingleMarketRiskView
+            key={item.market}
+            address={address}
+            version={version}
+            marketLabel={item.symbol || item.market}
+            data={item}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  const selectedPosition = positions[0] ?? null;
+  if (notFound || !selectedPosition) {
+    return (
+      <NoPositionCard
+        address={address}
+        version={version}
+        marketLabel={market === 'all' ? '所有市场' : market}
+      />
+    );
+  }
+
+  return (
+    <SingleMarketRiskView
+      address={address}
+      version={version}
+      marketLabel={selectedPosition.symbol || market}
+      data={selectedPosition}
+    />
   );
 }

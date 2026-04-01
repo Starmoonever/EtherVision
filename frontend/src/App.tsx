@@ -32,13 +32,15 @@ interface VersionState {
 }
 
 interface CompoundVersionState {
-  data: CompoundUserPositionItem | null;
+  data: CompoundUserPositionItem[] | null;
   loading: boolean;
   notFound: boolean;
 }
 
 type AaveCacheEntry = { kind: 'data'; data: UserPosition | BorrowPosition } | { kind: 'not_found' };
-type CompoundCacheEntry = { kind: 'data'; data: CompoundUserPositionItem } | { kind: 'not_found' };
+type CompoundCacheEntry =
+  | { kind: 'data'; data: CompoundUserPositionItem[] }
+  | { kind: 'not_found' };
 
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 const emptyCompoundState = (): CompoundVersionState => ({
@@ -139,9 +141,6 @@ export default function App() {
         if (markets.length > 0) {
           if (compoundMarket !== 'all' && !markets.find((m) => m.address === compoundMarket)) {
             setCompoundMarket(markets[0].address);
-          } else if (compoundMarket === 'all' && version === 'v2') {
-            // Compound v2 doesn't support 'all', so default to first market
-            setCompoundMarket(markets[0].address);
           }
         }
       } catch (loadError) {
@@ -221,16 +220,16 @@ export default function App() {
           compoundAddress,
         );
         if (response.positions && response.positions.length > 0) {
-          const position = response.positions[0];
+          const positions = response.positions;
 
           if (compoundMarket === 'all') {
             const foundMarkets = new Set<string>();
-            for (const item of response.positions) {
+            for (const item of positions) {
               compoundPositionCache.set(
                 compoundCacheKey(compoundAddress, item.market, personalVersion),
                 {
                   kind: 'data',
-                  data: item,
+                  data: [item],
                 },
               );
               foundMarkets.add(item.market.toLowerCase());
@@ -247,16 +246,26 @@ export default function App() {
             }
           }
 
-          compoundPositionCache.set(cacheKey, { kind: 'data', data: position });
-          setCompoundState({ data: position, loading: false, notFound: false });
+          compoundPositionCache.set(cacheKey, { kind: 'data', data: positions });
+          setCompoundState({ data: positions, loading: false, notFound: false });
         } else {
-          compoundPositionCache.set(cacheKey, { kind: 'not_found' });
-          setCompoundState({ data: null, loading: false, notFound: true });
+          if (compoundMarket === 'all') {
+            compoundPositionCache.set(cacheKey, { kind: 'data', data: [] });
+            setCompoundState({ data: [], loading: false, notFound: false });
+          } else {
+            compoundPositionCache.set(cacheKey, { kind: 'not_found' });
+            setCompoundState({ data: null, loading: false, notFound: true });
+          }
         }
       } catch (loadError) {
         if (loadError instanceof Error && loadError.message.includes('404')) {
-          compoundPositionCache.set(cacheKey, { kind: 'not_found' });
-          setCompoundState({ data: null, loading: false, notFound: true });
+          if (compoundMarket === 'all') {
+            compoundPositionCache.set(cacheKey, { kind: 'data', data: [] });
+            setCompoundState({ data: [], loading: false, notFound: false });
+          } else {
+            compoundPositionCache.set(cacheKey, { kind: 'not_found' });
+            setCompoundState({ data: null, loading: false, notFound: true });
+          }
         } else {
           setCompoundState({ data: null, loading: false, notFound: false });
           console.error(loadError);
@@ -462,6 +471,7 @@ export default function App() {
               address={compoundAddress}
               version={personalVersion}
               market={selectedCompoundMarketSymbol}
+              markets={visibleCompoundMarkets}
               {...compoundState}
             />
           </div>
