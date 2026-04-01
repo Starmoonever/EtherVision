@@ -666,20 +666,24 @@ async def _collect_v2_replay_snapshot_row(
     block_number: int,
     point_ts: datetime,
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]] | None = None,
+    feed_price_cache: dict[tuple[str, int], Decimal] | None = None,
 ) -> CompoundEventPositionSnapshotRow:
     user_checksum = AsyncWeb3.to_checksum_address("0x" + user_address.hex())
     event_market_address = "0x" + event_market.hex()
     market_addresses = list(
         dict.fromkeys([event_market_address, *COMPOUND_V2_MARKET_NAMES.keys()])
     )
-    deployment_cache: dict[str, dict[str, int]] = {}
+    active_deployment_cache: dict[str, dict[str, int]] = (
+        deployment_cache if deployment_cache is not None else {}
+    )
     deployed_markets: list[str] = []
     for market in market_addresses:
         if await _is_contract_deployed_at_block(
             w3,
             market,
             block_number,
-            deployment_cache,
+            active_deployment_cache,
         ):
             deployed_markets.append(market)
 
@@ -705,11 +709,17 @@ async def _collect_v2_replay_snapshot_row(
         block_identifier=block_number
     )
     collateral_markets = {str(addr).lower() for addr in assets_in}
-    eth_price_usd_from_feed = await _price_from_feed_direct(
-        w3,
-        ETH_USD_PRICE_FEED,
-        block_number,
-    )
+    feed_key = (ETH_USD_PRICE_FEED.lower(), block_number)
+    if feed_price_cache is not None and feed_key in feed_price_cache:
+        eth_price_usd_from_feed = feed_price_cache[feed_key]
+    else:
+        eth_price_usd_from_feed = await _price_from_feed_direct(
+            w3,
+            ETH_USD_PRICE_FEED,
+            block_number,
+        )
+        if feed_price_cache is not None:
+            feed_price_cache[feed_key] = eth_price_usd_from_feed
 
     market_rows: list[dict[str, Any]] = []
     for market in deployed_markets:
@@ -2141,9 +2151,9 @@ def _map_market_governance_row(
         base_min_for_rewards=_fmt(_row_get(row, "base_min_for_rewards")),
         base_borrow_min=_fmt(_row_get(row, "base_borrow_min")),
         target_reserves=_fmt(_row_get(row, "target_reserves")),
-        assets=[_map_governance_asset_row(item) for item in asset_rows]
-        if detail
-        else None,
+        assets=(
+            [_map_governance_asset_row(item) for item in asset_rows] if detail else None
+        ),
     )
 
 
