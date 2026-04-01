@@ -48,11 +48,25 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         </p>
         <p style={{ margin: '0 0 5px 0', color: '#fff' }}>{point.brief}</p>
         <p style={{ margin: '0 0 5px 0', color: '#fbbf24' }}>交易类型: {point.operation_type}</p>
-        <p style={{ margin: '0' }}>有效抵押总值: ${safeParse(point.discounted_collateral_usd).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
-        <p style={{ margin: '0' }}>债务总值: ${safeParse(point.total_debt_usd).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+        <p style={{ margin: '0' }}>
+          有效抵押总值: $
+          {safeParse(point.discounted_collateral_usd).toLocaleString(undefined, {
+            maximumFractionDigits: 2,
+          })}
+        </p>
+        <p style={{ margin: '0' }}>
+          债务总值: $
+          {safeParse(point.total_debt_usd).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </p>
         <p style={{ margin: '0' }}>健康因子: {safeParse(point.health_factor).toFixed(2)}</p>
-        <p style={{ margin: '0' }}>ETH 清算价格: ${safeParse(point.liq_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
-        <p style={{ margin: '0' }}>ETH 价格: ${safeParse(point.eth_price_usd).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+        <p style={{ margin: '0' }}>
+          ETH 清算价格: $
+          {safeParse(point.liq_price).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </p>
+        <p style={{ margin: '0' }}>
+          ETH 价格: $
+          {safeParse(point.eth_price_usd).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </p>
       </div>
     );
   }
@@ -95,7 +109,12 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
         const seconds = String(now.getUTCSeconds()).padStart(2, '0');
         const defaultEnd = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 
-        const result = await fetchCompoundPositionReplay(address, defaultStart, defaultEnd, version);
+        const result = await fetchCompoundPositionReplay(
+          address,
+          defaultStart,
+          defaultEnd,
+          version,
+        );
 
         if (!result.points || !Array.isArray(result.points)) {
           throw new Error('Invalid data format');
@@ -181,20 +200,35 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
 
   if (loading)
     return (
-      <div className="card" style={{ height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div
+        className="card"
+        style={{ height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
         <div className="spinner"></div>
       </div>
     );
   if (error)
     return (
-      <div className="card" style={{ height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
+      <div
+        className="card"
+        style={{
+          height: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#f87171',
+        }}
+      >
         {error}
       </div>
     );
 
   return (
     <div className="card" style={{ marginTop: '1.5rem' }}>
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        className="card-header"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <span className="card-title">历史交易与头寸变化记录</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
@@ -247,7 +281,14 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
         </div>
       </div>
 
-      <div style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+      <div
+        style={{
+          padding: '0 1rem 0.5rem 1rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.8rem',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>交易类型:</span>
           <button
@@ -286,7 +327,15 @@ export function CompoundPositionReplayChart({ address, version }: CompoundPositi
 
       <div style={{ height: 550 }}>
         {!data.length ? (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+          <div
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#94a3b8',
+            }}
+          >
             暂无该时间段的交易数据
           </div>
         ) : (

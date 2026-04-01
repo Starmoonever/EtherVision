@@ -1,4 +1,4 @@
-import { apiFetch } from './client';
+import { apiFetch, apiFetchRaw } from './client';
 
 export interface CompoundMarket {
   address: string;
@@ -49,6 +49,105 @@ export interface CompoundMarketHistoryResponse {
 interface FetchCompoundMarketHistoryOptions {
   interval?: number;
   detail?: boolean;
+}
+
+const V2_MARKET_ALIAS_MAP: Record<string, string> = {
+  cdai: 'cDAI',
+  dai: 'cDAI',
+  cusdc: 'cUSDC',
+  usdc: 'cUSDC',
+  ceth: 'cETH',
+  eth: 'cETH',
+  weth: 'cETH',
+  cwbtc: 'cWBTC',
+  wbtc: 'cWBTC',
+  btc: 'cWBTC',
+  cbbtc: 'cWBTC',
+};
+
+const V2_BASE_ASSET_ALIAS_MAP: Record<string, string> = {
+  cdai: 'DAI',
+  dai: 'DAI',
+  cusdc: 'USDC',
+  usdc: 'USDC',
+  ceth: 'ETH',
+  eth: 'ETH',
+  weth: 'ETH',
+  cwbtc: 'WBTC',
+  wbtc: 'WBTC',
+  btc: 'WBTC',
+  cbbtc: 'WBTC',
+};
+
+const EMPTY_V2_MARKET_CONFIG_RESPONSE = {
+  version: 'v2',
+  market_config: null,
+  protocol_config: null,
+};
+
+const EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE = {
+  points: [],
+};
+
+function buildCompoundV2MarketCandidates(market: string): string[] {
+  const trimmed = market.trim();
+  if (!trimmed) return [];
+
+  const normalized = trimmed.toLowerCase();
+  const candidates: string[] = [];
+  const push = (value: string | undefined) => {
+    if (!value) return;
+    if (!candidates.includes(value)) {
+      candidates.push(value);
+    }
+  };
+
+  const alias = V2_MARKET_ALIAS_MAP[normalized];
+  push(alias);
+  push(trimmed);
+
+  if (!alias && !normalized.startsWith('0x') && !normalized.startsWith('c')) {
+    push(`c${trimmed}`);
+  }
+
+  return candidates;
+}
+
+export function getCompoundV2BaseAssetSymbol(market: string): string {
+  const trimmed = market.trim();
+  const normalized = trimmed.toLowerCase();
+
+  if (V2_BASE_ASSET_ALIAS_MAP[normalized]) {
+    return V2_BASE_ASSET_ALIAS_MAP[normalized];
+  }
+
+  if (normalized.startsWith('c') && trimmed.length > 1) {
+    return trimmed.slice(1);
+  }
+
+  return trimmed;
+}
+
+async function fetchFirstCompoundV2ConfigCandidate<T>(
+  market: string,
+  buildPath: (market: string) => string,
+): Promise<T | null> {
+  const candidates = buildCompoundV2MarketCandidates(market);
+
+  for (const candidate of candidates) {
+    const path = buildPath(candidate);
+    const response = await apiFetchRaw(path);
+
+    if (response.ok) {
+      return response.json() as Promise<T>;
+    }
+
+    if (response.status >= 500) {
+      throw new Error(`API error ${response.status}: ${path}`);
+    }
+  }
+
+  return null;
 }
 
 export interface CompoundUserAsset {
@@ -156,9 +255,12 @@ export async function fetchCompoundMarketGovernanceV3(market: string, date: stri
 }
 
 export async function fetchCompoundMarketConfigV2(market: string, date: string): Promise<any> {
-  return apiFetch<any>(
-    `/compound/market/config?version=v2&market=${market}&date=${encodeURIComponent(date)}`,
+  const data = await fetchFirstCompoundV2ConfigCandidate<any>(
+    market,
+    (candidate) =>
+      `/compound/market/config?version=v2&market=${encodeURIComponent(candidate)}&date=${encodeURIComponent(date)}`,
   );
+  return data ?? EMPTY_V2_MARKET_CONFIG_RESPONSE;
 }
 
 export async function fetchCompoundMarketConfigPeriodV2(
@@ -166,9 +268,12 @@ export async function fetchCompoundMarketConfigPeriodV2(
   start: string,
   end: string,
 ): Promise<any> {
-  return apiFetch<any>(
-    `/compound/market/config/period?version=v2&market=${market}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+  const data = await fetchFirstCompoundV2ConfigCandidate<any>(
+    market,
+    (candidate) =>
+      `/compound/market/config/period?version=v2&market=${encodeURIComponent(candidate)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
   );
+  return data ?? EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE;
 }
 
 export interface CompoundPositionReplayPoint {
@@ -211,6 +316,6 @@ export async function fetchCompoundPositionReplay(
   version: string,
 ): Promise<CompoundPositionReplayResponse> {
   return apiFetch<CompoundPositionReplayResponse>(
-    `/compound/position/replay?address=${address}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&version=${version}`
+    `/compound/position/replay?address=${address}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&version=${version}`,
   );
 }

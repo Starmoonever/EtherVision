@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchAssetPrice } from '../api';
 import type { CompoundMarket } from '../api/compound';
-import { fetchCompoundMarketConfigV2 } from '../api/compound';
+import { fetchCompoundMarketConfigV2, getCompoundV2BaseAssetSymbol } from '../api/compound';
 import { CompoundPriceTrend } from './CompoundPriceTrend';
 import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
@@ -39,7 +39,7 @@ export function CompoundMarketAssessment({
       try {
         if (marketVersion === 'v2') {
           // For Compound v2 cTokens, we need to fetch the underlying token price and multiply by exchange_rate
-          const baseSymbol = activeMarketSymbol.replace(/^c/i, '');
+          const baseSymbol = getCompoundV2BaseAssetSymbol(activeMarketSymbol);
           const basePrice = await fetchAssetPrice(baseSymbol);
 
           const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';

@@ -9,7 +9,6 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import type { TooltipValueType } from 'recharts';
 import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
 import { fetchUserPosition } from '../api';
 import type { LiquidationDetailResponse as LiquidationData } from '../api';
@@ -40,6 +39,8 @@ interface ChartDataPoint {
   liquidationAmount: number;
   isCurrent: boolean;
 }
+
+type ChartTooltipValue = string | number | Array<string | number>;
 
 const PAGE_SIZE = 20;
 
@@ -445,7 +446,7 @@ export function LiquidationChart({
               }}
               itemStyle={{ color: '#f87171' }}
               formatter={(
-                value: TooltipValueType | undefined,
+                value: ChartTooltipValue | undefined,
                 name: string | number | undefined,
               ) => {
                 const normalizedValue = Array.isArray(value) ? value[0] : value;
