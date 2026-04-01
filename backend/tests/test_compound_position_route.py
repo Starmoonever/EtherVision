@@ -185,3 +185,39 @@ def test_compound_liquidate_route_ok() -> None:
     assert resp.status_code == 200
     assert resp.json() == payload
     mocked_service.assert_awaited_once()
+
+
+def test_compound_liquidate_period_route_ok() -> None:
+    payload = [
+        {
+            "simulated_eth_price": "1400",
+            "positions_cnt": "2",
+            "total_eth_sensitive_collateral_usd": "3500",
+            "total_liquidation_usd": "1800",
+        },
+        {
+            "simulated_eth_price": "1500",
+            "positions_cnt": "1",
+            "total_eth_sensitive_collateral_usd": "1200",
+            "total_liquidation_usd": "900",
+        },
+    ]
+    with patch(
+        "compound_crawler.api.routes.simulate_liquidation_period",
+        new=AsyncMock(return_value=payload),
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get(
+                "/api/compound/liquidate/period",
+                params={
+                    "version": "v3",
+                    "start": 1400,
+                    "end": 1500,
+                    "interval": 100,
+                    "market": "all",
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_awaited_once()

@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from .schemas import (
+    CompoundLiquidationPeriodItem,
     CompoundLiquidationSimResponse,
     CompoundMarketConfigPeriodResponse,
     CompoundMarketConfigResponse,
@@ -28,6 +29,7 @@ from .service import (
     get_position_replay,
     get_positions,
     simulate_liquidation,
+    simulate_liquidation_period,
     get_v2_market_config,
     get_v2_market_config_period,
     get_v2_protocol_config,
@@ -153,6 +155,29 @@ async def liquidate_simulation(
         offset=offset,
         orderby=orderby,
         order=order,
+    )
+
+
+@router.get(
+    "/liquidate/period",
+    response_model=list[CompoundLiquidationPeriodItem],
+    summary="Simulate Compound ETH liquidation risk across a price interval",
+)
+async def liquidate_period(
+    pool: AsyncpgPool,
+    version: Literal["v2", "v3"] = Query("v3", description=_VERSION_DESC_BOTH),
+    start: float = Query(..., gt=0, description="起始 ETH 价格（USD）"),
+    end: float = Query(..., gt=0, description="结束 ETH 价格（USD）"),
+    interval: float = Query(..., gt=0, description="价格步长（USD）"),
+    market: str = Query("all", description="市场地址或名称，也支持 `all`"),
+) -> list[CompoundLiquidationPeriodItem]:
+    return await simulate_liquidation_period(
+        pool,
+        version=version,
+        start_price=Decimal(str(start)),
+        end_price=Decimal(str(end)),
+        interval=Decimal(str(interval)),
+        market=market,
     )
 
 

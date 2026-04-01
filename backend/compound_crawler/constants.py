@@ -9,7 +9,7 @@ COMPOUND_V3_MARKETS: list[str] = [
     "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",  # USDT Comet
     "0xA17581A9E3356d9A858b789D68B4d866e593aE94",  # WETH Comet
     "0x5D409e56D886231aDAf00c8775665AD0f9897b56",  # USDS Comet
-    "0x3D0bb1ccaB520A66e607822fC55BC921738fAFE3",  # wstETH Cometm
+    "0x3D0bb1ccaB520A66e607822fC55BC921738fAFE3",  # wstETH Comet
 ]
 
 COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
@@ -23,17 +23,17 @@ COMPOUND_V3_MARKET_NAMES: dict[str, str] = {
 # Compound V2 (Ethereum mainnet) cToken markets.
 # These are used as defaults when config does not provide market lists.
 COMPOUND_V2_MARKETS: list[str] = [
-    "0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643",  # cDAI
-    "0x39AA39c021dfbaE8faC545936693aC917d5E7563",  # cUSDC
     "0x4Ddc2D193948926D02f9B1fE9e1daa0718270ED5",  # cETH
     "0xccF4429DB6322D5C611ee964527D42E5d685DD6a",  # cWBTC
+    "0xf650c3d88d12db855b8bf7d11be6c55a4e07dcc9",  # cUSDT
+    "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",  # cDAI
 ]
 
 COMPOUND_V2_MARKET_NAMES: dict[str, str] = {
     "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643": "cDAI",
-    "0x39aa39c021dfbae8fac545936693ac917d5e7563": "cUSDC",
     "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5": "cETH",
     "0xccf4429db6322d5c611ee964527d42e5d685dd6a": "cWBTC",
+    "0xf650c3d88d12db855b8bf7d11be6c55a4e07dcc9": "cUSDT",
 }
 
 CTOKEN_V2_ABI = [

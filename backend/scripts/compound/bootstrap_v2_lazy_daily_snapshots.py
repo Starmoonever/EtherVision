@@ -172,8 +172,8 @@ async def _resolve_deployed_markets(
     w3: Any,
     *,
     block_number: int,
+    deployment_cache: dict[str, dict[str, int]],
 ) -> list[str]:
-    deployment_cache: dict[str, dict[str, int]] = {}
     resolved: list[str] = []
     for market in COMPOUND_V2_MARKET_NAMES.keys():
         if await _is_contract_deployed_at_block(
@@ -194,6 +194,8 @@ async def _collect_rows_for_user(
     block_number: int,
     markets: list[str],
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    deployment_cache: dict[str, dict[str, int]],
+    feed_price_cache: dict[tuple[str, int], Decimal],
 ) -> list[UserPositionSnapshotRow]:
     rows: list[UserPositionSnapshotRow] = []
     for market in markets:
@@ -204,6 +206,8 @@ async def _collect_rows_for_user(
             block_number=block_number,
             point_ts=point_ts,
             metadata_cache=metadata_cache,
+            deployment_cache=deployment_cache,
+            feed_price_cache=feed_price_cache,
         )
         rows.append(_to_user_snapshot_row(replay_row, point_ts=point_ts))
     return rows
@@ -268,13 +272,16 @@ async def run(
             return
 
         w3 = await _build_web3(cfg)
+        deployment_cache: dict[str, dict[str, int]] = {}
+        feed_price_cache: dict[tuple[str, int], Decimal] = {}
         cursor = start_day
         while cursor <= end_day:
             day_started_at = time.perf_counter()
             day_start = cursor
             day_end = cursor + timedelta(days=1) - timedelta(seconds=1)
             point_ts = day_end
-            active_before = len(await fetch_compound_v2_active_users(pool))
+            active_before_users = await fetch_compound_v2_active_users(pool)
+            active_before = len(active_before_users)
             history_events = await fetch_compound_v2_users_from_history_day(
                 pool,
                 day_start=day_start,
@@ -289,8 +296,8 @@ async def run(
             activated = await activate_compound_v2_users_with_event_rows(
                 pool, merged_events
             )
-            active_after_activation = len(await fetch_compound_v2_active_users(pool))
             active_users = await fetch_compound_v2_active_users(pool)
+            active_after_activation = len(active_users)
             if limit:
                 active_users = active_users[:limit]
 
@@ -321,7 +328,9 @@ async def run(
                 w3, int(point_ts.timestamp()), pool=pool
             )
             deployed_markets = await _resolve_deployed_markets(
-                w3, block_number=block_number
+                w3,
+                block_number=block_number,
+                deployment_cache=deployment_cache,
             )
             print(
                 "day=%s block=%d deployed_markets=%d"
@@ -348,6 +357,49 @@ async def run(
             open_user_set: set[bytes] = set()
             liquidatable_user_set: set[bytes] = set()
 
+            def _append_batch_rows(batch_rows: list[UserPositionSnapshotRow]) -> None:
+                nonlocal day_rows_collected
+                if not batch_rows:
+                    return
+                day_rows_collected += len(batch_rows)
+                for row in batch_rows:
+                    scanned_user_set.add(row.user_address)
+                    if row.has_open_position:
+                        open_user_set.add(row.user_address)
+                    if row.is_liquidatable:
+                        liquidatable_user_set.add(row.user_address)
+                pending_snapshots.extend(batch_rows)
+                for row in batch_rows:
+                    pending_assets.extend(_to_asset_rows(row))
+
+            async def _flush_pending_buffers() -> None:
+                nonlocal pending_snapshots
+                nonlocal pending_assets
+                nonlocal day_snapshot_written
+                nonlocal day_asset_written
+                nonlocal day_refreshed_users
+                if not pending_snapshots:
+                    return
+
+                await upsert_user_position_snapshots(
+                    pool, pending_snapshots, protocol="v2"
+                )
+                if pending_assets:
+                    await upsert_user_position_asset_rows(
+                        pool, pending_assets, protocol="v2"
+                    )
+                refreshed = await refresh_compound_v2_active_users_from_snapshots(
+                    pool,
+                    pending_snapshots,
+                    point_ts=point_ts,
+                    dust_threshold_usd=dust_threshold_usd,
+                )
+                day_refreshed_users += refreshed
+                day_snapshot_written += len(pending_snapshots)
+                day_asset_written += len(pending_assets)
+                pending_snapshots = []
+                pending_assets = []
+
             async def _one_user(user_address: bytes) -> list[UserPositionSnapshotRow]:
                 async with sem:
                     return await _collect_rows_for_user(
@@ -357,6 +409,8 @@ async def run(
                         block_number=block_number,
                         markets=deployed_markets,
                         metadata_cache=metadata_cache,
+                        deployment_cache=deployment_cache,
+                        feed_price_cache=feed_price_cache,
                     )
 
             for chunk_start in range(0, len(active_users), user_batch_size):
@@ -371,50 +425,19 @@ async def run(
                         if not task.done():
                             task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
+                    _append_batch_rows(batch_rows)
+                    await _flush_pending_buffers()
                     raise
 
-                refreshed = await refresh_compound_v2_active_users_from_snapshots(
-                    pool,
-                    batch_rows,
-                    point_ts=point_ts,
-                    dust_threshold_usd=dust_threshold_usd,
-                )
-                day_refreshed_users += refreshed
-                day_rows_collected += len(batch_rows)
-                for row in batch_rows:
-                    scanned_user_set.add(row.user_address)
-                    if row.has_open_position:
-                        open_user_set.add(row.user_address)
-                    if row.is_liquidatable:
-                        liquidatable_user_set.add(row.user_address)
-                pending_snapshots.extend(batch_rows)
-                for row in batch_rows:
-                    pending_assets.extend(_to_asset_rows(row))
+                _append_batch_rows(batch_rows)
 
                 if (
                     len(pending_snapshots) >= write_snapshot_batch_size
                     or len(pending_assets) >= write_asset_batch_size
                 ):
-                    await upsert_user_position_snapshots(
-                        pool, pending_snapshots, protocol="v2"
-                    )
-                    await upsert_user_position_asset_rows(
-                        pool, pending_assets, protocol="v2"
-                    )
-                    day_snapshot_written += len(pending_snapshots)
-                    day_asset_written += len(pending_assets)
-                    pending_snapshots = []
-                    pending_assets = []
+                    await _flush_pending_buffers()
 
-            if pending_snapshots:
-                await upsert_user_position_snapshots(
-                    pool, pending_snapshots, protocol="v2"
-                )
-                await upsert_user_position_asset_rows(
-                    pool, pending_assets, protocol="v2"
-                )
-                day_snapshot_written += len(pending_snapshots)
-                day_asset_written += len(pending_assets)
+            await _flush_pending_buffers()
 
             await upsert_compound_v2_run_watermark(
                 pool,
