@@ -27,6 +27,8 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 target_metadata = Base.metadata
+VERSION_TABLE = "alembic_version_aave_liquidation"
+VERSION_TABLE_SCHEMA = "loan"
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -52,6 +54,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table=VERSION_TABLE,
+        version_table_schema=VERSION_TABLE_SCHEMA,
     )
 
     with context.begin_transaction():
@@ -81,7 +85,12 @@ def run_migrations_online() -> None:
         await connectable.dispose()
 
     def do_run_migrations(connection):
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table=VERSION_TABLE,
+            version_table_schema=VERSION_TABLE_SCHEMA,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

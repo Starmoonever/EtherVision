@@ -14,6 +14,7 @@ from compound_crawler.db import (
     UserPositionSnapshotRow,
     activate_compound_v2_users,
     activate_compound_v2_users_with_event_rows,
+    ensure_compound_v2_current_position_tables,
     ensure_compound_v3_current_position_tables,
     fetch_compound_v2_run_watermark,
     fetch_compound_v2_active_users,
@@ -312,6 +313,17 @@ async def test_ensure_compound_v3_current_position_tables_executes_ddl() -> None
     conn = _FakeConn()
 
     await ensure_compound_v3_current_position_tables(
+        cast(asyncpg.Pool, _FakePool(conn))
+    )
+
+    assert len(conn.execute_calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_ensure_compound_v2_current_position_tables_executes_ddl() -> None:
+    conn = _FakeConn()
+
+    await ensure_compound_v2_current_position_tables(
         cast(asyncpg.Pool, _FakePool(conn))
     )
 

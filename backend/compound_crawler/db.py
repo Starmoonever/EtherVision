@@ -1132,6 +1132,8 @@ _USER_POSITION_ASSET_TABLES = {
 
 _V3_CURRENT_POSITION_TABLE = "compound_v3_current_positions"
 _V3_CURRENT_POSITION_ASSET_TABLE = "compound_v3_current_position_assets"
+_V2_CURRENT_POSITION_TABLE = "compound_v2_current_positions"
+_V2_CURRENT_POSITION_ASSET_TABLE = "compound_v2_current_position_assets"
 _V2_ACTIVE_USER_TABLE = "compound_v2_active_users"
 _V2_ACTIVE_RUN_STATE_TABLE = "compound_v2_active_run_state"
 
@@ -1296,6 +1298,89 @@ CREATE INDEX IF NOT EXISTS idx_{_V3_CURRENT_POSITION_ASSET_TABLE}_user
 _DDL_V3_CURRENT_POSITION_ASSET_INDEX_UPDATED = f"""
 CREATE INDEX IF NOT EXISTS idx_{_V3_CURRENT_POSITION_ASSET_TABLE}_updated
     ON loan.{_V3_CURRENT_POSITION_ASSET_TABLE} (updated_at DESC);
+"""
+
+_DDL_V2_CURRENT_POSITION = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_CURRENT_POSITION_TABLE} (
+    market                       BYTEA           NOT NULL,
+    user_address                 BYTEA           NOT NULL,
+    symbol                       TEXT            NULL,
+    last_block_number            BIGINT          NOT NULL,
+    last_block_timestamp         TIMESTAMPTZ     NOT NULL,
+    last_tx_hash                 TEXT            NULL,
+    has_open_position            BOOLEAN         NOT NULL,
+    is_liquidatable              BOOLEAN         NOT NULL,
+    base_token                   BYTEA           NULL,
+    base_symbol                  TEXT            NULL,
+    base_price_usd               NUMERIC(30, 8)  NULL,
+    eth_price_usd                NUMERIC(30, 8)  NOT NULL,
+    total_collateral_usd         NUMERIC(30, 8)  NOT NULL,
+    total_debt_usd               NUMERIC(30, 8)  NOT NULL,
+    discounted_collateral_usd    NUMERIC(30, 8)  NOT NULL,
+    liquidation_buffer_usd       NUMERIC(30, 8)  NOT NULL,
+    health_factor                NUMERIC(40, 18) NOT NULL,
+    eth_sensitive_collateral_usd NUMERIC(30, 8)  NOT NULL,
+    eth_sensitive_debt_usd       NUMERIC(30, 8)  NOT NULL,
+    net_eth_exposure_usd         NUMERIC(30, 8)  NOT NULL,
+    non_eth_collateral_usd       NUMERIC(30, 8)  NOT NULL,
+    non_eth_debt_usd             NUMERIC(30, 8)  NOT NULL,
+    basis_risk_collateral_usd    NUMERIC(30, 8)  NOT NULL,
+    eth_down_liq_price_usd       NUMERIC(30, 8)  NULL,
+    eth_up_liq_price_usd         NUMERIC(30, 8)  NULL,
+    eth_liq_mode                 TEXT            NOT NULL,
+    dominant_risk                TEXT            NOT NULL,
+    assets_jsonb                 JSONB           NOT NULL DEFAULT '[]',
+    created_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market, user_address)
+);
+"""
+
+_DDL_V2_CURRENT_POSITION_INDEX_USER = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_CURRENT_POSITION_TABLE}_user
+    ON loan.{_V2_CURRENT_POSITION_TABLE} (user_address, last_block_timestamp DESC);
+"""
+
+_DDL_V2_CURRENT_POSITION_INDEX_UPDATED = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_CURRENT_POSITION_TABLE}_updated
+    ON loan.{_V2_CURRENT_POSITION_TABLE} (updated_at DESC);
+"""
+
+_DDL_V2_CURRENT_POSITION_ASSET = f"""
+CREATE TABLE IF NOT EXISTS loan.{_V2_CURRENT_POSITION_ASSET_TABLE} (
+    market                       BYTEA           NOT NULL,
+    user_address                 BYTEA           NOT NULL,
+    asset                        BYTEA           NOT NULL,
+    side                         TEXT            NOT NULL,
+    symbol                       TEXT            NULL,
+    decimals                     INTEGER         NULL,
+    amount                       NUMERIC(38, 18) NOT NULL,
+    price_in_base                NUMERIC(30, 8)  NULL,
+    price_usd                    NUMERIC(30, 8)  NOT NULL,
+    value_usd                    NUMERIC(30, 8)  NOT NULL,
+    discounted_value_usd         NUMERIC(30, 8)  NOT NULL,
+    borrow_collateral_factor     NUMERIC(20, 18) NULL,
+    liquidate_collateral_factor  NUMERIC(20, 18) NULL,
+    liquidation_factor           NUMERIC(20, 18) NULL,
+    beta_to_eth                  NUMERIC(20, 8)  NOT NULL,
+    is_eth_correlated            BOOLEAN         NOT NULL,
+    is_basis_risk_asset          BOOLEAN         NOT NULL,
+    last_block_number            BIGINT          NOT NULL,
+    last_block_timestamp         TIMESTAMPTZ     NOT NULL,
+    created_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at                   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market, user_address, asset, side)
+);
+"""
+
+_DDL_V2_CURRENT_POSITION_ASSET_INDEX_USER = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_CURRENT_POSITION_ASSET_TABLE}_user
+    ON loan.{_V2_CURRENT_POSITION_ASSET_TABLE} (user_address, last_block_timestamp DESC);
+"""
+
+_DDL_V2_CURRENT_POSITION_ASSET_INDEX_UPDATED = f"""
+CREATE INDEX IF NOT EXISTS idx_{_V2_CURRENT_POSITION_ASSET_TABLE}_updated
+    ON loan.{_V2_CURRENT_POSITION_ASSET_TABLE} (updated_at DESC);
 """
 
 _UPSERT_V3_CURRENT_POSITION = f"""
@@ -2224,6 +2309,21 @@ async def ensure_compound_v3_current_position_tables(pool: asyncpg.Pool) -> None
         "Compound v3 current position tables ready: %s, %s",
         _V3_CURRENT_POSITION_TABLE,
         _V3_CURRENT_POSITION_ASSET_TABLE,
+    )
+
+
+async def ensure_compound_v2_current_position_tables(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL_V2_CURRENT_POSITION)
+        await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_USER)
+        await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_UPDATED)
+        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET)
+        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_USER)
+        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_UPDATED)
+    logger.info(
+        "Compound v2 current position tables ready: %s, %s",
+        _V2_CURRENT_POSITION_TABLE,
+        _V2_CURRENT_POSITION_ASSET_TABLE,
     )
 
 
