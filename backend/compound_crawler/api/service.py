@@ -1862,8 +1862,14 @@ def _market_to_address(version: str, market: str | None = None) -> str:
         market = version
         version = "v3"
     normalized = market.strip().lower()
+    available_addresses = set(_available_market_addresses(version))
     if normalized.startswith("0x") and len(normalized) == 42:
-        return normalized
+        if normalized in available_addresses:
+            return normalized
+        raise HTTPException(
+            status_code=400,
+            detail=f"market 仅支持已配置的 Compound {version} 市场地址或符号，或 all",
+        )
 
     market_name_map = _market_name_map(version)
     for address, name in market_name_map.items():

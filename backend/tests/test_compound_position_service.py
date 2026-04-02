@@ -922,6 +922,17 @@ def test_market_to_address_accepts_mixed_case_known_addresses() -> None:
         assert service._market_to_address("v2", mixed) == address.lower()
 
 
+def test_market_to_address_rejects_cross_version_address() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        service._market_to_address(
+            "v2",
+            "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Compound v2" in exc_info.value.detail
+
+
 def test_format_compound_brief_keeps_v2_brief_plain() -> None:
     assert (
         service._format_compound_brief("v2", "借入", "cDAI", amount=Decimal("100"))
