@@ -5,6 +5,7 @@ import { fetchCompoundMarketConfigV2, getCompoundV2BaseAssetSymbol } from '../ap
 import { CompoundPriceTrend } from './CompoundPriceTrend';
 import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
+import { CompoundLiquidationChart } from './CompoundLiquidationChart';
 
 export interface CompoundMarketAssessmentProps {
   marketVersion: 'v2' | 'v3';
@@ -121,11 +122,19 @@ export function CompoundMarketAssessment({
 
         {/* Right: Historical Data Panel */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-          <CompoundMarketHistoryChart
+          <CompoundLiquidationChart
             version={marketVersion}
             market={activeMarketAddress}
             marketSymbol={activeMarketSymbol}
           />
+
+          <div style={{ marginTop: '2rem' }}>
+            <CompoundMarketHistoryChart
+              version={marketVersion}
+              market={activeMarketAddress}
+              marketSymbol={activeMarketSymbol}
+            />
+          </div>
 
           <div style={{ marginTop: '2rem' }}>
             <CompoundCollateralHistoryChart

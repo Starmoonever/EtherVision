@@ -176,7 +176,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeCompoundMarketsVersion, activeTab, compoundMarket]);
+  }, [activeCompoundMarketsVersion, activeTab]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;
