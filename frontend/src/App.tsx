@@ -145,6 +145,10 @@ export default function App() {
   }, [compoundAddress, compoundMarket]);
 
   useEffect(() => {
+    if (protocol !== 'compound') {
+      return;
+    }
+
     let cancelled = false;
 
     const loadCompoundMarkets = async () => {
@@ -176,7 +180,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeCompoundMarketsVersion, activeTab]);
+  }, [activeCompoundMarketsVersion, activeTab, protocol]);
 
   useEffect(() => {
     if (!queriedAddress || protocol !== 'aave' || activeTab !== 'personal') return;

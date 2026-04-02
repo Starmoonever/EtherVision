@@ -647,54 +647,97 @@ export function CompoundCollateralHistoryChart({
           </div>
         </div>
 
-        <div className="card">
-          <div
-            className="card-header"
-            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-          >
-            <span className="card-title">{marketSymbol} 市场效率与储备占比</span>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+            gap: '1.5rem',
+          }}
+        >
+          <div className="card">
+            <div
+              className="card-header"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <span className="card-title">{marketSymbol} 市场效率</span>
+            </div>
+            <div style={{ height: 360 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={v2StructureData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="timestamp"
+                    stroke="#64748b"
+                    tick={{ fontSize: 12 }}
+                    minTickGap={30}
+                  />
+                  <YAxis
+                    stroke="#64748b"
+                    tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                    width={60}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                    formatter={(value: unknown, name: unknown) => [
+                      formatPercent(Number(value)),
+                      String(name),
+                    ]}
+                  />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="utilization_pct"
+                    name="利用率"
+                    stroke="#38bdf8"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div style={{ height: 360 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={v2StructureData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis
-                  dataKey="timestamp"
-                  stroke="#64748b"
-                  tick={{ fontSize: 12 }}
-                  minTickGap={30}
-                />
-                <YAxis
-                  stroke="#64748b"
-                  tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
-                  width={60}
-                />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                  formatter={(value: unknown, name: unknown) => [
-                    formatPercent(Number(value)),
-                    String(name),
-                  ]}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="utilization_pct"
-                  name="利用率"
-                  stroke="#38bdf8"
-                  dot={false}
-                  strokeWidth={2}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="reserve_share_pct"
-                  name="储备占供应规模比例"
-                  stroke="#f97316"
-                  dot={false}
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+
+          <div className="card">
+            <div
+              className="card-header"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <span className="card-title">{marketSymbol} 储备占比</span>
+            </div>
+            <div style={{ height: 360 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={v2StructureData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="timestamp"
+                    stroke="#64748b"
+                    tick={{ fontSize: 12 }}
+                    minTickGap={30}
+                  />
+                  <YAxis
+                    stroke="#64748b"
+                    tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                    width={60}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                    formatter={(value: unknown, name: unknown) => [
+                      formatPercent(Number(value)),
+                      String(name),
+                    ]}
+                  />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="reserve_share_pct"
+                    name="储备占供应规模比例"
+                    stroke="#f97316"
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       </div>
