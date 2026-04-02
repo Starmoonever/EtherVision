@@ -310,7 +310,7 @@ export function CompoundLiquidationChart({
               <Bar
                 yAxisId="left"
                 dataKey="totalLiquidationUsd"
-                fill="#334155"
+                fill="#e43f36"
                 radius={[4, 4, 0, 0]}
                 activeBar={{ fill: '#4a6080' }}
                 onClick={(barData) => {
