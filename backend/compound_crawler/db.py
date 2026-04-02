@@ -1460,6 +1460,83 @@ ON CONFLICT (market, user_address, asset, side) DO UPDATE SET
     updated_at = NOW();
 """
 
+_UPSERT_V2_CURRENT_POSITION = f"""
+INSERT INTO loan.{_V2_CURRENT_POSITION_TABLE} (
+    market, user_address, symbol, last_block_number, last_block_timestamp, last_tx_hash,
+    has_open_position, is_liquidatable, base_token, base_symbol, base_price_usd,
+    eth_price_usd, total_collateral_usd, total_debt_usd, discounted_collateral_usd,
+    liquidation_buffer_usd, health_factor, eth_sensitive_collateral_usd, eth_sensitive_debt_usd,
+    net_eth_exposure_usd, non_eth_collateral_usd, non_eth_debt_usd, basis_risk_collateral_usd,
+    eth_down_liq_price_usd, eth_up_liq_price_usd, eth_liq_mode, dominant_risk, assets_jsonb
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10, $11,
+    $12, $13, $14, $15,
+    $16, $17, $18, $19,
+    $20, $21, $22, $23,
+    $24, $25, $26, $27, $28
+)
+ON CONFLICT (market, user_address) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
+    last_block_number = EXCLUDED.last_block_number,
+    last_block_timestamp = EXCLUDED.last_block_timestamp,
+    last_tx_hash = EXCLUDED.last_tx_hash,
+    has_open_position = EXCLUDED.has_open_position,
+    is_liquidatable = EXCLUDED.is_liquidatable,
+    base_token = EXCLUDED.base_token,
+    base_symbol = EXCLUDED.base_symbol,
+    base_price_usd = EXCLUDED.base_price_usd,
+    eth_price_usd = EXCLUDED.eth_price_usd,
+    total_collateral_usd = EXCLUDED.total_collateral_usd,
+    total_debt_usd = EXCLUDED.total_debt_usd,
+    discounted_collateral_usd = EXCLUDED.discounted_collateral_usd,
+    liquidation_buffer_usd = EXCLUDED.liquidation_buffer_usd,
+    health_factor = EXCLUDED.health_factor,
+    eth_sensitive_collateral_usd = EXCLUDED.eth_sensitive_collateral_usd,
+    eth_sensitive_debt_usd = EXCLUDED.eth_sensitive_debt_usd,
+    net_eth_exposure_usd = EXCLUDED.net_eth_exposure_usd,
+    non_eth_collateral_usd = EXCLUDED.non_eth_collateral_usd,
+    non_eth_debt_usd = EXCLUDED.non_eth_debt_usd,
+    basis_risk_collateral_usd = EXCLUDED.basis_risk_collateral_usd,
+    eth_down_liq_price_usd = EXCLUDED.eth_down_liq_price_usd,
+    eth_up_liq_price_usd = EXCLUDED.eth_up_liq_price_usd,
+    eth_liq_mode = EXCLUDED.eth_liq_mode,
+    dominant_risk = EXCLUDED.dominant_risk,
+    assets_jsonb = EXCLUDED.assets_jsonb,
+    updated_at = NOW();
+"""
+
+_UPSERT_V2_CURRENT_POSITION_ASSET = f"""
+INSERT INTO loan.{_V2_CURRENT_POSITION_ASSET_TABLE} (
+    market, user_address, asset, side, symbol, decimals, amount, price_in_base, price_usd,
+    value_usd, discounted_value_usd, borrow_collateral_factor, liquidate_collateral_factor,
+    liquidation_factor, beta_to_eth, is_eth_correlated, is_basis_risk_asset,
+    last_block_number, last_block_timestamp
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14, $15, $16, $17,
+    $18, $19
+)
+ON CONFLICT (market, user_address, asset, side) DO UPDATE SET
+    symbol = EXCLUDED.symbol,
+    decimals = EXCLUDED.decimals,
+    amount = EXCLUDED.amount,
+    price_in_base = EXCLUDED.price_in_base,
+    price_usd = EXCLUDED.price_usd,
+    value_usd = EXCLUDED.value_usd,
+    discounted_value_usd = EXCLUDED.discounted_value_usd,
+    borrow_collateral_factor = EXCLUDED.borrow_collateral_factor,
+    liquidate_collateral_factor = EXCLUDED.liquidate_collateral_factor,
+    liquidation_factor = EXCLUDED.liquidation_factor,
+    beta_to_eth = EXCLUDED.beta_to_eth,
+    is_eth_correlated = EXCLUDED.is_eth_correlated,
+    is_basis_risk_asset = EXCLUDED.is_basis_risk_asset,
+    last_block_number = EXCLUDED.last_block_number,
+    last_block_timestamp = EXCLUDED.last_block_timestamp,
+    updated_at = NOW();
+"""
+
 _DDL_V2_ACTIVE_USER = f"""
 CREATE TABLE IF NOT EXISTS loan.{_V2_ACTIVE_USER_TABLE} (
     user_address               BYTEA            PRIMARY KEY,
@@ -3116,6 +3193,180 @@ async def refresh_compound_v3_current_positions(
     return len(accepted_snapshots)
 
 
+async def refresh_compound_v2_current_positions(
+    pool: asyncpg.Pool,
+    snapshot_rows: list[UserPositionSnapshotRow],
+    asset_rows: list[UserPositionAssetRow],
+    *,
+    tx_hash_by_key: dict[tuple[bytes, bytes], str] | None = None,
+) -> int:
+    if not snapshot_rows:
+        return 0
+
+    latest_snapshots: dict[tuple[bytes, bytes], UserPositionSnapshotRow] = {}
+    for row in snapshot_rows:
+        key = _current_position_key(row.market, row.user_address)
+        existing = latest_snapshots.get(key)
+        if existing is None or _is_newer_current_state(
+            existing_block_number=existing.block_number,
+            existing_block_timestamp=existing.timestamp,
+            incoming_block_number=row.block_number,
+            incoming_block_timestamp=row.timestamp,
+        ):
+            latest_snapshots[key] = row
+
+    latest_asset_groups: dict[tuple[bytes, bytes], list[UserPositionAssetRow]] = (
+        defaultdict(list)
+    )
+    for row in asset_rows:
+        key = _current_position_key(row.market, row.user_address)
+        snapshot = latest_snapshots.get(key)
+        if snapshot is None:
+            continue
+        if (
+            row.block_number != snapshot.block_number
+            or row.timestamp != snapshot.timestamp
+        ):
+            continue
+        latest_asset_groups[key].append(row)
+
+    markets = [key[0] for key in latest_snapshots]
+    users = [key[1] for key in latest_snapshots]
+    async with pool.acquire() as conn:
+        existing_rows = await conn.fetch(
+            f"""
+            SELECT market, user_address, last_block_number, last_block_timestamp
+            FROM loan.{_V2_CURRENT_POSITION_TABLE}
+            WHERE market = ANY($1::bytea[])
+              AND user_address = ANY($2::bytea[])
+            """,
+            markets,
+            users,
+        )
+
+        existing_map = {
+            _current_position_key(bytes(row["market"]), bytes(row["user_address"])): (
+                int(row["last_block_number"]),
+                row["last_block_timestamp"],
+            )
+            for row in existing_rows
+        }
+
+        accepted_snapshots: dict[tuple[bytes, bytes], UserPositionSnapshotRow] = {}
+        for key, row in latest_snapshots.items():
+            existing_meta = existing_map.get(key)
+            if _is_newer_current_state(
+                existing_block_number=(
+                    existing_meta[0] if existing_meta is not None else None
+                ),
+                existing_block_timestamp=(
+                    existing_meta[1] if existing_meta is not None else None
+                ),
+                incoming_block_number=row.block_number,
+                incoming_block_timestamp=row.timestamp,
+            ):
+                accepted_snapshots[key] = row
+
+        if not accepted_snapshots:
+            return 0
+
+        open_position_values: list[tuple[object, ...]] = []
+        open_asset_values: list[tuple[object, ...]] = []
+        tx_hash_map = tx_hash_by_key or {}
+
+        async with conn.transaction():
+            for key, row in accepted_snapshots.items():
+                await conn.execute(
+                    f"""
+                    DELETE FROM loan.{_V2_CURRENT_POSITION_ASSET_TABLE}
+                    WHERE market = $1 AND user_address = $2
+                    """,
+                    row.market,
+                    row.user_address,
+                )
+                if not row.has_open_position:
+                    await conn.execute(
+                        f"""
+                        DELETE FROM loan.{_V2_CURRENT_POSITION_TABLE}
+                        WHERE market = $1 AND user_address = $2
+                        """,
+                        row.market,
+                        row.user_address,
+                    )
+                    continue
+
+                open_position_values.append(
+                    (
+                        row.market,
+                        row.user_address,
+                        row.symbol,
+                        row.block_number,
+                        row.timestamp,
+                        tx_hash_map.get(key),
+                        row.has_open_position,
+                        row.is_liquidatable,
+                        row.base_token or None,
+                        row.base_symbol,
+                        row.base_price_usd,
+                        row.eth_price_usd,
+                        row.total_collateral_usd,
+                        row.total_debt_usd,
+                        row.discounted_collateral_usd,
+                        row.liquidation_buffer_usd,
+                        row.health_factor,
+                        row.eth_sensitive_collateral_usd,
+                        row.eth_sensitive_debt_usd,
+                        row.net_eth_exposure_usd,
+                        row.non_eth_collateral_usd,
+                        row.non_eth_debt_usd,
+                        row.basis_risk_collateral_usd,
+                        row.eth_down_liq_price_usd,
+                        row.eth_up_liq_price_usd,
+                        row.eth_liq_mode,
+                        row.dominant_risk,
+                        json.dumps(row.assets_jsonb, ensure_ascii=False),
+                    )
+                )
+
+                for asset_row in latest_asset_groups.get(key, []):
+                    open_asset_values.append(
+                        (
+                            asset_row.market,
+                            asset_row.user_address,
+                            asset_row.asset,
+                            asset_row.side,
+                            asset_row.symbol,
+                            asset_row.decimals,
+                            asset_row.amount,
+                            asset_row.price_in_base,
+                            asset_row.price_usd,
+                            asset_row.value_usd,
+                            asset_row.discounted_value_usd,
+                            asset_row.borrow_collateral_factor,
+                            asset_row.liquidate_collateral_factor,
+                            asset_row.liquidation_factor,
+                            asset_row.beta_to_eth,
+                            asset_row.is_eth_correlated,
+                            asset_row.is_basis_risk_asset,
+                            asset_row.block_number,
+                            asset_row.timestamp,
+                        )
+                    )
+
+            if open_position_values:
+                await conn.executemany(
+                    _UPSERT_V2_CURRENT_POSITION,
+                    open_position_values,
+                )
+            if open_asset_values:
+                await conn.executemany(
+                    _UPSERT_V2_CURRENT_POSITION_ASSET,
+                    open_asset_values,
+                )
+
+    return len(accepted_snapshots)
+
+
 async def fetch_compound_v3_current_positions(
     pool: asyncpg.Pool,
     *,
@@ -3136,6 +3387,86 @@ async def fetch_compound_v3_current_positions(
             f"""
             SELECT *
             FROM loan.{_V3_CURRENT_POSITION_TABLE}
+            {where_sql}
+            ORDER BY last_block_timestamp DESC, market, user_address
+            """,
+            *args,
+        )
+    return [
+        CompoundCurrentPositionRow(
+            market=bytes(row["market"]),
+            user_address=bytes(row["user_address"]),
+            symbol=row["symbol"],
+            last_block_number=int(row["last_block_number"]),
+            last_block_timestamp=row["last_block_timestamp"],
+            last_tx_hash=row["last_tx_hash"],
+            has_open_position=bool(row["has_open_position"]),
+            is_liquidatable=bool(row["is_liquidatable"]),
+            base_token=bytes(row["base_token"])
+            if row["base_token"] is not None
+            else None,
+            base_symbol=row["base_symbol"],
+            base_price_usd=(
+                Decimal(row["base_price_usd"])
+                if row["base_price_usd"] is not None
+                else None
+            ),
+            eth_price_usd=Decimal(row["eth_price_usd"]),
+            total_collateral_usd=Decimal(row["total_collateral_usd"]),
+            total_debt_usd=Decimal(row["total_debt_usd"]),
+            discounted_collateral_usd=Decimal(row["discounted_collateral_usd"]),
+            liquidation_buffer_usd=Decimal(row["liquidation_buffer_usd"]),
+            health_factor=Decimal(row["health_factor"]),
+            eth_sensitive_collateral_usd=Decimal(row["eth_sensitive_collateral_usd"]),
+            eth_sensitive_debt_usd=Decimal(row["eth_sensitive_debt_usd"]),
+            net_eth_exposure_usd=Decimal(row["net_eth_exposure_usd"]),
+            non_eth_collateral_usd=Decimal(row["non_eth_collateral_usd"]),
+            non_eth_debt_usd=Decimal(row["non_eth_debt_usd"]),
+            basis_risk_collateral_usd=Decimal(row["basis_risk_collateral_usd"]),
+            eth_down_liq_price_usd=(
+                Decimal(row["eth_down_liq_price_usd"])
+                if row["eth_down_liq_price_usd"] is not None
+                else None
+            ),
+            eth_up_liq_price_usd=(
+                Decimal(row["eth_up_liq_price_usd"])
+                if row["eth_up_liq_price_usd"] is not None
+                else None
+            ),
+            eth_liq_mode=str(row["eth_liq_mode"]),
+            dominant_risk=str(row["dominant_risk"]),
+            assets_jsonb=(
+                json.loads(row["assets_jsonb"])
+                if isinstance(row["assets_jsonb"], str)
+                else list(row["assets_jsonb"])
+            ),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+async def fetch_compound_v2_current_positions(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes | None = None,
+    market: bytes | None = None,
+) -> list[CompoundCurrentPositionRow]:
+    where_clauses: list[str] = []
+    args: list[Any] = []
+    if user_address is not None:
+        args.append(user_address)
+        where_clauses.append(f"user_address = ${len(args)}")
+    if market is not None:
+        args.append(market)
+        where_clauses.append(f"market = ${len(args)}")
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT *
+            FROM loan.{_V2_CURRENT_POSITION_TABLE}
             {where_sql}
             ORDER BY last_block_timestamp DESC, market, user_address
             """,

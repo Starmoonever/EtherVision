@@ -318,6 +318,58 @@ def _current_position_dataclass() -> CompoundCurrentPositionRow:
     )
 
 
+def _current_position_v2_dataclass() -> CompoundCurrentPositionRow:
+    return CompoundCurrentPositionRow(
+        market=bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5"),
+        user_address=bytes.fromhex("11" * 20),
+        symbol="cETH",
+        last_block_number=123,
+        last_block_timestamp=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+        last_tx_hash="0x" + "cc" * 32,
+        has_open_position=True,
+        is_liquidatable=False,
+        base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        base_symbol="WETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("5000"),
+        total_debt_usd=Decimal("2000"),
+        discounted_collateral_usd=Decimal("4200"),
+        liquidation_buffer_usd=Decimal("2200"),
+        health_factor=Decimal("2.1"),
+        eth_sensitive_collateral_usd=Decimal("5000"),
+        eth_sensitive_debt_usd=Decimal("2000"),
+        net_eth_exposure_usd=Decimal("3000"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("0"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=Decimal("1200"),
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="down",
+        dominant_risk="eth_down",
+        assets_jsonb=[
+            {
+                "asset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "side": "base_borrow",
+                "amount": "1",
+                "price_in_base": None,
+                "price_usd": "2000",
+                "value_usd": "2000",
+                "discounted_value_usd": "0",
+                "borrow_collateral_factor": None,
+                "liquidate_collateral_factor": None,
+                "liquidation_factor": None,
+                "beta_to_eth": "1",
+                "is_eth_correlated": True,
+                "is_basis_risk_asset": False,
+            }
+        ],
+        created_at=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+    )
+
+
 @pytest.mark.asyncio
 async def test_simulate_liquidation_uses_current_positions_for_v3() -> None:
     rows = [
@@ -565,14 +617,19 @@ async def test_get_positions_v2_realtime_uses_replay_snapshot() -> None:
         patch.object(service, "close_web3", new=AsyncMock()),
         patch.object(
             service,
+            "fetch_compound_v2_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            service,
             "_collect_v2_replay_snapshot_row",
             new=AsyncMock(return_value=replay_row),
         ) as mocked_collect,
         patch.object(
             service,
-            "_fetch_latest_position_rows",
-            new=AsyncMock(return_value=[_RecordLike(_snapshot_row_dict())]),
-        ) as mocked_db,
+            "refresh_compound_v2_current_positions",
+            new=AsyncMock(return_value=1),
+        ) as mocked_refresh,
     ):
         response = await service.get_positions(
             pool=object(),
@@ -587,10 +644,38 @@ async def test_get_positions_v2_realtime_uses_replay_snapshot() -> None:
     assert len(response.positions) == 1
     assert response.positions[0].symbol == "cETH"
     mocked_collect.assert_awaited_once()
-    mocked_db.assert_not_awaited()
+    mocked_refresh.assert_awaited_once()
     assert response.positions[0].timestamp == "2026-03-28T00:00:00Z"
     assert response.positions[0].liquidation_buffer_usd == "600"
     assert response.positions[0].assets == []
+
+
+@pytest.mark.asyncio
+async def test_get_positions_v2_without_date_uses_current_positions_first() -> None:
+    with (
+        patch.object(
+            service,
+            "fetch_compound_v2_current_positions",
+            new=AsyncMock(return_value=[_current_position_v2_dataclass()]),
+        ) as mocked_current,
+        patch.object(
+            service,
+            "_collect_v2_replay_snapshot_row",
+            new=AsyncMock(),
+        ) as mocked_collect,
+    ):
+        response = await service.get_positions(
+            pool=_FakePool(),
+            version="v2",
+            market="ceth",
+            address="0x1111111111111111111111111111111111111111",
+            date=None,
+        )
+
+    assert len(response.positions) == 1
+    assert response.positions[0].symbol == "cETH"
+    mocked_current.assert_awaited_once()
+    mocked_collect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -766,29 +851,107 @@ async def test_get_positions_v2_without_date_uses_realtime_path() -> None:
         patch.object(service, "close_web3", new=AsyncMock()),
         patch.object(
             service,
+            "fetch_compound_v2_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            service,
             "_collect_v2_replay_snapshot_row",
             new=AsyncMock(return_value=replay_row),
         ) as mocked_collect,
         patch.object(
             service,
-            "_fetch_latest_position_rows",
-            new=AsyncMock(return_value=[_RecordLike(_snapshot_row_dict())]),
-        ) as mocked_db,
+            "refresh_compound_v2_current_positions",
+            new=AsyncMock(return_value=1),
+        ) as mocked_refresh,
     ):
-        response = await service.get_positions(
-            pool=object(),
-            version="v2",
-            market="all",
-            address="0x1111111111111111111111111111111111111111",
-            date=None,
-            w3=None,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_positions(
+                pool=object(),
+                version="v2",
+                market="all",
+                address="0x1111111111111111111111111111111111111111",
+                date=None,
+                w3=None,
+            )
 
-    assert response.version == "v2"
-    assert len(response.positions) == 1
-    assert response.positions[0].symbol == "WETH"
+    assert exc_info.value.status_code == 404
     assert mocked_collect.await_count == len(COMPOUND_V2_MARKET_NAMES)
-    mocked_db.assert_awaited_once()
+    mocked_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_positions_v2_realtime_empty_result_raises_404() -> None:
+    fake_w3 = _FakeWeb3()
+    replay_row = CompoundEventPositionSnapshotRow(
+        user_address=bytes.fromhex("11" * 20),
+        protocol="v2",
+        market=bytes.fromhex("4ddc2d193948926d02f9b1fe9e1daa0718270ed5"),
+        symbol="cETH",
+        block_number=123,
+        tx_hash="",
+        block_timestamp=datetime(2026, 3, 28, tzinfo=timezone.utc),
+        has_open_position=False,
+        is_liquidatable=False,
+        base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        base_symbol="WETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("0"),
+        total_debt_usd=Decimal("0"),
+        discounted_collateral_usd=Decimal("0"),
+        liquidation_buffer_usd=Decimal("0"),
+        health_factor=Decimal("1e18"),
+        eth_sensitive_collateral_usd=Decimal("0"),
+        eth_sensitive_debt_usd=Decimal("0"),
+        net_eth_exposure_usd=Decimal("0"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("0"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=None,
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="neutral",
+        dominant_risk="neutral",
+        assets_jsonb=[],
+        brief="",
+    )
+
+    with (
+        patch.object(
+            service,
+            "load_config",
+            return_value=SimpleNamespace(protocol="v3"),
+        ),
+        patch.object(service, "_build_web3", new=AsyncMock(return_value=fake_w3)),
+        patch.object(service, "close_web3", new=AsyncMock()),
+        patch.object(
+            service,
+            "fetch_compound_v2_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            service,
+            "_collect_v2_replay_snapshot_row",
+            new=AsyncMock(return_value=replay_row),
+        ),
+        patch.object(
+            service,
+            "refresh_compound_v2_current_positions",
+            new=AsyncMock(return_value=1),
+        ) as mocked_refresh,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_positions(
+                pool=object(),
+                version="v2",
+                market="ceth",
+                address="0x1111111111111111111111111111111111111111",
+                date=None,
+                w3=None,
+            )
+
+    assert exc_info.value.status_code == 404
+    mocked_refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio

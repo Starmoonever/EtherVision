@@ -24,10 +24,14 @@ from ..crawler import _build_web3, close_web3
 from ..db import (
     CompoundCurrentPositionRow,
     CompoundEventPositionSnapshotRow,
+    UserPositionAssetRow,
+    UserPositionSnapshotRow,
+    fetch_compound_v2_current_positions,
     fetch_compound_v3_current_positions,
     fetch_compound_user_tx_history,
     get_compound_event_snapshots,
     market_table_name,
+    refresh_compound_v2_current_positions,
     reserve_table_name,
     upsert_compound_event_snapshots,
 )
@@ -404,6 +408,22 @@ async def get_positions(
         )
 
     if date is None and version == "v2":
+        current_rows = await fetch_compound_v2_current_positions(
+            pool,
+            user_address=user_address_bytes,
+        )
+        current_rows = [
+            row
+            for row in current_rows
+            if _bytea_to_address(row.market).lower() in set(market_addresses)
+        ]
+        if current_rows:
+            return UserPositionResponse(
+                version=version,
+                address=_bytea_to_address(user_address_bytes),
+                positions=_map_and_sort_current_positions(current_rows),
+            )
+
         cfg = load_config()
         cfg.protocol = "v2"
         own_w3 = False
@@ -426,6 +446,8 @@ async def get_positions(
             feed_price_cache: dict[tuple[str, int], Decimal] = {}
 
             rows: list[dict[str, Any]] = []
+            snapshot_rows: list[UserPositionSnapshotRow] = []
+            asset_rows: list[UserPositionAssetRow] = []
             for market_address in market_addresses:
                 snapshot_row = await _collect_v2_replay_snapshot_row(
                     active_w3,
@@ -437,6 +459,11 @@ async def get_positions(
                     deployment_cache=deployment_cache,
                     feed_price_cache=feed_price_cache,
                 )
+                current_snapshot_row, current_asset_rows = (
+                    _v2_event_snapshot_to_current_rows(snapshot_row)
+                )
+                snapshot_rows.append(current_snapshot_row)
+                asset_rows.extend(current_asset_rows)
                 if not snapshot_row.has_open_position:
                     continue
                 rows.append(
@@ -470,18 +497,15 @@ async def get_positions(
                     }
                 )
 
-            if not rows:
-                fallback_rows = await _fetch_latest_position_rows(
+            if snapshot_rows:
+                await refresh_compound_v2_current_positions(
                     pool,
-                    position_table=position_table,
-                    market_bytes_list=market_bytes_list,
-                    user_address=user_address_bytes,
+                    snapshot_rows,
+                    asset_rows,
                 )
-                return UserPositionResponse(
-                    version=version,
-                    address=_bytea_to_address(user_address_bytes),
-                    positions=_map_and_sort_positions(fallback_rows),
-                )
+
+            if not rows:
+                raise HTTPException(status_code=404, detail="未找到该用户当前仓位")
 
             return UserPositionResponse(
                 version=version,
@@ -2063,6 +2087,87 @@ def _map_and_sort_current_positions(
 ) -> list[PositionResponse]:
     positions = [_map_current_position_row(row) for row in rows]
     return _sort_positions(positions)
+
+
+def _v2_event_snapshot_to_current_rows(
+    row: CompoundEventPositionSnapshotRow,
+) -> tuple[UserPositionSnapshotRow, list[UserPositionAssetRow]]:
+    snapshot_row = UserPositionSnapshotRow(
+        timestamp=row.block_timestamp,
+        block_number=row.block_number,
+        market=row.market,
+        symbol=row.symbol,
+        user_address=row.user_address,
+        has_open_position=row.has_open_position,
+        is_liquidatable=row.is_liquidatable,
+        base_token=row.base_token or b"",
+        base_symbol=row.base_symbol,
+        base_price_usd=row.base_price_usd or Decimal("0"),
+        eth_price_usd=row.eth_price_usd,
+        total_collateral_usd=row.total_collateral_usd,
+        total_debt_usd=row.total_debt_usd,
+        discounted_collateral_usd=row.discounted_collateral_usd,
+        liquidation_buffer_usd=row.liquidation_buffer_usd,
+        health_factor=row.health_factor,
+        eth_sensitive_collateral_usd=row.eth_sensitive_collateral_usd,
+        eth_sensitive_debt_usd=row.eth_sensitive_debt_usd,
+        net_eth_exposure_usd=row.net_eth_exposure_usd,
+        non_eth_collateral_usd=row.non_eth_collateral_usd,
+        non_eth_debt_usd=row.non_eth_debt_usd,
+        basis_risk_collateral_usd=row.basis_risk_collateral_usd,
+        eth_down_liq_price_usd=row.eth_down_liq_price_usd,
+        eth_up_liq_price_usd=row.eth_up_liq_price_usd,
+        eth_liq_mode=row.eth_liq_mode,
+        dominant_risk=row.dominant_risk,
+        assets_jsonb=row.assets_jsonb,
+    )
+    asset_rows: list[UserPositionAssetRow] = []
+    for payload in _load_assets_payload(row.assets_jsonb):
+        asset = str(payload.get("asset", "")).strip().lower()
+        if not asset.startswith("0x") or len(asset) != 42:
+            continue
+        asset_rows.append(
+            UserPositionAssetRow(
+                timestamp=row.block_timestamp,
+                block_number=row.block_number,
+                market=row.market,
+                user_address=row.user_address,
+                asset=_address_to_bytes(asset),
+                symbol=payload.get("symbol"),
+                side=str(payload.get("side", "")),
+                decimals=None,
+                amount=Decimal(str(payload.get("amount", "0"))),
+                price_in_base=(
+                    Decimal(str(payload["price_in_base"]))
+                    if payload.get("price_in_base") is not None
+                    else None
+                ),
+                price_usd=Decimal(str(payload.get("price_usd", "0"))),
+                value_usd=Decimal(str(payload.get("value_usd", "0"))),
+                discounted_value_usd=Decimal(
+                    str(payload.get("discounted_value_usd", "0"))
+                ),
+                borrow_collateral_factor=(
+                    Decimal(str(payload["borrow_collateral_factor"]))
+                    if payload.get("borrow_collateral_factor") is not None
+                    else None
+                ),
+                liquidate_collateral_factor=(
+                    Decimal(str(payload["liquidate_collateral_factor"]))
+                    if payload.get("liquidate_collateral_factor") is not None
+                    else None
+                ),
+                liquidation_factor=(
+                    Decimal(str(payload["liquidation_factor"]))
+                    if payload.get("liquidation_factor") is not None
+                    else None
+                ),
+                beta_to_eth=Decimal(str(payload.get("beta_to_eth", "0"))),
+                is_eth_correlated=bool(payload.get("is_eth_correlated", False)),
+                is_basis_risk_asset=bool(payload.get("is_basis_risk_asset", False)),
+            )
+        )
+    return snapshot_row, asset_rows
 
 
 def _sort_positions(positions: list[PositionResponse]) -> list[PositionResponse]:

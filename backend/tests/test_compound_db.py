@@ -18,10 +18,12 @@ from compound_crawler.db import (
     ensure_compound_v3_current_position_tables,
     fetch_compound_v2_run_watermark,
     fetch_compound_v2_active_users,
+    fetch_compound_v2_current_positions,
     fetch_compound_v3_current_positions,
     fetch_compound_v2_users_from_detail_tables_day,
     fetch_compound_v2_users_from_history_day,
     fetch_compound_v2_users_affected_by_events,
+    refresh_compound_v2_current_positions,
     refresh_compound_v3_current_positions,
     refresh_compound_v2_active_users_from_snapshots,
     upsert_compound_v2_run_watermark,
@@ -410,6 +412,85 @@ async def test_refresh_compound_v3_current_positions_replaces_open_rows() -> Non
 
 
 @pytest.mark.asyncio
+async def test_refresh_compound_v2_current_positions_replaces_open_rows() -> None:
+    conn = _FakeConn()
+    conn.fetch_results = [[]]
+    pool = cast(asyncpg.Pool, _FakePool(conn))
+    ts = datetime(2026, 3, 27, 0, 0, 0, tzinfo=timezone.utc)
+    market = bytes.fromhex("aa" * 20)
+    user = bytes.fromhex("11" * 20)
+    base_token = bytes.fromhex("22" * 20)
+    asset = bytes.fromhex("33" * 20)
+
+    touched = await refresh_compound_v2_current_positions(
+        pool,
+        snapshot_rows=[
+            UserPositionSnapshotRow(
+                timestamp=ts,
+                block_number=100,
+                market=market,
+                symbol="cETH",
+                user_address=user,
+                has_open_position=True,
+                is_liquidatable=False,
+                base_token=base_token,
+                base_symbol="WETH",
+                base_price_usd=Decimal("3000"),
+                eth_price_usd=Decimal("3000"),
+                total_collateral_usd=Decimal("100"),
+                total_debt_usd=Decimal("25"),
+                discounted_collateral_usd=Decimal("80"),
+                liquidation_buffer_usd=Decimal("55"),
+                health_factor=Decimal("3.2"),
+                eth_sensitive_collateral_usd=Decimal("100"),
+                eth_sensitive_debt_usd=Decimal("25"),
+                net_eth_exposure_usd=Decimal("75"),
+                non_eth_collateral_usd=Decimal("0"),
+                non_eth_debt_usd=Decimal("0"),
+                basis_risk_collateral_usd=Decimal("0"),
+                eth_down_liq_price_usd=Decimal("1800"),
+                eth_up_liq_price_usd=None,
+                eth_liq_mode="down",
+                dominant_risk="eth_down",
+                assets_jsonb=[{"symbol": "WETH"}],
+            )
+        ],
+        asset_rows=[
+            UserPositionAssetRow(
+                timestamp=ts,
+                block_number=100,
+                market=market,
+                user_address=user,
+                asset=asset,
+                symbol="WETH",
+                side="collateral",
+                decimals=None,
+                amount=Decimal("1"),
+                price_in_base=None,
+                price_usd=Decimal("3000"),
+                value_usd=Decimal("3000"),
+                discounted_value_usd=Decimal("2400"),
+                borrow_collateral_factor=None,
+                liquidate_collateral_factor=None,
+                liquidation_factor=None,
+                beta_to_eth=Decimal("1"),
+                is_eth_correlated=True,
+                is_basis_risk_asset=False,
+            )
+        ],
+    )
+
+    assert touched == 1
+    assert len(conn.execute_calls) == 1
+    assert len(conn.executemany_calls) == 2
+    assert conn.executemany_calls[0][1][0][0] == market
+    assert conn.executemany_calls[0][1][0][1] == user
+    assert conn.executemany_calls[1][1][0][0] == market
+    assert conn.executemany_calls[1][1][0][1] == user
+    assert conn.executemany_calls[1][1][0][2] == asset
+
+
+@pytest.mark.asyncio
 async def test_refresh_compound_v3_current_positions_skips_stale_rows() -> None:
     conn = _FakeConn()
     ts_existing = datetime(2026, 3, 27, 0, 0, 1, tzinfo=timezone.utc)
@@ -512,3 +593,51 @@ async def test_fetch_compound_v3_current_positions_maps_rows() -> None:
     assert len(rows) == 1
     assert rows[0].last_tx_hash == "0x" + "ab" * 32
     assert rows[0].assets_jsonb == [{"symbol": "USDC"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_v2_current_positions_maps_rows() -> None:
+    conn = _FakeConn()
+    conn.fetch_rows = [
+        {
+            "market": bytes.fromhex("aa" * 20),
+            "user_address": bytes.fromhex("11" * 20),
+            "symbol": "cETH",
+            "last_block_number": 100,
+            "last_block_timestamp": datetime(2026, 3, 27, tzinfo=timezone.utc),
+            "last_tx_hash": "0x" + "ab" * 32,
+            "has_open_position": True,
+            "is_liquidatable": False,
+            "base_token": bytes.fromhex("22" * 20),
+            "base_symbol": "WETH",
+            "base_price_usd": Decimal("3000"),
+            "eth_price_usd": Decimal("3000"),
+            "total_collateral_usd": Decimal("100"),
+            "total_debt_usd": Decimal("25"),
+            "discounted_collateral_usd": Decimal("80"),
+            "liquidation_buffer_usd": Decimal("55"),
+            "health_factor": Decimal("3.2"),
+            "eth_sensitive_collateral_usd": Decimal("100"),
+            "eth_sensitive_debt_usd": Decimal("25"),
+            "net_eth_exposure_usd": Decimal("75"),
+            "non_eth_collateral_usd": Decimal("0"),
+            "non_eth_debt_usd": Decimal("0"),
+            "basis_risk_collateral_usd": Decimal("0"),
+            "eth_down_liq_price_usd": Decimal("1800"),
+            "eth_up_liq_price_usd": None,
+            "eth_liq_mode": "down",
+            "dominant_risk": "eth_down",
+            "assets_jsonb": '[{"symbol":"WETH"}]',
+            "created_at": datetime(2026, 3, 27, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 3, 27, tzinfo=timezone.utc),
+        }
+    ]
+
+    rows = await fetch_compound_v2_current_positions(
+        cast(asyncpg.Pool, _FakePool(conn))
+    )
+
+    assert len(rows) == 1
+    assert rows[0].symbol == "cETH"
+    assert rows[0].last_tx_hash == "0x" + "ab" * 32
+    assert rows[0].assets_jsonb == [{"symbol": "WETH"}]
