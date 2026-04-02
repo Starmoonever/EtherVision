@@ -26,7 +26,7 @@ repos:
 
   # Python lint + formatter (Ruff)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.7
+    rev: v0.15.8
     hooks:
       - id: ruff-check
         args: ['--fix'] # 自动修复可修复的问题
@@ -43,7 +43,7 @@ repos:
     hooks:
       - id: frontend-build
         name: frontend build
-        entry: bash -lc 'cd frontend && pnpm build'
+        entry: bash -lc 'cd frontend && pnpm i && pnpm build'
         language: system
         pass_filenames: false
         files: ^frontend/
