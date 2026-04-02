@@ -367,6 +367,22 @@ async def get_positions(
     position_table = _user_position_table(version)
 
     if date is None and version == "v3":
+        current_rows = await fetch_compound_v3_current_positions(
+            pool,
+            user_address=user_address_bytes,
+        )
+        current_rows = [
+            row
+            for row in current_rows
+            if _bytea_to_address(row.market).lower() in set(market_addresses)
+        ]
+        if current_rows:
+            return UserPositionResponse(
+                version=version,
+                address=_bytea_to_address(user_address_bytes),
+                positions=_map_and_sort_current_positions(current_rows),
+            )
+
         positions: list[PositionResponse] = []
         for market_address in market_addresses:
             collected = await collect_market_user_snapshots(
@@ -374,11 +390,13 @@ async def get_positions(
                 pool,
                 market=market_address,
                 point_ts=None,
-                persist=False,
+                persist=True,
                 user_addresses=[user_address_bytes],
                 w3=w3,
             )
             positions.extend(_map_and_sort_positions(collected.snapshots))
+        if not positions:
+            raise HTTPException(status_code=404, detail="未找到该用户当前仓位")
         return UserPositionResponse(
             version=version,
             address=_bytea_to_address(user_address_bytes),
@@ -2004,6 +2022,46 @@ def _map_position_row(row: Any) -> PositionResponse:
 
 def _map_and_sort_positions(rows: list[Any]) -> list[PositionResponse]:
     positions = [_map_position_row(row) for row in rows]
+    return _sort_positions(positions)
+
+
+def _map_current_position_row(row: CompoundCurrentPositionRow) -> PositionResponse:
+    return PositionResponse(
+        market=_bytea_to_address(row.market),
+        symbol=row.symbol,
+        timestamp=_timestamp_to_utc_string(row.last_block_timestamp),
+        block_number=int(row.last_block_number),
+        has_open_position=bool(row.has_open_position),
+        is_liquidatable=bool(row.is_liquidatable),
+        base_token=_bytea_to_address(_require_bytes(row.base_token, "base_token")),
+        base_symbol=row.base_symbol,
+        base_price_usd=_fmt(row.base_price_usd),
+        eth_price_usd=_fmt(row.eth_price_usd),
+        total_collateral_usd=_fmt(row.total_collateral_usd),
+        total_debt_usd=_fmt(row.total_debt_usd),
+        discounted_collateral_usd=_fmt(row.discounted_collateral_usd),
+        liquidation_buffer_usd=_fmt(row.liquidation_buffer_usd),
+        health_factor=_fmt(row.health_factor),
+        eth_sensitive_collateral_usd=_fmt(row.eth_sensitive_collateral_usd),
+        eth_sensitive_debt_usd=_fmt(row.eth_sensitive_debt_usd),
+        net_eth_exposure_usd=_fmt(row.net_eth_exposure_usd),
+        non_eth_collateral_usd=_fmt(row.non_eth_collateral_usd),
+        non_eth_debt_usd=_fmt(row.non_eth_debt_usd),
+        basis_risk_collateral_usd=_fmt(row.basis_risk_collateral_usd),
+        eth_down_liq_price_usd=_fmt_optional(row.eth_down_liq_price_usd),
+        eth_up_liq_price_usd=_fmt_optional(row.eth_up_liq_price_usd),
+        eth_liq_mode=row.eth_liq_mode,
+        dominant_risk=row.dominant_risk,
+        assets=[
+            _map_position_asset(item) for item in _load_assets_payload(row.assets_jsonb)
+        ],
+    )
+
+
+def _map_and_sort_current_positions(
+    rows: list[CompoundCurrentPositionRow],
+) -> list[PositionResponse]:
+    positions = [_map_current_position_row(row) for row in rows]
     return _sort_positions(positions)
 
 

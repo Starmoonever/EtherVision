@@ -37,6 +37,7 @@ from .db import (
     UserPositionSnapshotRow,
     ensure_user_position_snapshot_tables,
     fetch_existing_user_position_addresses,
+    refresh_compound_v3_current_positions,
     upsert_user_position_asset_rows,
     upsert_user_position_snapshots,
 )
@@ -1005,6 +1006,12 @@ async def collect_market_user_snapshots(
             await upsert_user_position_asset_rows(
                 pool, asset_rows, protocol=cfg.protocol
             )
+            if cfg.protocol == "v3":
+                await refresh_compound_v3_current_positions(
+                    pool,
+                    snapshot_rows,
+                    asset_rows,
+                )
 
         return CollectedMarketSnapshots(
             timestamp=timestamp,

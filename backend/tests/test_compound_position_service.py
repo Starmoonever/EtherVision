@@ -266,6 +266,58 @@ def _snapshot_dataclass() -> UserPositionSnapshotRow:
     )
 
 
+def _current_position_dataclass() -> CompoundCurrentPositionRow:
+    return CompoundCurrentPositionRow(
+        market=bytes.fromhex("a17581a9e3356d9a858b789d68b4d866e593ae94"),
+        user_address=bytes.fromhex("11" * 20),
+        symbol="WETH",
+        last_block_number=123,
+        last_block_timestamp=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+        last_tx_hash="0x" + "aa" * 32,
+        has_open_position=True,
+        is_liquidatable=False,
+        base_token=bytes.fromhex("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        base_symbol="WETH",
+        base_price_usd=Decimal("2000"),
+        eth_price_usd=Decimal("2000"),
+        total_collateral_usd=Decimal("5000"),
+        total_debt_usd=Decimal("2000"),
+        discounted_collateral_usd=Decimal("4200"),
+        liquidation_buffer_usd=Decimal("2200"),
+        health_factor=Decimal("2.1"),
+        eth_sensitive_collateral_usd=Decimal("5000"),
+        eth_sensitive_debt_usd=Decimal("2000"),
+        net_eth_exposure_usd=Decimal("3000"),
+        non_eth_collateral_usd=Decimal("0"),
+        non_eth_debt_usd=Decimal("0"),
+        basis_risk_collateral_usd=Decimal("0"),
+        eth_down_liq_price_usd=Decimal("1200"),
+        eth_up_liq_price_usd=None,
+        eth_liq_mode="down",
+        dominant_risk="eth_down",
+        assets_jsonb=[
+            {
+                "asset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "side": "base_borrow",
+                "amount": "1",
+                "price_in_base": "1",
+                "price_usd": "2000",
+                "value_usd": "2000",
+                "discounted_value_usd": "0",
+                "borrow_collateral_factor": None,
+                "liquidate_collateral_factor": None,
+                "liquidation_factor": None,
+                "beta_to_eth": "1",
+                "is_eth_correlated": True,
+                "is_basis_risk_asset": False,
+            }
+        ],
+        created_at=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 21, 0, 0, 0, tzinfo=timezone.utc),
+    )
+
+
 @pytest.mark.asyncio
 async def test_simulate_liquidation_uses_current_positions_for_v3() -> None:
     rows = [
@@ -599,7 +651,9 @@ async def test_get_positions_collects_and_persists_when_history_missing() -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_positions_passes_single_user_address_to_collector() -> None:
+async def test_get_positions_v3_chain_lookup_passes_single_user_address_to_collector() -> (
+    None
+):
     collected = CollectedMarketSnapshots(
         timestamp=datetime(2026, 3, 21, 9, 30, 0, tzinfo=timezone.utc),
         block_number=789,
@@ -610,56 +664,60 @@ async def test_get_positions_passes_single_user_address_to_collector() -> None:
 
     with (
         patch.object(service, "load_config", return_value=SimpleNamespace()),
+        patch.object(
+            service,
+            "fetch_compound_v3_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
         patch.object(
             service,
             "collect_market_user_snapshots",
             new=AsyncMock(return_value=collected),
         ) as mocked_collect,
     ):
-        await service.get_positions(
-            pool=_FakePool(),
-            version="v3",
-            market="usdt",
-            address="0x1111111111111111111111111111111111111111",
-            date=None,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_positions(
+                pool=_FakePool(),
+                version="v3",
+                market="usdt",
+                address="0x1111111111111111111111111111111111111111",
+                date=None,
+            )
 
+    assert exc_info.value.status_code == 404
     await_args = mocked_collect.await_args
     assert await_args is not None
     assert await_args.kwargs["user_addresses"] == [bytes.fromhex("11" * 20)]
+    assert await_args.kwargs["persist"] is True
 
 
 @pytest.mark.asyncio
-async def test_get_positions_without_date_fetches_realtime() -> None:
-    collected = CollectedMarketSnapshots(
-        timestamp=datetime(2026, 3, 21, 9, 30, 0, tzinfo=timezone.utc),
-        block_number=789,
-        market="0x3afdc9bca9213a35503b077a6072f3d0d5ab0840",
-        symbol="USDT",
-        snapshots=[],
-    )
-
+async def test_get_positions_without_date_uses_current_positions_first() -> None:
     with (
-        patch.object(service, "load_config", return_value=SimpleNamespace()),
+        patch.object(
+            service,
+            "fetch_compound_v3_current_positions",
+            new=AsyncMock(return_value=[_current_position_dataclass()]),
+        ) as mocked_current,
         patch.object(
             service,
             "collect_market_user_snapshots",
-            new=AsyncMock(return_value=collected),
+            new=AsyncMock(),
         ) as mocked_collect,
     ):
         response = await service.get_positions(
             pool=_FakePool(),
             version="v3",
-            market="usdt",
+            market="weth",
             address="0x1111111111111111111111111111111111111111",
             date=None,
         )
 
     assert response.address == "0x1111111111111111111111111111111111111111"
-    assert response.positions == []
-    await_args = mocked_collect.await_args
-    assert await_args is not None
-    assert await_args.kwargs["persist"] is False
+    assert len(response.positions) == 1
+    assert response.positions[0].symbol == "WETH"
+    mocked_current.assert_awaited_once()
+    mocked_collect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -780,6 +838,11 @@ async def test_get_positions_market_all_collects_all_markets() -> None:
         patch.object(service, "load_config", return_value=SimpleNamespace()),
         patch.object(
             service,
+            "fetch_compound_v3_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            service,
             "collect_market_user_snapshots",
             new=AsyncMock(side_effect=_collect_for_market),
         ) as mocked_collect,
@@ -801,7 +864,7 @@ async def test_get_positions_market_all_collects_all_markets() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_positions_realtime_empty_result() -> None:
+async def test_get_positions_realtime_empty_result_raises_404() -> None:
     collected = CollectedMarketSnapshots(
         timestamp=datetime(2026, 3, 21, 9, 30, 0, tzinfo=timezone.utc),
         block_number=789,
@@ -814,23 +877,28 @@ async def test_get_positions_realtime_empty_result() -> None:
         patch.object(service, "load_config", return_value=SimpleNamespace()),
         patch.object(
             service,
+            "fetch_compound_v3_current_positions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            service,
             "collect_market_user_snapshots",
             new=AsyncMock(return_value=collected),
         ) as mocked_collect,
     ):
-        response = await service.get_positions(
-            pool=_FakePool(),
-            version="v3",
-            market="usdt",
-            address="0x1111111111111111111111111111111111111111",
-            date=None,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_positions(
+                pool=_FakePool(),
+                version="v3",
+                market="usdt",
+                address="0x1111111111111111111111111111111111111111",
+                date=None,
+            )
 
-    assert response.address == "0x1111111111111111111111111111111111111111"
-    assert response.positions == []
+    assert exc_info.value.status_code == 404
     await_args = mocked_collect.await_args
     assert await_args is not None
-    assert await_args.kwargs["persist"] is False
+    assert await_args.kwargs["persist"] is True
 
 
 @pytest.mark.asyncio
@@ -1235,5 +1303,5 @@ async def test_collect_v2_replay_snapshot_row_skips_undeployed_event_market() ->
 
     assert user_checksum.startswith("0x")
     assert row.market == bytes.fromhex(undeployed_event_market[2:])
-    assert row.symbol == COMPOUND_V2_MARKET_NAMES[undeployed_event_market]
+    assert row.symbol == undeployed_event_market
     assert row.total_collateral_usd > 0
