@@ -1,5 +1,7 @@
 import { apiFetch, apiFetchRaw } from './client';
 
+const COMPOUND_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export interface CompoundMarket {
   address: string;
   symbol: string;
@@ -88,6 +90,30 @@ const EMPTY_V2_MARKET_CONFIG_RESPONSE = {
 const EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE = {
   points: [],
 };
+
+const compoundMarketsCache = new Map<string, { fetchedAt: number; data: CompoundMarket[] }>();
+const compoundMarketsInflight = new Map<string, Promise<CompoundMarket[]>>();
+
+const compoundMarketHistoryCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundMarketPoint[] }
+>();
+const compoundMarketHistoryInflight = new Map<string, Promise<CompoundMarketPoint[]>>();
+
+const compoundUserPositionCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundUserPositionResponse }
+>();
+const compoundUserPositionInflight = new Map<string, Promise<CompoundUserPositionResponse>>();
+
+const compoundGovernanceCache = new Map<string, { fetchedAt: number; data: any }>();
+const compoundGovernanceInflight = new Map<string, Promise<any>>();
+
+const compoundV2ConfigCache = new Map<string, { fetchedAt: number; data: any }>();
+const compoundV2ConfigInflight = new Map<string, Promise<any>>();
+
+const compoundV2ConfigPeriodCache = new Map<string, { fetchedAt: number; data: any }>();
+const compoundV2ConfigPeriodInflight = new Map<string, Promise<any>>();
 
 function buildCompoundV2MarketCandidates(market: string): string[] {
   const trimmed = market.trim();
@@ -203,11 +229,31 @@ export interface CompoundUserPositionResponse {
 }
 
 export async function fetchCompoundMarkets(version: string): Promise<CompoundMarket[]> {
-  const data = await apiFetch<CompoundMarketsResponse>(`/compound/markets?version=${version}`);
-  if (!data.markets || !Array.isArray(data.markets)) {
-    throw new Error('Invalid Compound markets response format');
+  const key = version;
+  const cached = compoundMarketsCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
   }
-  return data.markets;
+
+  const inflight = compoundMarketsInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const request = apiFetch<CompoundMarketsResponse>(`/compound/markets?version=${version}`)
+    .then((data) => {
+      if (!data.markets || !Array.isArray(data.markets)) {
+        throw new Error('Invalid Compound markets response format');
+      }
+      compoundMarketsCache.set(key, { fetchedAt: Date.now(), data: data.markets });
+      return data.markets;
+    })
+    .finally(() => {
+      compoundMarketsInflight.delete(key);
+    });
+
+  compoundMarketsInflight.set(key, request);
+  return request;
 }
 
 export async function fetchCompoundMarketHistory(
@@ -217,6 +263,17 @@ export async function fetchCompoundMarketHistory(
   end: string,
   options: FetchCompoundMarketHistoryOptions = {},
 ): Promise<CompoundMarketPoint[]> {
+  const key = `${version}|${market}|${start}|${end}|${options.interval ?? ''}|${String(options.detail ?? true)}`;
+  const cached = compoundMarketHistoryCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundMarketHistoryInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
   const params = new URLSearchParams({
     version,
     market,
@@ -229,13 +286,22 @@ export async function fetchCompoundMarketHistory(
     params.set('interval', String(options.interval));
   }
 
-  const data = await apiFetch<CompoundMarketHistoryResponse>(
+  const request = apiFetch<CompoundMarketHistoryResponse>(
     `/compound/market/state/period?${params.toString()}`,
-  );
-  if (!data.points || !Array.isArray(data.points)) {
-    throw new Error('Invalid Compound market history response format');
-  }
-  return data.points;
+  )
+    .then((data) => {
+      if (!data.points || !Array.isArray(data.points)) {
+        throw new Error('Invalid Compound market history response format');
+      }
+      compoundMarketHistoryCache.set(key, { fetchedAt: Date.now(), data: data.points });
+      return data.points;
+    })
+    .finally(() => {
+      compoundMarketHistoryInflight.delete(key);
+    });
+
+  compoundMarketHistoryInflight.set(key, request);
+  return request;
 }
 
 export async function fetchCompoundUserPosition(
@@ -243,24 +309,89 @@ export async function fetchCompoundUserPosition(
   market: string,
   address: string,
 ): Promise<CompoundUserPositionResponse> {
-  return apiFetch<CompoundUserPositionResponse>(
+  const normalizedAddress = address.toLowerCase();
+  const normalizedMarket = market.toLowerCase();
+  const key = `${version}|${normalizedMarket}|${normalizedAddress}`;
+  const cached = compoundUserPositionCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundUserPositionInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const request = apiFetch<CompoundUserPositionResponse>(
     `/compound/position?version=${version}&market=${market}&address=${address}`,
-  );
+  )
+    .then((data) => {
+      compoundUserPositionCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      compoundUserPositionInflight.delete(key);
+    });
+
+  compoundUserPositionInflight.set(key, request);
+  return request;
 }
 
 export async function fetchCompoundMarketGovernanceV3(market: string, date: string): Promise<any> {
-  return apiFetch<any>(
+  const key = `${market.toLowerCase()}|${date}`;
+  const cached = compoundGovernanceCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundGovernanceInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const request = apiFetch<any>(
     `/compound/market/config?version=v3&market=${market}&date=${encodeURIComponent(date)}&detail=true`,
-  );
+  )
+    .then((data) => {
+      compoundGovernanceCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      compoundGovernanceInflight.delete(key);
+    });
+
+  compoundGovernanceInflight.set(key, request);
+  return request;
 }
 
 export async function fetchCompoundMarketConfigV2(market: string, date: string): Promise<any> {
-  const data = await fetchFirstCompoundV2ConfigCandidate<any>(
+  const key = `${market.trim().toLowerCase()}|${date}`;
+  const cached = compoundV2ConfigCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundV2ConfigInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const request = fetchFirstCompoundV2ConfigCandidate<any>(
     market,
     (candidate) =>
       `/compound/market/config?version=v2&market=${encodeURIComponent(candidate)}&date=${encodeURIComponent(date)}`,
-  );
-  return data ?? EMPTY_V2_MARKET_CONFIG_RESPONSE;
+  )
+    .then((data) => {
+      const resolved = data ?? EMPTY_V2_MARKET_CONFIG_RESPONSE;
+      compoundV2ConfigCache.set(key, { fetchedAt: Date.now(), data: resolved });
+      return resolved;
+    })
+    .finally(() => {
+      compoundV2ConfigInflight.delete(key);
+    });
+
+  compoundV2ConfigInflight.set(key, request);
+  return request;
 }
 
 export async function fetchCompoundMarketConfigPeriodV2(
@@ -268,12 +399,33 @@ export async function fetchCompoundMarketConfigPeriodV2(
   start: string,
   end: string,
 ): Promise<any> {
-  const data = await fetchFirstCompoundV2ConfigCandidate<any>(
+  const key = `${market.trim().toLowerCase()}|${start}|${end}`;
+  const cached = compoundV2ConfigPeriodCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundV2ConfigPeriodInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const request = fetchFirstCompoundV2ConfigCandidate<any>(
     market,
     (candidate) =>
       `/compound/market/config/period?version=v2&market=${encodeURIComponent(candidate)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
-  );
-  return data ?? EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE;
+  )
+    .then((data) => {
+      const resolved = data ?? EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE;
+      compoundV2ConfigPeriodCache.set(key, { fetchedAt: Date.now(), data: resolved });
+      return resolved;
+    })
+    .finally(() => {
+      compoundV2ConfigPeriodInflight.delete(key);
+    });
+
+  compoundV2ConfigPeriodInflight.set(key, request);
+  return request;
 }
 
 export interface CompoundPositionReplayPoint {
@@ -318,4 +470,62 @@ export async function fetchCompoundPositionReplay(
   return apiFetch<CompoundPositionReplayResponse>(
     `/compound/position/replay?address=${address}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&version=${version}`,
   );
+}
+
+export interface CompoundLiquidationPeriodItem {
+  simulated_eth_price: string;
+  positions_cnt: string;
+  total_eth_sensitive_collateral_usd: string;
+  total_liquidation_usd: string;
+}
+
+const compoundLiquidationPeriodCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundLiquidationPeriodItem[] }
+>();
+const compoundLiquidationPeriodInflight = new Map<
+  string,
+  Promise<CompoundLiquidationPeriodItem[]>
+>();
+
+export async function fetchCompoundLiquidationPeriod(
+  version: 'v2' | 'v3',
+  market: string,
+  start: number,
+  end: number,
+  interval: number = 1,
+): Promise<CompoundLiquidationPeriodItem[]> {
+  const key = `${version}|${market}|${Math.round(start)}|${Math.round(end)}|${interval}`;
+  const cached = compoundLiquidationPeriodCache.get(key);
+
+  if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = compoundLiquidationPeriodInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const params = new URLSearchParams({
+    version,
+    market,
+    start: String(start),
+    end: String(end),
+    interval: String(interval),
+  });
+
+  const request = apiFetch<CompoundLiquidationPeriodItem[]>(
+    `/compound/liquidate/period?${params.toString()}`,
+  )
+    .then((data) => {
+      compoundLiquidationPeriodCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      compoundLiquidationPeriodInflight.delete(key);
+    });
+
+  compoundLiquidationPeriodInflight.set(key, request);
+  return request;
 }
