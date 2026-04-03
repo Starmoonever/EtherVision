@@ -35,6 +35,8 @@ from .db import (
 from .rpc import build_web3
 from compound_crawler.db import ensure_compound_event_snapshot_table
 from compound_crawler.api.routes import router as compound_router
+from justlend_crawler.api.routes import router as justlend_router
+from justlend_crawler.db import ensure_justlend_tables
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         await ensure_tables(pool, _tables)
     await ensure_snapshot_cache_table(pool)
     await ensure_compound_event_snapshot_table(pool)
+    await ensure_justlend_tables(pool)
     await ensure_eth_price_timestamp_table(pool)
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
@@ -74,8 +77,8 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     application = FastAPI(
-        title="Aave + Compound API",
-        description="统一提供 Aave 与 Compound 的查询接口",
+        title="Aave + Compound + JustLend API",
+        description="统一提供 Aave、Compound 与 JustLend 的查询接口",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -91,13 +94,18 @@ def create_app() -> FastAPI:
     application.include_router(aave_router)
     application.include_router(aave_common_router)
     application.include_router(compound_router)
+    application.include_router(justlend_router)
 
     @application.get("/aave/health", tags=["系统"])
-    async def health() -> dict:
+    async def _() -> dict:
         return {"status": "ok"}
 
     @application.get("/compound/health", tags=["系统"])
-    async def compound_health() -> dict:
+    async def _() -> dict:
+        return {"status": "ok"}
+
+    @application.get("/justlend/health", tags=["系统"])
+    async def _() -> dict:
         return {"status": "ok"}
 
     return application

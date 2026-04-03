@@ -9,7 +9,7 @@ from datetime import datetime
 from datetime import date as date_type
 from decimal import Decimal
 from collections import defaultdict
-from typing import Any
+from typing import Any, Protocol, cast
 
 import asyncpg
 from crawler_shared.config import PostgresConfig
@@ -19,6 +19,16 @@ from sqlalchemy import inspect
 from .orm_models import Base, CompoundV3UserPosition
 
 logger = logging.getLogger(__name__)
+
+_DDL_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext($1));"
+
+
+class _DdlLockConn(Protocol):
+    async def execute(self, query: str, *args) -> str: ...
+
+
+async def _acquire_ddl_lock(conn: _DdlLockConn, lock_name: str) -> None:
+    await conn.execute(_DDL_LOCK_SQL, lock_name)
 
 
 _MARKET_TABLES = {
@@ -1913,80 +1923,86 @@ async def ensure_market_state_tables(
         protocols = [protocol]
 
     async with pool.acquire() as conn:
-        for p in protocols:
-            market_table = _MARKET_TABLES[p]
-            reserve_table = _RESERVE_TABLES[p]
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(
+                ddl_conn,
+                f"loan.compound.market_state_ddl.{','.join(protocols)}.{int(use_timescaledb)}",
+            )
+            for p in protocols:
+                market_table = _MARKET_TABLES[p]
+                reserve_table = _RESERVE_TABLES[p]
 
-            await conn.execute(_DDL_MARKET.format(table_name=market_table))
-            await _ensure_market_columns(conn, market_table)
-            await conn.execute(
-                _DDL_MARKET_INDEX_TS.format(
-                    index_name=f"idx_{market_table}_ts",
-                    table_name=market_table,
+                await conn.execute(_DDL_MARKET.format(table_name=market_table))
+                await _ensure_market_columns(conn, market_table)
+                await conn.execute(
+                    _DDL_MARKET_INDEX_TS.format(
+                        index_name=f"idx_{market_table}_ts",
+                        table_name=market_table,
+                    )
                 )
-            )
-            await conn.execute(
-                _DDL_MARKET_INDEX_MARKET.format(
-                    index_name=f"idx_{market_table}_market_ts",
-                    table_name=market_table,
+                await conn.execute(
+                    _DDL_MARKET_INDEX_MARKET.format(
+                        index_name=f"idx_{market_table}_market_ts",
+                        table_name=market_table,
+                    )
                 )
-            )
 
-            await conn.execute(_DDL_RESERVE.format(table_name=reserve_table))
-            await _ensure_reserve_columns(
-                conn, reserve_table, include_price_in_base=(p == "v3")
-            )
-            await conn.execute(
-                _DDL_RESERVE_INDEX_MARKET_TS.format(
-                    index_name=f"idx_{reserve_table}_market_ts",
-                    table_name=reserve_table,
+                await conn.execute(_DDL_RESERVE.format(table_name=reserve_table))
+                await _ensure_reserve_columns(
+                    conn, reserve_table, include_price_in_base=(p == "v3")
                 )
-            )
-            await conn.execute(
-                _DDL_RESERVE_INDEX_RESERVE_TS.format(
-                    index_name=f"idx_{reserve_table}_reserve_ts",
-                    table_name=reserve_table,
+                await conn.execute(
+                    _DDL_RESERVE_INDEX_MARKET_TS.format(
+                        index_name=f"idx_{reserve_table}_market_ts",
+                        table_name=reserve_table,
+                    )
                 )
-            )
+                await conn.execute(
+                    _DDL_RESERVE_INDEX_RESERVE_TS.format(
+                        index_name=f"idx_{reserve_table}_reserve_ts",
+                        table_name=reserve_table,
+                    )
+                )
 
-            if p == "v3":
-                await conn.execute(_DDL_MARKET_CONFIG)
-                await conn.execute(_DDL_MARKET_CONFIG_INDEX_TS)
-                await conn.execute(_DDL_MARKET_CONFIG_ASSET)
-                await conn.execute(_DDL_MARKET_CONFIG_ASSET_INDEX)
-                await conn.execute(_DDL_MARKET_STATUS)
-                await conn.execute(_DDL_MARKET_STATUS_INDEX)
-            if p == "v2":
-                await conn.execute(_DDL_V2_MARKET_CONFIG)
-                await conn.execute(_DDL_V2_MARKET_CONFIG_INDEX)
-                await conn.execute(_DDL_V2_PROTOCOL_CONFIG)
-                await conn.execute(_DDL_V2_PROTOCOL_CONFIG_INDEX)
-
-            if use_timescaledb:
-                await _try_enable_hypertable(conn, market_table)
-                await _try_enable_hypertable(conn, reserve_table)
                 if p == "v3":
-                    await _try_enable_hypertable(conn, _MARKET_STATUS_TABLE)
+                    await conn.execute(_DDL_MARKET_CONFIG)
+                    await conn.execute(_DDL_MARKET_CONFIG_INDEX_TS)
+                    await conn.execute(_DDL_MARKET_CONFIG_ASSET)
+                    await conn.execute(_DDL_MARKET_CONFIG_ASSET_INDEX)
+                    await conn.execute(_DDL_MARKET_STATUS)
+                    await conn.execute(_DDL_MARKET_STATUS_INDEX)
+                if p == "v2":
+                    await conn.execute(_DDL_V2_MARKET_CONFIG)
+                    await conn.execute(_DDL_V2_MARKET_CONFIG_INDEX)
+                    await conn.execute(_DDL_V2_PROTOCOL_CONFIG)
+                    await conn.execute(_DDL_V2_PROTOCOL_CONFIG_INDEX)
 
-            logger.info(
-                "Compound market_state tables ready: %s, %s (timescaledb=%s)",
-                market_table,
-                reserve_table,
-                use_timescaledb,
-            )
-            if p == "v3":
+                if use_timescaledb:
+                    await _try_enable_hypertable(conn, market_table)
+                    await _try_enable_hypertable(conn, reserve_table)
+                    if p == "v3":
+                        await _try_enable_hypertable(conn, _MARKET_STATUS_TABLE)
+
                 logger.info(
-                    "Compound governance tables ready: %s, %s, %s",
-                    _MARKET_CONFIG_TABLE,
-                    _MARKET_CONFIG_ASSET_TABLE,
-                    _MARKET_STATUS_TABLE,
+                    "Compound market_state tables ready: %s, %s (timescaledb=%s)",
+                    market_table,
+                    reserve_table,
+                    use_timescaledb,
                 )
-            if p == "v2":
-                logger.info(
-                    "Compound v2 config tables ready: %s, %s",
-                    _V2_MARKET_CONFIG_TABLE,
-                    _V2_PROTOCOL_CONFIG_TABLE,
-                )
+                if p == "v3":
+                    logger.info(
+                        "Compound governance tables ready: %s, %s, %s",
+                        _MARKET_CONFIG_TABLE,
+                        _MARKET_CONFIG_ASSET_TABLE,
+                        _MARKET_STATUS_TABLE,
+                    )
+                if p == "v2":
+                    logger.info(
+                        "Compound v2 config tables ready: %s, %s",
+                        _V2_MARKET_CONFIG_TABLE,
+                        _V2_PROTOCOL_CONFIG_TABLE,
+                    )
 
 
 def market_table_name(protocol: str) -> str:
@@ -2334,37 +2350,45 @@ async def ensure_user_position_snapshot_tables(
     user_table = user_position_table_name(protocol)
     user_asset_table = user_position_asset_table_name(protocol)
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_USER_POSITION.format(table_name=user_table))
-        await conn.execute(
-            _DDL_USER_POSITION_INDEX_MARKET_TS.format(
-                index_name=f"idx_{user_table}_market_ts",
-                table_name=user_table,
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(
+                ddl_conn,
+                f"loan.compound.user_position_snapshot_ddl.{protocol}.{int(use_timescaledb)}",
             )
-        )
-        await conn.execute(
-            _DDL_USER_POSITION_INDEX_USER_TS.format(
-                index_name=f"idx_{user_table}_user_ts",
-                table_name=user_table,
+            await conn.execute(_DDL_USER_POSITION.format(table_name=user_table))
+            await conn.execute(
+                _DDL_USER_POSITION_INDEX_MARKET_TS.format(
+                    index_name=f"idx_{user_table}_market_ts",
+                    table_name=user_table,
+                )
             )
-        )
+            await conn.execute(
+                _DDL_USER_POSITION_INDEX_USER_TS.format(
+                    index_name=f"idx_{user_table}_user_ts",
+                    table_name=user_table,
+                )
+            )
 
-        await conn.execute(_DDL_USER_POSITION_ASSET.format(table_name=user_asset_table))
-        await conn.execute(
-            _DDL_USER_POSITION_ASSET_INDEX_USER_TS.format(
-                index_name=f"idx_{user_asset_table}_user_ts",
-                table_name=user_asset_table,
+            await conn.execute(
+                _DDL_USER_POSITION_ASSET.format(table_name=user_asset_table)
             )
-        )
-        await conn.execute(
-            _DDL_USER_POSITION_ASSET_INDEX_MARKET_TS.format(
-                index_name=f"idx_{user_asset_table}_market_ts",
-                table_name=user_asset_table,
+            await conn.execute(
+                _DDL_USER_POSITION_ASSET_INDEX_USER_TS.format(
+                    index_name=f"idx_{user_asset_table}_user_ts",
+                    table_name=user_asset_table,
+                )
             )
-        )
+            await conn.execute(
+                _DDL_USER_POSITION_ASSET_INDEX_MARKET_TS.format(
+                    index_name=f"idx_{user_asset_table}_market_ts",
+                    table_name=user_asset_table,
+                )
+            )
 
-        if use_timescaledb:
-            await _try_enable_hypertable(conn, user_table)
-            await _try_enable_hypertable(conn, user_asset_table)
+            if use_timescaledb:
+                await _try_enable_hypertable(conn, user_table)
+                await _try_enable_hypertable(conn, user_asset_table)
 
     logger.info(
         "Compound user position snapshot tables ready: %s, %s (timescaledb=%s)",
@@ -2376,12 +2400,15 @@ async def ensure_user_position_snapshot_tables(
 
 async def ensure_compound_v3_current_position_tables(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_V3_CURRENT_POSITION)
-        await conn.execute(_DDL_V3_CURRENT_POSITION_INDEX_USER)
-        await conn.execute(_DDL_V3_CURRENT_POSITION_INDEX_UPDATED)
-        await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET)
-        await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET_INDEX_USER)
-        await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET_INDEX_UPDATED)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.compound.v3_current_position_ddl")
+            await conn.execute(_DDL_V3_CURRENT_POSITION)
+            await conn.execute(_DDL_V3_CURRENT_POSITION_INDEX_USER)
+            await conn.execute(_DDL_V3_CURRENT_POSITION_INDEX_UPDATED)
+            await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET)
+            await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET_INDEX_USER)
+            await conn.execute(_DDL_V3_CURRENT_POSITION_ASSET_INDEX_UPDATED)
     logger.info(
         "Compound v3 current position tables ready: %s, %s",
         _V3_CURRENT_POSITION_TABLE,
@@ -2391,12 +2418,15 @@ async def ensure_compound_v3_current_position_tables(pool: asyncpg.Pool) -> None
 
 async def ensure_compound_v2_current_position_tables(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_V2_CURRENT_POSITION)
-        await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_USER)
-        await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_UPDATED)
-        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET)
-        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_USER)
-        await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_UPDATED)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.compound.v2_current_position_ddl")
+            await conn.execute(_DDL_V2_CURRENT_POSITION)
+            await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_USER)
+            await conn.execute(_DDL_V2_CURRENT_POSITION_INDEX_UPDATED)
+            await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET)
+            await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_USER)
+            await conn.execute(_DDL_V2_CURRENT_POSITION_ASSET_INDEX_UPDATED)
     logger.info(
         "Compound v2 current position tables ready: %s, %s",
         _V2_CURRENT_POSITION_TABLE,
@@ -2406,8 +2436,11 @@ async def ensure_compound_v2_current_position_tables(pool: asyncpg.Pool) -> None
 
 async def ensure_compound_v2_active_user_table(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_V2_ACTIVE_USER)
-        await conn.execute(_DDL_V2_ACTIVE_USER_INDEXES)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.compound.v2_active_user_ddl")
+            await conn.execute(_DDL_V2_ACTIVE_USER)
+            await conn.execute(_DDL_V2_ACTIVE_USER_INDEXES)
     logger.info(
         "Compound v2 active user table ready: loan.%s",
         _V2_ACTIVE_USER_TABLE,
@@ -2416,7 +2449,10 @@ async def ensure_compound_v2_active_user_table(pool: asyncpg.Pool) -> None:
 
 async def ensure_compound_v2_active_run_state_table(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_V2_ACTIVE_RUN_STATE)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.compound.v2_active_run_state_ddl")
+            await conn.execute(_DDL_V2_ACTIVE_RUN_STATE)
     logger.info(
         "Compound v2 run-state table ready: loan.%s",
         _V2_ACTIVE_RUN_STATE_TABLE,
@@ -3598,8 +3634,11 @@ async def fetch_compound_v3_current_position_assets(
 
 async def ensure_compound_event_snapshot_table(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT)
-        await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT_INDEXES)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.compound.event_snapshot_ddl")
+            await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT)
+            await conn.execute(_DDL_COMPOUND_EVENT_SNAPSHOT_INDEXES)
     logger.info(
         "Compound event-driven snapshot table ready: loan.%s",
         _COMPOUND_EVENT_SNAPSHOT_TABLE,
