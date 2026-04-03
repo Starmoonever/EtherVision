@@ -21,7 +21,6 @@ interface CompoundLiquidationChartProps {
   version: 'v2' | 'v3';
   market: string;
   marketSymbol: string;
-  onScenarioChange?: (scenarioLabel: string) => void;
 }
 
 interface ChartDataPoint {
@@ -54,7 +53,6 @@ export function CompoundLiquidationChart({
   version,
   market,
   marketSymbol,
-  onScenarioChange,
 }: CompoundLiquidationChartProps) {
   const [ethPrice, setEthPrice] = useState<number | null>(null);
   const [priceChange, setPriceChange] = useState(-10);
@@ -170,13 +168,6 @@ export function CompoundLiquidationChart({
     setMeta(mergeRequestMetas(metas));
   }, [chartMeta, priceMeta]);
 
-  useEffect(() => {
-    if (!ethPrice) return;
-    onScenarioChange?.(
-      `ETH ${displayedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${priceChange}%)`,
-    );
-  }, [displayedPrice, ethPrice, onScenarioChange, priceChange]);
-
   const highlightedData = useMemo(
     () =>
       chartData.map((item) => ({
@@ -204,10 +195,7 @@ export function CompoundLiquidationChart({
           <ChartInfoButton title="Compound 清算模拟说明" items={explainItems} />
           <span className="badge green-badge">{marketSymbol || 'Market'}</span>
         </div>
-        <ChartDataStatus
-          meta={meta}
-          scenarioLabel={`ETH ${displayedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-        />
+        <ChartDataStatus meta={meta} />
       </div>
 
       <div

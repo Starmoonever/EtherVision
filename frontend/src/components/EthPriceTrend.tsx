@@ -7,8 +7,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ReferenceArea,
-  ReferenceLine,
 } from 'recharts';
 import { fetchEthPricePeriodWithMeta } from '../api/price';
 import type { PricePeriodItem } from '../api';
@@ -42,17 +40,7 @@ const explainItems: ExplainItem[] = [
   },
 ];
 
-interface EthPriceTrendProps {
-  riskReferencePrice?: number;
-  riskDirection?: 'up' | 'down';
-  scenarioLabel?: string;
-}
-
-export function EthPriceTrend({
-  riskReferencePrice,
-  riskDirection = 'down',
-  scenarioLabel,
-}: EthPriceTrendProps) {
+export function EthPriceTrend() {
   const [timeRange, setTimeRange] = useState<'24h' | '7D' | '3M'>('24h');
   const [data, setData] = useState<PricePoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -134,8 +122,9 @@ export function EthPriceTrend({
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
           marginBottom: '0.75rem',
         }}
       >
@@ -143,7 +132,7 @@ export function EthPriceTrend({
           <span className="card-title">历史趋势</span>
           <ChartInfoButton title="ETH 历史趋势说明" items={explainItems} />
         </div>
-        <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
+        <ChartDataStatus meta={meta} />
       </div>
 
       <div
@@ -203,40 +192,6 @@ export function EthPriceTrend({
                 tickFormatter={(val) => `$${val}`}
                 width={65}
               />
-              {riskReferencePrice ? (
-                <>
-                  <ReferenceLine
-                    y={riskReferencePrice}
-                    stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
-                    strokeDasharray="6 4"
-                    label={{
-                      value: `风险阈值 $${riskReferencePrice.toFixed(0)}`,
-                      position: 'insideTopRight',
-                      fill: riskDirection === 'down' ? '#fb7185' : '#c084fc',
-                      fontSize: 11,
-                    }}
-                  />
-                  <ReferenceArea
-                    y1={0}
-                    y2={riskReferencePrice}
-                    ifOverflow="extendDomain"
-                    fill="#7f1d1d"
-                    fillOpacity={0.08}
-                  />
-                </>
-              ) : riskReferencePrice ? (
-                <ReferenceLine
-                  y={riskReferencePrice}
-                  stroke="#c084fc"
-                  strokeDasharray="6 4"
-                  label={{
-                    value: `风险阈值 $${riskReferencePrice.toFixed(0)}`,
-                    position: 'insideTopRight',
-                    fill: '#c084fc',
-                    fontSize: 11,
-                  }}
-                />
-              ) : null}
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#0f172a',

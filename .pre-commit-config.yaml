@@ -47,6 +47,12 @@ repos:
         language: system
         pass_filenames: false
         files: ^frontend/
+      - id: frontend-eslint
+        name: frontend eslint
+        entry: bash -lc 'cd frontend && pnpm lint --fix'
+        language: system
+        pass_filenames: false
+        files: ^frontend/
 
 ci:
   autoupdate_schedule: weekly

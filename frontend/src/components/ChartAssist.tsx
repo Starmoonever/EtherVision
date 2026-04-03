@@ -15,7 +15,6 @@ interface ChartInfoButtonProps {
 
 interface ChartDataStatusProps {
   meta: AggregatedRequestMeta;
-  scenarioLabel?: string;
 }
 
 function formatTime(timestamp: number | null): string {
@@ -178,7 +177,7 @@ export function ChartInfoButton({ title, items }: ChartInfoButtonProps) {
   );
 }
 
-export function ChartDataStatus({ meta, scenarioLabel }: ChartDataStatusProps) {
+export function ChartDataStatus({ meta }: ChartDataStatusProps) {
   const items = [
     {
       label: '最后刷新',
@@ -191,14 +190,6 @@ export function ChartDataStatus({ meta, scenarioLabel }: ChartDataStatusProps) {
       color: cacheStatusColor(meta.cacheStatus),
     },
   ];
-
-  if (scenarioLabel) {
-    items.push({
-      label: '联动场景',
-      value: scenarioLabel,
-      color: '#fbbf24',
-    });
-  }
 
   return (
     <div

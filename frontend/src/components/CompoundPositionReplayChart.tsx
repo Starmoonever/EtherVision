@@ -44,12 +44,22 @@ const explainItems: ExplainItem[] = [
   },
 ];
 
-const safeParse = (val: any) => {
-  const num = parseFloat(val);
-  return isNaN(num) ? 0 : num;
+interface ReplayTooltipPayloadEntry {
+  payload: ReplayPointExt;
+}
+
+interface ReplayTooltipProps {
+  active?: boolean;
+  payload?: ReplayTooltipPayloadEntry[];
+  label?: string;
+}
+
+const safeParse = (val: unknown) => {
+  const num = parseFloat(String(val));
+  return Number.isNaN(num) ? 0 : num;
 };
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label }: ReplayTooltipProps) => {
   if (active && payload && payload.length) {
     const point = payload[0].payload as ReplayPointExt;
     return (
@@ -173,7 +183,7 @@ export function CompoundPositionReplayChart({
 
             // Parse operation_type robustly by searching for keywords in the brief
             let operation_type = '未知';
-            let originalBrief = pt.brief ? pt.brief.trim() : '';
+            const originalBrief = pt.brief ? pt.brief.trim() : '';
             const typeKeywords = ['存入', '赎回', '借入', '还款', '代还', '清算'];
             for (const kw of typeKeywords) {
               if (originalBrief.startsWith(kw)) {
@@ -223,10 +233,6 @@ export function CompoundPositionReplayChart({
   }, [address, version]);
 
   const [appliedRange, setAppliedRange] = useState({ start: '2020-12-01 00:00:00', end: endTime });
-
-  useEffect(() => {
-    setAppliedRange({ start: '2020-12-01 00:00:00', end: endTime });
-  }, []);
 
   useEffect(() => {
     if (!fullData.length) return;

@@ -4,8 +4,6 @@ import {
   Legend,
   Line,
   LineChart,
-  ReferenceArea,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,9 +15,6 @@ import type { AggregatedRequestMeta } from '../api/requestMeta';
 
 interface MarketHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
-  riskReferencePrice?: number;
-  riskDirection?: 'up' | 'down';
-  scenarioLabel?: string;
 }
 
 interface MarketReplayPoint {
@@ -124,12 +119,7 @@ function formatRateTooltipValue(
   return [`${numericValue.toFixed(2)}%`, label] as [string, string];
 }
 
-export function MarketHistoryChart({
-  version,
-  riskReferencePrice,
-  riskDirection = 'down',
-  scenarioLabel,
-}: MarketHistoryChartProps) {
+export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
   const [data, setData] = useState<MarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -263,7 +253,7 @@ export function MarketHistoryChart({
           <ChartInfoButton title="Aave 市场历史图说明" items={explainItems} />
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
+          <ChartDataStatus meta={meta} />
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {(['3M', '6M', '1Y'] as const).map((preset) => (
               <button
@@ -351,26 +341,6 @@ export function MarketHistoryChart({
                     tickFormatter={formatPriceTick}
                     width={60}
                   />
-                  {riskReferencePrice ? (
-                    <>
-                      <ReferenceLine
-                        yAxisId="price"
-                        y={riskReferencePrice}
-                        stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
-                        strokeDasharray="6 4"
-                      />
-                      {riskDirection === 'down' && (
-                        <ReferenceArea
-                          yAxisId="price"
-                          y1={0}
-                          y2={riskReferencePrice}
-                          ifOverflow="extendDomain"
-                          fill="#7f1d1d"
-                          fillOpacity={0.08}
-                        />
-                      )}
-                    </>
-                  ) : null}
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                     formatter={formatTooltipValue}
@@ -447,14 +417,6 @@ export function MarketHistoryChart({
                     tickFormatter={formatPriceTick}
                     width={60}
                   />
-                  {riskReferencePrice ? (
-                    <ReferenceLine
-                      yAxisId="price"
-                      y={riskReferencePrice}
-                      stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
-                      strokeDasharray="6 4"
-                    />
-                  ) : null}
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                     formatter={formatRateTooltipValue}

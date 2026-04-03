@@ -10,6 +10,7 @@ import {
 } from 'recharts';
 import { fetchAssetPricePeriodWithMeta } from '../api/price';
 import {
+  type CompoundV2MarketConfigPeriodPoint,
   fetchCompoundMarketConfigPeriodV2WithMeta,
   fetchCompoundMarketConfigV2WithMeta,
   getCompoundV2BaseAssetSymbol,
@@ -32,7 +33,6 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
 interface CompoundPriceTrendProps {
   asset: string;
   version?: 'v2' | 'v3';
-  scenarioLabel?: string;
 }
 
 const explainItems: ExplainItem[] = [
@@ -50,11 +50,7 @@ const explainItems: ExplainItem[] = [
   },
 ];
 
-export function CompoundPriceTrend({
-  asset,
-  version = 'v3',
-  scenarioLabel,
-}: CompoundPriceTrendProps) {
+export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrendProps) {
   const [timeRange, setTimeRange] = useState<'24h' | '7D' | '3M'>('24h');
   const [data, setData] = useState<PricePoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -122,8 +118,8 @@ export function CompoundPriceTrend({
           // Create a map of timestamp -> exchange_rate
           const rateMap = new Map<string, number>();
           if (configRes.data && Array.isArray(configRes.data.points)) {
-            configRes.data.points.forEach((pt: any) => {
-              if (pt.market_config && pt.market_config.exchange_rate) {
+            configRes.data.points.forEach((pt: CompoundV2MarketConfigPeriodPoint) => {
+              if (pt.market_config?.exchange_rate && pt.market_config.effective_timestamp) {
                 // Keep only the date part YYYY-MM-DD to match closest price point
                 const dateKey = pt.market_config.effective_timestamp.split('T')[0];
                 rateMap.set(dateKey, parseFloat(pt.market_config.exchange_rate));
@@ -185,8 +181,9 @@ export function CompoundPriceTrend({
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
           marginBottom: '0.75rem',
         }}
       >
@@ -194,7 +191,7 @@ export function CompoundPriceTrend({
           <span className="card-title">历史趋势</span>
           <ChartInfoButton title="Compound 价格趋势说明" items={explainItems} />
         </div>
-        <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
+        <ChartDataStatus meta={meta} />
       </div>
 
       <div
@@ -272,7 +269,7 @@ export function CompoundPriceTrend({
                   color: '#e2e8f0',
                 }}
                 itemStyle={{ color: '#3b82f6' }}
-                formatter={(value: any, name: any) => {
+                formatter={(value: unknown, name: unknown) => {
                   if (name === 'price') {
                     const label = version === 'v2' ? `${asset} 价格` : '价格';
                     return [
@@ -289,7 +286,7 @@ export function CompoundPriceTrend({
                       `${asset} 兑换率`,
                     ];
                   }
-                  return [value, name] as any;
+                  return [String(value), String(name)];
                 }}
               />
               <Line

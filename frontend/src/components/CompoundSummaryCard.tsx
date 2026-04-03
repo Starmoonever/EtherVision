@@ -42,7 +42,7 @@ export function CompoundSummaryCard({
   const healthFactor = parseFloat(data.health_factor || '0');
 
   // Format health factor
-  let hfDisplay = healthFactor.toFixed(2);
+  const hfDisplay = healthFactor.toFixed(2);
   let hfColor = '#10b981'; // Green
   if (healthFactor < 1.0)
     hfColor = '#ef4444'; // Red

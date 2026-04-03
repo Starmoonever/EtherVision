@@ -415,10 +415,7 @@ export function HistoricalLiquidationChart({
             ，仓位与 reserve 明细均截止该日 00:00 UTC
           </span>
         </div>
-        <ChartDataStatus
-          meta={meta}
-          scenarioLabel={`${priceChange > 0 ? '+' : ''}${priceChange}%`}
-        />
+        <ChartDataStatus meta={meta} />
         <button
           onClick={version === 'all' ? undefined : handleShowDetails}
           disabled={version === 'all' || !activeSnapshotDate}
