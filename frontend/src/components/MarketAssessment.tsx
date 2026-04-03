@@ -80,6 +80,7 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
     (_, index) => sliderMin + index * 10,
   );
   const simulatedPrice = ethPrice * (1 + priceChange / 100);
+  const linkedScenarioLabel = `ETH ${simulatedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${priceChange > 0 ? '+' : ''}${priceChange}%)`;
 
   return (
     <div className="market-assessment">
@@ -123,7 +124,11 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
           <hr style={{ border: 'none', borderTop: '1px solid #1e293b', margin: 0 }} />
 
           {/* ETH 历史趋势图 */}
-          <EthPriceTrend />
+          <EthPriceTrend
+            riskReferencePrice={simulatedPrice}
+            riskDirection={marketSide === 'borrow' ? 'up' : 'down'}
+            scenarioLabel={linkedScenarioLabel}
+          />
         </div>
 
         {/* ── 右侧：清算模拟 + 图表 Panel（3/4 宽，合并为一个 board） ── */}
@@ -315,7 +320,12 @@ export function MarketAssessment({ marketVersion }: MarketAssessmentProps) {
           {/* 清算瀑布图 */}
           <WaterfallLiquidationChart version={marketVersion} />
 
-          <MarketHistoryChart version={marketVersion} />
+          <MarketHistoryChart
+            version={marketVersion}
+            riskReferencePrice={simulatedPrice}
+            riskDirection={marketSide === 'borrow' ? 'up' : 'down'}
+            scenarioLabel={linkedScenarioLabel}
+          />
         </div>
       </div>
     </div>

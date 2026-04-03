@@ -1,4 +1,5 @@
 import { apiFetch, apiFetchRaw } from './client';
+import type { DataWithMeta } from './requestMeta';
 
 // ---------- 类型定义 ----------
 
@@ -87,6 +88,11 @@ const _detailCache = new Map<
   string,
   { fetchedAt: number; data: LiquidationDetailResponse | null }
 >();
+const _historicalCache = new Map<
+  string,
+  { fetchedAt: number; data: HistoricalLiquidationPoint[] }
+>();
+const _waterfallCache = new Map<string, { fetchedAt: number; data: WaterfallResponse }>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
 
 /**
@@ -99,10 +105,27 @@ export async function fetchLiquidationPeriod(
   end: number,
   interval: number = 1,
 ): Promise<LiqPeriodItem[]> {
+  const result = await fetchLiquidationPeriodWithMeta(side, version, start, end, interval);
+  return result.data;
+}
+
+export async function fetchLiquidationPeriodWithMeta(
+  side: 'collateral' | 'borrow',
+  version: string,
+  start: number,
+  end: number,
+  interval: number = 1,
+): Promise<DataWithMeta<LiqPeriodItem[]>> {
   const key = `${side}|${version}|${Math.round(start)}|${Math.round(end)}`;
   const cached = _periodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const path =
@@ -111,7 +134,13 @@ export async function fetchLiquidationPeriod(
       : `/aave/liquidate/period?start=${start}&end=${end}&interval=${interval}&eth_ratio=0.4&version=${version}`;
   const data = await apiFetch<LiqPeriodItem[]>(path);
   _periodCache.set(key, { fetchedAt: Date.now(), data });
-  return data;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 /**
@@ -159,8 +188,38 @@ export async function fetchHistoricalLiquidation(
   version: string,
   simEthPriceDistance: number,
 ): Promise<HistoricalLiquidationPoint[]> {
+  const result = await fetchHistoricalLiquidationWithMeta(start, end, version, simEthPriceDistance);
+  return result.data;
+}
+
+export async function fetchHistoricalLiquidationWithMeta(
+  start: string,
+  end: string,
+  version: string,
+  simEthPriceDistance: number,
+): Promise<DataWithMeta<HistoricalLiquidationPoint[]>> {
+  const key = `${start}|${end}|${version}|${simEthPriceDistance}`;
+  const cached = _historicalCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
   const path = `/aave/positions/period?start=${start}&end=${end}&version=${version}&interval=1&sim_eth_price_distance=${simEthPriceDistance}`;
-  return apiFetch<HistoricalLiquidationPoint[]>(path);
+  const data = await apiFetch<HistoricalLiquidationPoint[]>(path);
+  _historicalCache.set(key, { fetchedAt: Date.now(), data });
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchHistoricalLiquidationDetail(
@@ -190,6 +249,43 @@ export async function fetchWaterfallLiquidation(
   impactK: number,
   sellPartitionEth: number,
 ): Promise<WaterfallResponse> {
+  const result = await fetchWaterfallLiquidationWithMeta(
+    version,
+    initialPriceShockEth,
+    date,
+    impactK,
+    sellPartitionEth,
+  );
+  return result.data;
+}
+
+export async function fetchWaterfallLiquidationWithMeta(
+  version: string,
+  initialPriceShockEth: number,
+  date: string,
+  impactK: number,
+  sellPartitionEth: number,
+): Promise<DataWithMeta<WaterfallResponse>> {
+  const key = `${version}|${initialPriceShockEth}|${date}|${impactK}|${sellPartitionEth}`;
+  const cached = _waterfallCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
   const path = `/aave/liquidate/waterfall?version=${version}&initial_price_shock_eth=${initialPriceShockEth}&date=${date}&impact_k=${impactK}&sell_partition_eth=${sellPartitionEth}`;
-  return apiFetch<WaterfallResponse>(path);
+  const data = await apiFetch<WaterfallResponse>(path);
+  _waterfallCache.set(key, { fetchedAt: Date.now(), data });
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }

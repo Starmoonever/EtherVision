@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { DataWithMeta } from './requestMeta';
 
 // ---------- 类型定义 ----------
 
@@ -32,16 +33,33 @@ const pricePeriodInflight = new Map<string, Promise<PricePeriodItem[]>>();
  * 获取任意资产当前价格（USD）。
  */
 export async function fetchAssetPrice(asset: string): Promise<number> {
+  const result = await fetchAssetPriceWithMeta(asset);
+  return result.data;
+}
+
+export async function fetchAssetPriceWithMeta(asset: string): Promise<DataWithMeta<number>> {
   const normalizedAsset = asset.toLowerCase();
   const key = `now:${normalizedAsset}`;
   const cached = priceCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
-    return cached.value;
+    return {
+      data: cached.value,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = priceInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((value) => ({
+      data: value,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = apiFetch<PriceResponse>(`/price?asset=${normalizedAsset}&time=now`)
@@ -56,7 +74,14 @@ export async function fetchAssetPrice(asset: string): Promise<number> {
     });
 
   priceInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 /**
@@ -68,16 +93,38 @@ export async function fetchAssetPricePeriod(
   end: string,
   interval: number,
 ): Promise<PricePeriodItem[]> {
+  const result = await fetchAssetPricePeriodWithMeta(asset, start, end, interval);
+  return result.data;
+}
+
+export async function fetchAssetPricePeriodWithMeta(
+  asset: string,
+  start: string,
+  end: string,
+  interval: number,
+): Promise<DataWithMeta<PricePeriodItem[]>> {
   const normalizedAsset = asset.toLowerCase();
   const key = `${normalizedAsset}|${start}|${end}|${interval}`;
   const cached = pricePeriodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
-    return cached.value;
+    return {
+      data: cached.value,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = pricePeriodInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((value) => ({
+      data: value,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = apiFetch<PricePeriodResponse>(
@@ -95,11 +142,22 @@ export async function fetchAssetPricePeriod(
     });
 
   pricePeriodInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchEthPrice(): Promise<number> {
   return fetchAssetPrice('eth');
+}
+
+export async function fetchEthPriceWithMeta(): Promise<DataWithMeta<number>> {
+  return fetchAssetPriceWithMeta('eth');
 }
 
 export async function fetchEthPricePeriod(
@@ -108,4 +166,12 @@ export async function fetchEthPricePeriod(
   interval: number,
 ): Promise<PricePeriodItem[]> {
   return fetchAssetPricePeriod('eth', start, end, interval);
+}
+
+export async function fetchEthPricePeriodWithMeta(
+  start: string,
+  end: string,
+  interval: number,
+): Promise<DataWithMeta<PricePeriodItem[]>> {
+  return fetchAssetPricePeriodWithMeta('eth', start, end, interval);
 }
