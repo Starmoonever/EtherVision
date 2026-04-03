@@ -163,12 +163,15 @@ export default function App() {
         setCompoundMarketsVersion(version);
         // Ensure compoundMarket points to a valid address after version change
         if (visibleMarkets.length > 0) {
-          if (
-            compoundMarket !== 'all' &&
-            !visibleMarkets.find((marketItem) => marketItem.address === compoundMarket)
-          ) {
-            setCompoundMarket(visibleMarkets[0].address);
-          }
+          setCompoundMarket((currentMarket) => {
+            if (
+              currentMarket !== 'all' &&
+              !visibleMarkets.find((marketItem) => marketItem.address === currentMarket)
+            ) {
+              return visibleMarkets[0].address;
+            }
+            return currentMarket;
+          });
         }
       } catch (loadError) {
         console.error(loadError);

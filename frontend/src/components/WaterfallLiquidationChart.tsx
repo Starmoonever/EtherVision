@@ -221,7 +221,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
             <span className="card-title">模拟清算瀑布图 (多轮迭代)</span>
             <ChartInfoButton title="清算瀑布图说明" items={explainItems} />
           </div>
-          <ChartDataStatus meta={meta} scenarioLabel={`初始跌幅 ${committedInitialShock}%`} />
+          <ChartDataStatus meta={meta} />
         </div>
       </div>
 

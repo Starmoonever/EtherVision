@@ -32,6 +32,50 @@ interface ReplayPoint {
   original_operation_type: string;
 }
 
+interface AaveReplayApiPoint {
+  timestamp: string;
+  eth_price_usd: string;
+  eth_collateral_usd: string;
+  weth_debt_usd: string;
+  liq_price: string;
+  brief?: string;
+  total_collateral_usd: string;
+  total_debt_usd: string;
+  available_borrows_usd: string;
+  health_factor: string;
+  operation_type?: string;
+}
+
+interface AaveReplayResponse {
+  points: AaveReplayApiPoint[];
+}
+
+interface TooltipPayloadEntry {
+  payload: ReplayPoint;
+  color?: string;
+  name?: string;
+  value?: string | number;
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipPayloadEntry[];
+  label?: string;
+  onDetailsClick: (point: ReplayPoint) => void;
+  primaryMetric: 'eth_collateral_usd' | 'weth_debt_usd';
+}
+
+interface ChartClickState {
+  activeTooltipIndex?: number | string | null;
+  activeCoordinate?: { x: number; y: number };
+}
+
+interface DotRenderProps {
+  cx?: number;
+  cy?: number;
+  payload?: ReplayPoint;
+}
+
 const replayCache = new Map<string, { fetchedAt: number; data: ReplayPoint[] }>();
 const REPLAY_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -50,7 +94,13 @@ const explainItems: ExplainItem[] = [
   },
 ];
 
-const CustomTooltip = ({ active, payload, label, onDetailsClick, primaryMetric }: any) => {
+const CustomTooltip = ({
+  active,
+  payload,
+  label,
+  onDetailsClick,
+  primaryMetric,
+}: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     const point = payload[0].payload;
     return (
@@ -86,7 +136,7 @@ const CustomTooltip = ({ active, payload, label, onDetailsClick, primaryMetric }
             总贷出债务价值: {point.total_debt_usd}
           </p>
         )}
-        {payload.map((entry: any, index: number) => (
+        {payload.map((entry: TooltipPayloadEntry, index: number) => (
           <p key={index} style={{ color: entry.color, margin: 0, fontSize: '0.9rem' }}>
             {entry.name}: {entry.value}
           </p>
@@ -270,14 +320,14 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
           throw new Error('Failed to fetch replay data');
         }
 
-        const result = await response.json();
+        const result: AaveReplayResponse = await response.json();
 
         if (!result.points || !Array.isArray(result.points)) {
           throw new Error('Invalid data format');
         }
 
         const formattedData = result.points
-          .map((pt: any) => {
+          .map((pt: AaveReplayApiPoint) => {
             const d = new Date(pt.timestamp);
             const pad = (n: number) => n.toString().padStart(2, '0');
             const timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -316,9 +366,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
               original_operation_type,
             };
           })
-          .sort(
-            (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-          );
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
         replayCache.set(cacheKey, { fetchedAt: Date.now(), data: formattedData });
         setFullData(formattedData);
@@ -340,32 +388,7 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     }
   }, [address, version]);
 
-  // Filter data locally when search/filter params change
-  useEffect(() => {
-    if (!fullData.length) return;
-
-    // Filter by time range
-    const startTs = new Date(startTime).getTime();
-    const endTs = new Date(endTime).getTime();
-
-    const filtered = fullData.filter((pt) => {
-      const ptTs = new Date(pt.timestamp).getTime();
-      return ptTs >= startTs && ptTs <= endTs;
-    });
-
-    setData(filtered);
-
-    // Reset tooltip on filter change
-    setActiveTooltip(null);
-    setSelectedPoint(null);
-  }, [startTime, endTime, fullData]);
-
   const [appliedRange, setAppliedRange] = useState({ start: '2020-12-01 00:00:00', end: endTime });
-
-  // Update applied range on mount to match initial default
-  useEffect(() => {
-    setAppliedRange({ start: '2020-12-01 00:00:00', end: endTime });
-  }, []);
 
   // The actual filtering effect depends on appliedRange
   useEffect(() => {
@@ -395,8 +418,8 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     setAppliedRange({ start: startTime, end: endTime });
   };
 
-  const handleChartClick = (e: any) => {
-    if (e && e.activeTooltipIndex !== undefined && e.activeCoordinate) {
+  const handleChartClick = (e: ChartClickState | undefined) => {
+    if (e && typeof e.activeTooltipIndex === 'number' && e.activeCoordinate) {
       if (activeTooltip && activeTooltip.index === e.activeTooltipIndex) {
         setActiveTooltip(null); // Toggle off if clicking the same point
       } else {
@@ -500,7 +523,9 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
           <span style={{ fontSize: '0.85rem', color: '#94a3b8', marginLeft: '0.5rem' }}>指标:</span>
           <select
             value={primaryMetric}
-            onChange={(e) => setPrimaryMetric(e.target.value as any)}
+            onChange={(e) =>
+              setPrimaryMetric(e.target.value as 'eth_collateral_usd' | 'weth_debt_usd')
+            }
             style={{
               background: '#1e293b',
               color: '#e2e8f0',
@@ -667,8 +692,11 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 dataKey={primaryMetric}
                 stroke="#10b981"
                 strokeWidth={2}
-                dot={(props: any) => {
+                dot={(props: DotRenderProps) => {
                   const { cx, cy, payload } = props;
+                  if (cx === undefined || cy === undefined || !payload) {
+                    return null;
+                  }
 
                   // If filtering by specific type, show prominent dots
                   return (

@@ -49,6 +49,39 @@ export interface CompoundMarketHistoryResponse {
   points: CompoundMarketPoint[];
 }
 
+export interface CompoundGovernanceAsset {
+  symbol: string;
+  borrow_collateral_factor?: string;
+}
+
+export interface CompoundGovernanceV3Response {
+  tracking_index_scale?: string;
+  base_tracking_supply_speed?: string;
+  base_tracking_borrow_speed?: string;
+  assets?: CompoundGovernanceAsset[];
+}
+
+export interface CompoundV2MarketConfig {
+  effective_timestamp?: string;
+  exchange_rate?: string;
+  collateral_factor?: string;
+  reserve_factor?: string;
+}
+
+export interface CompoundV2MarketConfigResponse {
+  version: string;
+  market_config: CompoundV2MarketConfig | null;
+  protocol_config: unknown | null;
+}
+
+export interface CompoundV2MarketConfigPeriodPoint {
+  market_config?: CompoundV2MarketConfig | null;
+}
+
+export interface CompoundV2MarketConfigPeriodResponse {
+  points: CompoundV2MarketConfigPeriodPoint[];
+}
+
 interface FetchCompoundMarketHistoryOptions {
   interval?: number;
   detail?: boolean;
@@ -82,13 +115,13 @@ const V2_BASE_ASSET_ALIAS_MAP: Record<string, string> = {
   cbbtc: 'WBTC',
 };
 
-const EMPTY_V2_MARKET_CONFIG_RESPONSE = {
+const EMPTY_V2_MARKET_CONFIG_RESPONSE: CompoundV2MarketConfigResponse = {
   version: 'v2',
   market_config: null,
   protocol_config: null,
 };
 
-const EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE = {
+const EMPTY_V2_MARKET_CONFIG_PERIOD_RESPONSE: CompoundV2MarketConfigPeriodResponse = {
   points: [],
 };
 
@@ -107,14 +140,26 @@ const compoundUserPositionCache = new Map<
 >();
 const compoundUserPositionInflight = new Map<string, Promise<CompoundUserPositionResponse>>();
 
-const compoundGovernanceCache = new Map<string, { fetchedAt: number; data: any }>();
-const compoundGovernanceInflight = new Map<string, Promise<any>>();
+const compoundGovernanceCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundGovernanceV3Response }
+>();
+const compoundGovernanceInflight = new Map<string, Promise<CompoundGovernanceV3Response>>();
 
-const compoundV2ConfigCache = new Map<string, { fetchedAt: number; data: any }>();
-const compoundV2ConfigInflight = new Map<string, Promise<any>>();
+const compoundV2ConfigCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundV2MarketConfigResponse }
+>();
+const compoundV2ConfigInflight = new Map<string, Promise<CompoundV2MarketConfigResponse>>();
 
-const compoundV2ConfigPeriodCache = new Map<string, { fetchedAt: number; data: any }>();
-const compoundV2ConfigPeriodInflight = new Map<string, Promise<any>>();
+const compoundV2ConfigPeriodCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundV2MarketConfigPeriodResponse }
+>();
+const compoundV2ConfigPeriodInflight = new Map<
+  string,
+  Promise<CompoundV2MarketConfigPeriodResponse>
+>();
 
 function buildCompoundV2MarketCandidates(market: string): string[] {
   const trimmed = market.trim();
@@ -422,7 +467,10 @@ export async function fetchCompoundUserPositionWithMeta(
   };
 }
 
-export async function fetchCompoundMarketGovernanceV3(market: string, date: string): Promise<any> {
+export async function fetchCompoundMarketGovernanceV3(
+  market: string,
+  date: string,
+): Promise<CompoundGovernanceV3Response> {
   const result = await fetchCompoundMarketGovernanceV3WithMeta(market, date);
   return result.data;
 }
@@ -430,7 +478,7 @@ export async function fetchCompoundMarketGovernanceV3(market: string, date: stri
 export async function fetchCompoundMarketGovernanceV3WithMeta(
   market: string,
   date: string,
-): Promise<DataWithMeta<any>> {
+): Promise<DataWithMeta<CompoundGovernanceV3Response>> {
   const key = `${market.toLowerCase()}|${date}`;
   const cached = compoundGovernanceCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
@@ -454,7 +502,7 @@ export async function fetchCompoundMarketGovernanceV3WithMeta(
     }));
   }
 
-  const request = apiFetch<any>(
+  const request = apiFetch<CompoundGovernanceV3Response>(
     `/compound/market/config?version=v3&market=${market}&date=${encodeURIComponent(date)}&detail=true`,
   )
     .then((data) => {
@@ -476,7 +524,10 @@ export async function fetchCompoundMarketGovernanceV3WithMeta(
   };
 }
 
-export async function fetchCompoundMarketConfigV2(market: string, date: string): Promise<any> {
+export async function fetchCompoundMarketConfigV2(
+  market: string,
+  date: string,
+): Promise<CompoundV2MarketConfigResponse> {
   const result = await fetchCompoundMarketConfigV2WithMeta(market, date);
   return result.data;
 }
@@ -484,7 +535,7 @@ export async function fetchCompoundMarketConfigV2(market: string, date: string):
 export async function fetchCompoundMarketConfigV2WithMeta(
   market: string,
   date: string,
-): Promise<DataWithMeta<any>> {
+): Promise<DataWithMeta<CompoundV2MarketConfigResponse>> {
   const key = `${market.trim().toLowerCase()}|${date}`;
   const cached = compoundV2ConfigCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
@@ -508,7 +559,7 @@ export async function fetchCompoundMarketConfigV2WithMeta(
     }));
   }
 
-  const request = fetchFirstCompoundV2ConfigCandidate<any>(
+  const request = fetchFirstCompoundV2ConfigCandidate<CompoundV2MarketConfigResponse>(
     market,
     (candidate) =>
       `/compound/market/config?version=v2&market=${encodeURIComponent(candidate)}&date=${encodeURIComponent(date)}`,
@@ -537,7 +588,7 @@ export async function fetchCompoundMarketConfigPeriodV2(
   market: string,
   start: string,
   end: string,
-): Promise<any> {
+): Promise<CompoundV2MarketConfigPeriodResponse> {
   const result = await fetchCompoundMarketConfigPeriodV2WithMeta(market, start, end);
   return result.data;
 }
@@ -546,7 +597,7 @@ export async function fetchCompoundMarketConfigPeriodV2WithMeta(
   market: string,
   start: string,
   end: string,
-): Promise<DataWithMeta<any>> {
+): Promise<DataWithMeta<CompoundV2MarketConfigPeriodResponse>> {
   const key = `${market.trim().toLowerCase()}|${start}|${end}`;
   const cached = compoundV2ConfigPeriodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
@@ -570,7 +621,7 @@ export async function fetchCompoundMarketConfigPeriodV2WithMeta(
     }));
   }
 
-  const request = fetchFirstCompoundV2ConfigCandidate<any>(
+  const request = fetchFirstCompoundV2ConfigCandidate<CompoundV2MarketConfigPeriodResponse>(
     market,
     (candidate) =>
       `/compound/market/config/period?version=v2&market=${encodeURIComponent(candidate)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,

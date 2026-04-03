@@ -12,6 +12,8 @@ import {
   Legend,
 } from 'recharts';
 import {
+  type CompoundGovernanceAsset,
+  type CompoundV2MarketConfig,
   fetchCompoundMarketHistoryWithMeta,
   fetchCompoundMarketGovernanceV3WithMeta,
   fetchCompoundMarketConfigV2WithMeta,
@@ -100,7 +102,7 @@ export function CompoundCollateralHistoryChart({
   const [data, setData] = useState<CompoundMarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [v2Config, setV2Config] = useState<any | null>(null);
+  const [v2Config, setV2Config] = useState<CompoundV2MarketConfig | null>(null);
   const [timeRange, setTimeRange] = useState<'3M' | '6M' | '1Y' | null>('3M');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
   const [customStart, setCustomStart] = useState(() => {
@@ -180,7 +182,7 @@ export function CompoundCollateralHistoryChart({
         const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
         const response = await fetchCompoundMarketConfigV2WithMeta(marketSymbol, today);
         if (!cancelled) {
-          setV2Config(response.data?.market_config ?? response.data ?? null);
+          setV2Config(response.data.market_config ?? null);
         }
       } catch (err) {
         if (!cancelled) {
@@ -310,7 +312,9 @@ export function CompoundCollateralHistoryChart({
         const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
         const result = await fetchCompoundMarketGovernanceV3WithMeta(market, today);
         if (result.data && result.data.assets && Array.isArray(result.data.assets)) {
-          const assetInfo = result.data.assets.find((a: any) => a.symbol === selectedSymbol);
+          const assetInfo = result.data.assets.find(
+            (a: CompoundGovernanceAsset) => a.symbol === selectedSymbol,
+          );
           if (assetInfo && assetInfo.borrow_collateral_factor) {
             setCollateralFactor(parseFloat(assetInfo.borrow_collateral_factor));
             return;
@@ -521,6 +525,39 @@ export function CompoundCollateralHistoryChart({
                 {r}
               </button>
             ))}
+            <input
+              type="date"
+              value={customStart}
+              onChange={(e) => {
+                setTimeRange(null);
+                setCustomStart(e.target.value);
+              }}
+              style={{
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#cbd5e1',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '0.75rem',
+              }}
+            />
+            <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
+            <input
+              type="date"
+              value={customEnd}
+              onChange={(e) => {
+                setTimeRange(null);
+                setCustomEnd(e.target.value);
+              }}
+              style={{
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#cbd5e1',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '0.75rem',
+              }}
+            />
           </div>
         </div>
 
@@ -537,49 +574,6 @@ export function CompoundCollateralHistoryChart({
         >
           Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里改为展示该 cToken
           市场的资金结构、流动性利用率和协议储备演化。
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-            marginTop: '-0.5rem',
-          }}
-        >
-          <input
-            type="date"
-            value={customStart}
-            onChange={(e) => {
-              setTimeRange(null);
-              setCustomStart(e.target.value);
-            }}
-            style={{
-              background: '#0f172a',
-              border: '1px solid #334155',
-              color: '#cbd5e1',
-              borderRadius: '4px',
-              padding: '2px 6px',
-              fontSize: '0.75rem',
-            }}
-          />
-          <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
-          <input
-            type="date"
-            value={customEnd}
-            onChange={(e) => {
-              setTimeRange(null);
-              setCustomEnd(e.target.value);
-            }}
-            style={{
-              background: '#0f172a',
-              border: '1px solid #334155',
-              color: '#cbd5e1',
-              borderRadius: '4px',
-              padding: '2px 6px',
-              fontSize: '0.75rem',
-            }}
-          />
         </div>
 
         <div
@@ -827,44 +821,40 @@ export function CompoundCollateralHistoryChart({
               {r}
             </button>
           ))}
+          <input
+            type="date"
+            value={customStart}
+            onChange={(e) => {
+              setTimeRange(null);
+              setCustomStart(e.target.value);
+            }}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#cbd5e1',
+              borderRadius: '4px',
+              padding: '2px 6px',
+              fontSize: '0.75rem',
+            }}
+          />
+          <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
+          <input
+            type="date"
+            value={customEnd}
+            onChange={(e) => {
+              setTimeRange(null);
+              setCustomEnd(e.target.value);
+            }}
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#cbd5e1',
+              borderRadius: '4px',
+              padding: '2px 6px',
+              fontSize: '0.75rem',
+            }}
+          />
         </div>
-      </div>
-      <div
-        style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '-0.5rem' }}
-      >
-        <input
-          type="date"
-          value={customStart}
-          onChange={(e) => {
-            setTimeRange(null);
-            setCustomStart(e.target.value);
-          }}
-          style={{
-            background: '#0f172a',
-            border: '1px solid #334155',
-            color: '#cbd5e1',
-            borderRadius: '4px',
-            padding: '2px 6px',
-            fontSize: '0.75rem',
-          }}
-        />
-        <span style={{ color: '#64748b', alignSelf: 'center' }}>-</span>
-        <input
-          type="date"
-          value={customEnd}
-          onChange={(e) => {
-            setTimeRange(null);
-            setCustomEnd(e.target.value);
-          }}
-          style={{
-            background: '#0f172a',
-            border: '1px solid #334155',
-            color: '#cbd5e1',
-            borderRadius: '4px',
-            padding: '2px 6px',
-            fontSize: '0.75rem',
-          }}
-        />
       </div>
 
       {/* Composition Chart: collateral share over time */}

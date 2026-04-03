@@ -416,10 +416,7 @@ export function LiquidationChart({
           </span>
           <ChartInfoButton title="实时清算模拟说明" items={explainItems} />
         </div>
-        <ChartDataStatus
-          meta={meta}
-          scenarioLabel={`ETH ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-        />
+        <ChartDataStatus meta={meta} />
         <button
           onClick={version === 'all' ? undefined : handleShowDetails}
           disabled={version === 'all'}
