@@ -29,6 +29,8 @@ _TRON_MAINNET_PREFIX = b"\x41"
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _BASE58_INDEX = {char: idx for idx, char in enumerate(_BASE58_ALPHABET)}
 _STABLE_SYMBOLS = ("USDT", "USDD", "USDJ", "TUSD", "USDC")
+_MAX_HF = Decimal("1e18")
+_SUMMARY_TOLERANCE_USD = Decimal("0.01")
 
 
 def get_scaffold_status() -> JustLendScaffoldStatusResponse:
@@ -91,6 +93,8 @@ def _fmt_ratio(value: Decimal) -> str:
 
 
 def _fmt_health(value: Decimal) -> str:
+    if value >= _MAX_HF:
+        return format(value, "f")
     return format(value.quantize(Decimal("0.000000000000000001")), "f")
 
 
@@ -140,6 +144,28 @@ def _record_ts(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     raise TypeError(f"unsupported timestamp type: {type(value)!r}")
+
+
+def _sum_asset_values(assets: list[Any], side: str) -> Decimal:
+    total = Decimal("0")
+    for asset in assets:
+        if str(asset["side"]) != side:
+            continue
+        total += Decimal(str(asset["value_usd"]))
+    return total
+
+
+def _cached_position_requires_refresh(position: Any, assets: list[Any]) -> bool:
+    if position is None or not assets:
+        return False
+    total_collateral_usd = Decimal(str(position["total_collateral_usd"]))
+    total_debt_usd = Decimal(str(position["total_debt_usd"]))
+    asset_collateral_usd = _sum_asset_values(assets, "collateral")
+    asset_debt_usd = _sum_asset_values(assets, "borrow")
+    return (
+        abs(total_collateral_usd - asset_collateral_usd) > _SUMMARY_TOLERANCE_USD
+        or abs(total_debt_usd - asset_debt_usd) > _SUMMARY_TOLERANCE_USD
+    )
 
 
 def _format_position(
@@ -251,8 +277,6 @@ async def fetch_position_from_justlend_api(
 
     assets: list[dict[str, Any]] = []
     discounted_collateral_usd = Decimal("0")
-    raw_collateral_trx = Decimal("0")
-    raw_debt_trx = Decimal("0")
 
     for item in source_assets:
         market = market_by_jtoken.get(str(item.get("address")), {})
@@ -284,11 +308,11 @@ async def fetch_position_from_justlend_api(
                     "extra_jsonb": {
                         "entered": item.get("entered"),
                         "jtoken_address": item.get("address"),
+                        "collateral_factor": str(collateral_factor),
                     },
                 }
             )
             discounted_collateral_usd += value_usd * collateral_factor
-            raw_collateral_trx += supply_amount * price_in_trx
 
         borrow_amount = _decimal(item.get("borrowBalanceUnderlying", "0"))
         if borrow_amount > 0:
@@ -308,15 +332,39 @@ async def fetch_position_from_justlend_api(
                     },
                 }
             )
-            raw_debt_trx += borrow_amount * price_in_trx
+    total_collateral_usd = sum(
+        (
+            Decimal(str(asset["value_usd"]))
+            for asset in assets
+            if asset["side"] == "collateral"
+        ),
+        Decimal("0"),
+    )
+    total_debt_usd = sum(
+        (
+            Decimal(str(asset["value_usd"]))
+            for asset in assets
+            if asset["side"] == "borrow"
+        ),
+        Decimal("0"),
+    )
 
     liquidation_threshold = (
         discounted_collateral_usd / total_collateral_usd
         if total_collateral_usd > 0
         else Decimal("0")
     )
+    ltv = (
+        total_debt_usd / total_collateral_usd
+        if total_collateral_usd > 0
+        else Decimal("0")
+    )
     available_borrow_usd = max(discounted_collateral_usd - total_debt_usd, Decimal("0"))
-    health_factor = _decimal(account.get("health", "0"))
+    health_factor = (
+        discounted_collateral_usd / total_debt_usd
+        if total_debt_usd > 0
+        else (_MAX_HF if total_collateral_usd > 0 else Decimal("0"))
+    )
     now = datetime.now(timezone.utc)
 
     return {
@@ -331,7 +379,7 @@ async def fetch_position_from_justlend_api(
         "total_debt_usd": total_debt_usd,
         "available_borrow_usd": available_borrow_usd,
         "health_factor": health_factor,
-        "ltv": liquidation_threshold,
+        "ltv": ltv,
         "liquidation_threshold": liquidation_threshold,
         "extra_jsonb": {
             "source": "justlend_api",
@@ -359,7 +407,7 @@ async def get_user_position(
 
     user_address = _tron_address_to_bytes(address)
     position, assets = await fetch_current_user_position(pool, user_address)
-    if position is not None:
+    if position is not None and not _cached_position_requires_refresh(position, assets):
         return _format_position(position, assets, data_source="database")
 
     fetched = await fetch_position_from_justlend_api(
