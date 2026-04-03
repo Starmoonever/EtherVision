@@ -124,7 +124,7 @@ def main() -> None:
     )
     @click.option(
         "--log-level",
-        default=None,
+        default="info",
         help="日志级别（默认读取 config.yaml log_level，缺省 info）",
     )
     @click.option(
@@ -159,14 +159,6 @@ def main() -> None:
         reload_excludes: tuple[str, ...],
     ) -> None:
         """启动统一 API 服务（Aave + Compound）"""
-        # --log-level 未显式传入时，读 config.yaml log_level，最终默认 info
-        if log_level is None:
-            try:
-                from .config import load_config as _load_cfg
-
-                log_level = _load_cfg().log_level
-            except Exception:
-                log_level = "info"
         logging.basicConfig(
             level=log_level.upper(),
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
