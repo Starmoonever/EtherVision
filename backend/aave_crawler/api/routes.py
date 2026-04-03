@@ -18,6 +18,7 @@ from .schemas import (
     MarketReplayResponse,
     PositionPeriodItem,
     PositionReplayResponse,
+    PriceAssetsResponse,
     PositionResponse,
     PricePeriodResponse,
     PriceResponse,
@@ -29,6 +30,7 @@ from .service import (
     get_borrow_user_position,
     get_daily_user_position,
     get_eth_price,
+    get_supported_price_assets,
     get_market_replay,
     get_positions_history,
     get_positions_period_detail,
@@ -192,6 +194,23 @@ async def positions(
         )
     ts = _parse_utc_time(date)
     return await get_positions_history(pool, ts, limit=min(limit, 100))
+
+
+@common_router.get(
+    "/price/assets",
+    response_model=PriceAssetsResponse,
+    summary="列出支持价格查询的资产",
+    description="返回当前后端支持价格查询的资产列表，包含 ethereum 与 tron 两条链。",
+)
+async def price_assets(
+    request: Request,
+    pool: AsyncpgPool,
+) -> PriceAssetsResponse:
+    return await get_supported_price_assets(
+        _w3(request),
+        pool=pool,
+        justlend_cfg=getattr(request.app.state, "justlend_cfg", None),
+    )
 
 
 @common_router.get(

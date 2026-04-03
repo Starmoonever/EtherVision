@@ -87,6 +87,16 @@ class PriceResponse(BaseModel):
     )
 
 
+class PriceAssetSchema(BaseModel):
+    asset: str = Field(description="资产符号，如 ETH、WBTC、USDT。")
+    token_address: str = Field(description="资产地址。")
+    chain: str = Field(description="资产所属链，如 ethereum 或 tron。")
+
+
+class PriceAssetsResponse(BaseModel):
+    assets: list[PriceAssetSchema] = Field(description="当前支持价格查询的资产列表。")
+
+
 class PricePeriodItem(BaseModel):
     price_usd: str = Field(description="USD 价格（2 位小数）")
     timestamp: str = Field(description="UTC 时间，格式如 2024-11-14T12:00:00Z")

@@ -45,6 +45,39 @@ def get_markets() -> JustLendMarketResponse:
     return JustLendMarketResponse(chain=JUSTLEND_CHAIN, markets=[])
 
 
+async def get_supported_tron_price_assets(cfg: Any) -> list[dict[str, str]]:
+    market_url = f"{cfg.justlend.api_base_url.rstrip('/')}/lend/jtoken"
+    market_payload = await _fetch_json(
+        market_url, float(cfg.justlend.api_timeout_seconds)
+    )
+    if market_payload.get("code") != 0:
+        raise HTTPException(
+            status_code=502, detail="JustLend market API returned error"
+        )
+
+    token_list = list(market_payload.get("data", {}).get("tokenList", []))
+    seen: set[tuple[str, str]] = set()
+    assets: list[dict[str, str]] = []
+    for token in token_list:
+        asset_address = str(token.get("underlyingAddress") or "").strip()
+        symbol = str(token.get("underlyingSymbol") or "").strip().upper()
+        if not asset_address or not symbol:
+            continue
+        key = (symbol, asset_address)
+        if key in seen:
+            continue
+        seen.add(key)
+        assets.append(
+            {
+                "asset": symbol,
+                "token_address": asset_address,
+                "chain": JUSTLEND_CHAIN,
+            }
+        )
+    assets.sort(key=lambda item: (item["asset"], item["token_address"]))
+    return assets
+
+
 def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
