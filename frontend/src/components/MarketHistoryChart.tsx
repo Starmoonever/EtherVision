@@ -4,15 +4,22 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import { apiFetch } from '../api/client';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import type { AggregatedRequestMeta } from '../api/requestMeta';
 
 interface MarketHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
+  riskReferencePrice?: number;
+  riskDirection?: 'up' | 'down';
+  scenarioLabel?: string;
 }
 
 interface MarketReplayPoint {
@@ -42,6 +49,30 @@ interface MarketPoint {
 type TimeRangePreset = '3M' | '6M' | '1Y';
 
 type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
+
+const HISTORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const historyCache = new Map<string, { fetchedAt: number; data: MarketPoint[] }>();
+
+const explainItems: ExplainItem[] = [
+  {
+    term: '市场规模',
+    formula: '借出 ETH 总值 + 剩余可借 ETH 总值',
+    meaning: '反映协议内 ETH 借贷盘子的大小和剩余流动性缓冲。',
+    riskHint: '借出规模大、剩余流动性小，代表系统在冲击下更容易出现资金紧张。',
+  },
+  {
+    term: '资金利用率',
+    formula: 'utilization = borrowed / available liquidity',
+    meaning: '利用率越高，说明池子里的资金越被借走，利率和脆弱性通常也越高。',
+    riskHint: '高利用率叠加价格快速下跌时，清算与利率上升往往会同时出现。',
+  },
+  {
+    term: '联动风险阈值',
+    formula: '来自清算模拟当前选中的 ETH 价格',
+    meaning: '把压力测试中的价格阈值，映射到真实历史价格曲线上做对照。',
+    riskHint: '如果历史价格反复接近这条线，说明该风险情景并非极端小概率事件。',
+  },
+];
 
 function formatDateInput(date: Date) {
   return date.toISOString().split('T')[0];
@@ -93,10 +124,19 @@ function formatRateTooltipValue(
   return [`${numericValue.toFixed(2)}%`, label] as [string, string];
 }
 
-export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
+export function MarketHistoryChart({
+  version,
+  riskReferencePrice,
+  riskDirection = 'down',
+  scenarioLabel,
+}: MarketHistoryChartProps) {
   const [data, setData] = useState<MarketPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
   const [timeRange, setTimeRange] = useState<TimeRangePreset | null>('3M');
   const [dateRange, setDateRange] = useState(() => getPresetRange('3M'));
   const today = formatDateInput(new Date());
@@ -113,25 +153,42 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
       setLoading(true);
       setError('');
       try {
-        const json = await apiFetch<MarketReplayResponse>(
-          `/aave/positions/replay?start=${dateRange.start}&end=${dateRange.end}&version=${version}&interval=24`,
-        );
+        const key = `${version}|${dateRange.start}|${dateRange.end}`;
+        const cached = historyCache.get(key);
 
-        if (!json.points || !Array.isArray(json.points)) {
-          throw new Error('Invalid data format');
+        let finalData: MarketPoint[];
+        if (cached && Date.now() - cached.fetchedAt < HISTORY_CACHE_TTL_MS) {
+          finalData = cached.data;
+          setMeta({
+            lastUpdatedAt: cached.fetchedAt,
+            cacheStatus: 'hit',
+          });
+        } else {
+          const json = await apiFetch<MarketReplayResponse>(
+            `/aave/positions/replay?start=${dateRange.start}&end=${dateRange.end}&version=${version}&interval=24`,
+          );
+
+          if (!json.points || !Array.isArray(json.points)) {
+            throw new Error('Invalid data format');
+          }
+
+          finalData = json.points
+            .map((pt) => ({
+              timestamp: pt.block_timestamp.split('T')[0],
+              eth_price_usd: parseFloat(pt.eth_price_usd || '0'),
+              total_debt_usd: parseFloat(pt.eth_total_debt_usd || '0'),
+              available_liquidity_usd: parseFloat(pt.eth_available_liquidity_usd || '0'),
+              variable_borrow_apy: parseFloat(pt.eth_variable_borrow_apy || '0') * 100,
+              supply_apy: parseFloat(pt.eth_supply_apy || '0') * 100,
+              utilization_rate: parseFloat(pt.eth_utilization_rate || '0') * 100,
+            }))
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          historyCache.set(key, { fetchedAt: Date.now(), data: finalData });
+          setMeta({
+            lastUpdatedAt: Date.now(),
+            cacheStatus: 'miss',
+          });
         }
-
-        const finalData = json.points
-          .map((pt) => ({
-            timestamp: pt.block_timestamp.split('T')[0],
-            eth_price_usd: parseFloat(pt.eth_price_usd || '0'),
-            total_debt_usd: parseFloat(pt.eth_total_debt_usd || '0'),
-            available_liquidity_usd: parseFloat(pt.eth_available_liquidity_usd || '0'),
-            variable_borrow_apy: parseFloat(pt.eth_variable_borrow_apy || '0') * 100,
-            supply_apy: parseFloat(pt.eth_supply_apy || '0') * 100,
-            utilization_rate: parseFloat(pt.eth_utilization_rate || '0') * 100,
-          }))
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
         setData(finalData);
       } catch (err) {
@@ -199,8 +256,14 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
           marginBottom: '0.5rem',
         }}
       >
-        <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>历史数据回顾</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
+            历史数据回顾
+          </span>
+          <ChartInfoButton title="Aave 市场历史图说明" items={explainItems} />
+        </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {(['3M', '6M', '1Y'] as const).map((preset) => (
               <button
@@ -288,6 +351,26 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
                     tickFormatter={formatPriceTick}
                     width={60}
                   />
+                  {riskReferencePrice ? (
+                    <>
+                      <ReferenceLine
+                        yAxisId="price"
+                        y={riskReferencePrice}
+                        stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
+                        strokeDasharray="6 4"
+                      />
+                      {riskDirection === 'down' && (
+                        <ReferenceArea
+                          yAxisId="price"
+                          y1={0}
+                          y2={riskReferencePrice}
+                          ifOverflow="extendDomain"
+                          fill="#7f1d1d"
+                          fillOpacity={0.08}
+                        />
+                      )}
+                    </>
+                  ) : null}
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                     formatter={formatTooltipValue}
@@ -364,6 +447,14 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
                     tickFormatter={formatPriceTick}
                     width={60}
                   />
+                  {riskReferencePrice ? (
+                    <ReferenceLine
+                      yAxisId="price"
+                      y={riskReferencePrice}
+                      stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
+                      strokeDasharray="6 4"
+                    />
+                  ) : null}
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                     formatter={formatRateTooltipValue}

@@ -9,6 +9,8 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import type { AggregatedRequestMeta } from '../api/requestMeta';
 
 interface PositionReplayProps {
   address: string;
@@ -29,6 +31,24 @@ interface ReplayPoint {
   operation_type: string;
   original_operation_type: string;
 }
+
+const replayCache = new Map<string, { fetchedAt: number; data: ReplayPoint[] }>();
+const REPLAY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const explainItems: ExplainItem[] = [
+  {
+    term: '历史交易与头寸变化',
+    formula: '按交易时间顺序回放账户状态',
+    meaning: '把每次存入、借入、还款、取出之后的头寸状态连成时间序列。',
+    riskHint: '看清算价格线是否不断接近 ETH 现价线，可以快速判断账户是在加杠杆还是去风险。',
+  },
+  {
+    term: 'ETH 清算价格',
+    formula: '达到该价格时，账户健康因子接近清算阈值',
+    meaning: '红色虚线越靠近蓝线，说明账户留给价格波动的安全边际越小。',
+    riskHint: '红线与蓝线长期贴近，通常代表仓位对 ETH 波动已经非常敏感。',
+  },
+];
 
 const CustomTooltip = ({ active, payload, label, onDetailsClick, primaryMetric }: any) => {
   if (active && payload && payload.length) {
@@ -192,6 +212,10 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     index: number;
     coordinate: { x: number; y: number };
   } | null>(null);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   const [startTime, setStartTime] = useState('2020-12-01 00:00:00');
   const [endTime, setEndTime] = useState(() => {
@@ -213,6 +237,18 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
       setLoading(true);
       setError('');
       try {
+        const cacheKey = `${version}:${address.toLowerCase()}`;
+        const cached = replayCache.get(cacheKey);
+        if (cached && Date.now() - cached.fetchedAt < REPLAY_CACHE_TTL_MS) {
+          setFullData(cached.data);
+          setData(cached.data);
+          setMeta({
+            lastUpdatedAt: cached.fetchedAt,
+            cacheStatus: 'hit',
+          });
+          return;
+        }
+
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
 
         // Always fetch the full range initially
@@ -284,8 +320,13 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
             (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           );
 
+        replayCache.set(cacheKey, { fetchedAt: Date.now(), data: formattedData });
         setFullData(formattedData);
         setData(formattedData); // Initialize display data with full data
+        setMeta({
+          lastUpdatedAt: Date.now(),
+          cacheStatus: 'miss',
+        });
       } catch (err) {
         console.error(err);
         setError('无法加载历史回放数据');
@@ -403,8 +444,12 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
         className="card-header"
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
       >
-        <span className="card-title">历史交易与头寸变化记录</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="card-title">历史交易与头寸变化记录</span>
+          <ChartInfoButton title="账户回放图说明" items={explainItems} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <ChartDataStatus meta={meta} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
             <input
               type="text"

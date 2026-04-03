@@ -9,16 +9,19 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { fetchEthPrice } from '../api';
+import { fetchEthPriceWithMeta } from '../api/price';
 import {
-  fetchCompoundLiquidationPeriod,
+  fetchCompoundLiquidationPeriodWithMeta,
   type CompoundLiquidationPeriodItem,
 } from '../api/compound';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface CompoundLiquidationChartProps {
   version: 'v2' | 'v3';
   market: string;
   marketSymbol: string;
+  onScenarioChange?: (scenarioLabel: string) => void;
 }
 
 interface ChartDataPoint {
@@ -32,10 +35,26 @@ interface ChartDataPoint {
 
 type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
+const explainItems: ExplainItem[] = [
+  {
+    term: 'ETH 敏感抵押',
+    formula: '对 ETH 波动敏感的抵押 USD 总额',
+    meaning: '只统计会随着 ETH 价格波动而显著变化的那部分抵押，而不是账户全部资产。',
+    riskHint: '该值越大，ETH 下跌对 Compound 仓位安全边际的影响越大。',
+  },
+  {
+    term: '预计清算规模',
+    formula: 'sum(min(总债务, 模拟价格下 ETH 敏感抵押))',
+    meaning: '给出在该价格冲击下，可能进入清算流程的总规模。',
+    riskHint: '如果某个价格附近柱子突然上升，说明风险集中堆积在那个阈值附近。',
+  },
+];
+
 export function CompoundLiquidationChart({
   version,
   market,
   marketSymbol,
+  onScenarioChange,
 }: CompoundLiquidationChartProps) {
   const [ethPrice, setEthPrice] = useState<number | null>(null);
   const [priceChange, setPriceChange] = useState(-10);
@@ -44,6 +63,18 @@ export function CompoundLiquidationChart({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
+  const [priceMeta, setPriceMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
+  const [chartMeta, setChartMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     setPriceChange(-10);
@@ -54,8 +85,9 @@ export function CompoundLiquidationChart({
   useEffect(() => {
     const loadEthPrice = async () => {
       try {
-        const price = await fetchEthPrice();
-        setEthPrice(price);
+        const result = await fetchEthPriceWithMeta();
+        setEthPrice(result.data);
+        setPriceMeta(mergeRequestMetas([result.meta]));
       } catch (err) {
         console.error('Fetch ETH price error:', err);
       }
@@ -92,12 +124,20 @@ export function CompoundLiquidationChart({
       setError('');
 
       try {
-        const points = await fetchCompoundLiquidationPeriod(version, market, 0.01, ethPrice, 5);
+        const result = await fetchCompoundLiquidationPeriodWithMeta(
+          version,
+          market,
+          0.01,
+          ethPrice,
+          5,
+        );
+        const points = result.data;
 
         const rangeSteps = Array.from({ length: 101 }, (_, index) => -100 + index);
         const mappedData = rangeSteps.map((step) => mapPeriodPointToChart(step, ethPrice, points));
 
         setChartData(mappedData);
+        setChartMeta(mergeRequestMetas([result.meta]));
       } catch (err) {
         console.error('Fetch Compound liquidation range data error:', err);
         setChartData([]);
@@ -112,6 +152,30 @@ export function CompoundLiquidationChart({
 
   const selectedPrice = ethPrice ? ethPrice * (1 + committedPriceChange / 100) : 0;
   const displayedPrice = ethPrice ? ethPrice * (1 + priceChange / 100) : 0;
+
+  useEffect(() => {
+    const metas = [];
+    if (priceMeta.lastUpdatedAt) {
+      metas.push({
+        fetchedAt: priceMeta.lastUpdatedAt,
+        fromCache: priceMeta.cacheStatus === 'hit',
+      });
+    }
+    if (chartMeta.lastUpdatedAt) {
+      metas.push({
+        fetchedAt: chartMeta.lastUpdatedAt,
+        fromCache: chartMeta.cacheStatus === 'hit',
+      });
+    }
+    setMeta(mergeRequestMetas(metas));
+  }, [chartMeta, priceMeta]);
+
+  useEffect(() => {
+    if (!ethPrice) return;
+    onScenarioChange?.(
+      `ETH ${displayedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${priceChange}%)`,
+    );
+  }, [displayedPrice, ethPrice, onScenarioChange, priceChange]);
 
   const highlightedData = useMemo(
     () =>
@@ -135,8 +199,15 @@ export function CompoundLiquidationChart({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div className="card-header" style={{ marginBottom: 0 }}>
-        <span className="card-title">实时价格波动下清算模拟</span>
-        <span className="badge green-badge">{marketSymbol || 'Market'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="card-title">实时价格波动下清算模拟</span>
+          <ChartInfoButton title="Compound 清算模拟说明" items={explainItems} />
+          <span className="badge green-badge">{marketSymbol || 'Market'}</span>
+        </div>
+        <ChartDataStatus
+          meta={meta}
+          scenarioLabel={`ETH ${displayedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+        />
       </div>
 
       <div
@@ -312,7 +383,7 @@ export function CompoundLiquidationChart({
                 dataKey="totalLiquidationUsd"
                 fill="#334155"
                 radius={[4, 4, 0, 0]}
-                activeBar={{ fill: '#4a6080' }}
+                activeBar={false}
                 onClick={(barData) => {
                   const clickedPrice = (barData as { payload?: ChartDataPoint }).payload?.price;
                   if (!clickedPrice) return;

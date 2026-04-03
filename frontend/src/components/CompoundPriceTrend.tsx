@@ -8,13 +8,15 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { fetchAssetPricePeriod } from '../api';
+import { fetchAssetPricePeriodWithMeta } from '../api/price';
 import {
-  fetchCompoundMarketConfigPeriodV2,
-  fetchCompoundMarketConfigV2,
+  fetchCompoundMarketConfigPeriodV2WithMeta,
+  fetchCompoundMarketConfigV2WithMeta,
   getCompoundV2BaseAssetSymbol,
 } from '../api/compound';
 import type { PricePeriodItem } from '../api';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface PricePoint {
   time: string;
@@ -30,12 +32,36 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
 interface CompoundPriceTrendProps {
   asset: string;
   version?: 'v2' | 'v3';
+  scenarioLabel?: string;
 }
 
-export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrendProps) {
+const explainItems: ExplainItem[] = [
+  {
+    term: '市场资产价格',
+    formula: 'v3: 资产现价；v2: 底层资产价格 × exchange rate',
+    meaning: 'v2 里展示的是 cToken 价格路径，v3 展示的是市场基础资产价格路径。',
+    riskHint: '若价格本身波动很大，再叠加高利用率或高杠杆，清算风险会被放大。',
+  },
+  {
+    term: 'exchange rate (v2)',
+    formula: 'cToken 可兑换底层资产的比率',
+    meaning: '随着利息累积，兑换率通常会缓慢上升，因此 cToken 价格不等于底层资产价格。',
+    riskHint: '看 v2 图时要区分“底层价格波动”和“利息累积导致的兑换率抬升”。',
+  },
+];
+
+export function CompoundPriceTrend({
+  asset,
+  version = 'v3',
+  scenarioLabel,
+}: CompoundPriceTrendProps) {
   const [timeRange, setTimeRange] = useState<'24h' | '7D' | '3M'>('24h');
   const [data, setData] = useState<PricePoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -44,6 +70,10 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
       const cached = _cache.get(cacheKey);
       if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
         setData(cached.points);
+        setMeta({
+          lastUpdatedAt: cached.fetchedAt,
+          cacheStatus: 'hit',
+        });
         return;
       }
 
@@ -79,19 +109,20 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
           const baseSymbol = getCompoundV2BaseAssetSymbol(asset);
           const baselineConfigDate = startStr.slice(0, 10) + ' 00:00:00';
           const [priceItems, configRes, baselineConfig] = await Promise.all([
-            fetchAssetPricePeriod(baseSymbol, startStr, endStr, interval),
-            fetchCompoundMarketConfigPeriodV2(
+            fetchAssetPricePeriodWithMeta(baseSymbol, startStr, endStr, interval),
+            fetchCompoundMarketConfigPeriodV2WithMeta(
               asset,
               baselineConfigDate,
               endStr.slice(0, 10) + ' 00:00:00',
             ),
-            fetchCompoundMarketConfigV2(asset, baselineConfigDate),
+            fetchCompoundMarketConfigV2WithMeta(asset, baselineConfigDate),
           ]);
+          setMeta(mergeRequestMetas([priceItems.meta, configRes.meta, baselineConfig.meta]));
 
           // Create a map of timestamp -> exchange_rate
           const rateMap = new Map<string, number>();
-          if (configRes && Array.isArray(configRes.points)) {
-            configRes.points.forEach((pt: any) => {
+          if (configRes.data && Array.isArray(configRes.data.points)) {
+            configRes.data.points.forEach((pt: any) => {
               if (pt.market_config && pt.market_config.exchange_rate) {
                 // Keep only the date part YYYY-MM-DD to match closest price point
                 const dateKey = pt.market_config.effective_timestamp.split('T')[0];
@@ -100,9 +131,9 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
             });
           }
 
-          let lastKnownRate = parseFloat(baselineConfig?.market_config?.exchange_rate || '1');
+          let lastKnownRate = parseFloat(baselineConfig.data?.market_config?.exchange_rate || '1');
 
-          finalData = priceItems.map((item: PricePeriodItem) => {
+          finalData = priceItems.data.map((item: PricePeriodItem) => {
             const dateKey = item.timestamp.split('T')[0];
             const rate = rateMap.get(dateKey) || lastKnownRate;
             if (rateMap.has(dateKey)) {
@@ -121,8 +152,9 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
             };
           });
         } else {
-          const items = await fetchAssetPricePeriod(asset, startStr, endStr, interval);
-          finalData = items.map((item: PricePeriodItem) => ({
+          const result = await fetchAssetPricePeriodWithMeta(asset, startStr, endStr, interval);
+          setMeta(mergeRequestMetas([result.meta]));
+          finalData = result.data.map((item: PricePeriodItem) => ({
             time: new Date(item.timestamp).toLocaleString(undefined, {
               month: 'numeric',
               day: 'numeric',
@@ -158,7 +190,21 @@ export function CompoundPriceTrend({ asset, version = 'v3' }: CompoundPriceTrend
           marginBottom: '0.75rem',
         }}
       >
-        <span className="card-title">历史趋势</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="card-title">历史趋势</span>
+          <ChartInfoButton title="Compound 价格趋势说明" items={explainItems} />
+        </div>
+        <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.75rem',
+        }}
+      >
         <div
           style={{
             display: 'flex',

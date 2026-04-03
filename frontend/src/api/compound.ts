@@ -1,4 +1,5 @@
 import { apiFetch, apiFetchRaw } from './client';
+import type { DataWithMeta } from './requestMeta';
 
 const COMPOUND_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -229,15 +230,34 @@ export interface CompoundUserPositionResponse {
 }
 
 export async function fetchCompoundMarkets(version: string): Promise<CompoundMarket[]> {
+  const result = await fetchCompoundMarketsWithMeta(version);
+  return result.data;
+}
+
+export async function fetchCompoundMarketsWithMeta(
+  version: string,
+): Promise<DataWithMeta<CompoundMarket[]>> {
   const key = version;
   const cached = compoundMarketsCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundMarketsInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = apiFetch<CompoundMarketsResponse>(`/compound/markets?version=${version}`)
@@ -253,7 +273,14 @@ export async function fetchCompoundMarkets(version: string): Promise<CompoundMar
     });
 
   compoundMarketsInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchCompoundMarketHistory(
@@ -263,15 +290,38 @@ export async function fetchCompoundMarketHistory(
   end: string,
   options: FetchCompoundMarketHistoryOptions = {},
 ): Promise<CompoundMarketPoint[]> {
+  const result = await fetchCompoundMarketHistoryWithMeta(version, market, start, end, options);
+  return result.data;
+}
+
+export async function fetchCompoundMarketHistoryWithMeta(
+  version: string,
+  market: string,
+  start: string,
+  end: string,
+  options: FetchCompoundMarketHistoryOptions = {},
+): Promise<DataWithMeta<CompoundMarketPoint[]>> {
   const key = `${version}|${market}|${start}|${end}|${options.interval ?? ''}|${String(options.detail ?? true)}`;
   const cached = compoundMarketHistoryCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundMarketHistoryInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const params = new URLSearchParams({
@@ -301,7 +351,14 @@ export async function fetchCompoundMarketHistory(
     });
 
   compoundMarketHistoryInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchCompoundUserPosition(
@@ -309,17 +366,38 @@ export async function fetchCompoundUserPosition(
   market: string,
   address: string,
 ): Promise<CompoundUserPositionResponse> {
+  const result = await fetchCompoundUserPositionWithMeta(version, market, address);
+  return result.data;
+}
+
+export async function fetchCompoundUserPositionWithMeta(
+  version: string,
+  market: string,
+  address: string,
+): Promise<DataWithMeta<CompoundUserPositionResponse>> {
   const normalizedAddress = address.toLowerCase();
   const normalizedMarket = market.toLowerCase();
   const key = `${version}|${normalizedMarket}|${normalizedAddress}`;
   const cached = compoundUserPositionCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundUserPositionInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = apiFetch<CompoundUserPositionResponse>(
@@ -334,19 +412,46 @@ export async function fetchCompoundUserPosition(
     });
 
   compoundUserPositionInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchCompoundMarketGovernanceV3(market: string, date: string): Promise<any> {
+  const result = await fetchCompoundMarketGovernanceV3WithMeta(market, date);
+  return result.data;
+}
+
+export async function fetchCompoundMarketGovernanceV3WithMeta(
+  market: string,
+  date: string,
+): Promise<DataWithMeta<any>> {
   const key = `${market.toLowerCase()}|${date}`;
   const cached = compoundGovernanceCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundGovernanceInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = apiFetch<any>(
@@ -361,19 +466,46 @@ export async function fetchCompoundMarketGovernanceV3(market: string, date: stri
     });
 
   compoundGovernanceInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchCompoundMarketConfigV2(market: string, date: string): Promise<any> {
+  const result = await fetchCompoundMarketConfigV2WithMeta(market, date);
+  return result.data;
+}
+
+export async function fetchCompoundMarketConfigV2WithMeta(
+  market: string,
+  date: string,
+): Promise<DataWithMeta<any>> {
   const key = `${market.trim().toLowerCase()}|${date}`;
   const cached = compoundV2ConfigCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundV2ConfigInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = fetchFirstCompoundV2ConfigCandidate<any>(
@@ -391,7 +523,14 @@ export async function fetchCompoundMarketConfigV2(market: string, date: string):
     });
 
   compoundV2ConfigInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export async function fetchCompoundMarketConfigPeriodV2(
@@ -399,15 +538,36 @@ export async function fetchCompoundMarketConfigPeriodV2(
   start: string,
   end: string,
 ): Promise<any> {
+  const result = await fetchCompoundMarketConfigPeriodV2WithMeta(market, start, end);
+  return result.data;
+}
+
+export async function fetchCompoundMarketConfigPeriodV2WithMeta(
+  market: string,
+  start: string,
+  end: string,
+): Promise<DataWithMeta<any>> {
   const key = `${market.trim().toLowerCase()}|${start}|${end}`;
   const cached = compoundV2ConfigPeriodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundV2ConfigPeriodInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const request = fetchFirstCompoundV2ConfigCandidate<any>(
@@ -425,7 +585,14 @@ export async function fetchCompoundMarketConfigPeriodV2(
     });
 
   compoundV2ConfigPeriodInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
 
 export interface CompoundPositionReplayPoint {
@@ -467,26 +634,27 @@ export async function fetchCompoundPositionReplay(
   end: string,
   version: string,
 ): Promise<CompoundPositionReplayResponse> {
-  return apiFetch<CompoundPositionReplayResponse>(
+  const result = await fetchCompoundPositionReplayWithMeta(address, start, end, version);
+  return result.data;
+}
+
+export async function fetchCompoundPositionReplayWithMeta(
+  address: string,
+  start: string,
+  end: string,
+  version: string,
+): Promise<DataWithMeta<CompoundPositionReplayResponse>> {
+  const data = await apiFetch<CompoundPositionReplayResponse>(
     `/compound/position/replay?address=${address}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&version=${version}`,
   );
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
-
-export interface CompoundLiquidationPeriodItem {
-  simulated_eth_price: string;
-  positions_cnt: string;
-  total_eth_sensitive_collateral_usd: string;
-  total_liquidation_usd: string;
-}
-
-const compoundLiquidationPeriodCache = new Map<
-  string,
-  { fetchedAt: number; data: CompoundLiquidationPeriodItem[] }
->();
-const compoundLiquidationPeriodInflight = new Map<
-  string,
-  Promise<CompoundLiquidationPeriodItem[]>
->();
 
 export async function fetchCompoundLiquidationPeriod(
   version: 'v2' | 'v3',
@@ -495,16 +663,45 @@ export async function fetchCompoundLiquidationPeriod(
   end: number,
   interval: number = 1,
 ): Promise<CompoundLiquidationPeriodItem[]> {
+  const result = await fetchCompoundLiquidationPeriodWithMeta(
+    version,
+    market,
+    start,
+    end,
+    interval,
+  );
+  return result.data;
+}
+
+export async function fetchCompoundLiquidationPeriodWithMeta(
+  version: 'v2' | 'v3',
+  market: string,
+  start: number,
+  end: number,
+  interval: number = 1,
+): Promise<DataWithMeta<CompoundLiquidationPeriodItem[]>> {
   const key = `${version}|${market}|${Math.round(start)}|${Math.round(end)}|${interval}`;
   const cached = compoundLiquidationPeriodCache.get(key);
 
   if (cached && Date.now() - cached.fetchedAt < COMPOUND_CACHE_TTL_MS) {
-    return cached.data;
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
   }
 
   const inflight = compoundLiquidationPeriodInflight.get(key);
   if (inflight) {
-    return inflight;
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
   }
 
   const params = new URLSearchParams({
@@ -527,5 +724,28 @@ export async function fetchCompoundLiquidationPeriod(
     });
 
   compoundLiquidationPeriodInflight.set(key, request);
-  return request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }
+
+export interface CompoundLiquidationPeriodItem {
+  simulated_eth_price: string;
+  positions_cnt: string;
+  total_eth_sensitive_collateral_usd: string;
+  total_liquidation_usd: string;
+}
+
+const compoundLiquidationPeriodCache = new Map<
+  string,
+  { fetchedAt: number; data: CompoundLiquidationPeriodItem[] }
+>();
+const compoundLiquidationPeriodInflight = new Map<
+  string,
+  Promise<CompoundLiquidationPeriodItem[]>
+>();
