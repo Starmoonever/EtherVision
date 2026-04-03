@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from justlend_crawler.database import get_pool
 from starlette.testclient import TestClient
 
 from justlend_crawler.api.routes import router as justlend_router
@@ -9,6 +10,12 @@ from justlend_crawler.api.routes import router as justlend_router
 def _build_client() -> TestClient:
     app = FastAPI()
     app.include_router(justlend_router)
+    app.state.cfg = object()
+
+    async def _override_pool():
+        return object()
+
+    app.dependency_overrides[get_pool] = _override_pool
     return TestClient(app)
 
 
@@ -34,15 +41,11 @@ def test_markets_route_returns_empty_scaffold_list() -> None:
     assert response.json() == {"chain": "tron", "markets": []}
 
 
-def test_position_route_is_reserved_for_future_implementation() -> None:
+def test_position_route_requires_address() -> None:
     with _build_client() as client:
         response = client.get(
             "/api/justlend/position",
-            params={"address": "TLYJ...", "protocol": "trx"},
+            params={"protocol": "trx"},
         )
 
-    assert response.status_code == 501
-    assert (
-        response.json()["detail"]
-        == "JustLend scaffold is ready, but `position` is not implemented yet."
-    )
+    assert response.status_code == 422

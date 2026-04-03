@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import logging
+import json
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
 
 import asyncpg
 from crawler_shared.config import PostgresConfig
@@ -100,3 +104,182 @@ async def ensure_justlend_tables(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_CURRENT_POSITION_ASSETS_INDEXES)
             await conn.execute(_DDL_WATCHER_WATERMARKS)
     logger.info("JustLend scaffold tables are ready")
+
+
+async def fetch_current_user_position(
+    pool: asyncpg.Pool, user_address: bytes
+) -> tuple[asyncpg.Record | None, list[asyncpg.Record]]:
+    async with pool.acquire() as conn:
+        position = await conn.fetchrow(
+            """
+            SELECT
+                user_address,
+                chain,
+                protocol,
+                snapshot_at,
+                block_timestamp,
+                block_number,
+                source_cursor,
+                total_collateral_usd,
+                total_debt_usd,
+                available_borrow_usd,
+                health_factor,
+                ltv,
+                liquidation_threshold,
+                extra_jsonb,
+                created_at,
+                updated_at
+            FROM loan.justlend_current_user_positions
+            WHERE user_address = $1
+            """,
+            user_address,
+        )
+        if position is None:
+            return None, []
+        assets = await conn.fetch(
+            """
+            SELECT
+                user_address,
+                asset_address,
+                snapshot_at,
+                block_timestamp,
+                side,
+                symbol,
+                decimals,
+                amount,
+                price_usd,
+                value_usd,
+                extra_jsonb,
+                created_at,
+                updated_at
+            FROM loan.justlend_current_user_position_assets
+            WHERE user_address = $1
+            ORDER BY value_usd DESC, asset_address, side
+            """,
+            user_address,
+        )
+    return position, assets
+
+
+async def upsert_current_user_position(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes,
+    chain: str,
+    protocol: str,
+    snapshot_at: datetime,
+    block_timestamp: datetime,
+    block_number: int | None,
+    source_cursor: str | None,
+    total_collateral_usd: Decimal,
+    total_debt_usd: Decimal,
+    available_borrow_usd: Decimal,
+    health_factor: Decimal,
+    ltv: Decimal,
+    liquidation_threshold: Decimal,
+    extra_jsonb: dict[str, Any],
+    assets: list[dict[str, Any]],
+) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO loan.justlend_current_user_positions (
+                    user_address,
+                    chain,
+                    protocol,
+                    snapshot_at,
+                    block_timestamp,
+                    block_number,
+                    source_cursor,
+                    total_collateral_usd,
+                    total_debt_usd,
+                    available_borrow_usd,
+                    health_factor,
+                    ltv,
+                    liquidation_threshold,
+                    extra_jsonb,
+                    updated_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7,
+                    $8, $9, $10, $11, $12, $13, $14, NOW()
+                )
+                ON CONFLICT (user_address) DO UPDATE SET
+                    chain = EXCLUDED.chain,
+                    protocol = EXCLUDED.protocol,
+                    snapshot_at = EXCLUDED.snapshot_at,
+                    block_timestamp = EXCLUDED.block_timestamp,
+                    block_number = EXCLUDED.block_number,
+                    source_cursor = EXCLUDED.source_cursor,
+                    total_collateral_usd = EXCLUDED.total_collateral_usd,
+                    total_debt_usd = EXCLUDED.total_debt_usd,
+                    available_borrow_usd = EXCLUDED.available_borrow_usd,
+                    health_factor = EXCLUDED.health_factor,
+                    ltv = EXCLUDED.ltv,
+                    liquidation_threshold = EXCLUDED.liquidation_threshold,
+                    extra_jsonb = EXCLUDED.extra_jsonb,
+                    updated_at = NOW()
+                """,
+                user_address,
+                chain,
+                protocol,
+                snapshot_at,
+                block_timestamp,
+                block_number,
+                source_cursor,
+                total_collateral_usd,
+                total_debt_usd,
+                available_borrow_usd,
+                health_factor,
+                ltv,
+                liquidation_threshold,
+                json.dumps(extra_jsonb, ensure_ascii=False),
+            )
+            await conn.execute(
+                """
+                DELETE FROM loan.justlend_current_user_position_assets
+                WHERE user_address = $1
+                """,
+                user_address,
+            )
+            if assets:
+                await conn.executemany(
+                    """
+                    INSERT INTO loan.justlend_current_user_position_assets (
+                        user_address,
+                        asset_address,
+                        snapshot_at,
+                        block_timestamp,
+                        side,
+                        symbol,
+                        decimals,
+                        amount,
+                        price_usd,
+                        value_usd,
+                        extra_jsonb,
+                        updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()
+                    )
+                    """,
+                    [
+                        (
+                            user_address,
+                            asset["asset_address"],
+                            snapshot_at,
+                            block_timestamp,
+                            asset["side"],
+                            asset.get("symbol"),
+                            asset.get("decimals"),
+                            asset["amount"],
+                            asset["price_usd"],
+                            asset["value_usd"],
+                            json.dumps(
+                                asset.get("extra_jsonb", {}), ensure_ascii=False
+                            ),
+                        )
+                        for asset in assets
+                    ],
+                )

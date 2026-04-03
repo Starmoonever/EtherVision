@@ -14,7 +14,8 @@ from crawler_shared.config import build_dataclass, load_yaml_config
 @dataclass
 class JustLendConfig:
     chain: str = "tron"
-    api_base_url: str = ""
+    api_base_url: str = "https://openapi.just.network"
+    api_timeout_seconds: float = 10.0
     markets: list[str] = field(default_factory=list)
 
 

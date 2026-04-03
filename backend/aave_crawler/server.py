@@ -35,6 +35,7 @@ from .db import (
 from .rpc import build_web3
 from compound_crawler.db import ensure_compound_event_snapshot_table
 from compound_crawler.api.routes import router as compound_router
+from justlend_crawler.config import load_config as load_justlend_config
 from justlend_crawler.api.routes import router as justlend_router
 from justlend_crawler.db import ensure_justlend_tables
 
@@ -49,6 +50,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     w3 = await build_web3(cfg)
     application.state.w3 = w3
     application.state.cfg = cfg
+    application.state.justlend_cfg = load_justlend_config()
     logger.info("正在连接数据库...")
     # asyncpg 连接池：供爬虫批量写入 / tx_parser / market_collector 使用
     pool = await create_pool(cfg.postgres)

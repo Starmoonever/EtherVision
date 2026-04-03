@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
-from .schemas import JustLendMarketResponse, JustLendScaffoldStatusResponse
-from .service import get_markets, get_scaffold_status, raise_not_implemented
+from ..database import AsyncpgPool
+from ..config import load_config
+from .schemas import (
+    JustLendMarketResponse,
+    JustLendPositionResponse,
+    JustLendScaffoldStatusResponse,
+)
+from .service import get_markets, get_scaffold_status, get_user_position
 
 router = APIRouter(prefix="/api/justlend")
 
@@ -30,11 +36,14 @@ async def markets() -> JustLendMarketResponse:
 
 @router.get(
     "/position",
-    summary="Reserved JustLend user-position endpoint",
+    response_model=JustLendPositionResponse,
+    summary="Query current JustLend user position",
 )
 async def position(
+    pool: AsyncpgPool,
+    request: Request,
     address: str = Query(..., description="TRON user address"),
     protocol: str = Query("trx", description="JustLend protocol selector"),
-):
-    _ = (address, protocol)
-    raise_not_implemented("position")
+) -> JustLendPositionResponse:
+    cfg = getattr(request.app.state, "justlend_cfg", None) or load_config()
+    return await get_user_position(pool, cfg, address, protocol)
