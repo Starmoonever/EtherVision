@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AddressInput } from './components/AddressInput';
 import { CompoundPersonalRiskDashboard } from './components/CompoundPersonalRiskDashboard';
+import { JustLendPersonalDashboard } from './components/JustLendPersonalDashboard';
 import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
 import { fetchUserPosition } from './api';
@@ -95,7 +96,7 @@ function ChartFallback({ minHeight = '240px' }: { minHeight?: string }) {
 }
 
 export default function App() {
-  const [protocol, setProtocol] = useState<'aave' | 'compound'>('aave');
+  const [protocol, setProtocol] = useState<'aave' | 'compound' | 'justlend'>('aave');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
   const [error, setError] = useState('');
 
@@ -111,6 +112,7 @@ export default function App() {
   const [compoundMarket, setCompoundMarket] = useState<string>('all');
   const [compoundAddress, setCompoundAddress] = useState('');
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
+  const [justLendAddress, setJustLendAddress] = useState('');
   const activeCompoundMarketsVersion = activeTab === 'personal' ? personalVersion : marketVersion;
   const visibleCompoundMarkets = getVisibleCompoundMarkets(
     activeTab,
@@ -130,8 +132,10 @@ export default function App() {
 
     if (protocol === 'aave') {
       setQueriedAddress(address);
-    } else {
+    } else if (protocol === 'compound') {
       setCompoundAddress(address);
+    } else {
+      setJustLendAddress(address);
     }
   };
 
@@ -322,6 +326,13 @@ export default function App() {
       >
         Compound
       </button>
+      <button
+        onClick={() => setProtocol('justlend')}
+        className={`switch-btn ${protocol === 'justlend' ? 'active' : ''}`}
+        type="button"
+      >
+        JustLend
+      </button>
     </div>
   );
 
@@ -508,6 +519,32 @@ export default function App() {
     </>
   );
 
+  const renderJustLendPersonal = () => (
+    <>
+      <div className="hero">
+        <h1 className="hero-title">JustLend 个人账户分析</h1>
+        <p className="hero-sub">TRON 链账户仓位框架页与地址识别</p>
+      </div>
+
+      <AddressInput
+        onSearch={handleSearch}
+        loading={false}
+        historyKey="search_history_justlend"
+        placeholder="输入 JustLend / TRON 钱包地址 (T...)"
+        addressType="tron"
+      />
+      {renderError()}
+
+      {justLendAddress && (
+        <div className="results-container" style={{ marginTop: '2rem' }}>
+          <div style={resultPanelStyle}>
+            <JustLendPersonalDashboard address={justLendAddress} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   const renderAaveMarket = () => (
     <>
       <div className="hero">
@@ -540,6 +577,28 @@ export default function App() {
     </>
   );
 
+  const renderJustLendMarket = () => (
+    <>
+      <div className="hero">
+        <h1 className="hero-title">JustLend 宏观市场评估</h1>
+        <p className="hero-sub">等待 TRON 市场级接口与历史序列接入</p>
+      </div>
+
+      <div className="card" style={{ maxWidth: '920px', margin: '0 auto' }}>
+        <div className="card-header">
+          <span className="card-title">模块状态</span>
+          <span className="badge" style={{ background: '#172554', color: '#bfdbfe' }}>
+            Not Ready
+          </span>
+        </div>
+        <div style={{ color: '#94a3b8', lineHeight: 1.8 }}>
+          当前前端先开放 JustLend 的个人账户分析框架。宏观市场评估后续需要后端补充 market
+          list、历史时序、清算模拟等接口后再接入。
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <div className="app">
       <header className="app-header">
@@ -560,13 +619,17 @@ export default function App() {
         {activeTab === 'personal'
           ? protocol === 'aave'
             ? renderAavePersonal()
-            : renderCompoundPersonal()
+            : protocol === 'compound'
+              ? renderCompoundPersonal()
+              : renderJustLendPersonal()
           : protocol === 'aave'
             ? renderAaveMarket()
-            : renderCompoundMarket()}
+            : protocol === 'compound'
+              ? renderCompoundMarket()
+              : renderJustLendMarket()}
       </main>
 
-      <footer className="app-footer">数据来源：内网 API | Ethereum Mainnet</footer>
+      <footer className="app-footer">数据来源：内网 API | Ethereum Mainnet / TRON</footer>
     </div>
   );
 }

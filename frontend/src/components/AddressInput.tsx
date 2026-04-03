@@ -8,11 +8,12 @@ import { isAddress } from 'viem';
 // 定义接口，该组件接收的参数
 interface Props {
   // 函数 onSearch: 用户点击查询按钮时调用，传入用户输入的地址
-  onSearch: (address: string) => void;
+  onSearch: (address: string) => void | Promise<void>;
   // 布尔值，是否正在查询链上数据
   loading: boolean;
   historyKey?: string;
   placeholder?: string;
+  addressType?: 'evm' | 'tron';
 }
 
 const DEFAULT_STORAGE_KEY = 'search_history';
@@ -39,12 +40,79 @@ function validateAddressByCase(address: string): { ok: boolean; reason?: string 
   return { ok: true };
 }
 
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function decodeBase58(value: string): Uint8Array | null {
+  let result = 0n;
+
+  for (const char of value) {
+    const index = BASE58_ALPHABET.indexOf(char);
+    if (index < 0) return null;
+    result = result * 58n + BigInt(index);
+  }
+
+  const bytes: number[] = [];
+  while (result > 0n) {
+    bytes.push(Number(result % 256n));
+    result /= 256n;
+  }
+  bytes.reverse();
+
+  let leadingZeroCount = 0;
+  for (const char of value) {
+    if (char === '1') leadingZeroCount += 1;
+    else break;
+  }
+
+  return new Uint8Array([...Array(leadingZeroCount).fill(0), ...bytes]);
+}
+
+async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return new Uint8Array(hash);
+}
+
+async function validateTronAddress(address: string): Promise<{ ok: boolean; reason?: string }> {
+  const trimmed = address.trim();
+  if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(trimmed)) {
+    return { ok: false, reason: 'TRON 钱包地址格式无效' };
+  }
+
+  if (!globalThis.crypto?.subtle) {
+    return { ok: true };
+  }
+
+  const decoded = decodeBase58(trimmed);
+  if (!decoded || decoded.length !== 25) {
+    return { ok: false, reason: 'TRON 钱包地址长度或编码无效' };
+  }
+
+  if (decoded[0] !== 0x41) {
+    return { ok: false, reason: 'TRON 钱包地址前缀无效' };
+  }
+
+  const body = decoded.slice(0, 21);
+  const checksum = decoded.slice(21);
+  const firstHash = await sha256(body);
+  const secondHash = await sha256(firstHash);
+  const expectedChecksum = secondHash.slice(0, 4);
+
+  for (let i = 0; i < 4; i += 1) {
+    if (checksum[i] !== expectedChecksum[i]) {
+      return { ok: false, reason: 'TRON 钱包地址校验失败' };
+    }
+  }
+
+  return { ok: true };
+}
+
 // 组件函数 AddressInput，接收 Props 参数
 export function AddressInput({
   onSearch,
   loading,
   historyKey = DEFAULT_STORAGE_KEY,
   placeholder = '输入钱包地址 (0x...)',
+  addressType = 'evm',
 }: Props) {
   // 状态变量 value: 存储用户在搜索框里的输入
   const [value, setValue] = useState('');
@@ -63,10 +131,17 @@ export function AddressInput({
       const stored = localStorage.getItem(historyKey);
       if (stored) {
         setHistory(JSON.parse(stored));
+      } else {
+        setHistory([]);
       }
     } catch (e) {
+      setHistory([]);
       console.error('Failed to load history', e);
     }
+
+    setValue('');
+    setError('');
+    setShowHistory(false);
   }, [historyKey]);
 
   // 点击外部关闭下拉框
@@ -101,27 +176,35 @@ export function AddressInput({
   };
 
   // 处理表单提交事件
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); // 阻止浏览器刷新
     // 移除首尾空格
     let trimmed = value.trim();
     // 如果钱包地址为空
     if (!trimmed) {
       // 设置报错信息
-      setError('请输入抵押ETH的钱包地址');
+      setError(addressType === 'tron' ? '请输入 TRON 钱包地址' : '请输入抵押ETH的钱包地址');
       //终止执行并返回，不进行后续搜索。
       return;
     }
 
-    // 容错处理：如果用户没有输入 0x 前缀，自动补全
-    if (!trimmed.startsWith('0x') && !trimmed.startsWith('0X')) {
-      trimmed = '0x' + trimmed;
-    }
+    if (addressType === 'evm') {
+      // 容错处理：如果用户没有输入 0x 前缀，自动补全
+      if (!trimmed.startsWith('0x') && !trimmed.startsWith('0X')) {
+        trimmed = '0x' + trimmed;
+      }
 
-    const validation = validateAddressByCase(trimmed);
-    if (!validation.ok) {
-      setError(validation.reason ?? '抵押ETH的钱包地址格式无效');
-      return;
+      const validation = validateAddressByCase(trimmed);
+      if (!validation.ok) {
+        setError(validation.reason ?? '抵押ETH的钱包地址格式无效');
+        return;
+      }
+    } else {
+      const validation = await validateTronAddress(trimmed);
+      if (!validation.ok) {
+        setError(validation.reason ?? 'TRON 钱包地址格式无效');
+        return;
+      }
     }
     // 地址正确，则清空之前的错误提示
     setError('');
@@ -130,7 +213,7 @@ export function AddressInput({
     saveHistory(trimmed);
 
     // 将合规地址传给 onSearch 函数，触发Aave 里 的API 调用
-    onSearch(trimmed);
+    await onSearch(trimmed);
     setShowHistory(false);
   };
 
