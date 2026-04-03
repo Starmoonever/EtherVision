@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine
 
-from aave_crawler.server import app, create_app, main
+from crawler_shared.server import app, create_app, main
 
 from .config import load_config
 from .db import ensure_justlend_tables

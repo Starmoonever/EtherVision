@@ -39,7 +39,7 @@ def test_price_assets_route_ok() -> None:
     }
 
     with patch(
-        "aave_crawler.api.routes.get_supported_price_assets",
+        "crawler_shared.api.routes.get_supported_price_assets",
         new=AsyncMock(return_value=payload),
     ) as mocked_service:
         with _build_client() as client:

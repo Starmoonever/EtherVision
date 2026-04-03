@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aave_crawler.server import app, create_app, main
+from crawler_shared.server import app, create_app, main
 from .db import ensure_compound_v3_user_positions_table
 from sqlalchemy import create_engine
 from .config import load_config

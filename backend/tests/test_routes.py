@@ -45,6 +45,7 @@ from tests.conftest import (
 
 # service 函数在 routes 模块中被导入，patch 该命名空间
 _ROUTES = "aave_crawler.api.routes"
+_COMMON_ROUTES = "crawler_shared.api.routes"
 
 _404 = HTTPException(status_code=404, detail="无仓位")
 _502 = HTTPException(status_code=502, detail="RPC失败")
@@ -347,7 +348,7 @@ class TestPrice:
     def test_defaults_return_onchain_price(self, client: TestClient):
         """默认参数：asset=eth, time=now → 链上实时价格。"""
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_ONCHAIN,
         ) as mock_svc:
@@ -362,7 +363,7 @@ class TestPrice:
 
     def test_time_now_explicit(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_ONCHAIN,
         ):
@@ -373,7 +374,7 @@ class TestPrice:
     @pytest.mark.parametrize("asset", ["eth", "ETH", "wbtc", "WBTC", "usdc"])
     def test_various_assets_realtime(self, client: TestClient, asset: str):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_ONCHAIN,
         ):
@@ -382,7 +383,7 @@ class TestPrice:
 
     def test_unknown_asset_returns_404(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             side_effect=HTTPException(status_code=404, detail="未找到资产"),
         ):
@@ -398,7 +399,7 @@ class TestPrice:
 
     def test_historical_price_ok(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_HIST,
         ) as mock_svc:
@@ -424,7 +425,7 @@ class TestPrice:
     )
     def test_historical_time_formats_accepted(self, client: TestClient, time_str: str):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_HIST,
         ):
@@ -437,7 +438,7 @@ class TestPrice:
 
         expected_ts = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_HIST,
         ) as mock_svc:
@@ -460,7 +461,7 @@ class TestPrice:
 
     def test_defillama_failure_returns_502(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_eth_price",
+            f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             side_effect=HTTPException(status_code=502, detail="DeFiLlama 不可用"),
         ):
@@ -872,7 +873,7 @@ class TestPricePeriod:
     def test_ok_returns_price_period(self, client: TestClient):
         """正常请求返回 200 和价格序列。"""
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ):
@@ -893,20 +894,20 @@ class TestPricePeriod:
         expected_start = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
         expected_end = int(datetime(2024, 6, 3, tzinfo=timezone.utc).timestamp())
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ) as mock_svc:
             client.get("/api/price/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
-        assert kwargs["start_ts"] == expected_start
-        assert kwargs["end_ts"] == expected_end
-        assert kwargs["interval_minutes"] == 60
+        assert kwargs["start"] == expected_start
+        assert kwargs["end"] == expected_end
+        assert kwargs["interval"] == 60
 
     def test_default_interval_is_60(self, client: TestClient):
         """省略 interval 时默认 60 分钟。"""
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ) as mock_svc:
@@ -915,12 +916,12 @@ class TestPricePeriod:
                 params={"asset": "eth", "start": "2024-06-01", "end": "2024-06-03"},
             )
         _, kwargs = mock_svc.call_args
-        assert kwargs["interval_minutes"] == 60
+        assert kwargs["interval"] == 60
 
     @pytest.mark.parametrize("interval", [1, 15, 30, 60, 1440])
     def test_various_intervals_accepted(self, client: TestClient, interval: int):
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ):
@@ -962,7 +963,7 @@ class TestPricePeriod:
 
     def test_invalid_start_time_returns_400(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ):
@@ -974,7 +975,7 @@ class TestPricePeriod:
 
     def test_invalid_end_time_returns_400(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ):
@@ -991,7 +992,7 @@ class TestPricePeriod:
 
     def test_unknown_asset_returns_404(self, client: TestClient):
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             side_effect=HTTPException(status_code=404, detail="未找到资产"),
         ):
@@ -1016,7 +1017,7 @@ class TestPricePeriod:
     )
     def test_various_time_formats_accepted(self, client: TestClient, time_str: str):
         with patch(
-            f"{_ROUTES}.get_price_period",
+            f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_PERIOD,
         ):

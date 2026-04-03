@@ -2,6 +2,7 @@
 
 from typing import Literal
 
+from crawler_shared.api.routes import router as _common_router
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
@@ -18,10 +19,7 @@ from .schemas import (
     MarketReplayResponse,
     PositionPeriodItem,
     PositionReplayResponse,
-    PriceAssetsResponse,
     PositionResponse,
-    PricePeriodResponse,
-    PriceResponse,
     ShortLiqPeriodItem,
     ShortLiqSimResponse,
     TxHistoryResponse,
@@ -30,12 +28,10 @@ from .service import (
     get_borrow_user_position,
     get_daily_user_position,
     get_eth_price,
-    get_supported_price_assets,
     get_market_replay,
     get_positions_history,
     get_positions_period_detail,
     get_positions_period,
-    get_price_period,
     get_sorted_borrow_positions,
     get_sorted_positions,
     get_user_position,
@@ -50,7 +46,7 @@ from .service import (
 )
 
 router = APIRouter(prefix="/api/aave")
-common_router = APIRouter(prefix="/api")
+common_router = _common_router
 
 
 def _w3(request: Request):
@@ -196,49 +192,6 @@ async def positions(
     return await get_positions_history(pool, ts, limit=min(limit, 100))
 
 
-@common_router.get(
-    "/price/assets",
-    response_model=PriceAssetsResponse,
-    summary="列出支持价格查询的资产",
-    description="返回当前后端支持价格查询的资产列表，包含 ethereum 与 tron 两条链。",
-)
-async def price_assets(
-    request: Request,
-    pool: AsyncpgPool,
-) -> PriceAssetsResponse:
-    return await get_supported_price_assets(
-        _w3(request),
-        pool=pool,
-        justlend_cfg=getattr(request.app.state, "justlend_cfg", None),
-    )
-
-
-@common_router.get(
-    "/price",
-    response_model=PriceResponse,
-    summary="查询资产价格（当前或历史）",
-    description=(
-        "查询资产 USD 价格。\n\n"
-        "- `time=now`（默认）：从链上 Aave Oracle 实时查询当前价格\n"
-        "- `time=<UTC 时间字符串>`：从 DeFiLlama 查询历史价格\n\n"
-        "支持格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
-    ),
-)
-async def asset_price(
-    request: Request,
-    pool: AsyncpgPool,
-    asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
-    time: str = Query(
-        "now",
-        description="now = 实时价格；UTC 时间字符串 = 历史价格，如 2024-11-14T12:00:00Z",
-    ),
-) -> PriceResponse:
-    if time == "now":
-        return await get_eth_price(_w3(request), asset, pool=pool)
-    ts = _parse_utc_time(time)
-    return await get_eth_price(_w3(request), asset, timestamp=ts, pool=pool)
-
-
 @router.get(
     "/liquidate",
     response_model=LiquidationSimResponse,
@@ -381,35 +334,6 @@ async def liquidate_waterfall(
         initial_price_shock_eth=Decimal(str(initial_price_shock_eth)),
         impact_k=Decimal(str(impact_k)),
         sell_partition_eth=Decimal(str(sell_partition_eth)),
-    )
-
-
-@common_router.get(
-    "/price/period",
-    response_model=PricePeriodResponse,
-    summary="查询资产历史价格序列",
-    description=(
-        "从 DeFiLlama 查询指定资产在 start～end 时间段内，按 interval 分钟间隔的历史 USD 价格序列。\n\n"
-        "支持时间格式：`2024-11-14T12:00:00Z` / `2024-11-14 12:00:00` / `2024-11-14`"
-    ),
-)
-async def asset_price_period(
-    request: Request,
-    pool: AsyncpgPool,
-    asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
-    start: str = Query(..., description="起始 UTC 时间，如 2024-01-01"),
-    end: str = Query(..., description="结束 UTC 时间，如 2024-12-31"),
-    interval: int = Query(60, ge=1, description="采样间隔（分钟），最小 1"),
-) -> PricePeriodResponse:
-    start_ts = _parse_utc_time(start)
-    end_ts = _parse_utc_time(end)
-    return await get_price_period(
-        _w3(request),
-        asset,
-        start_ts=start_ts,
-        end_ts=end_ts,
-        interval_minutes=interval,
-        pool=pool,
     )
 
 

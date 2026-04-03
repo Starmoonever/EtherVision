@@ -28,6 +28,104 @@ class _FakeW3:
         self.eth = _FakeEth(code)
 
 
+class _FakeFeedCall:
+    def __init__(
+        self,
+        *,
+        historical_result: object | None = None,
+        latest_result: object | None = None,
+        historical_exc: Exception | None = None,
+        latest_exc: Exception | None = None,
+    ) -> None:
+        self._historical_result = historical_result
+        self._latest_result = latest_result
+        self._historical_exc = historical_exc
+        self._latest_exc = latest_exc
+
+    async def call(self, block_identifier=None):
+        if block_identifier is None:
+            if self._latest_exc is not None:
+                raise self._latest_exc
+            return self._latest_result
+        if self._historical_exc is not None:
+            raise self._historical_exc
+        return self._historical_result
+
+
+class _FakeFeedFunctions:
+    def __init__(
+        self,
+        *,
+        historical_exc: Exception | None = None,
+        latest_exc: Exception | None = None,
+    ) -> None:
+        self._historical_exc = historical_exc
+        self._latest_exc = latest_exc
+
+    def decimals(self) -> _FakeFeedCall:
+        return _FakeFeedCall(
+            historical_result=8,
+            latest_result=8,
+            historical_exc=self._historical_exc,
+            latest_exc=self._latest_exc,
+        )
+
+    def latestRoundData(self) -> _FakeFeedCall:
+        return _FakeFeedCall(
+            historical_result=(0, 200_000_000_000, 0, 0, 0),
+            latest_result=(0, 200_000_000_000, 0, 0, 0),
+            historical_exc=self._historical_exc,
+            latest_exc=self._latest_exc,
+        )
+
+
+class _FakeFeedContract:
+    def __init__(
+        self,
+        *,
+        historical_exc: Exception | None = None,
+        latest_exc: Exception | None = None,
+    ) -> None:
+        self.functions = _FakeFeedFunctions(
+            historical_exc=historical_exc,
+            latest_exc=latest_exc,
+        )
+
+
+class _FakeFeedEth(_FakeEth):
+    def __init__(
+        self,
+        code: bytes,
+        *,
+        historical_exc: Exception | None = None,
+        latest_exc: Exception | None = None,
+    ) -> None:
+        super().__init__(code)
+        self._historical_exc = historical_exc
+        self._latest_exc = latest_exc
+
+    def contract(self, address, abi):
+        return _FakeFeedContract(
+            historical_exc=self._historical_exc,
+            latest_exc=self._latest_exc,
+        )
+
+
+class _FakeFeedW3:
+    def __init__(
+        self,
+        code: bytes,
+        *,
+        historical_exc: Exception | None = None,
+        latest_exc: Exception | None = None,
+    ) -> None:
+        self.eth = _FakeFeedEth(
+            code,
+            historical_exc=historical_exc,
+            latest_exc=latest_exc,
+        )
+
+
 @pytest.mark.asyncio
 async def test_collect_v3_markets_skips_undeployed_market() -> None:
     cfg = cast(
@@ -223,3 +321,25 @@ def test_governance_config_hash_is_stable() -> None:
 
 def test_annualize_factor_from_per_second_rate() -> None:
     assert crawler._annualize_factor(10**18) == crawler.SECONDS_PER_YEAR
+
+
+@pytest.mark.asyncio
+async def test_price_from_feed_direct_returns_zero_when_historical_and_latest_fail() -> (
+    None
+):
+    w3 = cast(
+        AsyncWeb3,
+        _FakeFeedW3(
+            b"\x01",
+            historical_exc=RuntimeError("historical revert"),
+            latest_exc=RuntimeError("latest revert"),
+        ),
+    )
+
+    price = await crawler._price_from_feed_direct(
+        w3,
+        "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419",
+        23161825,
+    )
+
+    assert price == Decimal("0")

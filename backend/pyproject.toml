@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-api = "aave_crawler.server:main"
+api = "crawler_shared.server:main"
 aave-crawler = "aave_crawler.cli:cli"
 compound-crawler = "compound_crawler.cli:cli"
 justlend-crawler = "justlend_crawler.cli:cli"

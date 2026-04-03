@@ -12,6 +12,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 import asyncpg
+from crawler_shared.api.constants import SUPPORTED_PRICE_ASSETS
+from crawler_shared.api.schemas import (
+    PriceAssetsResponse,
+    PriceAssetSchema,
+    PricePeriodItem,
+    PricePeriodResponse,
+    PriceResponse,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from web3 import AsyncWeb3
@@ -68,13 +76,8 @@ from .schemas import (
     MarketReplayResponse,
     PositionPeriodItem,
     PositionReplayResponse,
-    PriceAssetsResponse,
-    PriceAssetSchema,
     PositionResponse,
     PositionSnapshotPoint,
-    PricePeriodItem,
-    PricePeriodResponse,
-    PriceResponse,
     ReservePositionSchema,
     ShortLiqPeriodItem,
     ShortLiqSimItem,
@@ -233,7 +236,7 @@ async def get_supported_price_assets(
     _ = (w3, pool, justlend_cfg)
     assets = [
         PriceAssetSchema(asset=asset, token_address=token_address, chain=chain)
-        for asset, token_address, chain in _SUPPORTED_PRICE_ASSETS
+        for asset, token_address, chain in SUPPORTED_PRICE_ASSETS
     ]
     return PriceAssetsResponse(assets=assets)
 

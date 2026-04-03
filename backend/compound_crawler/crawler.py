@@ -270,7 +270,15 @@ async def _price_from_feed_direct(
             block_number,
             exc,
         )
-        return await _read_latest(use_block=False)
+        try:
+            return await _read_latest(use_block=False)
+        except Exception as fallback_exc:
+            logger.warning(
+                "latest feed read failed feed=%s after historical fallback: %s",
+                price_feed,
+                fallback_exc,
+            )
+            return Decimal("0")
 
 
 async def _price_from_comet(
