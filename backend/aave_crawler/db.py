@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any, Protocol, cast
 
 import asyncpg
 from crawler_shared.config import PostgresConfig
@@ -24,6 +25,13 @@ from .models import ReservePosition, UserPosition
 from .utils import raw_to_decimal as _raw_to_decimal
 
 logger = logging.getLogger(__name__)
+
+_DDL_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext($1));"
+
+
+class _DdlLockConn(Protocol):
+    async def execute(self, query: str, *args) -> str: ...
+
 
 # ── 协议表名配置 ────────────────────────────────────────────────────────────────
 from dataclasses import dataclass  # noqa: E402
@@ -156,117 +164,66 @@ async def create_pool(pg: PostgresConfig, timeout: float = 10.0) -> asyncpg.Pool
     return await create_asyncpg_pool(pg, timeout=timeout, min_size=2, max_size=10)
 
 
+async def _acquire_ddl_lock(conn: _DdlLockConn, lock_name: str) -> None:
+    await conn.execute(_DDL_LOCK_SQL, lock_name)
+
+
 async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) -> None:
     """若目标表不存在则自动创建；幂等迁移旧表（精度升级、新增列、重命名）"""
     pos = tables.positions
     res = tables.reserve_positions
     async with pool.acquire() as conn:
-        # ── 幂等重命名：将旧表名（无 _collateral 后缀）迁移到新名 ──────────────
-        # 仅对 collateral 表执行，borrow 表是全新建的
-        if tables.side == "collateral":
-            old_pos = pos.replace("_collateral", "")
-            old_res = res.replace("_collateral", "")
-            if old_pos != pos:
-                await conn.execute(
-                    f"""
-                    DO $$
-                    BEGIN
-                        IF EXISTS (
-                            SELECT 1 FROM information_schema.tables
-                            WHERE table_schema = 'loan' AND table_name = '{old_pos}'
-                        ) AND NOT EXISTS (
-                            SELECT 1 FROM information_schema.tables
-                            WHERE table_schema = 'loan' AND table_name = '{pos}'
-                        ) THEN
-                            ALTER TABLE loan."{old_pos}" RENAME TO "{pos}";
-                        END IF;
-                    END$$;
-                """
-                )
-            if old_res != res:
-                await conn.execute(
-                    f"""
-                    DO $$
-                    BEGIN
-                        IF EXISTS (
-                            SELECT 1 FROM information_schema.tables
-                            WHERE table_schema = 'loan' AND table_name = '{old_res}'
-                        ) AND NOT EXISTS (
-                            SELECT 1 FROM information_schema.tables
-                            WHERE table_schema = 'loan' AND table_name = '{res}'
-                        ) THEN
-                            ALTER TABLE loan."{old_res}" RENAME TO "{res}";
-                        END IF;
-                    END$$;
-                """
-                )
-        # ── 建表（如不存在）─────────────────────────────────────────────────────
-        if tables.side == "borrow":
-            await conn.execute(_DDL_BORROW_POSITIONS.format(positions=pos))
-        else:
-            await conn.execute(_DDL_POSITIONS.format(positions=pos))
-        await conn.execute(_DDL_RESERVE_POSITIONS.format(reserve_positions=res))
-        # ── 以下迁移步骤仅适用于 collateral 表（borrow 表是全新建的）────────────
-        if tables.side == "collateral":
-            # 修复旧表 health_factor 列精度不足（NUMERIC(30,18) → NUMERIC(40,18)）
-            await conn.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = 'loan'
-                          AND table_name   = '{pos}'
-                          AND column_name  = 'health_factor'
-                          AND numeric_precision < 40
-                    ) THEN
-                        ALTER TABLE loan."{pos}"
-                            ALTER COLUMN health_factor TYPE NUMERIC(40, 18);
-                    END IF;
-                END$$;
-            """
-            )
-            # 为旧表添加 liq_price 列
-            await conn.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = 'loan'
-                          AND table_name   = '{pos}'
-                          AND column_name  = 'liq_price'
-                    ) THEN
-                        ALTER TABLE loan."{pos}"
-                            ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
-                    END IF;
-                END$$;
-            """
-            )
-            # 将 liq_price 精度从NUMERIC(20,8)升级为NUMERIC(30,8)
-            await conn.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = 'loan'
-                          AND table_name   = '{pos}'
-                          AND column_name  = 'liq_price'
-                          AND numeric_precision < 30
-                    ) THEN
-                        ALTER TABLE loan."{pos}"
-                            ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
-                    END IF;
-                END$$;
-            """
-            )
-            # 将 positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
-            for _col in (
-                "total_collateral_usd",
-                "total_debt_usd",
-                "available_borrows_usd",
-            ):
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, f"loan.aave.ensure_tables.{pos}.{res}")
+            # ── 幂等重命名：将旧表名（无 _collateral 后缀）迁移到新名 ──────────────
+            # 仅对 collateral 表执行，borrow 表是全新建的
+            if tables.side == "collateral":
+                old_pos = pos.replace("_collateral", "")
+                old_res = res.replace("_collateral", "")
+                if old_pos != pos:
+                    await conn.execute(
+                        f"""
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'loan' AND table_name = '{old_pos}'
+                            ) AND NOT EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'loan' AND table_name = '{pos}'
+                            ) THEN
+                                ALTER TABLE loan."{old_pos}" RENAME TO "{pos}";
+                            END IF;
+                        END$$;
+                    """
+                    )
+                if old_res != res:
+                    await conn.execute(
+                        f"""
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'loan' AND table_name = '{old_res}'
+                            ) AND NOT EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = 'loan' AND table_name = '{res}'
+                            ) THEN
+                                ALTER TABLE loan."{old_res}" RENAME TO "{res}";
+                            END IF;
+                        END$$;
+                    """
+                    )
+            # ── 建表（如不存在）─────────────────────────────────────────────────────
+            if tables.side == "borrow":
+                await conn.execute(_DDL_BORROW_POSITIONS.format(positions=pos))
+            else:
+                await conn.execute(_DDL_POSITIONS.format(positions=pos))
+            await conn.execute(_DDL_RESERVE_POSITIONS.format(reserve_positions=res))
+            # ── 以下迁移步骤仅适用于 collateral 表（borrow 表是全新建的）────────────
+            if tables.side == "collateral":
+                # 修复旧表 health_factor 列精度不足（NUMERIC(30,18) → NUMERIC(40,18)）
                 await conn.execute(
                     f"""
                     DO $$
@@ -275,15 +232,73 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                             SELECT 1 FROM information_schema.columns
                             WHERE table_schema = 'loan'
                               AND table_name   = '{pos}'
-                              AND column_name  = '{_col}'
-                              AND numeric_precision < 30
+                              AND column_name  = 'health_factor'
+                              AND numeric_precision < 40
                         ) THEN
                             ALTER TABLE loan."{pos}"
-                                ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                                ALTER COLUMN health_factor TYPE NUMERIC(40, 18);
                         END IF;
                     END$$;
                 """
                 )
+                # 为旧表添加 liq_price 列
+                await conn.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{pos}'
+                              AND column_name  = 'liq_price'
+                        ) THEN
+                            ALTER TABLE loan."{pos}"
+                                ADD COLUMN liq_price NUMERIC(30, 8) NOT NULL DEFAULT 0;
+                        END IF;
+                    END$$;
+                """
+                )
+                # 将 liq_price 精度从NUMERIC(20,8)升级为NUMERIC(30,8)
+                await conn.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{pos}'
+                              AND column_name  = 'liq_price'
+                              AND numeric_precision < 30
+                        ) THEN
+                            ALTER TABLE loan."{pos}"
+                                ALTER COLUMN liq_price TYPE NUMERIC(30, 8);
+                        END IF;
+                    END$$;
+                """
+                )
+                # 将 positions 表的 USD 列精度从 NUMERIC(20,8) 升级为 NUMERIC(30,8)
+                for _col in (
+                    "total_collateral_usd",
+                    "total_debt_usd",
+                    "available_borrows_usd",
+                ):
+                    await conn.execute(
+                        f"""
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_schema = 'loan'
+                                  AND table_name   = '{pos}'
+                                  AND column_name  = '{_col}'
+                                  AND numeric_precision < 30
+                            ) THEN
+                        ALTER TABLE loan."{pos}"
+                            ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                            END IF;
+                        END$$;
+                    """
+                    )
             # 为旧表添加 eth_collateral_amount / eth_collateral_usd 预计算列
             for _col in ("eth_collateral_amount", "eth_collateral_usd"):
                 await conn.execute(
@@ -302,25 +317,25 @@ async def ensure_tables(pool: asyncpg.Pool, tables: ProtocolTables = TABLES_V3) 
                     END$$;
                 """
                 )
-        # reserve_positions 精度迁移对两种 side 均执行
-        for _col in ("price_usd", "supply_usd", "total_debt_usd"):
-            await conn.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = 'loan'
-                          AND table_name   = '{res}'
-                          AND column_name  = '{_col}'
-                          AND numeric_precision < 30
-                    ) THEN
-                        ALTER TABLE loan."{res}"
-                            ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
-                    END IF;
-                END$$;
-            """
-            )
+            # reserve_positions 精度迁移对两种 side 均执行
+            for _col in ("price_usd", "supply_usd", "total_debt_usd"):
+                await conn.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'loan'
+                              AND table_name   = '{res}'
+                              AND column_name  = '{_col}'
+                              AND numeric_precision < 30
+                        ) THEN
+                            ALTER TABLE loan."{res}"
+                                ALTER COLUMN "{_col}" TYPE NUMERIC(30, 8);
+                        END IF;
+                    END$$;
+                """
+                )
     logger.info("目标表已就绪：%s, %s", pos, res)
 
 
@@ -1145,13 +1160,16 @@ END $$;
 async def ensure_snapshot_cache_table(pool: asyncpg.Pool) -> None:
     """若快照缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
     async with pool.acquire() as conn:
-        # 兼容旧表名：若旧表存在且新表不存在，则重命名
-        await conn.execute(_DDL_SNAPSHOT_CACHE_RENAME)
-        await conn.execute(_DDL_SNAPSHOT_CACHE)
-        await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
-        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
-        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF)
-        await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.aave.snapshot_cache_ddl")
+            # 兼容旧表名：若旧表存在且新表不存在，则重命名
+            await conn.execute(_DDL_SNAPSHOT_CACHE_RENAME)
+            await conn.execute(_DDL_SNAPSHOT_CACHE)
+            await conn.execute(_DDL_SNAPSHOT_CACHE_INDEXES)
+            await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE)
+            await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_BRIEF)
+            await conn.execute(_DDL_SNAPSHOT_CACHE_MIGRATE_LIQ_PRICE_WETH)
     logger.info("快照缓存表已就绪：loan.aave_position_snapshots")
 
 
@@ -1335,8 +1353,11 @@ def _eth_price_bucket(unix_ts: int) -> int:
 async def ensure_eth_price_timestamp_table(pool: asyncpg.Pool) -> None:
     """若价格缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
     async with pool.acquire() as conn:
-        await conn.execute(_DDL_ETH_PRICE_TIMESTAMP)
-        await conn.execute(_DDL_ETH_PRICE_TIMESTAMP_INDEX)
+        ddl_conn = cast(Any, conn)
+        async with conn.transaction():
+            await _acquire_ddl_lock(ddl_conn, "loan.aave.eth_price_timestamp_ddl")
+            await conn.execute(_DDL_ETH_PRICE_TIMESTAMP)
+            await conn.execute(_DDL_ETH_PRICE_TIMESTAMP_INDEX)
     logger.info("ETH 价格缓存表已就绪：loan.eth_price_timestamp")
 
 
