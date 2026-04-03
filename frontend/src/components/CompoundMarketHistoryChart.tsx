@@ -10,18 +10,21 @@ import {
   Legend,
 } from 'recharts';
 import {
-  fetchCompoundMarketHistory,
-  fetchCompoundMarketGovernanceV3,
-  fetchCompoundMarketConfigV2,
-  fetchCompoundMarketConfigPeriodV2,
+  fetchCompoundMarketGovernanceV3WithMeta,
+  fetchCompoundMarketConfigV2WithMeta,
+  fetchCompoundMarketConfigPeriodV2WithMeta,
+  fetchCompoundMarketHistoryWithMeta,
   getCompoundV2BaseAssetSymbol,
 } from '../api/compound';
-import { fetchAssetPrice, fetchAssetPricePeriod } from '../api/price';
+import { fetchAssetPriceWithMeta, fetchAssetPricePeriodWithMeta } from '../api/price';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface CompoundMarketHistoryChartProps {
   version: 'v2' | 'v3';
   market: string;
   marketSymbol: string;
+  scenarioLabel?: string;
 }
 
 interface ChartPoint {
@@ -123,10 +126,26 @@ function buildUnderlyingPriceResolver(priceItems: any[]): (timestamp: string) =>
   };
 }
 
+const explainItems: ExplainItem[] = [
+  {
+    term: '市场规模',
+    formula: 'borrow_usd 与 total_market_usd',
+    meaning: '反映这个 market 被借出的规模和可供借出的总体量。',
+    riskHint: '高借出规模叠加高利用率时，流动性缓冲更薄。',
+  },
+  {
+    term: '总收益率 / 总利率',
+    formula: 'v3 = 原生 APR ± 奖励 APR；v2 = 原生 supply / borrow APR',
+    meaning: '帮助你看清真实收益和真实融资成本，而不只是协议基础利率。',
+    riskHint: '高收益未必安全，要同时结合利用率和市场规模判断。',
+  },
+];
+
 export function CompoundMarketHistoryChart({
   version,
   market,
   marketSymbol,
+  scenarioLabel,
 }: CompoundMarketHistoryChartProps) {
   const [data, setData] = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -140,6 +159,10 @@ export function CompoundMarketHistoryChart({
   const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10));
 
   const [showRatesHelp, setShowRatesHelp] = useState(false);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     if (timeRange === null) return;
@@ -179,17 +202,31 @@ export function CompoundMarketHistoryChart({
           const baseSymbol = getCompoundV2BaseAssetSymbol(marketSymbol);
           const baselineConfigDate = `${customStart} 00:00:00`;
           const [priceItems, configRes, baselineConfig] = await Promise.all([
-            fetchAssetPricePeriod(baseSymbol, start, end, priceInterval),
-            fetchCompoundMarketConfigPeriodV2(marketSymbol, start, end),
-            fetchCompoundMarketConfigV2(marketSymbol, baselineConfigDate),
+            fetchAssetPricePeriodWithMeta(baseSymbol, start, end, priceInterval),
+            fetchCompoundMarketConfigPeriodV2WithMeta(marketSymbol, start, end),
+            fetchCompoundMarketConfigV2WithMeta(marketSymbol, baselineConfigDate),
           ]);
-          const statePoints = await fetchCompoundMarketHistory(version, market, start, end, {
-            interval: marketStateInterval,
-          });
+          const statePoints = await fetchCompoundMarketHistoryWithMeta(
+            version,
+            market,
+            start,
+            end,
+            {
+              interval: marketStateInterval,
+            },
+          );
+          setMeta(
+            mergeRequestMetas([
+              priceItems.meta,
+              configRes.meta,
+              baselineConfig.meta,
+              statePoints.meta,
+            ]),
+          );
 
           const rateMap = new Map<string, number>();
-          if (configRes && Array.isArray(configRes.points)) {
-            configRes.points.forEach((pt: any) => {
+          if (configRes.data && Array.isArray(configRes.data.points)) {
+            configRes.data.points.forEach((pt: any) => {
               if (pt.market_config && pt.market_config.exchange_rate) {
                 const dateKey = pt.market_config.effective_timestamp.split('T')[0];
                 rateMap.set(dateKey, parseFloat(pt.market_config.exchange_rate));
@@ -197,11 +234,11 @@ export function CompoundMarketHistoryChart({
             });
           }
 
-          const baselineRate = parseFloat(baselineConfig?.market_config?.exchange_rate || '1');
-          const resolveRateAt = buildV2RateResolver(configRes?.points || [], baselineRate);
-          const resolveUnderlyingPriceAt = buildUnderlyingPriceResolver(priceItems || []);
+          const baselineRate = parseFloat(baselineConfig.data?.market_config?.exchange_rate || '1');
+          const resolveRateAt = buildV2RateResolver(configRes.data?.points || [], baselineRate);
+          const resolveUnderlyingPriceAt = buildUnderlyingPriceResolver(priceItems.data || []);
 
-          const finalData: ChartPoint[] = statePoints.map((pt: any) => {
+          const finalData: ChartPoint[] = statePoints.data.map((pt: any) => {
             const supplyUsd = parseFloat(pt.supply_usd || '0');
             const borrowUsd = parseFloat(pt.borrow_usd || '0');
             const baseSupplyApr = parseFloat(pt.supply_apr || '0') * 100;
@@ -234,7 +271,7 @@ export function CompoundMarketHistoryChart({
           return;
         }
 
-        const pointsV3 = await fetchCompoundMarketHistory(version, market, start, end, {
+        const pointsV3 = await fetchCompoundMarketHistoryWithMeta(version, market, start, end, {
           interval: marketStateInterval,
         });
 
@@ -245,8 +282,13 @@ export function CompoundMarketHistoryChart({
 
         if (version === 'v3') {
           try {
-            compPrice = await fetchAssetPrice('comp');
-            const govData = await fetchCompoundMarketGovernanceV3(market, customEnd + ' 00:00:00');
+            const [compPriceResult, govDataResult] = await Promise.all([
+              fetchAssetPriceWithMeta('comp'),
+              fetchCompoundMarketGovernanceV3WithMeta(market, customEnd + ' 00:00:00'),
+            ]);
+            compPrice = compPriceResult.data;
+            const govData = govDataResult.data;
+            setMeta(mergeRequestMetas([pointsV3.meta, compPriceResult.meta, govDataResult.meta]));
             if (govData) {
               trackingIndexScale = parseFloat(govData.tracking_index_scale || '1e15');
               baseTrackingSupplySpeed = parseFloat(govData.base_tracking_supply_speed || '0');
@@ -255,11 +297,13 @@ export function CompoundMarketHistoryChart({
           } catch (e) {
             console.error('Failed to fetch governance data or COMP price', e);
           }
+        } else {
+          setMeta(mergeRequestMetas([pointsV3.meta]));
         }
 
         const SECONDS_PER_YEAR = 60 * 60 * 24 * 365;
 
-        const finalDataV3: ChartPoint[] = pointsV3.map((pt: any) => {
+        const finalDataV3: ChartPoint[] = pointsV3.data.map((pt: any) => {
           const supplyUsd = parseFloat(pt.supply_usd || '0');
           const borrowUsd = parseFloat(pt.borrow_usd || '0');
 
@@ -387,8 +431,10 @@ export function CompoundMarketHistoryChart({
           <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
             {marketSymbol} 借贷市场历史数据回顾
           </span>
+          <ChartInfoButton title="Compound 市场历史图说明" items={explainItems} />
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
           {(['3M', '6M', '1Y'] as const).map((r) => (
             <button
               key={r}

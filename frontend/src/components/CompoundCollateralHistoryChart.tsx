@@ -12,11 +12,13 @@ import {
   Legend,
 } from 'recharts';
 import {
-  fetchCompoundMarketHistory,
-  fetchCompoundMarketGovernanceV3,
-  fetchCompoundMarketConfigV2,
+  fetchCompoundMarketHistoryWithMeta,
+  fetchCompoundMarketGovernanceV3WithMeta,
+  fetchCompoundMarketConfigV2WithMeta,
 } from '../api/compound';
 import type { CompoundMarketPoint } from '../api/compound';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface CompoundCollateralHistoryChartProps {
   version: 'v2' | 'v3';
@@ -69,6 +71,27 @@ function formatPercent(value: number): string {
   })}%`;
 }
 
+const explainItems: ExplainItem[] = [
+  {
+    term: '资金结构 / 抵押结构',
+    formula: '按 reserve 的 supply_usd 汇总',
+    meaning: '展示一个 market 的抵押组成是否分散、是否过度依赖单一资产。',
+    riskHint: '如果抵押结构过于集中，单个资产波动或脱锚会更容易伤到整个 market。',
+  },
+  {
+    term: '有效抵押价值',
+    formula: 'collateral usd × collateral factor',
+    meaning: '不是所有抵押都能 1:1 支撑借款，乘上抵押参数后才更接近真实安全垫。',
+    riskHint: '有效抵押价值下降，比名义抵押下滑更值得警惕。',
+  },
+  {
+    term: '储备占比（v2）',
+    formula: 'reserves / supply',
+    meaning: '衡量协议从市场里留存了多少储备。',
+    riskHint: '储备越高未必越差，但如果伴随利用率恶化，往往意味着市场效率下降。',
+  },
+];
+
 export function CompoundCollateralHistoryChart({
   version,
   market,
@@ -86,6 +109,10 @@ export function CompoundCollateralHistoryChart({
     return d.toISOString().slice(0, 10);
   });
   const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     if (timeRange === null) return;
@@ -119,12 +146,13 @@ export function CompoundCollateralHistoryChart({
         const start = formatUtcDateBoundary(customStart);
         const end = formatUtcDateBoundary(customEnd, true);
 
-        const points = await fetchCompoundMarketHistory(version, market, start, end, {
+        const result = await fetchCompoundMarketHistoryWithMeta(version, market, start, end, {
           interval: version === 'v2' ? 1 : 24,
         });
+        setMeta(mergeRequestMetas([result.meta]));
 
         // Sort data by time
-        const sortedPoints = points.sort(
+        const sortedPoints = result.data.sort(
           (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
         );
         setData(sortedPoints);
@@ -150,9 +178,9 @@ export function CompoundCollateralHistoryChart({
     const fetchV2Config = async () => {
       try {
         const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
-        const response = await fetchCompoundMarketConfigV2(marketSymbol, today);
+        const response = await fetchCompoundMarketConfigV2WithMeta(marketSymbol, today);
         if (!cancelled) {
-          setV2Config(response?.market_config ?? response ?? null);
+          setV2Config(response.data?.market_config ?? response.data ?? null);
         }
       } catch (err) {
         if (!cancelled) {
@@ -280,9 +308,9 @@ export function CompoundCollateralHistoryChart({
     const fetchFactor = async () => {
       try {
         const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
-        const res = await fetchCompoundMarketGovernanceV3(market, today);
-        if (res && res.assets && Array.isArray(res.assets)) {
-          const assetInfo = res.assets.find((a: any) => a.symbol === selectedSymbol);
+        const result = await fetchCompoundMarketGovernanceV3WithMeta(market, today);
+        if (result.data && result.data.assets && Array.isArray(result.data.assets)) {
+          const assetInfo = result.data.assets.find((a: any) => a.symbol === selectedSymbol);
           if (assetInfo && assetInfo.borrow_collateral_factor) {
             setCollateralFactor(parseFloat(assetInfo.borrow_collateral_factor));
             return;
@@ -460,6 +488,7 @@ export function CompoundCollateralHistoryChart({
             <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
               {marketSymbol} v2 市场结构回顾
             </span>
+            <ChartInfoButton title="Compound 抵押与结构图说明" items={explainItems} />
             <span
               style={{
                 fontSize: '0.75rem',
@@ -473,7 +502,8 @@ export function CompoundCollateralHistoryChart({
               单资产 cToken 市场
             </span>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <ChartDataStatus meta={meta} />
             {(['3M', '6M', '1Y'] as const).map((r) => (
               <button
                 key={r}
@@ -776,8 +806,10 @@ export function CompoundCollateralHistoryChart({
           <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
             抵押资产市场历史数据回顾
           </span>
+          <ChartInfoButton title="Compound 抵押与结构图说明" items={explainItems} />
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <ChartDataStatus meta={meta} />
           {(['3M', '6M', '1Y'] as const).map((r) => (
             <button
               key={r}

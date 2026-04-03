@@ -21,6 +21,7 @@ export function CompoundMarketAssessment({
   onMarketChange,
 }: CompoundMarketAssessmentProps) {
   const [assetPrice, setAssetPrice] = useState<number | null>(null);
+  const [riskScenarioLabel, setRiskScenarioLabel] = useState('');
   const activeMarket = markets.find((item) => item.address === selectedMarket) ?? markets[0];
   const activeMarketAddress = activeMarket?.address ?? '';
   const activeMarketSymbol = activeMarket?.symbol ?? '';
@@ -117,7 +118,11 @@ export function CompoundMarketAssessment({
           <hr style={{ border: 'none', borderTop: '1px solid #1e293b', margin: 0 }} />
 
           {/* Historical trend */}
-          <CompoundPriceTrend asset={activeMarketSymbol} version={marketVersion} />
+          <CompoundPriceTrend
+            asset={activeMarketSymbol}
+            version={marketVersion}
+            scenarioLabel={riskScenarioLabel || undefined}
+          />
         </div>
 
         {/* Right: Historical Data Panel */}
@@ -126,6 +131,7 @@ export function CompoundMarketAssessment({
             version={marketVersion}
             market={activeMarketAddress}
             marketSymbol={activeMarketSymbol}
+            onScenarioChange={setRiskScenarioLabel}
           />
 
           <div style={{ marginTop: '2rem' }}>
@@ -133,6 +139,7 @@ export function CompoundMarketAssessment({
               version={marketVersion}
               market={activeMarketAddress}
               marketSymbol={activeMarketSymbol}
+              scenarioLabel={riskScenarioLabel || undefined}
             />
           </div>
 

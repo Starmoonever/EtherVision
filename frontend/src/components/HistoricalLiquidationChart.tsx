@@ -10,13 +10,18 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { fetchHistoricalLiquidation, fetchHistoricalLiquidationDetail } from '../api/liquidation';
+import {
+  fetchHistoricalLiquidationDetail,
+  fetchHistoricalLiquidationWithMeta,
+} from '../api/liquidation';
 import { fetchHistoricalUserPosition } from '../api';
 import type {
   HistoricalLiquidationPoint,
   HistoricalLiquidationDetailResponse,
 } from '../api/liquidation';
 import type { UserPosition } from '../api';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface HistoricalLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
@@ -39,6 +44,21 @@ type SortField =
 type SortOrder = 'asc' | 'desc';
 
 const PAGE_SIZE = 20;
+
+const explainItems: ExplainItem[] = [
+  {
+    term: '历史清算趋势',
+    formula: '按日快照 × 固定模拟价格偏移',
+    meaning: '每个点表示某一天的仓位结构，在设定的价格变化下，会有多少仓位进入清算区间。',
+    riskHint: '如果某段时间柱子持续抬高，说明风险是在慢慢堆积，而不是一次性爆发。',
+  },
+  {
+    term: '模拟 ETH 价格',
+    formula: '当日 ETH 价格 × (1 + priceChange)',
+    meaning: '线条展示的是这次历史回测使用的假设价格，而不是当天真实价格。',
+    riskHint: '应把它看成“压力测试情景”，不是市场实际成交价。',
+  },
+];
 
 function getDefaultSortField(side: 'collateral' | 'borrow'): SortField {
   return side === 'borrow' ? 'liq_price_rise' : 'liq_price';
@@ -84,6 +104,10 @@ export function HistoricalLiquidationChart({
       }
     >
   >({});
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     const loadData = async () => {
@@ -93,13 +117,13 @@ export function HistoricalLiquidationChart({
 
         if (version === 'all') {
           const [v2Data, v3Data] = await Promise.all([
-            fetchHistoricalLiquidation(startDate, endDate, 'v2', priceChange),
-            fetchHistoricalLiquidation(startDate, endDate, 'v3', priceChange),
+            fetchHistoricalLiquidationWithMeta(startDate, endDate, 'v2', priceChange),
+            fetchHistoricalLiquidationWithMeta(startDate, endDate, 'v3', priceChange),
           ]);
 
           const map = new Map<string, HistoricalLiquidationPoint>();
 
-          [...v2Data, ...v3Data].forEach((item) => {
+          [...v2Data.data, ...v3Data.data].forEach((item) => {
             if (!map.has(item.snapshot_date)) {
               map.set(item.snapshot_date, {
                 snapshot_date: item.snapshot_date,
@@ -133,8 +157,16 @@ export function HistoricalLiquidationChart({
           });
 
           nextData = Array.from(map.values());
+          setMeta(mergeRequestMetas([v2Data.meta, v3Data.meta]));
         } else {
-          nextData = await fetchHistoricalLiquidation(startDate, endDate, version, priceChange);
+          const result = await fetchHistoricalLiquidationWithMeta(
+            startDate,
+            endDate,
+            version,
+            priceChange,
+          );
+          nextData = result.data;
+          setMeta(mergeRequestMetas([result.meta]));
         }
 
         const sorted = nextData.sort(
@@ -368,9 +400,12 @@ export function HistoricalLiquidationChart({
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-          <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}>
-            历史清算趋势
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}>
+              历史清算趋势
+            </span>
+            <ChartInfoButton title="历史清算趋势说明" items={explainItems} />
+          </div>
           <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>
             已选日期：
             <span style={{ color: '#e2e8f0', fontWeight: 700 }}>
@@ -380,6 +415,10 @@ export function HistoricalLiquidationChart({
             ，仓位与 reserve 明细均截止该日 00:00 UTC
           </span>
         </div>
+        <ChartDataStatus
+          meta={meta}
+          scenarioLabel={`${priceChange > 0 ? '+' : ''}${priceChange}%`}
+        />
         <button
           onClick={version === 'all' ? undefined : handleShowDetails}
           disabled={version === 'all' || !activeSnapshotDate}

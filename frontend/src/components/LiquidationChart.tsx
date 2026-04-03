@@ -9,10 +9,13 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { fetchLiquidationPeriod, fetchLiquidationDetail } from '../api';
+import { fetchLiquidationDetail } from '../api';
+import { fetchLiquidationPeriodWithMeta } from '../api/liquidation';
 import { fetchUserPosition } from '../api';
 import type { LiquidationDetailResponse as LiquidationData } from '../api';
 import type { UserPosition } from '../api';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 type SortField =
   | 'liq_price'
@@ -43,6 +46,27 @@ interface ChartDataPoint {
 type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
 const PAGE_SIZE = 20;
+
+const explainItems: ExplainItem[] = [
+  {
+    term: '清算价值',
+    formula: 'sum(min(债务价值, 可被清算的 ETH 敏感部分))',
+    meaning: '在模拟 ETH 价格下，可能进入清算流程的仓位所对应的总清算规模。',
+    riskHint: '柱子越高，说明同一价格冲击下需要市场吸收的清算卖压越大。',
+  },
+  {
+    term: '清算数量',
+    formula: '总清算价值 / 模拟 ETH 价格（前端近似展示）',
+    meaning: '用来直观看出风险释放时，大致需要处置多少 ETH 相关头寸。',
+    riskHint: '如果在某个价位附近线条陡增，说明风险不是平滑分布，而是集中堆积。',
+  },
+  {
+    term: '抵押端 / 借贷端',
+    formula: '抵押端看 ETH 下跌；借贷端看借 WETH 仓位在 ETH 上涨时的风险',
+    meaning: '两种模式对应不同清算方向，帮助拆开看“做多 ETH 抵押”和“做空 ETH 借款”风险。',
+    riskHint: '同一协议可能同时存在下跌清算和上涨清算，不应只看单一方向。',
+  },
+];
 
 function getDefaultSortField(side: 'collateral' | 'borrow'): SortField {
   return side === 'borrow' ? 'liq_price_rise' : 'liq_price';
@@ -79,6 +103,10 @@ export function LiquidationChart({
       }
     >
   >({});
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   const selectedPrice = currentEthPrice * (1 + priceChange / 100);
   const totalPositions = parseInt(modalData?.positions_cnt || '0', 10);
@@ -106,7 +134,7 @@ export function LiquidationChart({
         }[] = [];
 
         // 获取数据函数
-        const fetchData = (v: string) => fetchLiquidationPeriod(side, v, start, end, 5);
+        const fetchData = (v: string) => fetchLiquidationPeriodWithMeta(side, v, start, end, 5);
 
         if (version === 'all') {
           const [v2Data, v3Data] = await Promise.all([fetchData('v2'), fetchData('v3')]);
@@ -122,7 +150,7 @@ export function LiquidationChart({
             }
           >();
 
-          [...v2Data, ...v3Data].forEach((item) => {
+          [...v2Data.data, ...v3Data.data].forEach((item) => {
             const priceKey = Math.round(parseFloat(item.simulated_eth_price));
             if (!mergedMap.has(priceKey)) {
               mergedMap.set(priceKey, {
@@ -141,8 +169,11 @@ export function LiquidationChart({
             positions_cnt: item.positions_cnt.toString(),
             total_liquidation_usd: item.total_liquidation_usd.toString(),
           }));
+          setMeta(mergeRequestMetas([v2Data.meta, v3Data.meta]));
         } else {
-          dataList = await fetchData(version);
+          const result = await fetchData(version);
+          dataList = result.data;
+          setMeta(mergeRequestMetas([result.meta]));
         }
 
         // 将返回的数组转换为 chartData
@@ -379,10 +410,16 @@ export function LiquidationChart({
           alignItems: 'center',
         }}
       >
-        <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}>
-          {' '}
-          ETH 清算量{' '}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="chart-title" style={{ color: '#cbd5e1', fontWeight: 700 }}>
+            ETH 清算量
+          </span>
+          <ChartInfoButton title="实时清算模拟说明" items={explainItems} />
+        </div>
+        <ChartDataStatus
+          meta={meta}
+          scenarioLabel={`ETH ${selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+        />
         <button
           onClick={version === 'all' ? undefined : handleShowDetails}
           disabled={version === 'all'}

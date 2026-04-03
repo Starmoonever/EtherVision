@@ -7,9 +7,13 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceArea,
+  ReferenceLine,
 } from 'recharts';
-import { fetchEthPricePeriod } from '../api';
+import { fetchEthPricePeriodWithMeta } from '../api/price';
 import type { PricePeriodItem } from '../api';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface PricePoint {
   time: string;
@@ -23,10 +27,39 @@ type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 const _cache = new Map<string, { fetchedAt: number; points: PricePoint[] }>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分钟
 
-export function EthPriceTrend() {
+const explainItems: ExplainItem[] = [
+  {
+    term: 'ETH 历史价格',
+    formula: 'price = oracle / market feed',
+    meaning: '展示 ETH 在不同时间点的美元价格，是所有清算风险分析的基础锚点。',
+    riskHint: '当价格快速接近清算模拟选中的阈值时，协议中的 ETH 敏感仓位会明显增多。',
+  },
+  {
+    term: '联动风险区间',
+    formula: '下跌风险: ETH <= 模拟阈值；上涨风险: ETH >= 模拟阈值',
+    meaning: '这是和清算模拟图共用的风险情景，帮助把“假设价格”映射到真实历史走势中。',
+    riskHint: '如果历史价格经常进入这个区间，说明该风险情景不是极端尾部，而是曾真实发生过。',
+  },
+];
+
+interface EthPriceTrendProps {
+  riskReferencePrice?: number;
+  riskDirection?: 'up' | 'down';
+  scenarioLabel?: string;
+}
+
+export function EthPriceTrend({
+  riskReferencePrice,
+  riskDirection = 'down',
+  scenarioLabel,
+}: EthPriceTrendProps) {
   const [timeRange, setTimeRange] = useState<'24h' | '7D' | '3M'>('24h');
   const [data, setData] = useState<PricePoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -34,6 +67,10 @@ export function EthPriceTrend() {
       const cached = _cache.get(timeRange);
       if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
         setData(cached.points);
+        setMeta({
+          lastUpdatedAt: cached.fetchedAt,
+          cacheStatus: 'hit',
+        });
         return;
       }
 
@@ -63,7 +100,8 @@ export function EthPriceTrend() {
         const startStr = formatDate(startTime);
         const endStr = formatDate(now);
 
-        const items = await fetchEthPricePeriod(startStr, endStr, interval);
+        const result = await fetchEthPricePeriodWithMeta(startStr, endStr, interval);
+        const items = result.data;
 
         const formattedData = items.map((item: PricePeriodItem) => ({
           time: new Date(item.timestamp).toLocaleString(undefined, {
@@ -80,6 +118,7 @@ export function EthPriceTrend() {
         if (formattedData.length > 0) {
           _cache.set(timeRange, { fetchedAt: Date.now(), points: formattedData });
         }
+        setMeta(mergeRequestMetas([result.meta]));
       } catch (err) {
         console.error('Fetch price trend error:', err);
       } finally {
@@ -100,7 +139,21 @@ export function EthPriceTrend() {
           marginBottom: '0.75rem',
         }}
       >
-        <span className="card-title">历史趋势</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="card-title">历史趋势</span>
+          <ChartInfoButton title="ETH 历史趋势说明" items={explainItems} />
+        </div>
+        <ChartDataStatus meta={meta} scenarioLabel={scenarioLabel} />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '0.75rem',
+        }}
+      >
         <div
           style={{
             display: 'flex',
@@ -150,6 +203,40 @@ export function EthPriceTrend() {
                 tickFormatter={(val) => `$${val}`}
                 width={65}
               />
+              {riskReferencePrice ? (
+                <>
+                  <ReferenceLine
+                    y={riskReferencePrice}
+                    stroke={riskDirection === 'down' ? '#fb7185' : '#c084fc'}
+                    strokeDasharray="6 4"
+                    label={{
+                      value: `风险阈值 $${riskReferencePrice.toFixed(0)}`,
+                      position: 'insideTopRight',
+                      fill: riskDirection === 'down' ? '#fb7185' : '#c084fc',
+                      fontSize: 11,
+                    }}
+                  />
+                  <ReferenceArea
+                    y1={0}
+                    y2={riskReferencePrice}
+                    ifOverflow="extendDomain"
+                    fill="#7f1d1d"
+                    fillOpacity={0.08}
+                  />
+                </>
+              ) : riskReferencePrice ? (
+                <ReferenceLine
+                  y={riskReferencePrice}
+                  stroke="#c084fc"
+                  strokeDasharray="6 4"
+                  label={{
+                    value: `风险阈值 $${riskReferencePrice.toFixed(0)}`,
+                    position: 'insideTopRight',
+                    fill: '#c084fc',
+                    fontSize: 11,
+                  }}
+                />
+              ) : null}
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#0f172a',

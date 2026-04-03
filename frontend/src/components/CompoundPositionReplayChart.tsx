@@ -10,6 +10,8 @@ import {
   Legend,
 } from 'recharts';
 import { fetchCompoundPositionReplay, CompoundPositionReplayPoint } from '../api/compound';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import type { AggregatedRequestMeta } from '../api/requestMeta';
 
 interface CompoundPositionReplayProps {
   address: string;
@@ -24,6 +26,23 @@ interface ReplayPointExt extends CompoundPositionReplayPoint {
 }
 
 const replayCache = new Map<string, ReplayPointExt[]>();
+const replayMetaCache = new Map<string, number>();
+const REPLAY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const explainItems: ExplainItem[] = [
+  {
+    term: '有效抵押总值',
+    formula: 'discounted collateral usd',
+    meaning: '已经乘上协议折扣/抵押参数后，真正能用来支撑借款安全垫的抵押价值。',
+    riskHint: '这条线如果持续靠近债务总值，账户的缓冲会越来越薄。',
+  },
+  {
+    term: 'ETH 清算价格',
+    formula: 'eth_down_liq_price_usd 或 eth_up_liq_price_usd',
+    meaning: '反映账户在 ETH 下跌或上涨场景下触发清算的关键价格阈值。',
+    riskHint: '清算价越接近当前 ETH 价格，说明仓位越脆弱。',
+  },
+];
 
 const safeParse = (val: any) => {
   const num = parseFloat(val);
@@ -87,6 +106,10 @@ export function CompoundPositionReplayChart({
   const [data, setData] = useState<ReplayPointExt[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   const [startTime, setStartTime] = useState('2020-12-01 00:00:00');
   const [endTime, setEndTime] = useState(() => {
@@ -110,10 +133,14 @@ export function CompoundPositionReplayChart({
       try {
         const cacheKey = `${version}:${address.toLowerCase()}`;
         const cached = replayCache.get(cacheKey);
-        if (cached) {
+        const cachedAt = replayMetaCache.get(cacheKey);
+        if (cached && cachedAt && Date.now() - cachedAt < REPLAY_CACHE_TTL_MS) {
           setFullData(cached);
           setData(cached);
-          setLoading(false);
+          setMeta({
+            lastUpdatedAt: cachedAt,
+            cacheStatus: 'hit',
+          });
           return;
         }
 
@@ -177,8 +204,13 @@ export function CompoundPositionReplayChart({
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
         replayCache.set(cacheKey, formattedData);
+        replayMetaCache.set(cacheKey, Date.now());
         setFullData(formattedData);
         setData(formattedData);
+        setMeta({
+          lastUpdatedAt: Date.now(),
+          cacheStatus: 'miss',
+        });
       } catch (err) {
         console.error(err);
         setError('无法加载历史回放数据');
@@ -257,6 +289,8 @@ export function CompoundPositionReplayChart({
           {marketLabel ? `${marketLabel} 历史交易与头寸变化记录` : '历史交易与头寸变化记录'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <ChartInfoButton title="Compound 账户回放图说明" items={explainItems} />
+          <ChartDataStatus meta={meta} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
             <input
               type="text"

@@ -10,8 +10,10 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { fetchWaterfallLiquidation } from '../api/liquidation';
+import { fetchWaterfallLiquidationWithMeta } from '../api/liquidation';
 import type { WaterfallResponse } from '../api/liquidation';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 
 interface WaterfallLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
@@ -32,6 +34,21 @@ interface WaterfallChartPoint {
 
 type ChartTooltipValue = string | number | ReadonlyArray<string | number>;
 
+const explainItems: ExplainItem[] = [
+  {
+    term: '清算瀑布',
+    formula: '初始价格冲击 -> 强平卖压 -> 进一步价格下跌 -> 下一轮强平',
+    meaning: '模拟清算是否会形成连锁反馈，而不是只看单轮静态清算规模。',
+    riskHint: '如果后几轮仍然有大量柱子，说明系统对卖压的自我放大效应更强。',
+  },
+  {
+    term: 'impactK',
+    formula: '价格冲击系数',
+    meaning: '控制“卖出多少 ETH 会对价格造成多大影响”的参数，数值越大代表市场深度越差。',
+    riskHint: '高 impactK 下瀑布图更陡，说明流动性脆弱时同样的清算会造成更大二次伤害。',
+  },
+];
+
 export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChartProps) {
   const [data, setData] = useState<WaterfallResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,6 +65,10 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
   const [animationStep, setAnimationStep] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -74,14 +95,15 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
       setError(null);
       try {
         const fetchVersion = version === 'all' ? 'v3' : version;
-        const res = await fetchWaterfallLiquidation(
+        const result = await fetchWaterfallLiquidationWithMeta(
           fetchVersion,
           committedInitialShock / 100,
           date,
           committedImpactK,
           committedSellPartition,
         );
-        setData(res);
+        setData(result.data);
+        setMeta(mergeRequestMetas([result.meta]));
       } catch (err: unknown) {
         console.error('Failed to fetch waterfall liquidation data', err);
         setError(err instanceof Error ? err.message : '获取数据失败');
@@ -187,7 +209,20 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
       style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
     >
       <div className="card-header" style={{ marginBottom: '0.5rem' }}>
-        <span className="card-title">模拟清算瀑布图 (多轮迭代)</span>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="card-title">模拟清算瀑布图 (多轮迭代)</span>
+            <ChartInfoButton title="清算瀑布图说明" items={explainItems} />
+          </div>
+          <ChartDataStatus meta={meta} scenarioLabel={`初始跌幅 ${committedInitialShock}%`} />
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'stretch' }}>
