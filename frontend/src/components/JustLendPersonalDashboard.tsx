@@ -7,6 +7,7 @@ import {
   Legend,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -674,7 +675,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
 
           <div className="justlend-bullet-shell">
             <div className="justlend-bullet-header">
-              <span>当前 LTV</span>
+              <span className="justlend-bullet-title">当前 LTV</span>
               <strong>{formatPercentRatio(data.ltv)}</strong>
             </div>
             <div className="justlend-bullet-track">
@@ -683,7 +684,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               <div className="justlend-bullet-zone justlend-bullet-zone-danger" />
               <div
                 className={`justlend-bullet-marker justlend-bullet-marker-current ${
-                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-up' : ''
+                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-left' : ''
                 }`}
                 style={{ left: `${Math.min(100, Math.max(0, ltvPercent))}%` }}
               >
@@ -691,7 +692,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               </div>
               <div
                 className={`justlend-bullet-marker justlend-bullet-marker-threshold ${
-                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-down' : ''
+                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-right' : ''
                 }`}
                 style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
               >
@@ -841,7 +842,12 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
           <div style={{ height: 280 }}>
             {borrowData.length ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={borrowData} layout="vertical" margin={{ left: 12, right: 16 }}>
+                <BarChart
+                  data={borrowData}
+                  layout="vertical"
+                  barCategoryGap="58%"
+                  margin={{ left: 12, right: 16, top: 6, bottom: 6 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis type="number" stroke="#64748b" tickFormatter={(value) => `${value}%`} />
                   <YAxis type="category" dataKey="name" stroke="#94a3b8" width={64} />
@@ -852,7 +858,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                       String(name ?? '债务占比'),
                     ]}
                   />
-                  <Bar dataKey="value" name="债务占比" radius={[0, 6, 6, 0]}>
+                  <Bar dataKey="value" name="债务占比" radius={[0, 6, 6, 0]} maxBarSize={22}>
                     {borrowData.map((entry, index) => (
                       <Cell key={entry.name} fill={borrowColors[index % borrowColors.length]} />
                     ))}
@@ -879,10 +885,11 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               <BarChart
                 data={bilateralData}
                 layout="vertical"
-                barCategoryGap="34%"
-                margin={{ top: 10, right: 16, left: 8, bottom: 0 }}
+                barCategoryGap="28%"
+                margin={{ top: 10, right: 20, left: 8, bottom: 4 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <ReferenceLine x={0} stroke="#475569" strokeOpacity={0.85} />
                 <XAxis
                   type="number"
                   stroke="#64748b"
@@ -892,6 +899,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 <YAxis type="category" dataKey="asset" stroke="#64748b" width={72} />
                 <Tooltip
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  cursor={{ fill: 'transparent' }}
                   formatter={(value: unknown, name: unknown) => [
                     formatUsdCompact(Math.abs(Number(value ?? 0))),
                     String(name),
@@ -902,15 +910,15 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                   dataKey="borrow"
                   name="借款价值"
                   fill="#f87171"
-                  radius={[6, 0, 0, 6]}
-                  maxBarSize={20}
+                  radius={[0, 6, 6, 0]}
+                  maxBarSize={18}
                 />
                 <Bar
                   dataKey="collateral"
                   name="抵押价值"
                   fill="#22c55e"
                   radius={[0, 6, 6, 0]}
-                  maxBarSize={20}
+                  maxBarSize={18}
                 />
               </BarChart>
             </ResponsiveContainer>

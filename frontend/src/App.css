@@ -689,6 +689,11 @@
   font-size: 0.9rem;
 }
 
+.justlend-bullet-title {
+  position: relative;
+  top: -0.7rem;
+}
+
 .justlend-bullet-track {
   position: relative;
   display: grid;
@@ -756,12 +761,12 @@
   color: #fca5a5;
 }
 
-.justlend-bullet-marker-stagger-up span {
-  top: -1.85rem;
+.justlend-bullet-marker-stagger-left span {
+  transform: translateX(-118%);
 }
 
-.justlend-bullet-marker-stagger-down span {
-  top: -0.6rem;
+.justlend-bullet-marker-stagger-right span {
+  transform: translateX(18%);
 }
 
 .justlend-bullet-footer {
