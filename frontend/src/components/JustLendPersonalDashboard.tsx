@@ -91,10 +91,6 @@ function formatUsd(value: string | number): string {
   })}`;
 }
 
-function formatUsdCompact(value: number): string {
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
-
 function formatUsdAxis(value: number): string {
   const absolute = Math.abs(value);
   return `$${Intl.NumberFormat(undefined, {
@@ -901,7 +897,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
                   cursor={{ fill: 'transparent' }}
                   formatter={(value: unknown, name: unknown) => [
-                    formatUsdCompact(Math.abs(Number(value ?? 0))),
+                    formatUsd(Math.abs(Number(value ?? 0))),
                     String(name),
                   ]}
                 />
