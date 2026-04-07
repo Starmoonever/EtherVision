@@ -37,6 +37,13 @@ interface ExposureItem {
   borrow: number;
 }
 
+interface RiskState {
+  label: string;
+  tone: 'safe' | 'watch' | 'danger' | 'neutral';
+  headline: string;
+  description: string;
+}
+
 const collateralColors = ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#eab308'];
 const borrowColors = ['#f87171', '#fb7185', '#f97316', '#fbbf24', '#ef4444', '#f43f5e'];
 
@@ -67,6 +74,15 @@ function toNum(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function ratioToPercent(value: string | number): number {
+  const num = toNum(value);
+  return num <= 1 ? num * 100 : num;
+}
+
 function formatUsd(value: string | number): string {
   return `$${toNum(value).toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -78,10 +94,16 @@ function formatUsdCompact(value: number): string {
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+function formatUsdAxis(value: number): string {
+  const absolute = Math.abs(value);
+  return `$${Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: absolute >= 1000 ? 1 : 0,
+  }).format(absolute)}`;
+}
+
 function formatPercentRatio(value: string | number): string {
-  const num = toNum(value);
-  const percent = num <= 1 ? num * 100 : num;
-  return `${percent.toFixed(2)}%`;
+  return `${ratioToPercent(value).toFixed(2)}%`;
 }
 
 function formatHealthFactor(value: string | number): string {
@@ -149,6 +171,115 @@ function buildExposureData(assets: JustLendPositionAsset[]): ExposureItem[] {
   );
 }
 
+function sumTopShare(items: AllocationItem[], count: number): number {
+  return items.slice(0, count).reduce((sum, item) => sum + item.value, 0);
+}
+
+function buildRiskState(
+  data: JustLendPositionResponse,
+  riskGap: number,
+  totalCollateralUsd: number,
+  totalDebtUsd: number,
+): RiskState {
+  const healthFactor = formatHealthFactor(data.health_factor);
+
+  if (totalDebtUsd <= 0) {
+    return {
+      label: '无借款风险',
+      tone: 'neutral',
+      headline: '当前账户没有活跃债务',
+      description: '仓位目前主要是抵押资产展示，不存在逼近清算线的借款压力。',
+    };
+  }
+
+  if (totalCollateralUsd <= 0) {
+    return {
+      label: '异常仓位',
+      tone: 'danger',
+      headline: '检测到债务但缺少抵押',
+      description: '当前返回结果不具备正常借贷结构，建议先回查后端数据源与地址状态。',
+    };
+  }
+
+  if (healthFactor === '∞') {
+    return {
+      label: '安全缓冲充足',
+      tone: 'safe',
+      headline: '健康因子显示为无穷大',
+      description: '当前账户对价格波动的容忍度较高，短期内没有明显清算压力。',
+    };
+  }
+
+  const hf = toNum(data.health_factor);
+  if (hf < 1.1 || riskGap < 5) {
+    return {
+      label: '高风险',
+      tone: 'danger',
+      headline: 'LTV 已经逼近清算阈值',
+      description: '需要尽快补充抵押或降低债务，否则价格波动会迅速压缩安全边际。',
+    };
+  }
+
+  if (hf < 1.5 || riskGap < 12) {
+    return {
+      label: '需重点观察',
+      tone: 'watch',
+      headline: '账户仍有缓冲，但已经进入敏感区',
+      description: '仓位还能承受有限波动，不过单一资产回撤或债务放大都会明显恶化风险。',
+    };
+  }
+
+  return {
+    label: '相对稳健',
+    tone: 'safe',
+    headline: `当前健康因子为 ${formatHealthFactor(data.health_factor)}`,
+    description: '账户离清算阈值仍有一定距离，建议继续关注资产集中度和借款扩张速度。',
+  };
+}
+
+function buildRiskScore(
+  data: JustLendPositionResponse,
+  riskGap: number,
+  totalCollateralUsd: number,
+  totalDebtUsd: number,
+  topCollateralShare: number,
+  topBorrowShare: number,
+): number {
+  if (totalDebtUsd <= 0) return 96;
+  if (totalCollateralUsd <= 0) return 8;
+
+  const raw = String(data.health_factor).trim().toLowerCase();
+  const healthFactor = toNum(data.health_factor);
+  const infiniteHealth =
+    raw === 'inf' || raw === 'infinity' || !Number.isFinite(healthFactor) || healthFactor >= 1e12;
+
+  const hfPenalty = infiniteHealth
+    ? 0
+    : clamp((1.4 - healthFactor) * 30, 0, 42) + clamp((2.2 - healthFactor) * 5, 0, 12);
+  const gapPenalty = clamp((12 - riskGap) * 3.2, 0, 36) + clamp((25 - riskGap) * 0.8, 0, 10);
+  const concentrationPenalty = clamp(
+    (Math.max(topCollateralShare, topBorrowShare) - 45) * 0.7,
+    0,
+    18,
+  );
+
+  return Math.round(clamp(96 - hfPenalty - gapPenalty - concentrationPenalty, 6, 99));
+}
+
+function riskScoreLabel(score: number): string {
+  if (score >= 85) return '稳健';
+  if (score >= 70) return '可控';
+  if (score >= 55) return '需关注';
+  return '高压';
+}
+
+function riskScoreTone(score: number): string {
+  if (score >= 85) return '#22c55e';
+  if (score >= 70) return '#38bdf8';
+  if (score >= 55) return '#f59e0b';
+  return '#ef4444';
+}
+
 export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboardProps) {
   const [data, setData] = useState<JustLendPositionResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -194,14 +325,6 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
   const borrowData = useMemo(() => summarizeAssets(data?.assets || [], 'borrow'), [data]);
   const exposureData = useMemo(() => buildExposureData(data?.assets || []), [data]);
 
-  const ltvPercent = data ? (toNum(data.ltv) <= 1 ? toNum(data.ltv) * 100 : toNum(data.ltv)) : 0;
-  const thresholdPercent = data
-    ? toNum(data.liquidation_threshold) <= 1
-      ? toNum(data.liquidation_threshold) * 100
-      : toNum(data.liquidation_threshold)
-    : 0;
-  const riskGap = Math.max(0, thresholdPercent - ltvPercent);
-
   if (loading) {
     return (
       <div
@@ -242,6 +365,45 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
     );
   }
 
+  const totalCollateralUsd = toNum(data.total_collateral_usd);
+  const totalDebtUsd = toNum(data.total_debt_usd);
+  const availableBorrowUsd = toNum(data.available_borrow_usd);
+  const ltvPercent = ratioToPercent(data.ltv);
+  const thresholdPercent = ratioToPercent(data.liquidation_threshold);
+  const riskGap = Math.max(0, thresholdPercent - ltvPercent);
+  const collateralCount = data.assets.filter((asset) => asset.side === 'collateral').length;
+  const borrowCount = data.assets.filter((asset) => asset.side === 'borrow').length;
+  const riskState = buildRiskState(data, riskGap, totalCollateralUsd, totalDebtUsd);
+  const topCollateral = collateralData[0];
+  const topBorrow = borrowData[0];
+  const topCollateralShare = topCollateral?.value ?? 0;
+  const topBorrowShare = topBorrow?.value ?? 0;
+  const collateralTop3Share = sumTopShare(collateralData, 3);
+  const borrowTop3Share = sumTopShare(borrowData, 3);
+  const riskScore = buildRiskScore(
+    data,
+    riskGap,
+    totalCollateralUsd,
+    totalDebtUsd,
+    topCollateralShare,
+    topBorrowShare,
+  );
+  const riskScoreColor = riskScoreTone(riskScore);
+  const capacityBase = totalDebtUsd + availableBorrowUsd;
+  const capacityUsedPct = capacityBase > 0 ? (totalDebtUsd / capacityBase) * 100 : 0;
+  const capacityRemainingPct = capacityBase > 0 ? (availableBorrowUsd / capacityBase) * 100 : 0;
+  const bilateralData = exposureData.slice(0, 8).map((item) => ({
+    asset: item.asset,
+    collateral: item.collateral,
+    borrow: item.borrow * -1,
+  }));
+  const bilateralDomainMax =
+    Math.max(
+      1,
+      ...bilateralData.map((item) => Math.max(Math.abs(item.collateral), Math.abs(item.borrow))),
+    ) * 1.15;
+  const bulletMarkersTooClose = Math.abs(thresholdPercent - ltvPercent) < 10;
+
   const summaryItems = [
     { label: '总抵押价值', value: formatUsd(data.total_collateral_usd), tone: 'green' as const },
     { label: '总债务价值', value: formatUsd(data.total_debt_usd), tone: 'red' as const },
@@ -255,9 +417,77 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
     },
   ];
 
+  const insightItems = [
+    {
+      label: '剩余安全边际',
+      value: `${riskGap.toFixed(2)}%`,
+      toneClass: 'blue',
+    },
+    {
+      label: '最大抵押集中度',
+      value: topCollateral ? `${topCollateral.name} ${topCollateral.value.toFixed(2)}%` : '--',
+      toneClass: 'green',
+    },
+    {
+      label: '最大债务集中度',
+      value: topBorrow ? `${topBorrow.name} ${topBorrow.value.toFixed(2)}%` : '--',
+      toneClass: 'red',
+    },
+    {
+      label: '仓位明细数量',
+      value: `${data.assets.length} 项`,
+      toneClass: 'blue',
+    },
+  ];
+  const concentrationRows = [
+    {
+      label: '最大抵押集中度',
+      percent: topCollateralShare,
+      hint: topCollateral ? `${topCollateral.name} 为第一大抵押资产` : '暂无抵押资产',
+      tone: 'green',
+    },
+    {
+      label: '最大债务集中度',
+      percent: topBorrowShare,
+      hint: topBorrow ? `${topBorrow.name} 为第一大债务资产` : '暂无债务资产',
+      tone: 'red',
+    },
+    {
+      label: '抵押前 3 占比',
+      percent: collateralTop3Share,
+      hint: `${collateralCount} 个抵押仓位`,
+      tone: 'blue',
+    },
+    {
+      label: '债务前 3 占比',
+      percent: borrowTop3Share,
+      hint: `${borrowCount} 个债务仓位`,
+      tone: 'blue',
+    },
+  ];
+
+  const riskToneClass =
+    riskState.tone === 'safe'
+      ? 'justlend-risk-safe'
+      : riskState.tone === 'watch'
+        ? 'justlend-risk-watch'
+        : riskState.tone === 'danger'
+          ? 'justlend-risk-danger'
+          : 'justlend-risk-neutral';
+  const overviewMetaItems = [
+    { label: '地址', value: data.address, mono: true },
+    { label: '快照时间', value: formatDateTime(data.snapshot_at) },
+    { label: '底层数据时间', value: formatDateTime(data.block_timestamp) },
+    { label: '数据来源', value: data.data_source },
+  ];
+  const overviewCountItems = [
+    { label: '抵押资产数', value: `${collateralCount}` },
+    { label: '债务资产数', value: `${borrowCount}` },
+  ];
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div className="card" style={{ marginBottom: 0 }}>
+    <div className="justlend-dashboard">
+      <div className="card justlend-overview-card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span className="card-title">JustLend 个人账户分析</span>
@@ -266,51 +496,44 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
             <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
               {data.protocol}
             </span>
+            <span className={`badge ${riskToneClass}`}>{riskState.label}</span>
           </div>
           <ChartDataStatus meta={meta} />
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            justifyContent: 'flex-start',
-          }}
-        >
-          {[
-            { label: '地址', value: data.address, mono: true },
-            { label: '快照时间', value: formatDateTime(data.snapshot_at) },
-            { label: '底层数据时间', value: formatDateTime(data.block_timestamp) },
-            { label: '数据来源', value: data.data_source },
-          ].map((item) => (
-            <div
-              key={item.label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                background: '#0f172a',
-                border: '1px solid #1e293b',
-                borderRadius: '999px',
-                padding: '0.22rem 0.6rem',
-                fontSize: '0.72rem',
-                lineHeight: 1.2,
-              }}
-            >
-              <span style={{ color: '#64748b' }}>{item.label}</span>
-              <span
-                style={{
-                  color: '#cbd5e1',
-                  fontWeight: 600,
-                  fontFamily: item.mono ? "'Courier New', monospace" : undefined,
-                }}
-              >
-                {item.value}
-              </span>
+        <div className="justlend-overview-grid">
+          <div className="justlend-overview-copy">
+            <div className="justlend-market-kicker">Position Overview</div>
+            <h2 className="justlend-market-title">{riskState.headline}</h2>
+            <p className="justlend-market-copy">{riskState.description}</p>
+          </div>
+
+          <div className="justlend-overview-side">
+            <div className="justlend-overview-pills">
+              {overviewMetaItems.map((item) => (
+                <div key={item.label} className="justlend-overview-pill">
+                  <span className="justlend-overview-pill-label">{item.label}</span>
+                  <span
+                    className={`justlend-overview-pill-value ${item.mono ? 'mono' : ''}`}
+                    title={item.value}
+                  >
+                    {item.value}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+
+            <div className="justlend-overview-tags">
+              {overviewCountItems.map((item) => (
+                <div key={item.label} className="justlend-overview-tag">
+                  <span className="justlend-overview-tag-label">{item.label}</span>
+                  <span className="justlend-overview-tag-value" title={item.value}>
+                    {item.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -323,13 +546,226 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         ))}
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: '1rem',
-        }}
-      >
+      <div className="justlend-analytics-grid">
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <span className="card-title">风险评分</span>
+            <span className={`badge ${riskToneClass}`}>{riskScoreLabel(riskScore)}</span>
+          </div>
+          <div className="justlend-score-layout">
+            <div
+              className="justlend-score-ring"
+              style={{
+                background: `conic-gradient(${riskScoreColor} 0 ${riskScore}%, #1e293b ${riskScore}% 100%)`,
+              }}
+            >
+              <div className="justlend-score-ring-inner">
+                <strong>{riskScore}</strong>
+                <span>Score</span>
+              </div>
+            </div>
+            <div className="justlend-score-copy">
+              <div className="justlend-market-kicker">Composite Risk</div>
+              <div className="justlend-score-headline">
+                {riskScoreLabel(riskScore)}，核心受健康因子、安全边际和资产集中度共同影响
+              </div>
+              <div className="justlend-market-copy">
+                这不是协议原生指标，而是前端基于现有 JustLend
+                数据推导出来的风险摘要，目的是帮你更快判断账户是否需要进一步排查。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <span className="card-title">借款容量</span>
+            <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
+              Capacity
+            </span>
+          </div>
+          <div className="justlend-capacity-layout">
+            <div className="justlend-capacity-bar">
+              <div
+                className="justlend-capacity-segment justlend-capacity-used"
+                style={{ width: `${clamp(capacityUsedPct, 0, 100)}%` }}
+              />
+              <div
+                className="justlend-capacity-segment justlend-capacity-available"
+                style={{ width: `${clamp(capacityRemainingPct, 0, 100)}%` }}
+              />
+            </div>
+            <div className="justlend-capacity-legend">
+              <div className="justlend-capacity-item">
+                <span className="justlend-risk-dot" style={{ background: '#f87171' }} />
+                <span>已使用额度</span>
+                <strong>{formatUsd(totalDebtUsd)}</strong>
+              </div>
+              <div className="justlend-capacity-item">
+                <span className="justlend-risk-dot" style={{ background: '#38bdf8' }} />
+                <span>剩余可借额度</span>
+                <strong>{formatUsd(availableBorrowUsd)}</strong>
+              </div>
+              <div className="justlend-capacity-item">
+                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
+                <span>已使用比例</span>
+                <strong>{capacityUsedPct.toFixed(2)}%</strong>
+              </div>
+            </div>
+            <div className="justlend-caption">
+              {capacityBase > 0
+                ? '容量条展示当前已使用借款额度与剩余可借空间的相对关系，越偏向红色，说明账户越接近融资上限。'
+                : '当前没有形成有效的借款容量基数，通常意味着账户还未发生借款，或后端没有返回可借空间。'}
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <span className="card-title">资产集中度</span>
+            <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
+              Concentration
+            </span>
+          </div>
+          <div className="justlend-concentration-list">
+            {concentrationRows.map((item) => (
+              <div key={item.label} className="justlend-concentration-item">
+                <div className="justlend-concentration-head">
+                  <span>{item.label}</span>
+                  <strong
+                    className={
+                      item.tone === 'red' ? 'red-text' : item.tone === 'green' ? 'green-text' : ''
+                    }
+                  >
+                    {item.percent.toFixed(2)}%
+                  </strong>
+                </div>
+                <div className="justlend-concentration-bar">
+                  <div
+                    className={`justlend-concentration-fill justlend-concentration-fill-${item.tone}`}
+                    style={{ width: `${clamp(item.percent, 0, 100)}%` }}
+                  />
+                </div>
+                <div className="justlend-caption">{item.hint}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="justlend-risk-layout">
+        <div className="card justlend-risk-hero" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <span className="card-title">风险判断</span>
+            <span className={`badge ${riskToneClass}`}>{riskState.label}</span>
+          </div>
+
+          <div className="justlend-risk-hero-top">
+            <div>
+              <div className="justlend-market-kicker">Health Factor</div>
+              <div className="justlend-risk-health">{formatHealthFactor(data.health_factor)}</div>
+            </div>
+            <div className="justlend-risk-health-copy">
+              账户当前总抵押为 <strong>{formatUsd(totalCollateralUsd)}</strong>，总债务为{' '}
+              <strong>{formatUsd(totalDebtUsd)}</strong>。如果借款使用率继续向清算阈值靠近，
+              仓位的抗波动空间会迅速压缩。
+            </div>
+          </div>
+
+          <div className="justlend-bullet-shell">
+            <div className="justlend-bullet-header">
+              <span>当前 LTV</span>
+              <strong>{formatPercentRatio(data.ltv)}</strong>
+            </div>
+            <div className="justlend-bullet-track">
+              <div className="justlend-bullet-zone justlend-bullet-zone-safe" />
+              <div className="justlend-bullet-zone justlend-bullet-zone-watch" />
+              <div className="justlend-bullet-zone justlend-bullet-zone-danger" />
+              <div
+                className={`justlend-bullet-marker justlend-bullet-marker-current ${
+                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-up' : ''
+                }`}
+                style={{ left: `${Math.min(100, Math.max(0, ltvPercent))}%` }}
+              >
+                <span>当前</span>
+              </div>
+              <div
+                className={`justlend-bullet-marker justlend-bullet-marker-threshold ${
+                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-down' : ''
+                }`}
+                style={{ left: `${Math.min(100, Math.max(0, thresholdPercent))}%` }}
+              >
+                <span>阈值</span>
+              </div>
+            </div>
+            <div className="justlend-bullet-footer">
+              <span>安全区</span>
+              <span>观察区</span>
+              <span>敏感区</span>
+            </div>
+          </div>
+
+          <div className="justlend-risk-markers">
+            <div className="justlend-risk-marker">
+              <span className="justlend-risk-dot" style={{ background: '#38bdf8' }} />
+              <span>当前借款使用率</span>
+              <strong>{formatPercentRatio(data.ltv)}</strong>
+            </div>
+            <div className="justlend-risk-marker">
+              <span className="justlend-risk-dot" style={{ background: '#ef4444' }} />
+              <span>清算阈值</span>
+              <strong>{formatPercentRatio(data.liquidation_threshold)}</strong>
+            </div>
+            <div className="justlend-risk-marker">
+              <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
+              <span>剩余安全边际</span>
+              <strong>{riskGap.toFixed(2)}%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="justlend-risk-side">
+          <div className="justlend-insight-grid">
+            {insightItems.map((item) => (
+              <div key={item.label} className="metric-box">
+                <span className="metric-label">{item.label}</span>
+                <span className={`metric-value ${item.toneClass}`}>{item.value}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="justlend-banner justlend-banner-soft">
+            <div className="justlend-banner-title">风险解读</div>
+            <div className="justlend-banner-copy">
+              当前可借空间为 <strong>{formatUsd(availableBorrowUsd)}</strong>。抵押侧最集中的资产是{' '}
+              <strong>{topCollateral?.name ?? '暂无'}</strong>，债务侧最集中的资产是{' '}
+              <strong>{topBorrow?.name ?? '暂无'}</strong>
+              。这两个集中点会决定账户对局部价格波动的敏感度。
+            </div>
+          </div>
+
+          {totalDebtUsd <= 0 ? (
+            <div className="justlend-banner justlend-banner-soft">
+              <div className="justlend-banner-title">当前无活跃借款</div>
+              <div className="justlend-banner-copy">
+                页面仍会展示抵押结构，但没有债务时，健康因子和 LTV
+                的风险解释更偏向“仓位快照”而不是“清算压力”。
+              </div>
+            </div>
+          ) : null}
+
+          {totalCollateralUsd <= 0 && totalDebtUsd > 0 ? (
+            <div className="justlend-banner justlend-banner-warn">
+              <div className="justlend-banner-title">检测到异常结构</div>
+              <div className="justlend-banner-copy">
+                该地址返回了债务但没有抵押，前端会继续展示明细，但这通常意味着数据尚未完整同步。
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="justlend-structure-grid">
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">抵押资产构成</span>
@@ -381,8 +817,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                       </div>
                       <div className="justlend-allocation-meta">
                         <span className="mono">
-                          数量:{' '}
-                          {item.amount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                          数量 {item.amount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
                         </span>
                         <span className="mono">{formatUsd(item.valueUsd)}</span>
                       </div>
@@ -431,87 +866,57 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.25fr) minmax(300px, 0.85fr)',
-          gap: '1rem',
-        }}
-      >
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div className="card-header">
-            <span className="card-title">抵押 / 借款净结构</span>
-            <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
-              Exposure
-            </span>
-          </div>
-          <div style={{ height: 320 }}>
-            {exposureData.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={exposureData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="asset" stroke="#94a3b8" />
-                  <YAxis
-                    stroke="#64748b"
-                    tickFormatter={(value) => `$${(Number(value) / 1000).toFixed(0)}k`}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                    formatter={(value: unknown, name: unknown) => [
-                      formatUsdCompact(Number(value ?? 0)),
-                      String(name),
-                    ]}
-                  />
-                  <Legend />
-                  <Bar dataKey="collateral" name="抵押价值" fill="#22c55e" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="borrow" name="借款价值" fill="#f87171" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="justlend-empty-state">暂无可展示的资产结构</div>
-            )}
-          </div>
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div className="card-header">
+          <span className="card-title">资产双侧对照</span>
+          <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
+            Bilateral
+          </span>
         </div>
-
-        <div className="card" style={{ marginBottom: 0 }}>
-          <div className="card-header">
-            <span className="card-title">风险缓冲</span>
-          </div>
-          <div className="justlend-risk-stack">
-            <div className="justlend-progress-header">
-              <span>当前 LTV</span>
-              <span>{formatPercentRatio(data.ltv)}</span>
-            </div>
-            <div className="justlend-progress-track">
-              <div
-                className="justlend-progress-fill"
-                style={{ width: `${Math.min(100, ltvPercent)}%` }}
-              />
-            </div>
-            <div className="justlend-risk-markers">
-              <div className="justlend-risk-marker">
-                <span className="justlend-risk-dot" style={{ background: '#38bdf8' }} />
-                <span>当前借款使用率</span>
-                <strong>{formatPercentRatio(data.ltv)}</strong>
-              </div>
-              <div className="justlend-risk-marker">
-                <span className="justlend-risk-dot" style={{ background: '#ef4444' }} />
-                <span>清算阈值</span>
-                <strong>{formatPercentRatio(data.liquidation_threshold)}</strong>
-              </div>
-              <div className="justlend-risk-marker">
-                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
-                <span>剩余安全边际</span>
-                <strong>{riskGap.toFixed(2)}%</strong>
-              </div>
-            </div>
-            <div className="justlend-banner justlend-banner-soft">
-              <div className="justlend-banner-copy">
-                当前账户健康因子为 <strong>{formatHealthFactor(data.health_factor)}</strong>。如果
-                LTV 继续向清算阈值靠近，仓位的价格波动容忍度会快速下降。
-              </div>
-            </div>
-          </div>
+        <div style={{ height: 320 }}>
+          {bilateralData.length ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={bilateralData}
+                layout="vertical"
+                barCategoryGap="34%"
+                margin={{ top: 10, right: 16, left: 8, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis
+                  type="number"
+                  stroke="#64748b"
+                  domain={[-bilateralDomainMax, bilateralDomainMax]}
+                  tickFormatter={(value) => formatUsdAxis(Number(value))}
+                />
+                <YAxis type="category" dataKey="asset" stroke="#64748b" width={72} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  formatter={(value: unknown, name: unknown) => [
+                    formatUsdCompact(Math.abs(Number(value ?? 0))),
+                    String(name),
+                  ]}
+                />
+                <Legend />
+                <Bar
+                  dataKey="borrow"
+                  name="借款价值"
+                  fill="#f87171"
+                  radius={[6, 0, 0, 6]}
+                  maxBarSize={20}
+                />
+                <Bar
+                  dataKey="collateral"
+                  name="抵押价值"
+                  fill="#22c55e"
+                  radius={[0, 6, 6, 0]}
+                  maxBarSize={20}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="justlend-empty-state">暂无可展示的资产结构</div>
+          )}
         </div>
       </div>
 
