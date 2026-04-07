@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AddressInput } from './components/AddressInput';
 import { CompoundPersonalRiskDashboard } from './components/CompoundPersonalRiskDashboard';
+import { JustLendMarketDashboard } from './components/JustLendMarketDashboard';
 import { JustLendPersonalDashboard } from './components/JustLendPersonalDashboard';
 import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
@@ -523,7 +524,7 @@ export default function App() {
     <>
       <div className="hero">
         <h1 className="hero-title">JustLend 个人账户分析</h1>
-        <p className="hero-sub">TRON 链账户仓位框架页与地址识别</p>
+        <p className="hero-sub">TRON 链当前仓位、风险缓冲与资产结构分析</p>
       </div>
 
       <AddressInput
@@ -537,9 +538,7 @@ export default function App() {
 
       {justLendAddress && (
         <div className="results-container" style={{ marginTop: '2rem' }}>
-          <div style={resultPanelStyle}>
-            <JustLendPersonalDashboard address={justLendAddress} />
-          </div>
+          <JustLendPersonalDashboard address={justLendAddress} />
         </div>
       )}
     </>
@@ -581,21 +580,10 @@ export default function App() {
     <>
       <div className="hero">
         <h1 className="hero-title">JustLend 宏观市场评估</h1>
-        <p className="hero-sub">等待 TRON 市场级接口与历史序列接入</p>
+        <p className="hero-sub">先搭好分析框架，等待 TRON 市场级接口与历史序列接入</p>
       </div>
 
-      <div className="card" style={{ maxWidth: '920px', margin: '0 auto' }}>
-        <div className="card-header">
-          <span className="card-title">模块状态</span>
-          <span className="badge" style={{ background: '#172554', color: '#bfdbfe' }}>
-            Not Ready
-          </span>
-        </div>
-        <div style={{ color: '#94a3b8', lineHeight: 1.8 }}>
-          当前前端先开放 JustLend 的个人账户分析框架。宏观市场评估后续需要后端补充 market
-          list、历史时序、清算模拟等接口后再接入。
-        </div>
-      </div>
+      <JustLendMarketDashboard />
     </>
   );
 
