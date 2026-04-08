@@ -1,0 +1,1 @@
+"""Morpho protocol scaffold package."""
