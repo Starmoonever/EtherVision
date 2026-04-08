@@ -534,7 +534,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         </div>
       </div>
 
-      <div className="summary-grid">
+      <div className="summary-grid justlend-summary-grid">
         {summaryItems.map((item) => (
           <div key={item.label} className="metric-box">
             <span className="metric-label">{item.label}</span>
@@ -599,12 +599,12 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 <strong>{formatUsd(totalDebtUsd)}</strong>
               </div>
               <div className="justlend-capacity-item">
-                <span className="justlend-risk-dot" style={{ background: '#38bdf8' }} />
+                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
                 <span>剩余可借额度</span>
                 <strong>{formatUsd(availableBorrowUsd)}</strong>
               </div>
               <div className="justlend-capacity-item">
-                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
+                <span className="justlend-risk-dot" style={{ background: '#94a3b8' }} />
                 <span>已使用比例</span>
                 <strong>{capacityUsedPct.toFixed(2)}%</strong>
               </div>
@@ -675,9 +675,6 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               <strong>{formatPercentRatio(data.ltv)}</strong>
             </div>
             <div className="justlend-bullet-track">
-              <div className="justlend-bullet-zone justlend-bullet-zone-safe" />
-              <div className="justlend-bullet-zone justlend-bullet-zone-watch" />
-              <div className="justlend-bullet-zone justlend-bullet-zone-danger" />
               <div
                 className={`justlend-bullet-marker justlend-bullet-marker-current ${
                   bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-left' : ''
@@ -782,7 +779,9 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                         nameKey="name"
                         innerRadius={58}
                         outerRadius={92}
-                        paddingAngle={2}
+                        paddingAngle={0.8}
+                        stroke="#151c2c"
+                        strokeWidth={1}
                       >
                         {collateralData.map((entry, index) => (
                           <Cell
@@ -849,12 +848,20 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                   <YAxis type="category" dataKey="name" stroke="#94a3b8" width={64} />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                    itemStyle={{ color: '#22c55e' }}
+                    cursor={{ fill: 'transparent' }}
                     formatter={(value: unknown, name: unknown) => [
                       `${Number(value ?? 0).toFixed(2)}%`,
                       String(name ?? '债务占比'),
                     ]}
                   />
-                  <Bar dataKey="value" name="债务占比" radius={[0, 6, 6, 0]} maxBarSize={22}>
+                  <Bar
+                    dataKey="value"
+                    name="债务占比"
+                    radius={[0, 6, 6, 0]}
+                    maxBarSize={22}
+                    activeBar={false}
+                  >
                     {borrowData.map((entry, index) => (
                       <Cell key={entry.name} fill={borrowColors[index % borrowColors.length]} />
                     ))}
@@ -881,7 +888,8 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               <BarChart
                 data={bilateralData}
                 layout="vertical"
-                barCategoryGap="28%"
+                stackOffset="sign"
+                barCategoryGap="40%"
                 margin={{ top: 10, right: 20, left: 8, bottom: 4 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -905,17 +913,25 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 <Bar
                   dataKey="borrow"
                   name="借款价值"
-                  fill="#f87171"
-                  radius={[0, 6, 6, 0]}
-                  maxBarSize={18}
-                />
+                  fill="#ef4444"
+                  stackId="bilateral"
+                  barSize={18}
+                >
+                  {bilateralData.map((entry) => (
+                    <Cell key={`borrow-${entry.asset}`} fill="#ef4444" />
+                  ))}
+                </Bar>
                 <Bar
                   dataKey="collateral"
                   name="抵押价值"
                   fill="#22c55e"
-                  radius={[0, 6, 6, 0]}
-                  maxBarSize={18}
-                />
+                  stackId="bilateral"
+                  barSize={18}
+                >
+                  {bilateralData.map((entry) => (
+                    <Cell key={`collateral-${entry.asset}`} fill="#22c55e" />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (
