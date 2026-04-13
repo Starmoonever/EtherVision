@@ -200,7 +200,7 @@
   transition: background 0.2s;
 }
 .search-btn:hover:not(:disabled) {
-  background: #6d28d9;
+  background: #7c3aed;
 }
 .search-btn:disabled {
   opacity: 0.5;
@@ -286,10 +286,23 @@
   font-weight: 700;
   color: #cbd5e1;
 }
+.morpho-section-title {
+  display: block;
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: 0.01em;
+}
+.morpho-section-subtitle {
+  margin: 0.35rem 0 0;
+  color: #93a4bf;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
 .address-badge {
   font-family: monospace;
   font-size: 0.8rem;
-  background: #0f172a;
+  background: #90949d;
   color: #94a3b8;
   padding: 0.2rem 0.6rem;
   border-radius: 999px;
@@ -352,6 +365,15 @@
 }
 .metric-value.blue {
   color: #60a5fa;
+}
+.morpho-metric-strong {
+  font-size: 1.38rem;
+  color: #eef6ff;
+}
+.morpho-metric-hero {
+  font-size: 1.95rem;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
 }
 
 /* ── Positions ───────────────────────────────────────────────────────── */
@@ -426,6 +448,9 @@
 }
 .red-text {
   color: #f87171;
+}
+.blue-text {
+  color: #60a5fa;
 }
 .green-text {
   color: #4ade80;
@@ -527,6 +552,93 @@
   gap: 1rem;
 }
 
+.morpho-panel-card,
+.morpho-emphasis-card,
+.morpho-detail-card {
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(21, 28, 44, 0.98));
+  border-color: #243247;
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.24);
+}
+
+.morpho-overview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.morpho-overview-title {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.morpho-overview-subtitle {
+  margin: 0;
+  max-width: 620px;
+  color: #93a4bf;
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.morpho-overview-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+}
+
+.morpho-overview-fact {
+  background: rgba(8, 15, 29, 0.78);
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: 14px;
+  padding: 1rem 1.05rem;
+}
+
+.morpho-overview-fact-label {
+  display: block;
+  color: #7f90ab;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.4rem;
+}
+
+.morpho-overview-fact strong {
+  font-size: 1.45rem;
+  line-height: 1.15;
+  color: #f8fafc;
+}
+
+.morpho-keyline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.7);
+}
+
+.morpho-keyline-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.morpho-keyline-item span {
+  color: #7f90ab;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.morpho-keyline-item strong {
+  color: #f8fafc;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
 .justlend-overview-card,
 .justlend-market-hero {
   background:
@@ -537,7 +649,7 @@
 .justlend-overview-grid,
 .justlend-market-hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.8fr);
   gap: 1rem;
   align-items: start;
   margin-bottom: 1rem;
@@ -554,6 +666,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .justlend-overview-pills {
@@ -1051,6 +1164,41 @@
   line-height: 1.75;
 }
 
+.morpho-detail-card .justlend-banner-copy,
+.morpho-emphasis-card .metric-label,
+.morpho-detail-card .empty-text {
+  color: #a8b7cf;
+}
+
+.morpho-detail-card .card-header,
+.morpho-emphasis-card .card-header {
+  align-items: flex-start;
+}
+
+.morpho-detail-card .token-symbol {
+  font-size: 1rem;
+  color: #f8fafc;
+}
+
+.morpho-table th {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  padding-bottom: 0.8rem;
+}
+
+.morpho-table td {
+  color: #dbe7f5;
+  font-size: 0.95rem;
+  padding-top: 0.8rem;
+  padding-bottom: 0.8rem;
+}
+
+.morpho-table td.bold {
+  font-size: 1rem;
+  color: #f8fafc;
+}
+
 .justlend-caption {
   color: #64748b;
   font-size: 0.82rem;
@@ -1198,7 +1346,8 @@
   .justlend-score-layout,
   .justlend-overview-tags,
   .justlend-insight-grid,
-  .justlend-market-summary-grid {
+  .justlend-market-summary-grid,
+  .morpho-keyline {
     grid-template-columns: 1fr;
   }
 

@@ -3,12 +3,15 @@ import { AddressInput } from './components/AddressInput';
 import { CompoundPersonalRiskDashboard } from './components/CompoundPersonalRiskDashboard';
 import { JustLendMarketDashboard } from './components/JustLendMarketDashboard';
 import { JustLendPersonalDashboard } from './components/JustLendPersonalDashboard';
+import { MorphoPersonalDashboard } from './components/MorphoPersonalDashboard';
 import { PositionTable } from './components/PositionTable';
 import { SummaryCard } from './components/SummaryCard';
 import { fetchUserPosition } from './api';
 import type { BorrowPosition, UserPosition } from './api';
 import { fetchCompoundMarkets, fetchCompoundUserPosition } from './api/compound';
 import type { CompoundMarket, CompoundUserPositionItem } from './api/compound';
+import { fetchMorphoPosition } from './api/morpho';
+import type { MorphoPositionResponse } from './api/morpho';
 import './App.css';
 
 const MarketAssessment = lazy(() =>
@@ -39,10 +42,17 @@ interface CompoundVersionState {
   notFound: boolean;
 }
 
+interface MorphoState {
+  data: MorphoPositionResponse | null;
+  loading: boolean;
+  notFound: boolean;
+}
+
 type AaveCacheEntry = { kind: 'data'; data: UserPosition | BorrowPosition } | { kind: 'not_found' };
 type CompoundCacheEntry =
   | { kind: 'data'; data: CompoundUserPositionItem[] }
   | { kind: 'not_found' };
+type MorphoCacheEntry = { kind: 'data'; data: MorphoPositionResponse } | { kind: 'not_found' };
 
 const COMPOUND_V2_PERSONAL_MARKETS = new Set(['ceth', 'cwbtc', 'cusdt', 'cdai']);
 
@@ -65,10 +75,23 @@ const emptyCompoundState = (): CompoundVersionState => ({
   loading: false,
   notFound: false,
 });
+const emptyMorphoState = (): MorphoState => ({
+  data: null,
+  loading: false,
+  notFound: false,
+});
 const aavePositionCache = new Map<string, AaveCacheEntry>();
 const compoundPositionCache = new Map<string, CompoundCacheEntry>();
+const morphoPositionCache = new Map<string, MorphoCacheEntry>();
 const compoundCacheKey = (address: string, market: string, version: string) =>
   `${version}:${address.toLowerCase()}:${market.toLowerCase()}`;
+const morphoCacheKey = (address: string, marketId: string, protocol: string) =>
+  `${protocol}:${marketId.toLowerCase()}:${address.toLowerCase()}`;
+
+// Morpho 的 market id 是 bytes32 hex，个人页搜索前先在前端做基础校验。
+function isBytes32Hex(value: string): boolean {
+  return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
+}
 
 const resultPanelStyle = {
   border: '1px solid #334155',
@@ -97,7 +120,7 @@ function ChartFallback({ minHeight = '240px' }: { minHeight?: string }) {
 }
 
 export default function App() {
-  const [protocol, setProtocol] = useState<'aave' | 'compound' | 'justlend'>('aave');
+  const [protocol, setProtocol] = useState<'aave' | 'compound' | 'justlend' | 'morpho'>('aave');
   const [activeTab, setActiveTab] = useState<'personal' | 'market'>('personal');
   const [error, setError] = useState('');
 
@@ -114,6 +137,10 @@ export default function App() {
   const [compoundAddress, setCompoundAddress] = useState('');
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
   const [justLendAddress, setJustLendAddress] = useState('');
+  const [morphoAddress, setMorphoAddress] = useState('');
+  const [morphoMarketInput, setMorphoMarketInput] = useState('');
+  const [morphoQueriedMarketId, setMorphoQueriedMarketId] = useState('');
+  const [morphoState, setMorphoState] = useState<MorphoState>(emptyMorphoState());
   const activeCompoundMarketsVersion = activeTab === 'personal' ? personalVersion : marketVersion;
   const visibleCompoundMarkets = getVisibleCompoundMarkets(
     activeTab,
@@ -128,6 +155,7 @@ export default function App() {
       : (visibleCompoundMarkets.find((item) => item.address === compoundMarket)?.symbol ??
         compoundMarket);
 
+  // 统一搜索入口：Morpho 额外依赖 market id，所以在这里做协议分发。
   const handleSearch = (address: string) => {
     setError('');
 
@@ -135,6 +163,18 @@ export default function App() {
       setQueriedAddress(address);
     } else if (protocol === 'compound') {
       setCompoundAddress(address);
+    } else if (protocol === 'morpho') {
+      const marketId = morphoMarketInput.trim();
+      if (!marketId) {
+        setError('请输入 Morpho market id');
+        return;
+      }
+      if (!isBytes32Hex(marketId)) {
+        setError('Morpho market id 必须是 0x 开头的 32 字节十六进制字符串');
+        return;
+      }
+      setMorphoAddress(address);
+      setMorphoQueriedMarketId(marketId);
     } else {
       setJustLendAddress(address);
     }
@@ -148,6 +188,10 @@ export default function App() {
   useEffect(() => {
     setCompoundState(emptyCompoundState());
   }, [compoundAddress, compoundMarket]);
+
+  useEffect(() => {
+    setMorphoState(emptyMorphoState());
+  }, [morphoAddress, morphoQueriedMarketId]);
 
   useEffect(() => {
     if (protocol !== 'compound') {
@@ -311,6 +355,75 @@ export default function App() {
     loadCompound();
   }, [activeTab, compoundAddress, compoundMarket, compoundMarkets, personalVersion, protocol]);
 
+  // Morpho 当前只接入个人页单市场查询，缓存 key 由 address + market id 组成。
+  useEffect(() => {
+    if (
+      !morphoAddress ||
+      !morphoQueriedMarketId ||
+      protocol !== 'morpho' ||
+      activeTab !== 'personal'
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadMorpho = async (force: boolean = false) => {
+      if (!force) {
+        setError('');
+      }
+
+      const cacheKey = morphoCacheKey(morphoAddress, morphoQueriedMarketId, 'blue');
+      const cached = morphoPositionCache.get(cacheKey);
+      if (!force && cached) {
+        if (cached.kind === 'not_found') {
+          if (!cancelled) {
+            setMorphoState({ data: null, loading: false, notFound: true });
+          }
+          return;
+        }
+        if (!cancelled) {
+          setMorphoState({ data: cached.data, loading: false, notFound: false });
+        }
+        return;
+      }
+
+      if (!force) {
+        setMorphoState((prev) => ({ ...prev, loading: true, notFound: false }));
+      }
+      try {
+        const data = await fetchMorphoPosition(morphoAddress, morphoQueriedMarketId, 'blue', {
+          force,
+        });
+        morphoPositionCache.set(cacheKey, { kind: 'data', data });
+        if (!cancelled) {
+          setMorphoState({ data, loading: false, notFound: false });
+        }
+      } catch (loadError) {
+        if (loadError instanceof Error && loadError.message.includes('404')) {
+          morphoPositionCache.set(cacheKey, { kind: 'not_found' });
+          if (!cancelled) {
+            setMorphoState({ data: null, loading: false, notFound: true });
+          }
+        } else {
+          if (!cancelled) {
+            setMorphoState((prev) => ({ ...prev, loading: false }));
+          }
+          console.error(loadError);
+          if (!cancelled) {
+            setError('无法加载 Morpho 仓位数据');
+          }
+        }
+      }
+    };
+
+    void loadMorpho(false);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, morphoAddress, morphoQueriedMarketId, protocol]);
+
   const renderProtocolSwitch = () => (
     <div className="switch-group">
       <button
@@ -326,6 +439,13 @@ export default function App() {
         type="button"
       >
         Compound
+      </button>
+      <button
+        onClick={() => setProtocol('morpho')}
+        className={`switch-btn ${protocol === 'morpho' ? 'active' : ''}`}
+        type="button"
+      >
+        Morpho
       </button>
       <button
         onClick={() => setProtocol('justlend')}
@@ -544,6 +664,53 @@ export default function App() {
     </>
   );
 
+  // Morpho 在通用地址输入框上方单独追加 market id 输入框，避免侵入现有 AddressInput。
+  const renderMorphoPersonal = () => (
+    <>
+      <div className="hero">
+        <h1 className="hero-title">Morpho 个人账户分析</h1>
+        <p className="hero-sub">Morpho Blue 单市场仓位、借款边际与抵押结构分析</p>
+      </div>
+
+      <div className="input-form" style={{ marginBottom: '1rem' }}>
+        <div className="input-row">
+          <input
+            type="text"
+            value={morphoMarketInput}
+            onChange={(e) => {
+              setMorphoMarketInput(e.target.value);
+              setError('');
+            }}
+            placeholder="输入 Morpho market id (0x... bytes32)"
+            className="address-input"
+            spellCheck={false}
+          />
+        </div>
+      </div>
+
+      <AddressInput
+        onSearch={handleSearch}
+        loading={morphoState.loading}
+        historyKey="search_history_morpho"
+        placeholder="输入 Morpho 钱包地址 (0x...)"
+      />
+      {renderError()}
+
+      {morphoAddress && morphoQueriedMarketId && (
+        <div className="results-container" style={{ marginTop: '2rem' }}>
+          <div style={resultPanelStyle}>
+            <MorphoPersonalDashboard
+              address={morphoAddress}
+              marketId={morphoQueriedMarketId}
+              protocol="blue"
+              {...morphoState}
+            />
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   const renderAaveMarket = () => (
     <>
       <div className="hero">
@@ -587,6 +754,28 @@ export default function App() {
     </>
   );
 
+  const renderMorphoMarket = () => (
+    <>
+      <div className="hero">
+        <h1 className="hero-title">Morpho 宏观市场评估</h1>
+        <p className="hero-sub">市场级接口尚未接入，当前先支持单 market id 的个人仓位查询</p>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">接入状态</span>
+          <span className="badge" style={{ background: '#1e293b', color: '#7dd3fc' }}>
+            Morpho Blue
+          </span>
+        </div>
+        <p className="empty-text" style={{ margin: 0 }}>
+          当前已接入个人页 `address + market id` 查询流程。等你提供 `markets`、`market state`、
+          `replay` 或 `liquidation` 接口后，这里可以继续扩成完整市场分析页。
+        </p>
+      </div>
+    </>
+  );
+
   return (
     <div className="app">
       <header className="app-header">
@@ -609,12 +798,16 @@ export default function App() {
             ? renderAavePersonal()
             : protocol === 'compound'
               ? renderCompoundPersonal()
-              : renderJustLendPersonal()
+              : protocol === 'morpho'
+                ? renderMorphoPersonal()
+                : renderJustLendPersonal()
           : protocol === 'aave'
             ? renderAaveMarket()
             : protocol === 'compound'
               ? renderCompoundMarket()
-              : renderJustLendMarket()}
+              : protocol === 'morpho'
+                ? renderMorphoMarket()
+                : renderJustLendMarket()}
       </main>
 
       <footer className="app-footer">数据来源：内网 API | Ethereum Mainnet / TRON</footer>
