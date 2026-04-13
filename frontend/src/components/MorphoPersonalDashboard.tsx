@@ -150,12 +150,12 @@ export function MorphoPersonalDashboard({
   const risk = buildRiskTone(data);
   const riskToneClass =
     risk.tone === 'safe'
-      ? 'justlend-risk-safe'
+      ? 'risk-status-safe'
       : risk.tone === 'watch'
-        ? 'justlend-risk-watch'
+        ? 'risk-status-watch'
         : risk.tone === 'danger'
-          ? 'justlend-risk-danger'
-          : 'justlend-risk-neutral';
+          ? 'risk-status-danger'
+          : 'risk-status-neutral';
 
   const [externalEthPrice, setExternalEthPrice] = useState<number | null>(null);
 
@@ -183,7 +183,7 @@ export function MorphoPersonalDashboard({
 
   if (notFound) {
     return (
-      <div className="card justlend-overview-card" style={{ marginBottom: 0 }}>
+      <div className="card protocol-overview-card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span className="card-title">Morpho 个人账户分析</span>
@@ -194,9 +194,9 @@ export function MorphoPersonalDashboard({
           </div>
           <span className="address-badge">{formatCompactAddress(address)}</span>
         </div>
-        <div className="justlend-banner justlend-banner-soft">
-          <div className="justlend-banner-title">没有找到可用仓位</div>
-          <div className="justlend-banner-copy">
+        <div className="protocol-banner protocol-banner-soft">
+          <div className="protocol-banner-title">没有找到可用仓位</div>
+          <div className="protocol-banner-copy">
             当前地址在这个 market id 下没有返回可展示的 Morpho Blue 仓位数据。
           </div>
         </div>
@@ -235,8 +235,8 @@ export function MorphoPersonalDashboard({
   const borrowHeadroom = Math.max(0, maxBorrowable - borrowAssets);
 
   return (
-    <div className="justlend-dashboard">
-      <div className="card justlend-overview-card" style={{ marginBottom: 0 }}>
+    <div className="protocol-dashboard">
+      <div className="card protocol-overview-card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span className="card-title">Morpho 个人账户分析</span>
@@ -251,45 +251,45 @@ export function MorphoPersonalDashboard({
           </span>
         </div>
 
-        <div className="justlend-overview-grid">
-          <div className="justlend-overview-copy">
-            <div className="justlend-market-kicker">Single Market (Morpho Blue)</div>
-            <h2 className="justlend-market-title">{risk.headline}</h2>
-            <p className="justlend-market-copy">{risk.description}</p>
+        <div className="protocol-overview-grid">
+          <div className="protocol-overview-copy">
+            <div className="protocol-kicker">Single Market (Morpho Blue)</div>
+            <h2 className="protocol-title">{risk.headline}</h2>
+            <p className="protocol-copy">{risk.description}</p>
           </div>
 
-          <div className="justlend-overview-side">
-            <div className="justlend-overview-pills">
-              <div className="justlend-overview-pill">
-                <span className="justlend-overview-pill-label">Market ID</span>
-                <span className="justlend-overview-pill-value mono" title={marketId}>
+          <div className="protocol-overview-side">
+            <div className="protocol-overview-pills">
+              <div className="protocol-overview-pill">
+                <span className="protocol-overview-pill-label">Market ID</span>
+                <span className="protocol-overview-pill-value mono" title={marketId}>
                   {marketId.slice(0, 10)}…{marketId.slice(-8)}
                 </span>
               </div>
-              <div className="justlend-overview-pill">
-                <span className="justlend-overview-pill-label">数据源</span>
-                <span className="justlend-overview-pill-value">
+              <div className="protocol-overview-pill">
+                <span className="protocol-overview-pill-label">数据源</span>
+                <span className="protocol-overview-pill-value">
                   {data.data_source ? data.data_source.toUpperCase() : 'RPC'}
                 </span>
               </div>
-              <div className="justlend-overview-pill">
-                <span className="justlend-overview-pill-label">快照时间</span>
-                <span className="justlend-overview-pill-value" title={data.block_timestamp}>
+              <div className="protocol-overview-pill">
+                <span className="protocol-overview-pill-label">快照时间</span>
+                <span className="protocol-overview-pill-value" title={data.block_timestamp}>
                   {data.block_timestamp ? formatDateTime(data.block_timestamp) : '--'}
                 </span>
               </div>
             </div>
 
-            <div className="justlend-overview-tags">
-              <div className="justlend-overview-tag">
-                <span className="justlend-overview-tag-label">抵押资产</span>
-                <span className="justlend-overview-tag-value">
+            <div className="protocol-overview-tags">
+              <div className="protocol-overview-tag">
+                <span className="protocol-overview-tag-label">抵押资产</span>
+                <span className="protocol-overview-tag-value">
                   {data.collateral_token_symbol} · {formatNumberCompact(collateralAssets, 6)}
                 </span>
               </div>
-              <div className="justlend-overview-tag">
-                <span className="justlend-overview-tag-label">借款资产</span>
-                <span className="justlend-overview-tag-value">
+              <div className="protocol-overview-tag">
+                <span className="protocol-overview-tag-label">借款资产</span>
+                <span className="protocol-overview-tag-value">
                   {data.loan_token_symbol} · {formatNumberCompact(borrowAssets, 6)}
                 </span>
               </div>
@@ -298,7 +298,7 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <div className="summary-grid justlend-summary-grid">
+      <div className="summary-grid protocol-summary-grid">
         <div className="metric-box">
           <span className="metric-label">健康因子</span>
           <span className="metric-value" style={{ color: gaugeColor(currentHF) }}>
@@ -327,21 +327,21 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <div className="justlend-risk-layout">
-        <div className="card justlend-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
+      <div className="protocol-risk-layout">
+        <div className="card protocol-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">风险判断</span>
             <span className={`badge ${riskToneClass}`}>{risk.label}</span>
           </div>
 
-          <div className="justlend-risk-hero-top">
+          <div className="protocol-risk-hero-top">
             <div>
-              <div className="justlend-market-kicker">Health Factor</div>
-              <div className="justlend-risk-health" style={{ color: gaugeColor(currentHF) }}>
+              <div className="protocol-kicker">Health Factor</div>
+              <div className="protocol-risk-health" style={{ color: gaugeColor(currentHF) }}>
                 {formatHealthFactorText(data)}
               </div>
             </div>
-            <div className="justlend-risk-health-copy">
+            <div className="protocol-risk-health-copy">
               当前抵押折算价值约为{' '}
               <strong>{formatNumberCompact(collateralValueInLoanAsset, 6)}</strong>{' '}
               {data.loan_token_symbol}，借款规模为{' '}
@@ -350,60 +350,60 @@ export function MorphoPersonalDashboard({
             </div>
           </div>
 
-          <div className="justlend-bullet-shell">
-            <div className="justlend-bullet-header">
-              <span className="justlend-bullet-title">借款使用率 vs LLTV</span>
+          <div className="risk-bullet-shell">
+            <div className="risk-bullet-header">
+              <span className="risk-bullet-title">借款使用率 vs LLTV</span>
               <strong>
                 {formatNumberCompact(borrowUtilPercent, 2)}% / {formatNumberCompact(lltvPercent, 2)}
                 %
               </strong>
             </div>
-            <div className="justlend-bullet-track">
+            <div className="risk-bullet-track">
               <div
-                className={`justlend-bullet-marker justlend-bullet-marker-current ${
-                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-left' : ''
+                className={`risk-bullet-marker risk-bullet-marker-current ${
+                  bulletMarkersTooClose ? 'risk-bullet-marker-stagger-left' : ''
                 }`}
                 style={{ left: `${borrowUtilPercent}%` }}
               >
                 <span>当前</span>
               </div>
               <div
-                className={`justlend-bullet-marker justlend-bullet-marker-threshold ${
-                  bulletMarkersTooClose ? 'justlend-bullet-marker-stagger-right' : ''
+                className={`risk-bullet-marker risk-bullet-marker-threshold ${
+                  bulletMarkersTooClose ? 'risk-bullet-marker-stagger-right' : ''
                 }`}
                 style={{ left: `${lltvPercent}%` }}
               >
                 <span>LLTV</span>
               </div>
             </div>
-            <div className="justlend-bullet-footer">
+            <div className="risk-bullet-footer">
               <span>安全区</span>
               <span>观察区</span>
               <span>敏感区</span>
             </div>
           </div>
 
-          <div className="justlend-risk-markers">
-            <div className="justlend-risk-marker">
-              <span className="justlend-risk-dot" style={{ background: '#38bdf8' }} />
+          <div className="protocol-risk-markers">
+            <div className="protocol-risk-marker">
+              <span className="protocol-risk-dot" style={{ background: '#38bdf8' }} />
               <span>当前借款使用率</span>
               <strong>{formatNumberCompact(borrowUtilPercent, 2)}%</strong>
             </div>
-            <div className="justlend-risk-marker">
-              <span className="justlend-risk-dot" style={{ background: '#ef4444' }} />
+            <div className="protocol-risk-marker">
+              <span className="protocol-risk-dot" style={{ background: '#ef4444' }} />
               <span>LLTV 上限</span>
               <strong>{formatNumberCompact(lltvPercent, 2)}%</strong>
             </div>
-            <div className="justlend-risk-marker">
-              <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
+            <div className="protocol-risk-marker">
+              <span className="protocol-risk-dot" style={{ background: '#22c55e' }} />
               <span>剩余安全边际</span>
               <strong>{formatNumberCompact(riskGap, 2)}%</strong>
             </div>
           </div>
         </div>
 
-        <div className="justlend-risk-side">
-          <div className="justlend-insight-grid">
+        <div className="protocol-risk-side">
+          <div className="protocol-insight-grid">
             <div className="metric-box">
               <span className="metric-label">Oracle 报价</span>
               <span className="metric-value blue">${formatNumberCompact(currentPrice, 6)}</span>
@@ -432,9 +432,9 @@ export function MorphoPersonalDashboard({
             </div>
           </div>
 
-          <div className="justlend-banner justlend-banner-soft">
-            <div className="justlend-banner-title">快速解读</div>
-            <div className="justlend-banner-copy">
+          <div className="protocol-banner protocol-banner-soft">
+            <div className="protocol-banner-title">快速解读</div>
+            <div className="protocol-banner-copy">
               当前供应为 <strong>{formatNumberCompact(supplyAssets, 6)}</strong>，抵押为{' '}
               <strong>{formatNumberCompact(collateralAssets, 6)}</strong>，借款为{' '}
               <strong>{formatNumberCompact(borrowAssets, 6)}</strong>

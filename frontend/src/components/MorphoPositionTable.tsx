@@ -114,8 +114,8 @@ export function MorphoPositionTable({
           <span className="badge red-badge">{loanAssets.length} 项</span>
         </div>
 
-        <div className="justlend-banner justlend-banner-soft" style={{ marginBottom: '0.9rem' }}>
-          <div className="justlend-banner-copy">
+        <div className="protocol-banner protocol-banner-soft" style={{ marginBottom: '0.9rem' }}>
+          <div className="protocol-banner-copy">
             当前借款主资产为 <strong>{data.loan_token_symbol}</strong>，总借款数量为{' '}
             <strong>{formatAmount(data.borrow_assets)}</strong>。
           </div>
@@ -152,8 +152,8 @@ export function MorphoPositionTable({
           <span className="badge green-badge">{collateralAssets.length} 项</span>
         </div>
 
-        <div className="justlend-banner justlend-banner-soft" style={{ marginBottom: '0.9rem' }}>
-          <div className="justlend-banner-copy">
+        <div className="protocol-banner protocol-banner-soft" style={{ marginBottom: '0.9rem' }}>
+          <div className="protocol-banner-copy">
             当前抵押主资产为 <strong>{data.collateral_token_symbol}</strong>，总抵押数量为{' '}
             <strong>{formatAmount(data.collateral_assets)}</strong>。
           </div>

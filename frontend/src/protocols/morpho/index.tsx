@@ -1,0 +1,1 @@
+export { MorphoProtocolRoot } from './root';

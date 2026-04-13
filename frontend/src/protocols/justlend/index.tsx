@@ -1,0 +1,1 @@
+export { JustLendProtocolRoot } from './root';

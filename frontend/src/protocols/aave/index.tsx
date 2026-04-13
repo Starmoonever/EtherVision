@@ -1,0 +1,1 @@
+export { AaveProtocolRoot } from './root';
