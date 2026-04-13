@@ -110,26 +110,31 @@ export function MorphoProtocolRoot({ active, activeTab }: ProtocolRootProps) {
       morphoMarketInput={morphoMarketInput}
       morphoQueriedMarketId={morphoQueriedMarketId}
       morphoState={morphoState}
+      onAddressChange={(value) => {
+        setMorphoAddress(value);
+        setError('');
+      }}
       onMarketInputChange={(value) => {
         setMorphoMarketInput(value);
         setError('');
       }}
-      onSearch={(address) => {
-        const marketId = morphoMarketInput.trim();
+      onSearch={(address, marketId) => {
+        const trimmedMarketId = marketId.trim();
         setError('');
 
-        if (!marketId) {
+        if (!trimmedMarketId) {
           setError('请输入 Morpho market id');
           return;
         }
 
-        if (!isBytes32Hex(marketId)) {
+        if (!isBytes32Hex(trimmedMarketId)) {
           setError('Morpho market id 必须是 0x 开头的 32 字节十六进制字符串');
           return;
         }
 
         setMorphoAddress(address);
-        setMorphoQueriedMarketId(marketId);
+        setMorphoMarketInput(trimmedMarketId);
+        setMorphoQueriedMarketId(trimmedMarketId);
       }}
     />
   ) : (

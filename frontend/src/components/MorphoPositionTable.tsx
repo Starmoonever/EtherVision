@@ -36,6 +36,17 @@ function renderRows(rows: MorphoPositionAsset[]) {
   ));
 }
 
+function renderMorphoColGroup() {
+  return (
+    <colgroup>
+      <col style={{ width: '28%' }} />
+      <col style={{ width: '14%' }} />
+      <col style={{ width: '24%' }} />
+      <col style={{ width: '34%' }} />
+    </colgroup>
+  );
+}
+
 export function MorphoPositionTable({
   data,
   loading,
@@ -126,6 +137,7 @@ export function MorphoPositionTable({
         ) : (
           <div className="table-wrap">
             <table className="pos-table morpho-table">
+              {renderMorphoColGroup()}
               <thead>
                 <tr>
                   <th>资产</th>
@@ -164,6 +176,7 @@ export function MorphoPositionTable({
         ) : (
           <div className="table-wrap">
             <table className="pos-table morpho-table">
+              {renderMorphoColGroup()}
               <thead>
                 <tr>
                   <th>资产</th>

@@ -806,26 +806,41 @@
   align-items: center;
 }
 
+.justlend-risk-hero-top > div:first-child,
+.protocol-risk-hero-top > div:first-child {
+  min-width: 0;
+}
+
 .justlend-risk-health,
 .protocol-risk-health {
   font-size: clamp(2.5rem, 4vw, 4rem);
   line-height: 1;
   font-weight: 800;
   color: #f8fafc;
+  max-width: 100%;
 }
 
 .justlend-risk-health-copy,
 .protocol-risk-health-copy {
   color: #94a3b8;
-  font-size: 0.92rem;
+  font-size: 0.8rem;
   line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .justlend-risk-hero-top,
+  .protocol-risk-hero-top {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
 }
 
 .justlend-bullet-shell,
 .risk-bullet-shell {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1.5rem;
 }
 
 .justlend-bullet-header,
@@ -1240,6 +1255,10 @@
   font-size: 0.82rem;
   letter-spacing: 0.08em;
   padding-bottom: 0.8rem;
+}
+
+.morpho-table {
+  table-layout: fixed;
 }
 
 .morpho-table td {
