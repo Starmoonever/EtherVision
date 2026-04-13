@@ -1,0 +1,62 @@
+"""Pydantic schemas for Morpho APIs."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class MorphoScaffoldStatusResponse(BaseModel):
+    module: str = Field(description="模块名。")
+    status: str = Field(description="当前实现状态。")
+    chain: str = Field(description="目标链。")
+    supported_protocols: list[str] = Field(description="当前保留的协议标识。")
+    message: str = Field(description="当前骨架说明。")
+
+
+class MorphoPositionAssetResponse(BaseModel):
+    role: str = Field(description="资产角色：loan 或 collateral。")
+    token_address: str = Field(description="代币地址。")
+    symbol: str | None = Field(description="代币符号。")
+    decimals: int = Field(description="代币 decimals。")
+    amount: str = Field(description="按 decimals 缩放后的资产数量。")
+
+
+class MorphoPositionResponse(BaseModel):
+    protocol: str = Field(description="协议标识。")
+    market_type: str = Field(description="Morpho 市场类型。")
+    chain: str = Field(description="链标识。")
+    morpho_address: str = Field(description="Morpho Blue 合约地址。")
+    market_id: str = Field(description="市场 id。")
+    address: str = Field(description="EVM 用户地址。")
+    block_number: int = Field(description="查询时所用区块号。")
+    block_timestamp: str = Field(description="查询时区块时间。")
+    has_position: bool = Field(description="该用户在该市场是否有非零仓位。")
+    is_healthy: bool = Field(description="按当前 oracle 价格估算，仓位是否健康。")
+    loan_token: str = Field(description="借贷 token 地址。")
+    loan_token_symbol: str | None = Field(description="借贷 token 符号。")
+    loan_token_decimals: int = Field(description="借贷 token decimals。")
+    collateral_token: str = Field(description="抵押 token 地址。")
+    collateral_token_symbol: str | None = Field(description="抵押 token 符号。")
+    collateral_token_decimals: int = Field(description="抵押 token decimals。")
+    oracle: str = Field(description="oracle 地址。")
+    irm: str = Field(description="irm 地址。")
+    lltv: str = Field(description="lltv，WAD 精度。")
+    lltv_ratio: str = Field(description="lltv 的十进制形式。")
+    supply_shares: str = Field(description="原始 supply shares。")
+    borrow_shares: str = Field(description="原始 borrow shares。")
+    collateral_assets_raw: str = Field(description="原始 collateral 数量。")
+    supply_assets: str = Field(description="估算后的 supply assets。")
+    borrow_assets: str = Field(description="估算后的 borrow assets。")
+    collateral_assets: str = Field(description="按 decimals 缩放后的 collateral 数量。")
+    collateral_value_in_loan_asset: str = Field(
+        description="抵押价值，单位为 loan asset。"
+    )
+    max_borrowable_in_loan_asset: str = Field(
+        description="按 lltv 估算的最大可借数量，单位为 loan asset。"
+    )
+    health_factor: str | None = Field(description="健康因子；无借款时返回 null。")
+    price_quote: str = Field(
+        description="oracle 返回的价格，表示 1 单位 collateral 对应的 loan asset 价格。"
+    )
+    data_source: str = Field(description="数据来源：rpc。")
+    assets: list[MorphoPositionAssetResponse] = Field(description="资产明细。")

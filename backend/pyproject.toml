@@ -22,13 +22,20 @@ api = "crawler_shared.server:main"
 aave-crawler = "aave_crawler.cli:cli"
 compound-crawler = "compound_crawler.cli:cli"
 justlend-crawler = "justlend_crawler.cli:cli"
+morpho-crawler = "morpho_crawler.cli:cli"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["aave_crawler", "compound_crawler", "crawler_shared", "justlend_crawler"]
+packages = [
+    "aave_crawler",
+    "compound_crawler",
+    "crawler_shared",
+    "justlend_crawler",
+    "morpho_crawler",
+]
 
 [dependency-groups]
 dev = [
