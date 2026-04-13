@@ -21,7 +21,7 @@ const MAX_HISTORY = 50;
 
 function validateAddressByCase(address: string): { ok: boolean; reason?: string } {
   if (!isAddress(address, { strict: false })) {
-    return { ok: false, reason: '抵押ETH的钱包地址格式无效' };
+    return { ok: false, reason: 'Invalid wallet address format' };
   }
 
   const hex = address.slice(2);
@@ -68,7 +68,7 @@ function decodeBase58(value: string): Uint8Array | null {
 }
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  const hash = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
   return new Uint8Array(hash);
 }
 
@@ -183,7 +183,7 @@ export function AddressInput({
     // 如果钱包地址为空
     if (!trimmed) {
       // 设置报错信息
-      setError(addressType === 'tron' ? '请输入 TRON 钱包地址' : '请输入抵押ETH的钱包地址');
+      setError(addressType === 'tron' ? '请输入 TRON 钱包地址' : '请输入抵押 ETH 的钱包地址');
       //终止执行并返回，不进行后续搜索。
       return;
     }
@@ -196,7 +196,7 @@ export function AddressInput({
 
       const validation = validateAddressByCase(trimmed);
       if (!validation.ok) {
-        setError(validation.reason ?? '抵押ETH的钱包地址格式无效');
+        setError(validation.reason ?? '抵押 ETH 的钱包地址格式无效');
         return;
       }
     } else {
@@ -212,7 +212,7 @@ export function AddressInput({
     // 保存历史记录
     saveHistory(trimmed);
 
-    // 将合规地址传给 onSearch 函数，触发Aave 里 的API 调用
+    // 将合规地址传给 onSearch 函数，触发 Aave 里 的 API 调用
     await onSearch(trimmed);
     setShowHistory(false);
   };

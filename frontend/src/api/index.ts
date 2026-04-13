@@ -25,3 +25,5 @@ export type {
   CompoundMarketHistoryResponse,
   CompoundReserve,
 } from './compound';
+export { fetchMorphoPosition, fetchMorphoPositionWithMeta } from './morpho';
+export type { MorphoPositionAsset, MorphoPositionResponse, MorphoProtocol } from './morpho';
