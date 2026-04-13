@@ -4,6 +4,7 @@ import { fetchEthPrice } from '../api/price';
 import { ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { MorphoPositionTable } from './MorphoPositionTable';
 import { MorphoSummaryCard } from './MorphoSummaryCard';
+import { AutoFitText } from '../shared/components/AutoFitText';
 
 interface MorphoPersonalDashboardProps {
   address: string;
@@ -40,6 +41,13 @@ function formatNumberCompact(value: number, digits: number = 2): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function isUsdLikeToken(symbol: string): boolean {
+  const upper = symbol.trim().toUpperCase();
+  return ['USDC', 'USDT', 'DAI', 'FRAX', 'TUSD', 'LUSD', 'GUSD', 'USDE', 'USDS', 'SUSD'].includes(
+    upper,
+  );
 }
 
 function gaugeColor(hf: number | null): string {
@@ -215,6 +223,8 @@ export function MorphoPersonalDashboard({
   const currentHF = data.health_factor ? toNum(data.health_factor) : null;
   const lltvRatio = toNum(data.lltv_ratio);
   const lltvPercent = clamp(lltvRatio * 100, 0, 100);
+  const quotePairLabel = `${data.loan_token_symbol}/${data.collateral_token_symbol}`;
+  const quoteLooksUsd = isUsdLikeToken(data.loan_token_symbol);
 
   const borrowUtilPercent =
     maxBorrowable <= 0 ? 0 : clamp((borrowAssets / maxBorrowable) * 100, 0, 100);
@@ -337,9 +347,16 @@ export function MorphoPersonalDashboard({
           <div className="protocol-risk-hero-top">
             <div>
               <div className="protocol-kicker">Health Factor</div>
-              <div className="protocol-risk-health" style={{ color: gaugeColor(currentHF) }}>
-                {formatHealthFactorText(data)}
-              </div>
+              <AutoFitText
+                className="protocol-risk-health"
+                text={formatHealthFactorText(data)}
+                maxFontSizePx={64}
+                minFontSizePx={28}
+                fontWeight={800}
+                style={{ color: gaugeColor(currentHF) }}
+                useScientificWhenOverflow
+                scientificIntegerDigitsThreshold={6}
+              />
             </div>
             <div className="protocol-risk-health-copy">
               当前抵押折算价值约为{' '}
@@ -406,12 +423,22 @@ export function MorphoPersonalDashboard({
           <div className="protocol-insight-grid">
             <div className="metric-box">
               <span className="metric-label">Oracle 报价</span>
-              <span className="metric-value blue">${formatNumberCompact(currentPrice, 6)}</span>
+              <span className="metric-value blue">
+                {quoteLooksUsd ? '$' : ''}
+                {formatNumberCompact(currentPrice, 6)} {quotePairLabel}
+              </span>
             </div>
             <div className="metric-box">
               <span className="metric-label">清算触发价</span>
               <span className="metric-value red">
-                {liquidationPrice === null ? '--' : `$${formatNumberCompact(liquidationPrice, 6)}`}
+                {liquidationPrice === null ? (
+                  '--'
+                ) : (
+                  <>
+                    {quoteLooksUsd ? '$' : ''}
+                    {formatNumberCompact(liquidationPrice, 6)} {quotePairLabel}
+                  </>
+                )}
               </span>
             </div>
             <div className="metric-box">
