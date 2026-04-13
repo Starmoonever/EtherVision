@@ -1244,8 +1244,8 @@
 
 .justlend-risk-markers {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
+  flex-direction: row;
+  justify-content: space-between;
 }
 
 .justlend-risk-marker {
