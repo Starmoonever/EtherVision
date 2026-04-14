@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..database import AsyncpgPool
 from .schemas import MorphoPositionResponse
 from .service import get_user_position
 
@@ -24,6 +25,7 @@ def _w3(request: Request):
 )
 async def position(
     request: Request,
+    pool: AsyncpgPool,
     address: str = Query(..., description="EVM user address"),
     market_id: str = Query(..., description="Morpho market id (bytes32 hex)"),
     protocol: str = Query(
@@ -32,6 +34,7 @@ async def position(
 ) -> MorphoPositionResponse:
     return await get_user_position(
         _w3(request),
+        pool=pool,
         address=address,
         market_id=market_id,
         protocol=protocol,
