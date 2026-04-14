@@ -136,7 +136,7 @@ async def main(config_path: str | None, dry_run: bool, protocol: str = "v3") -> 
     )
 
     # ── 1. 从链上取 reserve configs（仅此一次 RPC，约 15 次调用）──────────────
-    logger.info("连接 RPC：%s", cfg.rpc_url)
+    logger.info("连接 RPC：%s", cfg.eth_rpc_url)
     w3 = await build_web3(cfg)
 
     logger.info("获取储备资产列表 ...")

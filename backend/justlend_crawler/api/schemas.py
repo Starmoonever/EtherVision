@@ -41,3 +41,38 @@ class JustLendPositionResponse(BaseModel):
     liquidation_threshold: str = Field(description="估算清算阈值。")
     data_source: str = Field(description="数据来源：database 或 api。")
     assets: list[JustLendPositionAssetResponse] = Field(description="逐资产仓位明细。")
+
+
+class JustLendPositionReplayPoint(BaseModel):
+    tx_hash: str = Field(description="交易哈希。")
+    timestamp: str = Field(description="交易时间（UTC）。")
+    block_number: int | None = Field(
+        description="底层区块号，JustLend API 暂未提供时为空。"
+    )
+    market: str | None = Field(description="JustLend 市场地址。")
+    symbol: str | None = Field(description="市场或资产符号。")
+    operation_type: str | None = Field(description="归一化交易类型。")
+    total_collateral_usd: str = Field(description="总抵押 USD 价值。")
+    total_debt_usd: str = Field(description="总债务 USD 价值。")
+    available_borrow_usd: str = Field(description="估算剩余可借 USD 价值。")
+    discounted_collateral_usd: str = Field(description="折算后抵押 USD 价值。")
+    liquidation_buffer_usd: str = Field(description="清算缓冲 USD 价值。")
+    health_factor: str = Field(description="健康因子。")
+    ltv: str = Field(description="估算加权抵押率。")
+    liquidation_threshold: str = Field(description="估算清算阈值。")
+    brief: str = Field(description="该数据点的简要说明。")
+    assets: list[JustLendPositionAssetResponse] = Field(
+        default_factory=list, description="逐资产仓位明细。"
+    )
+
+
+class JustLendPositionReplayResponse(BaseModel):
+    address: str = Field(description="TRON 用户地址。")
+    protocol: str = Field(description="协议标识。")
+    from_time: str = Field(description="起始时间（UTC）。")
+    to_time: str = Field(description="结束时间（UTC）。")
+    data_source: str = Field(description="数据来源：cache、api 或 mixed。")
+    points: list[JustLendPositionReplayPoint] = Field(description="历史快照数据点。")
+    total_points: int = Field(description="返回的数据点数量。")
+    total_tx_count: int = Field(description="时间范围内命中的仓位相关交易数。")
+    cache_hit_rate: str = Field(description="快照缓存命中率。")

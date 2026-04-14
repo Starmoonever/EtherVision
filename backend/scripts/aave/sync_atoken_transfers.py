@@ -434,7 +434,7 @@ async def _async_main(args: argparse.Namespace) -> None:
                 return
 
         # ── 加载 aToken 地址 ───────────────────────────────────────────────
-        atoken_addresses = await _load_atoken_addresses(pool, cfg.rpc_url)
+        atoken_addresses = await _load_atoken_addresses(pool, cfg.eth_rpc_url)
         if not atoken_addresses:
             logger.error("未找到任何 aToken 地址，退出。")
             return
