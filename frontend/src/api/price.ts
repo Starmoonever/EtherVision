@@ -27,6 +27,18 @@ const priceInflight = new Map<string, Promise<number>>();
 const pricePeriodCache = new Map<string, { fetchedAt: number; value: PricePeriodItem[] }>();
 const pricePeriodInflight = new Map<string, Promise<PricePeriodItem[]>>();
 
+function isEvmAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
+}
+
+function buildPriceQueryParam(value: string): string {
+  const normalized = value.trim();
+  if (isEvmAddress(normalized)) {
+    return `address=${encodeURIComponent(normalized)}`;
+  }
+  return `symbol=${encodeURIComponent(normalized)}`;
+}
+
 // ---------- API 函数 ----------
 
 /**
@@ -38,8 +50,8 @@ export async function fetchAssetPrice(asset: string): Promise<number> {
 }
 
 export async function fetchAssetPriceWithMeta(asset: string): Promise<DataWithMeta<number>> {
-  const normalizedAsset = asset.toLowerCase();
-  const key = `now:${normalizedAsset}`;
+  const normalizedAsset = asset.trim();
+  const key = `now:${normalizedAsset.toLowerCase()}`;
   const cached = priceCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
     return {
@@ -62,7 +74,9 @@ export async function fetchAssetPriceWithMeta(asset: string): Promise<DataWithMe
     }));
   }
 
-  const request = apiFetch<PriceResponse>(`/price?asset=${normalizedAsset}&time=now`)
+  const request = apiFetch<PriceResponse>(
+    `/price?${buildPriceQueryParam(normalizedAsset)}&time=now`,
+  )
     .then((data) => {
       const price = parseFloat(data.price_usd);
       if (isNaN(price)) throw new Error(`Invalid ${asset} price response`);
@@ -103,8 +117,8 @@ export async function fetchAssetPricePeriodWithMeta(
   end: string,
   interval: number,
 ): Promise<DataWithMeta<PricePeriodItem[]>> {
-  const normalizedAsset = asset.toLowerCase();
-  const key = `${normalizedAsset}|${start}|${end}|${interval}`;
+  const normalizedAsset = asset.trim();
+  const key = `${normalizedAsset.toLowerCase()}|${start}|${end}|${interval}`;
   const cached = pricePeriodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
     return {
@@ -128,7 +142,7 @@ export async function fetchAssetPricePeriodWithMeta(
   }
 
   const request = apiFetch<PricePeriodResponse>(
-    `/price/period?asset=${normalizedAsset}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${interval}`,
+    `/price/period?${buildPriceQueryParam(normalizedAsset)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${interval}`,
   )
     .then((data) => {
       if (!data.prices || !Array.isArray(data.prices)) {

@@ -117,45 +117,41 @@ export function MorphoPositionTable({
   const [collateralTokenPrice, setCollateralTokenPrice] = useState<number | undefined>(undefined);
 
   useEffect(() => {
-    if (!data?.loan_token_symbol) {
-      console.log('⚠️ loan_token_symbol is empty');
+    if (!data?.loan_token) {
+      console.log('⚠️ loan_token is empty');
       return;
     }
-    console.log(`🔍 Fetching loan token price for: ${data.loan_token_symbol}`);
+    console.log(`🔍 Fetching loan token price for: ${data.loan_token}`);
 
-    // Get the USD price of loan token (e.g., USDC price)
-    fetchAssetPrice(data.loan_token_symbol)
+    // Prefer address lookup to avoid symbol ambiguity for long-tail assets.
+    fetchAssetPrice(data.loan_token)
       .then((price) => {
-        console.log(`✅ Loan price fetched: ${data.loan_token_symbol} = $${price}`);
+        console.log(`✅ Loan price fetched: ${data.loan_token} = $${price}`);
         setLoanTokenPrice(price);
       })
       .catch((err) => {
-        console.error(`❌ Failed to fetch loan price for ${data.loan_token_symbol}:`, err);
+        console.error(`❌ Failed to fetch loan price for ${data.loan_token}:`, err);
         setLoanTokenPrice(undefined);
       });
-  }, [data?.loan_token_symbol]);
+  }, [data?.loan_token]);
 
   useEffect(() => {
-    if (!data?.collateral_token_symbol) {
-      console.log('⚠️ collateral_token_symbol is empty');
+    if (!data?.collateral_token) {
+      console.log('⚠️ collateral_token is empty');
       return;
     }
-    console.log(`🔍 Fetching collateral token price for: ${data.collateral_token_symbol}`);
+    console.log(`🔍 Fetching collateral token price for: ${data.collateral_token}`);
 
-    // Get the USD price of collateral token (e.g., wstETH price)
-    fetchAssetPrice(data.collateral_token_symbol)
+    fetchAssetPrice(data.collateral_token)
       .then((price) => {
-        console.log(`✅ Collateral price fetched: ${data.collateral_token_symbol} = $${price}`);
+        console.log(`✅ Collateral price fetched: ${data.collateral_token} = $${price}`);
         setCollateralTokenPrice(price);
       })
       .catch((err) => {
-        console.error(
-          `❌ Failed to fetch collateral price for ${data.collateral_token_symbol}:`,
-          err,
-        );
+        console.error(`❌ Failed to fetch collateral price for ${data.collateral_token}:`, err);
         setCollateralTokenPrice(undefined);
       });
-  }, [data?.collateral_token_symbol]);
+  }, [data?.collateral_token]);
 
   const badge = (
     <span

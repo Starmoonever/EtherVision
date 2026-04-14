@@ -110,8 +110,8 @@ server {
 | 端点                                                                         | 用途                   |
 | ---------------------------------------------------------------------------- | ---------------------- |
 | `GET /user/position?address=&version=`                                       | 查询单个用户仓位概览   |
-| `GET /price?asset=eth&time=now`                                              | 获取 ETH 实时价格      |
-| `GET /price/period?asset=eth&start=&end=&interval=`                          | 获取 ETH 历史价格序列  |
+| `GET /price?symbol=ETH&time=now`                                             | 获取 ETH 实时价格      |
+| `GET /price/period?symbol=ETH&start=&end=&interval=`                         | 获取 ETH 历史价格序列  |
 | `GET /liquidate/period?start=&end=&interval=1&eth_ratio=0.4&version=`        | 抵押端各价格区间清算量 |
 | `GET /borrow/liquidate/period?start=&end=&interval=1&eth_ratio=0.4&version=` | 借贷端各价格区间清算量 |
 
