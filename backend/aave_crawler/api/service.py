@@ -6,24 +6,14 @@
 
 import asyncio
 import logging
-import time as _time
-import aiohttp
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 import asyncpg
-from crawler_shared.api.constants import (
-    ETHEREUM_PRICE_ASSET_BY_ADDRESS,
-    ETHEREUM_PRICE_ASSETS,
-    PRICE_ASSET_ALIASES,
-    SUPPORTED_PRICE_ASSETS,
-)
 from crawler_shared.api.schemas import (
     PriceAssetsResponse,
-    PriceAssetSchema,
-    PricePeriodItem,
     PricePeriodResponse,
     PriceResponse,
 )
@@ -45,9 +35,7 @@ from ..db import (
     _calc_weth_debt,
     _get_weth_price,
     fetch_user_tx_history,
-    get_cached_eth_price,
     get_cached_snapshots,
-    upsert_eth_price_timestamp,
     upsert_positions,
     upsert_snapshot_cache,
 )
@@ -109,55 +97,6 @@ _cache: dict = {}
 # 单次 API 触发最多在线补采区块数，防止长时阻塞
 _MAX_MARKET_ONLINE_COLLECT = 15
 
-_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL = """
-SELECT
-    symbol,
-    CONCAT('0x', encode(reserve, 'hex')) AS token_address
-FROM loan.compound_v3_market_snapshot_reserves
-WHERE symbol IS NOT NULL
-  AND UPPER(symbol) = $1
-ORDER BY "timestamp" DESC
-LIMIT 1
-"""
-
-_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE = """
-SELECT
-    price_usd,
-    "timestamp"
-FROM loan.compound_v3_market_snapshot_reserves
-WHERE reserve = decode(replace(lower($1), '0x', ''), 'hex')
-ORDER BY "timestamp" DESC
-LIMIT 1
-"""
-
-_SUPPORTED_PRICE_ASSETS: tuple[tuple[str, str, str], ...] = (
-    ("ETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "ethereum"),
-    ("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "ethereum"),
-    ("WBTC", "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "ethereum"),
-    ("USDC", "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "ethereum"),
-    ("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7", "ethereum"),
-    ("DAI", "0x6B175474E89094C44Da98b954EedeAC495271d0F", "ethereum"),
-    ("wstETH", "0x7f39C581F595B53c5cb5bA2D5dA6c935E2Ca0Ae6", "ethereum"),
-    ("cbETH", "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704", "ethereum"),
-    ("rETH", "0xae78736Cd615f374D3085123A210448E74Fc6393", "ethereum"),
-    ("weETH", "0xCd5fE23C85820F7B72D0926FC9B05b43E359b7ee", "ethereum"),
-    ("ezETH", "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110", "ethereum"),
-    ("TRX", "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", "tron"),
-    ("USDD", "TXDk8mbtRbXeYuMNS83CfKPaYYT8XWv9Hz", "tron"),
-    ("USDT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "tron"),
-    ("SUN", "TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S", "tron"),
-    ("BTT", "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4", "tron"),
-    ("NFT", "TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq", "tron"),
-    ("JST", "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9", "tron"),
-    ("WIN", "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", "tron"),
-    ("USDJ", "TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT", "tron"),
-    ("USDC", "TLZSucJRjnqBKwvQz6n5hd29gbS4P7u7w8", "tron"),
-    ("TUSD", "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4", "tron"),
-    ("BTC", "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9", "tron"),
-    ("ETH", "THb4CqiFdwNHsWsQCs4JhzwjMWys4aqCbF", "tron"),
-    ("sTRX", "TU3kjFuhtEo42tsCBtfYUAZxoqQ4yuSLQ5", "tron"),
-)
-
 
 async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
     """缓存当次进程内的储备资产列表 / 配置（按协议版本分别缓存，不缓存价格）"""
@@ -205,115 +144,15 @@ async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
     return _cache[cache_key_tokens], _cache[cache_key_configs], asset_prices
 
 
-def _normalize_price_asset(asset: str) -> str:
-    return asset.strip()
-
-
-def _is_evm_token_address(asset: str) -> bool:
-    value = asset.strip()
-    return value.startswith("0x") and len(value) == 42
-
-
-def _normalize_token_address(asset: str) -> str | None:
-    if not _is_evm_token_address(asset):
-        return None
-    try:
-        return AsyncWeb3.to_checksum_address(asset.strip())
-    except ValueError:
-        return None
-
-
-async def _resolve_price_asset(
-    w3: AsyncWeb3,
-    asset: str,
-    pool: "asyncpg.Pool | None" = None,
-) -> tuple[str, str, bool]:
-    from fastapi import HTTPException
-
-    normalized_asset = _normalize_price_asset(asset)
-    normalized_address = _normalize_token_address(normalized_asset)
-    if normalized_address is not None:
-        registered = ETHEREUM_PRICE_ASSET_BY_ADDRESS.get(normalized_address.lower())
-        if registered is not None:
-            registered_asset, token_address, _ = registered
-            return registered_asset, token_address, False
-        return normalized_address, normalized_address, False
-
-    target = PRICE_ASSET_ALIASES.get(normalized_asset.upper(), normalized_asset.upper())
-    registered = ETHEREUM_PRICE_ASSETS.get(target.upper())
-    if registered is not None:
-        registered_asset, token_address, _ = registered
-        return registered_asset, token_address, False
-
-    await _get_common_data(w3, "v3")
-
-    reserve_tokens = _cache["reserve_tokens_v3"]
-    for rt in reserve_tokens:
-        if rt.symbol.upper() == target:
-            return target, rt.token_address, False
-
-    if pool is not None:
-        row = await pool.fetchrow(_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL, target)
-        if row is not None and row["token_address"]:
-            return target, str(row["token_address"]), True
-
-    raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
-
-
-async def _fetch_defillama_current_price(
-    token_address: str,
-) -> tuple[Decimal, int] | None:
-    import aiohttp
-    from fastapi import HTTPException
-
-    coin_key = f"ethereum:{token_address.lower()}"
-    url = f"https://coins.llama.fi/prices/current/{coin_key}"
-
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"DeFiLlama 返回 HTTP {resp.status}",
-                    )
-                data = await resp.json()
-    except aiohttp.ClientError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"无法连接 DeFiLlama: {exc}"
-        ) from exc
-
-    entry = data.get("coins", {}).get(coin_key)
-    if entry is None or entry.get("price") is None:
-        return None
-
-    return Decimal(str(entry["price"])), int(entry.get("timestamp", _time.time()))
-
-
 async def get_supported_price_assets(
     w3: AsyncWeb3,
     pool: "asyncpg.Pool | None" = None,
     justlend_cfg: object | None = None,
 ) -> PriceAssetsResponse:
     _ = (w3, pool, justlend_cfg)
-    assets = [
-        PriceAssetSchema(asset=asset, token_address=token_address, chain=chain)
-        for asset, token_address, chain in SUPPORTED_PRICE_ASSETS
-    ]
-    return PriceAssetsResponse(assets=assets)
+    from crawler_shared.api.service import get_supported_price_assets as _shared_impl
 
-
-async def _get_latest_compound_v3_reserve_price(
-    pool: "asyncpg.Pool",
-    token_address: str,
-) -> tuple[Decimal, int] | None:
-    row = await pool.fetchrow(_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE, token_address)
-    if row is None or row["price_usd"] is None or row["timestamp"] is None:
-        return None
-
-    return Decimal(str(row["price_usd"])), int(row["timestamp"].timestamp())
+    return await _shared_impl()
 
 
 def _format_position(pos: UserPosition) -> PositionResponse:
@@ -1684,149 +1523,9 @@ async def get_eth_price(
     timestamp: int | None = None,
     pool: "asyncpg.Pool | None" = None,
 ) -> PriceResponse:
-    """获取指定资产的 USD 价格。
+    from crawler_shared.api.service import get_price as _shared_impl
 
-    - ``timestamp=None``：从链上 Aave Oracle 实时查询
-    - ``timestamp=<unix_ts>``：从 DeFiLlama Coins API 查询历史价格
-
-    Args:
-        w3:        AsyncWeb3 实例
-        asset:     资产符号，如 ``eth``、``wbtc``；大小写不敏感
-        timestamp: Unix 时间戳（秒），None 表示查当前价格
-    """
-    from datetime import datetime, timezone
-
-    from fastapi import HTTPException
-
-    def _ts_to_utc_str(ts: int) -> str:
-        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-
-    resolved_asset, token_address, compound_only = await _resolve_price_asset(
-        w3, asset, pool=pool
-    )
-
-    if timestamp is None:
-        # ── 实时价格：链上 Oracle ─────────────────────────────────────────
-        oracle_exc: Exception | None = None
-        try:
-            prices = await get_assets_prices(w3, [token_address])
-        except Exception as exc:
-            prices = []
-            oracle_exc = exc
-
-        if prices and prices[0] > 0:
-            price = _raw_to_dec(prices[0], 8)
-            return PriceResponse(
-                asset=resolved_asset,
-                price_usd=_fmt(price, 2),
-                token_address=token_address,
-                timestamp=_ts_to_utc_str(int(_time.time())),
-                source="on-chain",
-            )
-
-        if compound_only and pool is not None:
-            snapshot = await _get_latest_compound_v3_reserve_price(pool, token_address)
-            if snapshot is not None:
-                price, snapshot_ts = snapshot
-                return PriceResponse(
-                    asset=resolved_asset,
-                    price_usd=_fmt(price, 2),
-                    token_address=token_address,
-                    timestamp=_ts_to_utc_str(snapshot_ts),
-                    source="compound-snapshot",
-                )
-
-        latest_price = await _fetch_defillama_current_price(token_address)
-        if latest_price is not None:
-            price, price_ts = latest_price
-            return PriceResponse(
-                asset=resolved_asset,
-                price_usd=_fmt(price, 2),
-                token_address=token_address,
-                timestamp=_ts_to_utc_str(price_ts),
-                source="defillama",
-            )
-
-        if oracle_exc is not None:
-            logger.warning(
-                "获取实时价格失败 asset=%s token=%s: %s",
-                asset,
-                token_address,
-                oracle_exc,
-            )
-        raise HTTPException(
-            status_code=502, detail=f"无法获取资产 '{asset}' 的实时价格"
-        )
-    else:
-        # ── 历史价格：DeFiLlama Coins API ────────────────────────────────
-        # https://coins.llama.fi/prices/historical/{timestamp}/ethereum:{address}
-        coin_key = f"ethereum:{token_address.lower()}"
-        url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
-
-        # ── 先查 DB 缓存（15 分钟桶命中即直接返回）──────────────────────
-        if pool is not None:
-            cached_price = await get_cached_eth_price(pool, timestamp, token_address)
-            if cached_price is not None:
-                return PriceResponse(
-                    asset=resolved_asset,
-                    price_usd=_fmt(cached_price, 2),
-                    token_address=token_address,
-                    timestamp=_ts_to_utc_str(timestamp),
-                    source="defillama",
-                )
-
-        try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as session:
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"DeFiLlama 返回 HTTP {resp.status}",
-                        )
-                    data = await resp.json()
-        except aiohttp.ClientError as exc:
-            raise HTTPException(
-                status_code=502, detail=f"无法连接 DeFiLlama: {exc}"
-            ) from exc
-
-        coins = data.get("coins", {})
-        if coin_key not in coins:
-            raise HTTPException(
-                status_code=404,
-                detail=f"DeFiLlama 未返回 '{asset}' 在该时间点的价格数据",
-            )
-        entry = coins[coin_key]
-        price = Decimal(str(entry["price"]))
-        actual_ts = int(entry.get("timestamp", timestamp))
-
-        # ── 写回 DB 缓存 ───────────────────────────────────────────────
-        # 写入时使用请求时间桶而非 actual_ts，确保下次读缓存的 key 一致
-        if pool is not None:
-            try:
-                await upsert_eth_price_timestamp(
-                    pool,
-                    timestamp,
-                    token_address,
-                    resolved_asset,
-                    price,
-                    source="defillama",
-                )
-            except Exception as _cache_exc:
-                logger.warning(
-                    "写入 eth_price_timestamp 缓存失败（不影响主流程）：%s", _cache_exc
-                )
-
-        return PriceResponse(
-            asset=resolved_asset,
-            price_usd=_fmt(price, 2),
-            token_address=token_address,
-            timestamp=_ts_to_utc_str(actual_ts),
-            source="defillama",
-        )
+    return await _shared_impl(w3, asset, pool=pool, timestamp=timestamp)
 
 
 async def get_price_period(
@@ -1837,183 +1536,15 @@ async def get_price_period(
     interval_minutes: int,
     pool: "asyncpg.Pool | None" = None,
 ) -> PricePeriodResponse:
-    """查询资产在指定时间段内按固定间隔的历史价格序列（来自 DeFiLlama）。
+    from crawler_shared.api.service import get_price_period_service as _shared_impl
 
-    改进策略（避免大量并发请求触发 429）：
-    - interval_minutes >= 60：使用 ``GET /chart/{coins}?start=&span={n_points}&period={Xh}``
-      DeFiLlama 原生时间序列接口，整个时间范围只需 **1 次 HTTP 请求**。
-    - interval_minutes < 60：使用 ``POST /batchHistorical``，将所有时间戳打包进
-      单次请求，每批最多 ``_BATCH_MAX`` 个时间戳，大幅减少请求数量。
-
-    Args:
-        w3:               AsyncWeb3 实例（用于解析 token_address）
-        asset:            资产符号，如 ``eth``、``wbtc``；大小写不敏感
-        start_ts:         起始 Unix 时间戳（秒）
-        end_ts:           结束 Unix 时间戳（秒，含）
-        interval_minutes: 采样间隔（分钟，>= 1）
-    """
-    from datetime import datetime, timezone
-
-    import aiohttp
-    from fastapi import HTTPException
-
-    # 每批 batchHistorical 最多携带的时间戳数量
-    _BATCH_MAX = 500
-
-    def _ts_to_utc_str(ts: int) -> str:
-        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-
-    if end_ts < start_ts:
-        raise HTTPException(status_code=400, detail="end 必须晚于或等于 start")
-    if interval_minutes < 1:
-        raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
-
-    resolved_asset, token_address, _ = await _resolve_price_asset(w3, asset, pool=pool)
-    coin_key = f"ethereum:{token_address.lower()}"
-
-    timeout = aiohttp.ClientTimeout(total=30)
-
-    # ── /chart/ 接口：支持任意间隔（1m、15m、1h、24h 等），单次请求 ───────
-    # batchHistorical 已废弃，统一改用 /chart/
-    step = interval_minutes * 60
-    n_points = (end_ts - start_ts) // step + 1
-
-    if interval_minutes < 60:
-        period_str = f"{interval_minutes}m"
-    else:
-        period_str = f"{interval_minutes // 60}h"
-
-    # ── 分块策略：每块 ≤ _DEFILLAMA_MAX_SPAN 个点 ──────────────────────────
-    # DeFiLlama /chart/ 单次最多 500 个数据点；缓存也按块检查，避免"全量命中"
-    # 才跳过 HTTP 请求的 all-or-nothing 判断。
-    _DEFILLAMA_MAX_SPAN = 500
-
-    expected_buckets = [(start_ts + i * step) // 900 * 900 for i in range(n_points)]
-
-    raw_prices: list[dict] = []
-    chunk_offset = 0
-
-    while chunk_offset < n_points:
-        chunk_n = min(_DEFILLAMA_MAX_SPAN, n_points - chunk_offset)
-        chunk_buckets = expected_buckets[chunk_offset : chunk_offset + chunk_n]
-        chunk_start = start_ts + chunk_offset * step
-
-        # 查本块缓存：单次范围查询 + 最近邻匹配（解决 DeFiLlama 时间戳漂移导致的 key 不对齐问题）
-        chunk_cached: dict[int, Decimal] = {}
-        if pool is not None:
-            import bisect
-
-            # 容差：最大 step/2，最大 2 小时（防止误用远离期望时间的缓存点）
-            _tolerance = min(step // 2, 7200)
-            rows = await pool.fetch(
-                "SELECT timestamp_bucket, price_usd "
-                "FROM loan.eth_price_timestamp "
-                "WHERE asset_address = lower($1) "
-                "AND timestamp_bucket >= $2 AND timestamp_bucket <= $3 "
-                "ORDER BY timestamp_bucket ASC",
-                token_address,
-                chunk_buckets[0] - _tolerance,
-                chunk_buckets[-1] + _tolerance,
-            )
-            _stored_bkts = [r["timestamp_bucket"] for r in rows]
-            _stored_map = {
-                r["timestamp_bucket"]: Decimal(str(r["price_usd"])) for r in rows
-            }
-            for expected_b in chunk_buckets:
-                idx = bisect.bisect_left(_stored_bkts, expected_b)
-                best_b, best_d = None, _tolerance + 1
-                for ci in (idx - 1, idx):
-                    if 0 <= ci < len(_stored_bkts):
-                        d = abs(_stored_bkts[ci] - expected_b)
-                        if d <= _tolerance and d < best_d:
-                            best_d, best_b = d, _stored_bkts[ci]
-                if best_b is not None:
-                    chunk_cached[expected_b] = _stored_map[best_b]
-
-        if len(chunk_cached) >= chunk_n:
-            # 本块全部命中缓存
-            raw_prices.extend(
-                {"timestamp": b, "price": str(chunk_cached[b])} for b in chunk_buckets
-            )
-        else:
-            # 本块有缺失，从 DeFiLlama 取整块
-            chunk_url = (
-                f"https://coins.llama.fi/chart/{coin_key}"
-                f"?start={chunk_start}&span={chunk_n}&period={period_str}"
-            )
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                try:
-                    async with sess.get(chunk_url) as resp:
-                        if resp.status != 200:
-                            body = await resp.text()
-                            raise HTTPException(
-                                status_code=502,
-                                detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
-                            )
-                        data = await resp.json()
-                except aiohttp.ClientError as exc:
-                    raise HTTPException(
-                        status_code=502, detail=f"请求 DeFiLlama 失败: {exc}"
-                    ) from exc
-
-            chunk_prices = data.get("coins", {}).get(coin_key, {}).get("prices", [])
-            raw_prices.extend(chunk_prices)
-
-            # 写回缓存：对齐到 expected_bucket 网格（不用 DeFiLlama 实际时间戳，避免下次读取时 key 不匹配）
-            if pool is not None:
-                _ei = 0  # chunk_buckets 指针
-                for p in chunk_prices:
-                    if "price" not in p or "timestamp" not in p:
-                        continue
-                    actual_ts = int(p["timestamp"])
-                    # 找最近的 expected bucket（chunk_buckets 已按时间升序）
-                    while _ei < chunk_n - 1 and abs(
-                        chunk_buckets[_ei + 1] - actual_ts
-                    ) < abs(chunk_buckets[_ei] - actual_ts):
-                        _ei += 1
-                    nearest_expected = chunk_buckets[_ei]
-                    if abs(nearest_expected - actual_ts) > step:
-                        continue  # 与期望时间相差超过一个间隔，跳过
-                    if nearest_expected in chunk_cached:
-                        continue  # 已在缓存中，跳过
-                    try:
-                        await upsert_eth_price_timestamp(
-                            pool,
-                            nearest_expected,  # 存在 expected_bucket，下次精确命中
-                            token_address,
-                            resolved_asset,
-                            Decimal(str(p["price"])),
-                            source="defillama",
-                        )
-                    except Exception as _cache_exc:
-                        logger.warning(
-                            "写入 eth_price_timestamp 缓存失败（不影响主流程）：%s",
-                            _cache_exc,
-                        )
-                        break
-
-        chunk_offset += chunk_n
-
-    items: list[PricePeriodItem] = [
-        PricePeriodItem(
-            price_usd=_fmt(Decimal(str(p["price"])), 2),
-            timestamp=_ts_to_utc_str(int(p["timestamp"])),
-        )
-        for p in raw_prices
-        if "price" in p and "timestamp" in p
-    ]
-    if not items:
-        raise HTTPException(
-            status_code=404,
-            detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
-        )
-    return PricePeriodResponse(
-        asset=resolved_asset,
-        token_address=token_address,
-        source="defillama",
-        prices=items,
+    return await _shared_impl(
+        w3,
+        pool,
+        asset=asset,
+        start=start_ts,
+        end=end_ts,
+        interval=interval_minutes,
     )
 
 

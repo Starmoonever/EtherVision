@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
-from aave_crawler.api import service
+from crawler_shared.api import service
 
 
 class _FakePool:
@@ -92,7 +92,7 @@ async def test_get_eth_price_realtime_supports_compound_v3_asset() -> None:
                 new=AsyncMock(side_effect=Exception("execution reverted")),
             ),
         ):
-            resp = await service.get_eth_price(
+            resp = await service.get_price(
                 MagicMock(), "uni", pool=cast(asyncpg.Pool, pool)
             )
     finally:
@@ -141,13 +141,13 @@ async def test_get_price_period_supports_compound_v3_asset() -> None:
                 ),
             ),
         ):
-            resp = await service.get_price_period(
+            resp = await service.get_price_period_service(
                 MagicMock(),
-                "uni",
-                start_ts=start_ts,
-                end_ts=end_ts,
-                interval_minutes=60,
-                pool=cast(asyncpg.Pool, pool),
+                cast(asyncpg.Pool, pool),
+                asset="uni",
+                start=start_ts,
+                end=end_ts,
+                interval=60,
             )
     finally:
         service._cache.clear()
@@ -184,7 +184,7 @@ async def test_get_eth_price_realtime_supports_evm_address_defillama_fallback() 
             new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
         ),
     ):
-        resp = await service.get_eth_price(MagicMock(), token_address)
+        resp = await service.get_price(MagicMock(), token_address, pool=None)
 
     assert resp.asset == token_address
     assert resp.token_address == token_address
@@ -218,12 +218,13 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
             new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
         ),
     ):
-        resp = await service.get_price_period(
+        resp = await service.get_price_period_service(
             MagicMock(),
-            token_address,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            interval_minutes=60,
+            None,
+            asset=token_address,
+            start=start_ts,
+            end=end_ts,
+            interval=60,
         )
 
     assert resp.asset == token_address
