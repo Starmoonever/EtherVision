@@ -260,7 +260,7 @@ async def liquidate_simulation(
     current_eth_price: Decimal | None = None
     try:
         w3 = _w3(request)
-        price_resp = await get_eth_price(w3, "eth")
+        price_resp = await get_eth_price(w3, symbol="eth")
         current_eth_price = Decimal(str(price_resp.price_usd))
     except Exception:
         pass  # RPC 不可用时降级处理：不过滤，结果可能包含上涨清算仓位
@@ -370,7 +370,7 @@ async def liquidate_period(
     current_eth_price: Decimal | None = None
     try:
         w3 = _w3(request)
-        price_resp = await get_eth_price(w3, "eth")
+        price_resp = await get_eth_price(w3, symbol="eth")
         current_eth_price = Decimal(str(price_resp.price_usd))
     except Exception:
         pass

@@ -1519,18 +1519,27 @@ WHERE p.liq_price_rise > 0
 
 async def get_eth_price(
     w3: AsyncWeb3,
-    asset: str,
+    symbol: str | None = None,
+    address: str | None = None,
     timestamp: int | None = None,
     pool: "asyncpg.Pool | None" = None,
 ) -> PriceResponse:
     from crawler_shared.api.service import get_price as _shared_impl
 
-    return await _shared_impl(w3, asset, pool=pool, timestamp=timestamp)
+    return await _shared_impl(
+        w3,
+        symbol=symbol,
+        address=address,
+        pool=pool,
+        timestamp=timestamp,
+    )
 
 
 async def get_price_period(
     w3: AsyncWeb3,
-    asset: str,
+    *,
+    symbol: str | None = None,
+    address: str | None = None,
     start_ts: int,
     end_ts: int,
     interval_minutes: int,
@@ -1541,7 +1550,8 @@ async def get_price_period(
     return await _shared_impl(
         w3,
         pool,
-        asset=asset,
+        symbol=symbol,
+        address=address,
         start=start_ts,
         end=end_ts,
         interval=interval_minutes,

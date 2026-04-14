@@ -341,58 +341,74 @@ class TestPositions:
 
 
 class TestPrice:
-    """GET /api/price — 可选 asset（默认 eth）/ time（默认 now）。"""
+    """GET /api/price — symbol 与 address 二选一，time 默认 now。"""
 
     # ── 实时模式（time=now）──────────────────────────────────────────────────
 
     def test_defaults_return_onchain_price(self, client: TestClient):
-        """默认参数：asset=eth, time=now → 链上实时价格。"""
-        with patch(
-            f"{_COMMON_ROUTES}.get_price",
-            new_callable=AsyncMock,
-            return_value=MOCK_PRICE_ONCHAIN,
-        ) as mock_svc:
-            resp = client.get("/api/price")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["source"] == "on-chain"
-        # 确认调用时 timestamp 参数未传（即为 None）
-        _, kwargs = mock_svc.call_args
-        assert kwargs.get("timestamp") is None
-        assert kwargs.get("pool") is not None
+        resp = client.get("/api/price")
+        assert resp.status_code == 400
 
     def test_time_now_explicit(self, client: TestClient):
         with patch(
             f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_ONCHAIN,
-        ):
-            resp = client.get("/api/price", params={"time": "now"})
+        ) as mock_svc:
+            resp = client.get("/api/price", params={"symbol": "eth", "time": "now"})
         assert resp.status_code == 200
         assert resp.json()["source"] == "on-chain"
+        _, kwargs = mock_svc.call_args
+        assert kwargs["symbol"] == "eth"
+        assert kwargs["address"] is None
 
-    @pytest.mark.parametrize("asset", ["eth", "ETH", "wbtc", "WBTC", "usdc"])
-    def test_various_assets_realtime(self, client: TestClient, asset: str):
+    @pytest.mark.parametrize("symbol", ["eth", "ETH", "wbtc", "WBTC", "usdc"])
+    def test_various_symbols_realtime(self, client: TestClient, symbol: str):
         with patch(
             f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_ONCHAIN,
         ):
-            resp = client.get("/api/price", params={"asset": asset})
+            resp = client.get("/api/price", params={"symbol": symbol})
         assert resp.status_code == 200
 
-    def test_unknown_asset_returns_404(self, client: TestClient):
+    def test_address_realtime_ok(self, client: TestClient):
+        with patch(
+            f"{_COMMON_ROUTES}.get_price",
+            new_callable=AsyncMock,
+            return_value=MOCK_PRICE_ONCHAIN,
+        ) as mock_svc:
+            resp = client.get(
+                "/api/price",
+                params={"address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"},
+            )
+        assert resp.status_code == 200
+        _, kwargs = mock_svc.call_args
+        assert kwargs["symbol"] is None
+        assert kwargs["address"] == "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+
+    def test_symbol_and_address_together_returns_400(self, client: TestClient):
+        resp = client.get(
+            "/api/price",
+            params={
+                "symbol": "eth",
+                "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_symbol_returns_404(self, client: TestClient):
         with patch(
             f"{_COMMON_ROUTES}.get_price",
             new_callable=AsyncMock,
             side_effect=HTTPException(status_code=404, detail="未找到资产"),
         ):
-            resp = client.get("/api/price", params={"asset": "FAKETOKEN"})
+            resp = client.get("/api/price", params={"symbol": "FAKETOKEN"})
         assert resp.status_code == 404
 
     def test_no_w3_returns_503(self, app_no_w3):
         with TestClient(app_no_w3) as c:
-            resp = c.get("/api/price")
+            resp = c.get("/api/price", params={"symbol": "eth"})
         assert resp.status_code == 503
 
     # ── 历史模式（time=<日期字符串>）─────────────────────────────────────────
@@ -404,7 +420,7 @@ class TestPrice:
             return_value=MOCK_PRICE_HIST,
         ) as mock_svc:
             resp = client.get(
-                "/api/price", params={"asset": "eth", "time": "2024-06-01"}
+                "/api/price", params={"symbol": "eth", "time": "2024-06-01"}
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -429,7 +445,7 @@ class TestPrice:
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_HIST,
         ):
-            resp = client.get("/api/price", params={"asset": "eth", "time": time_str})
+            resp = client.get("/api/price", params={"symbol": "eth", "time": time_str})
         assert resp.status_code == 200
 
     def test_historical_correct_timestamp_passed(self, client: TestClient):
@@ -442,7 +458,7 @@ class TestPrice:
             new_callable=AsyncMock,
             return_value=MOCK_PRICE_HIST,
         ) as mock_svc:
-            client.get("/api/price", params={"asset": "eth", "time": "2024-06-01"})
+            client.get("/api/price", params={"symbol": "eth", "time": "2024-06-01"})
         _, kwargs = mock_svc.call_args
         assert kwargs["timestamp"] == expected_ts
 
@@ -466,13 +482,13 @@ class TestPrice:
             side_effect=HTTPException(status_code=502, detail="DeFiLlama 不可用"),
         ):
             resp = client.get(
-                "/api/price", params={"asset": "eth", "time": "2024-06-01"}
+                "/api/price", params={"symbol": "eth", "time": "2024-06-01"}
             )
         assert resp.status_code == 502
 
     def test_historical_no_w3_returns_503(self, app_no_w3):
         with TestClient(app_no_w3) as c:
-            resp = c.get("/api/price", params={"asset": "eth", "time": "2024-06-01"})
+            resp = c.get("/api/price", params={"symbol": "eth", "time": "2024-06-01"})
         assert resp.status_code == 503
 
 
@@ -864,7 +880,7 @@ class TestPricePeriod:
     """GET /api/price/period — 按间隔查询资产历史价格序列。"""
 
     _BASE_PARAMS = {
-        "asset": "eth",
+        "symbol": "eth",
         "start": "2024-06-01",
         "end": "2024-06-03",
         "interval": 60,
@@ -900,6 +916,8 @@ class TestPricePeriod:
         ) as mock_svc:
             client.get("/api/price/period", params=self._BASE_PARAMS)
         _, kwargs = mock_svc.call_args
+        assert kwargs["symbol"] == "eth"
+        assert kwargs["address"] is None
         assert kwargs["start"] == expected_start
         assert kwargs["end"] == expected_end
         assert kwargs["interval"] == 60
@@ -913,7 +931,7 @@ class TestPricePeriod:
         ) as mock_svc:
             client.get(
                 "/api/price/period",
-                params={"asset": "eth", "start": "2024-06-01", "end": "2024-06-03"},
+                params={"symbol": "eth", "start": "2024-06-01", "end": "2024-06-03"},
             )
         _, kwargs = mock_svc.call_args
         assert kwargs["interval"] == 60
@@ -928,7 +946,7 @@ class TestPricePeriod:
             resp = client.get(
                 "/api/price/period",
                 params={
-                    "asset": "eth",
+                    "symbol": "eth",
                     "start": "2024-06-01",
                     "end": "2024-06-30",
                     "interval": interval,
@@ -941,7 +959,7 @@ class TestPricePeriod:
         resp = client.get(
             "/api/price/period",
             params={
-                "asset": "eth",
+                "symbol": "eth",
                 "start": "2024-06-01",
                 "end": "2024-06-30",
                 "interval": 0,
@@ -951,13 +969,13 @@ class TestPricePeriod:
 
     def test_missing_start_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/price/period", params={"asset": "eth", "end": "2024-06-30"}
+            "/api/price/period", params={"symbol": "eth", "end": "2024-06-30"}
         )
         assert resp.status_code == 422
 
     def test_missing_end_returns_422(self, client: TestClient):
         resp = client.get(
-            "/api/price/period", params={"asset": "eth", "start": "2024-06-01"}
+            "/api/price/period", params={"symbol": "eth", "start": "2024-06-01"}
         )
         assert resp.status_code == 422
 
@@ -969,7 +987,7 @@ class TestPricePeriod:
         ):
             resp = client.get(
                 "/api/price/period",
-                params={"asset": "eth", "start": "not-a-date", "end": "2024-06-30"},
+                params={"symbol": "eth", "start": "not-a-date", "end": "2024-06-30"},
             )
         assert resp.status_code == 400
 
@@ -981,7 +999,7 @@ class TestPricePeriod:
         ):
             resp = client.get(
                 "/api/price/period",
-                params={"asset": "eth", "start": "2024-06-01", "end": "invalid"},
+                params={"symbol": "eth", "start": "2024-06-01", "end": "invalid"},
             )
         assert resp.status_code == 400
 
@@ -990,7 +1008,7 @@ class TestPricePeriod:
             resp = c.get("/api/price/period", params=self._BASE_PARAMS)
         assert resp.status_code == 503
 
-    def test_unknown_asset_returns_404(self, client: TestClient):
+    def test_unknown_symbol_returns_404(self, client: TestClient):
         with patch(
             f"{_COMMON_ROUTES}.get_price_period_service",
             new_callable=AsyncMock,
@@ -999,12 +1017,43 @@ class TestPricePeriod:
             resp = client.get(
                 "/api/price/period",
                 params={
-                    "asset": "FAKETOKEN",
+                    "symbol": "FAKETOKEN",
                     "start": "2024-06-01",
                     "end": "2024-06-30",
                 },
             )
         assert resp.status_code == 404
+
+    def test_address_ok(self, client: TestClient):
+        with patch(
+            f"{_COMMON_ROUTES}.get_price_period_service",
+            new_callable=AsyncMock,
+            return_value=MOCK_PRICE_PERIOD,
+        ) as mock_svc:
+            resp = client.get(
+                "/api/price/period",
+                params={
+                    "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                    "start": "2024-06-01",
+                    "end": "2024-06-30",
+                },
+            )
+        assert resp.status_code == 200
+        _, kwargs = mock_svc.call_args
+        assert kwargs["symbol"] is None
+        assert kwargs["address"] == "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+
+    def test_symbol_and_address_together_returns_400(self, client: TestClient):
+        resp = client.get(
+            "/api/price/period",
+            params={
+                "symbol": "eth",
+                "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                "start": "2024-06-01",
+                "end": "2024-06-30",
+            },
+        )
+        assert resp.status_code == 400
 
     @pytest.mark.parametrize(
         "time_str",
@@ -1024,7 +1073,7 @@ class TestPricePeriod:
             resp = client.get(
                 "/api/price/period",
                 params={
-                    "asset": "eth",
+                    "symbol": "eth",
                     "start": time_str,
                     "end": time_str,
                     "interval": 60,

@@ -42,6 +42,25 @@ def _parse_utc_time(time_str: str) -> int:
     )
 
 
+def _require_symbol_or_address(
+    *,
+    symbol: str | None,
+    address: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_symbol = symbol.strip() if symbol is not None else None
+    normalized_address = address.strip() if address is not None else None
+    if not normalized_symbol:
+        normalized_symbol = None
+    if not normalized_address:
+        normalized_address = None
+    if (normalized_symbol is None) == (normalized_address is None):
+        raise HTTPException(
+            status_code=400,
+            detail="symbol 和 address 必须且只能提供其中一个",
+        )
+    return normalized_symbol, normalized_address
+
+
 @router.get(
     "/price/assets",
     response_model=PriceAssetsResponse,
@@ -57,13 +76,19 @@ async def price_assets() -> PriceAssetsResponse:
 async def asset_price(
     request: Request,
     pool: AsyncpgPool,
-    asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
+    symbol: str | None = Query(None, description="代币符号，如 ETH、WBTC、USDC"),
+    address: str | None = Query(None, description="EVM 代币地址，如 0x..."),
     time: str = Query("now", description="now 或 UTC 时间字符串"),
 ) -> PriceResponse:
+    symbol, address = _require_symbol_or_address(symbol=symbol, address=address)
     if time == "now":
-        return await get_price(_w3(request), asset, pool=pool)
+        return await get_price(_w3(request), symbol=symbol, address=address, pool=pool)
     return await get_price(
-        _w3(request), asset, pool=pool, timestamp=_parse_utc_time(time)
+        _w3(request),
+        symbol=symbol,
+        address=address,
+        pool=pool,
+        timestamp=_parse_utc_time(time),
     )
 
 
@@ -73,11 +98,13 @@ async def asset_price(
 async def asset_price_period(
     request: Request,
     pool: AsyncpgPool,
-    asset: str = Query("eth", description="资产名称，如 eth、wbtc、usdc"),
+    symbol: str | None = Query(None, description="代币符号，如 ETH、WBTC、USDC"),
+    address: str | None = Query(None, description="EVM 代币地址，如 0x..."),
     start: str = Query(..., description="起始时间（UTC）"),
     end: str = Query(..., description="结束时间（UTC）"),
     interval: int = Query(60, ge=1, description="采样间隔（分钟），最小 1"),
 ) -> PricePeriodResponse:
+    symbol, address = _require_symbol_or_address(symbol=symbol, address=address)
     start_ts = _parse_utc_time(start)
     end_ts = _parse_utc_time(end)
     if start_ts > end_ts:
@@ -85,7 +112,8 @@ async def asset_price_period(
     return await get_price_period_service(
         _w3(request),
         pool,
-        asset=asset,
+        symbol=symbol,
+        address=address,
         start=start_ts,
         end=end_ts,
         interval=interval,

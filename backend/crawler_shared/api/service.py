@@ -129,72 +129,133 @@ def _normalize_token_address(asset: str) -> str | None:
 
 
 async def _resolve_price_asset(
-    w3: AsyncWeb3,
-    asset: str,
-    pool: asyncpg.Pool | None = None,
+    *,
+    symbol: str | None,
+    address: str | None,
 ) -> tuple[str, str, bool]:
     from fastapi import HTTPException
 
-    normalized_asset = _normalize_price_asset(asset)
-    normalized_address = _normalize_token_address(normalized_asset)
-    if normalized_address is not None:
+    if (symbol is None) == (address is None):
+        raise HTTPException(
+            status_code=400,
+            detail="symbol 和 address 必须且只能提供其中一个",
+        )
+
+    if address is not None:
+        normalized_address = _normalize_token_address(address)
+        if normalized_address is None:
+            raise HTTPException(status_code=400, detail="address 不是有效的 EVM 地址")
         registered = ETHEREUM_PRICE_ASSET_BY_ADDRESS.get(normalized_address.lower())
         if registered is not None:
             registered_asset, token_address, _ = registered
             return registered_asset, token_address, False
         return normalized_address, normalized_address, False
 
+    assert symbol is not None
+    normalized_asset = _normalize_price_asset(symbol)
     target = PRICE_ASSET_ALIASES.get(normalized_asset.upper(), normalized_asset.upper())
     registered = ETHEREUM_PRICE_ASSETS.get(target.upper())
     if registered is not None:
         registered_asset, token_address, _ = registered
         return registered_asset, token_address, False
 
-    await _get_common_data(w3, "v3")
-
-    reserve_tokens = _cache["reserve_tokens_v3"]
-    for reserve_token in reserve_tokens:
-        if reserve_token.symbol.upper() == target:
-            return target, reserve_token.token_address, False
-
-    if pool is not None:
-        row = await pool.fetchrow(_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL, target)
-        if row is not None and row["token_address"]:
-            return target, str(row["token_address"]), True
-
-    raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
+    raise HTTPException(
+        status_code=404,
+        detail=f"未找到 symbol '{symbol}' 对应的受支持资产",
+    )
 
 
 async def _fetch_defillama_current_price(
     token_address: str,
 ) -> tuple[Decimal, int] | None:
+    import asyncio
     import aiohttp
     from fastapi import HTTPException
 
     coin_key = f"ethereum:{token_address.lower()}"
-    url = f"https://coins.llama.fi/prices/current/{coin_key}"
+    current_ts = int(_time.time())
+    urls = (
+        f"https://coins.llama.fi/prices/current/{coin_key}",
+        f"https://coins.llama.fi/prices/historical/{current_ts}/{coin_key}",
+    )
 
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=10)
         ) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"DeFiLlama 返回 HTTP {resp.status}",
+            for url in urls:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                    entry = data.get("coins", {}).get(coin_key)
+                    if entry is None or entry.get("price") is None:
+                        continue
+                    return Decimal(str(entry["price"])), int(
+                        entry.get("timestamp", current_ts)
                     )
-                data = await resp.json()
-    except aiohttp.ClientError as exc:
+    except (aiohttp.ClientError, asyncio.TimeoutError, asyncio.CancelledError) as exc:
         raise HTTPException(
             status_code=502, detail=f"无法连接 DeFiLlama: {exc}"
         ) from exc
 
-    entry = data.get("coins", {}).get(coin_key)
-    if entry is None or entry.get("price") is None:
-        return None
+    return None
 
-    return Decimal(str(entry["price"])), int(entry.get("timestamp", _time.time()))
+
+async def _fetch_coingecko_current_price(
+    token_address: str,
+) -> tuple[Decimal, int] | None:
+    import asyncio
+    import aiohttp
+    from fastapi import HTTPException
+
+    normalized_address = token_address.lower()
+    urls = (
+        (
+            "simple",
+            "https://api.coingecko.com/api/v3/simple/token_price/ethereum"
+            f"?contract_addresses={normalized_address}"
+            "&vs_currencies=usd&include_last_updated_at=true",
+        ),
+        (
+            "onchain",
+            "https://api.coingecko.com/api/v3/onchain/simple/networks/eth/"
+            f"token_price/{normalized_address}",
+        ),
+    )
+
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
+            for mode, url in urls:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                    if mode == "simple":
+                        entry = data.get(normalized_address)
+                        if entry is None or entry.get("usd") is None:
+                            continue
+                        return Decimal(str(entry["usd"])), int(
+                            entry.get("last_updated_at", _time.time())
+                        )
+
+                    attributes = data.get("data", {}).get("attributes", {})
+                    token_prices = attributes.get("token_prices", {})
+                    price_raw = token_prices.get(normalized_address)
+                    if price_raw is None:
+                        continue
+                    last_trade_ts = attributes.get("last_trade_timestamp", {})
+                    return Decimal(str(price_raw)), int(
+                        last_trade_ts.get(normalized_address, _time.time())
+                    )
+    except (aiohttp.ClientError, asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"无法连接 CoinGecko: {exc}"
+        ) from exc
+
+    return None
 
 
 async def _get_latest_compound_v3_reserve_price(
@@ -222,15 +283,17 @@ async def get_supported_price_assets() -> PriceAssetsResponse:
 
 async def get_price(
     w3: AsyncWeb3,
-    asset: str,
     *,
+    symbol: str | None,
+    address: str | None,
     pool: asyncpg.Pool | None,
     timestamp: int | None = None,
 ) -> PriceResponse:
     from fastapi import HTTPException
 
-    resolved_asset, token_address, compound_only = await _resolve_price_asset(
-        w3, asset, pool=pool
+    resolved_asset, token_address, _ = await _resolve_price_asset(
+        symbol=symbol,
+        address=address,
     )
 
     if timestamp is None:
@@ -251,7 +314,7 @@ async def get_price(
                 source="on-chain",
             )
 
-        if compound_only and pool is not None:
+        if pool is not None:
             snapshot = await _get_latest_compound_v3_reserve_price(pool, token_address)
             if snapshot is not None:
                 price, snapshot_ts = snapshot
@@ -274,15 +337,27 @@ async def get_price(
                 source="defillama",
             )
 
+        coingecko_price = await _fetch_coingecko_current_price(token_address)
+        if coingecko_price is not None:
+            price, price_ts = coingecko_price
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(price_ts),
+                source="coingecko",
+            )
+
         if oracle_exc is not None:
             logger.warning(
                 "failed to fetch realtime price asset=%s token=%s: %s",
-                asset,
+                symbol or address,
                 token_address,
                 oracle_exc,
             )
         raise HTTPException(
-            status_code=502, detail=f"无法获取资产 '{asset}' 的实时价格"
+            status_code=502,
+            detail=f"无法获取资产 '{symbol or address}' 的实时价格",
         )
 
     import aiohttp
@@ -321,7 +396,7 @@ async def get_price(
     if coin_key not in coins:
         raise HTTPException(
             status_code=404,
-            detail=f"DeFiLlama 未返回 '{asset}' 在该时间点的价格数据",
+            detail=f"DeFiLlama 未返回 '{symbol or address}' 在该时间点的价格数据",
         )
     entry = coins[coin_key]
     price = Decimal(str(entry["price"]))
@@ -353,7 +428,8 @@ async def get_price_period_service(
     w3: AsyncWeb3,
     pool: asyncpg.Pool | None,
     *,
-    asset: str,
+    symbol: str | None,
+    address: str | None,
     start: int,
     end: int,
     interval: int,
@@ -366,7 +442,10 @@ async def get_price_period_service(
     if interval < 1:
         raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
 
-    resolved_asset, token_address, _ = await _resolve_price_asset(w3, asset, pool=pool)
+    resolved_asset, token_address, _ = await _resolve_price_asset(
+        symbol=symbol,
+        address=address,
+    )
     coin_key = f"ethereum:{token_address.lower()}"
     timeout = aiohttp.ClientTimeout(total=30)
 
@@ -484,7 +563,7 @@ async def get_price_period_service(
     if not items:
         raise HTTPException(
             status_code=404,
-            detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
+            detail=f"DeFiLlama 未返回 '{symbol or address}' 在指定区间的价格数据",
         )
     return PricePeriodResponse(
         asset=resolved_asset,
