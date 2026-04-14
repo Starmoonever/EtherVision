@@ -20,6 +20,7 @@ import {
 } from '../api/justlend';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { AutoFitText } from '../shared/components/AutoFitText';
 
 interface JustLendPersonalDashboardProps {
   address: string;
@@ -660,7 +661,15 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
           <div className="justlend-risk-hero-top">
             <div>
               <div className="justlend-market-kicker">Health Factor</div>
-              <div className="justlend-risk-health">{formatHealthFactor(data.health_factor)}</div>
+              <AutoFitText
+                className="justlend-risk-health"
+                text={formatHealthFactor(data.health_factor)}
+                maxFontSizePx={64}
+                minFontSizePx={28}
+                fontWeight={800}
+                useScientificWhenOverflow
+                scientificIntegerDigitsThreshold={6}
+              />
             </div>
             <div className="justlend-risk-health-copy">
               账户当前总抵押为 <strong>{formatUsd(totalCollateralUsd)}</strong>，总债务为{' '}

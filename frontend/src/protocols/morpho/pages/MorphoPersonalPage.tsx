@@ -1,9 +1,9 @@
-import { AddressInput } from '../../../components/AddressInput';
-import { MorphoPersonalDashboard } from '../../../components/MorphoPersonalDashboard';
 import type { MorphoPositionResponse } from '../../../api/morpho';
 import { ErrorNotice } from '../../../shared/components/ErrorNotice';
 import { PageHero } from '../../../shared/components/PageHero';
 import { ResultPanel } from '../../../shared/components/ResultPanel';
+import { MorphoPersonalSearch } from '../components/MorphoPersonalSearch';
+import { MorphoPersonalDashboard } from '../components/MorphoPersonalDashboard';
 
 interface MorphoState {
   data: MorphoPositionResponse | null;
@@ -14,20 +14,24 @@ interface MorphoState {
 interface MorphoPersonalPageProps {
   error: string;
   morphoAddress: string;
+  morphoQueriedAddress: string;
   morphoMarketInput: string;
   morphoQueriedMarketId: string;
   morphoState: MorphoState;
   onMarketInputChange: (value: string) => void;
-  onSearch: (address: string) => void;
+  onAddressChange: (value: string) => void;
+  onSearch: (address: string, marketId: string) => void | Promise<void>;
 }
 
 export function MorphoPersonalPage({
   error,
   morphoAddress,
+  morphoQueriedAddress,
   morphoMarketInput,
   morphoQueriedMarketId,
   morphoState,
   onMarketInputChange,
+  onAddressChange,
   onSearch,
 }: MorphoPersonalPageProps) {
   return (
@@ -37,32 +41,21 @@ export function MorphoPersonalPage({
         subtitle="Morpho Blue 单市场仓位、借款边际与抵押结构分析"
       />
 
-      <div className="input-form input-form-compact">
-        <div className="input-row">
-          <input
-            type="text"
-            value={morphoMarketInput}
-            onChange={(event) => onMarketInputChange(event.target.value)}
-            placeholder="输入 Morpho market id (0x... bytes32)"
-            className="address-input"
-            spellCheck={false}
-          />
-        </div>
-      </div>
-
-      <AddressInput
-        onSearch={onSearch}
+      <MorphoPersonalSearch
         loading={morphoState.loading}
-        historyKey="search_history_morpho"
-        placeholder="输入 Morpho 钱包地址 (0x...)"
+        valueAddress={morphoAddress}
+        valueMarketId={morphoMarketInput}
+        onChangeAddress={onAddressChange}
+        onChangeMarketId={onMarketInputChange}
+        onSearch={onSearch}
       />
       <ErrorNotice message={error} />
 
-      {morphoAddress && morphoQueriedMarketId ? (
+      {morphoQueriedAddress && morphoQueriedMarketId ? (
         <div className="results-container">
           <ResultPanel>
             <MorphoPersonalDashboard
-              address={morphoAddress}
+              address={morphoQueriedAddress}
               marketId={morphoQueriedMarketId}
               protocol="blue"
               {...morphoState}

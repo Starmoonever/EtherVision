@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { MorphoPositionResponse } from '../api/morpho';
-import { fetchEthPrice } from '../api/price';
-import { ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { fetchEthPrice } from '../../../api/price';
+import type { MorphoPositionResponse } from '../../../api/morpho';
+import { ChartInfoButton, type ExplainItem } from '../../../components/ChartAssist';
+import { AutoFitText } from '../../../shared/components/AutoFitText';
 import { MorphoPositionTable } from './MorphoPositionTable';
-import { MorphoSummaryCard } from './MorphoSummaryCard';
 
 interface MorphoPersonalDashboardProps {
   address: string;
@@ -30,16 +30,18 @@ function formatDateTime(value: string): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function formatCompactAddress(value: string): string {
-  if (value.length <= 16) return value;
-  return `${value.slice(0, 8)}…${value.slice(-6)}`;
-}
-
 function formatNumberCompact(value: number, digits: number = 2): string {
   return value.toLocaleString(undefined, {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function isUsdLikeToken(symbol: string): boolean {
+  const upper = symbol.trim().toUpperCase();
+  return ['USDC', 'USDT', 'DAI', 'FRAX', 'TUSD', 'LUSD', 'GUSD', 'USDE', 'USDS', 'SUSD'].includes(
+    upper,
+  );
 }
 
 function gaugeColor(hf: number | null): string {
@@ -140,8 +142,6 @@ function buildRiskTone(data: MorphoPositionResponse | null): RiskState {
 }
 
 export function MorphoPersonalDashboard({
-  address,
-  marketId,
   protocol = 'blue',
   data,
   loading,
@@ -192,7 +192,6 @@ export function MorphoPersonalDashboard({
               {protocol.toUpperCase()}
             </span>
           </div>
-          <span className="address-badge">{formatCompactAddress(address)}</span>
         </div>
         <div className="protocol-banner protocol-banner-soft">
           <div className="protocol-banner-title">没有找到可用仓位</div>
@@ -215,6 +214,8 @@ export function MorphoPersonalDashboard({
   const currentHF = data.health_factor ? toNum(data.health_factor) : null;
   const lltvRatio = toNum(data.lltv_ratio);
   const lltvPercent = clamp(lltvRatio * 100, 0, 100);
+  const quotePairLabel = `${data.loan_token_symbol}/${data.collateral_token_symbol}`;
+  const quoteLooksUsd = isUsdLikeToken(data.loan_token_symbol);
 
   const borrowUtilPercent =
     maxBorrowable <= 0 ? 0 : clamp((borrowAssets / maxBorrowable) * 100, 0, 100);
@@ -232,8 +233,6 @@ export function MorphoPersonalDashboard({
       ? null
       : Math.max(0, ((currentPrice - liquidationPrice) / currentPrice) * 100);
 
-  const borrowHeadroom = Math.max(0, maxBorrowable - borrowAssets);
-
   return (
     <div className="protocol-dashboard">
       <div className="card protocol-overview-card" style={{ marginBottom: 0 }}>
@@ -246,9 +245,6 @@ export function MorphoPersonalDashboard({
             </span>
             <span className={`badge ${riskToneClass}`}>{risk.label}</span>
           </div>
-          <span className="address-badge" title={address}>
-            {formatCompactAddress(address)}
-          </span>
         </div>
 
         <div className="protocol-overview-grid">
@@ -260,12 +256,6 @@ export function MorphoPersonalDashboard({
 
           <div className="protocol-overview-side">
             <div className="protocol-overview-pills">
-              <div className="protocol-overview-pill">
-                <span className="protocol-overview-pill-label">Market ID</span>
-                <span className="protocol-overview-pill-value mono" title={marketId}>
-                  {marketId.slice(0, 10)}…{marketId.slice(-8)}
-                </span>
-              </div>
               <div className="protocol-overview-pill">
                 <span className="protocol-overview-pill-label">数据源</span>
                 <span className="protocol-overview-pill-value">
@@ -298,35 +288,6 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <div className="summary-grid protocol-summary-grid">
-        <div className="metric-box">
-          <span className="metric-label">健康因子</span>
-          <span className="metric-value" style={{ color: gaugeColor(currentHF) }}>
-            {formatHealthFactorText(data)}
-          </span>
-        </div>
-        <div className="metric-box">
-          <span className="metric-label">借款使用率</span>
-          <span className="metric-value blue">{formatNumberCompact(borrowUtilPercent, 2)}%</span>
-        </div>
-        <div className="metric-box">
-          <span className="metric-label">LLTV 上限</span>
-          <span className="metric-value blue">{formatNumberCompact(lltvPercent, 2)}%</span>
-        </div>
-        <div className="metric-box">
-          <span className="metric-label">剩余安全边际</span>
-          <span className="metric-value blue">{formatNumberCompact(riskGap, 2)}%</span>
-        </div>
-        <div className="metric-box">
-          <span className="metric-label">最大可借</span>
-          <span className="metric-value blue">{formatNumberCompact(maxBorrowable, 6)}</span>
-        </div>
-        <div className="metric-box">
-          <span className="metric-label">可借余量</span>
-          <span className="metric-value blue">{formatNumberCompact(borrowHeadroom, 6)}</span>
-        </div>
-      </div>
-
       <div className="protocol-risk-layout">
         <div className="card protocol-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
           <div className="card-header">
@@ -337,9 +298,16 @@ export function MorphoPersonalDashboard({
           <div className="protocol-risk-hero-top">
             <div>
               <div className="protocol-kicker">Health Factor</div>
-              <div className="protocol-risk-health" style={{ color: gaugeColor(currentHF) }}>
-                {formatHealthFactorText(data)}
-              </div>
+              <AutoFitText
+                className="protocol-risk-health"
+                text={formatHealthFactorText(data)}
+                maxFontSizePx={64}
+                minFontSizePx={28}
+                fontWeight={800}
+                style={{ color: gaugeColor(currentHF) }}
+                useScientificWhenOverflow
+                scientificIntegerDigitsThreshold={6}
+              />
             </div>
             <div className="protocol-risk-health-copy">
               当前抵押折算价值约为{' '}
@@ -406,12 +374,22 @@ export function MorphoPersonalDashboard({
           <div className="protocol-insight-grid">
             <div className="metric-box">
               <span className="metric-label">Oracle 报价</span>
-              <span className="metric-value blue">${formatNumberCompact(currentPrice, 6)}</span>
+              <span className="metric-value blue">
+                {quoteLooksUsd ? '$' : ''}
+                {formatNumberCompact(currentPrice, 6)} {quotePairLabel}
+              </span>
             </div>
             <div className="metric-box">
               <span className="metric-label">清算触发价</span>
               <span className="metric-value red">
-                {liquidationPrice === null ? '--' : `$${formatNumberCompact(liquidationPrice, 6)}`}
+                {liquidationPrice === null ? (
+                  '--'
+                ) : (
+                  <>
+                    {quoteLooksUsd ? '$' : ''}
+                    {formatNumberCompact(liquidationPrice, 6)} {quotePairLabel}
+                  </>
+                )}
               </span>
             </div>
             <div className="metric-box">
@@ -444,14 +422,6 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <MorphoSummaryCard
-        address={address}
-        marketId={marketId}
-        protocol={protocol}
-        data={data}
-        loading={loading}
-        notFound={notFound}
-      />
       <MorphoPositionTable data={data} loading={loading} notFound={notFound} protocol={protocol} />
     </div>
   );

@@ -806,26 +806,41 @@
   align-items: center;
 }
 
+.justlend-risk-hero-top > div:first-child,
+.protocol-risk-hero-top > div:first-child {
+  min-width: 0;
+}
+
 .justlend-risk-health,
 .protocol-risk-health {
   font-size: clamp(2.5rem, 4vw, 4rem);
   line-height: 1;
   font-weight: 800;
   color: #f8fafc;
+  max-width: 100%;
 }
 
 .justlend-risk-health-copy,
 .protocol-risk-health-copy {
   color: #94a3b8;
-  font-size: 0.92rem;
+  font-size: 0.8rem;
   line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .justlend-risk-hero-top,
+  .protocol-risk-hero-top {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
 }
 
 .justlend-bullet-shell,
 .risk-bullet-shell {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1.5rem;
 }
 
 .justlend-bullet-header,
@@ -1242,6 +1257,10 @@
   padding-bottom: 0.8rem;
 }
 
+.morpho-table {
+  table-layout: fixed;
+}
+
 .morpho-table td {
   color: #dbe7f5;
   font-size: 0.95rem;
@@ -1252,6 +1271,36 @@
 .morpho-table td.bold {
   font-size: 1rem;
   color: #f8fafc;
+}
+
+.morpho-summary-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.morpho-summary-group {
+  background: rgba(8, 15, 29, 0.65);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 12px;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.morpho-summary-group-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+}
+
+.morpho-summary-group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
 }
 
 .justlend-caption {
@@ -1413,7 +1462,9 @@
   .protocol-overview-tags,
   .protocol-insight-grid,
   .protocol-market-summary-grid,
-  .morpho-keyline {
+  .morpho-keyline,
+  .morpho-summary-layout,
+  .morpho-summary-group-grid {
     grid-template-columns: 1fr;
   }
 
