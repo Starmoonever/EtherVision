@@ -1,9 +1,9 @@
-import { MorphoPersonalDashboard } from '../../../components/MorphoPersonalDashboard';
 import type { MorphoPositionResponse } from '../../../api/morpho';
 import { ErrorNotice } from '../../../shared/components/ErrorNotice';
 import { PageHero } from '../../../shared/components/PageHero';
 import { ResultPanel } from '../../../shared/components/ResultPanel';
 import { MorphoPersonalSearch } from '../components/MorphoPersonalSearch';
+import { MorphoPersonalDashboard } from '../components/MorphoPersonalDashboard';
 
 interface MorphoState {
   data: MorphoPositionResponse | null;
@@ -14,6 +14,7 @@ interface MorphoState {
 interface MorphoPersonalPageProps {
   error: string;
   morphoAddress: string;
+  morphoQueriedAddress: string;
   morphoMarketInput: string;
   morphoQueriedMarketId: string;
   morphoState: MorphoState;
@@ -25,6 +26,7 @@ interface MorphoPersonalPageProps {
 export function MorphoPersonalPage({
   error,
   morphoAddress,
+  morphoQueriedAddress,
   morphoMarketInput,
   morphoQueriedMarketId,
   morphoState,
@@ -49,11 +51,11 @@ export function MorphoPersonalPage({
       />
       <ErrorNotice message={error} />
 
-      {morphoAddress && morphoQueriedMarketId ? (
+      {morphoQueriedAddress && morphoQueriedMarketId ? (
         <div className="results-container">
           <ResultPanel>
             <MorphoPersonalDashboard
-              address={morphoAddress}
+              address={morphoQueriedAddress}
               marketId={morphoQueriedMarketId}
               protocol="blue"
               {...morphoState}

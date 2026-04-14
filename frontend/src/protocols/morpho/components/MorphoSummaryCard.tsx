@@ -1,4 +1,4 @@
-import type { MorphoPositionResponse } from '../api/morpho';
+import type { MorphoPositionResponse } from '../../../api/morpho';
 
 interface MorphoSummaryCardProps {
   address: string;
@@ -22,31 +22,9 @@ function formatNumber(value: string | number, digits: number = 2): string {
   });
 }
 
-function formatPercentFromRatio(value: string | number, digits: number = 2): string {
-  return `${(toNum(value) * 100).toLocaleString(undefined, {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })}%`;
-}
-
 function formatCompactAddress(value: string): string {
   if (value.length <= 12) return value;
   return `${value.slice(0, 6)}…${value.slice(-4)}`;
-}
-
-function healthColor(data: MorphoPositionResponse): string {
-  if (!data.has_position) return '#94a3b8';
-  if (!data.health_factor) return '#22c55e';
-  return data.is_healthy ? '#22c55e' : '#ef4444';
-}
-
-// Morpho 返回的 health_factor 在无仓位和无借款时都可能为空，这里拆开显示语义。
-function getHealthFactorText(data: MorphoPositionResponse): string {
-  if (!data.has_position) return '无仓位';
-  if (data.health_factor === null) {
-    return toNum(data.borrow_assets) > 0 ? '计算中' : '∞';
-  }
-  return toNum(data.health_factor).toFixed(2);
 }
 
 // 概览卡集中展示市场定义、借贷规模、风险阈值和可借上限这些高价值字段。
@@ -100,9 +78,6 @@ export function MorphoSummaryCard({
 
   if (!data) return null;
 
-  const hfText = getHealthFactorText(data);
-  const quoteLabel = `${data.collateral_token_symbol}/${data.loan_token_symbol} 计价`;
-
   return (
     <div className="card summary-card morpho-emphasis-card">
       <div className="card-header">
@@ -132,33 +107,6 @@ export function MorphoSummaryCard({
 
       <div className="summary-grid">
         <div className="metric-box">
-          <span className="metric-label">借款资产</span>
-          <span className="metric-value blue morpho-metric-strong">{data.loan_token_symbol}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">抵押资产</span>
-          <span className="metric-value green morpho-metric-strong">
-            {data.collateral_token_symbol}
-          </span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">存入数量</span>
-          <span className="metric-value green">{formatNumber(data.supply_assets, 6)}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">借款数量</span>
-          <span className="metric-value red">{formatNumber(data.borrow_assets, 6)}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">抵押数量</span>
-          <span className="metric-value blue">{formatNumber(data.collateral_assets, 6)}</span>
-        </div>
-
-        <div className="metric-box">
           <span className="metric-label">抵押折算借款资产价值</span>
           <span className="metric-value blue">
             {formatNumber(data.collateral_value_in_loan_asset, 6)}
@@ -170,23 +118,6 @@ export function MorphoSummaryCard({
           <span className="metric-value blue">
             {formatNumber(data.max_borrowable_in_loan_asset, 6)}
           </span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">健康因子</span>
-          <span className="metric-value morpho-metric-hero" style={{ color: healthColor(data) }}>
-            {hfText}
-          </span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">LLTV</span>
-          <span className="metric-value blue">{formatPercentFromRatio(data.lltv_ratio, 2)}</span>
-        </div>
-
-        <div className="metric-box">
-          <span className="metric-label">{quoteLabel}</span>
-          <span className="metric-value blue">{formatNumber(data.price_quote, 6)}</span>
         </div>
       </div>
     </div>
