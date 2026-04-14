@@ -66,8 +66,12 @@ def _hex_to_tron_base58(address_hex: str) -> str:
     return ("1" * pad) + encoded
 
 
+def _normalize_tron_address(address: str) -> str:
+    return _hex_to_tron_base58(_tron_address_to_hex(address))
+
+
 def _encode_address_word(address: str) -> str:
-    return _tron_address_to_hex(address).rjust(64, "0")
+    return _tron_address_to_hex(_normalize_tron_address(address)).rjust(64, "0")
 
 
 def _decode_words(raw: str) -> list[str]:
@@ -86,7 +90,7 @@ def _decode_bool(word: str) -> bool:
 
 
 def _decode_address(word: str) -> str:
-    return ("41" + word[-40:]).lower()
+    return _hex_to_tron_base58("41" + word[-40:])
 
 
 def _decode_string(raw: str) -> str:
@@ -106,9 +110,13 @@ async def _call_contract_method(
     parameter: str = "",
     owner_address: str | None = None,
 ) -> str:
+    normalized_contract_address = _normalize_tron_address(contract_address)
+    normalized_owner_address = _normalize_tron_address(
+        owner_address or normalized_contract_address
+    )
     payload = {
-        "contract_address": _tron_address_to_hex(contract_address),
-        "owner_address": _tron_address_to_hex(owner_address or contract_address),
+        "contract_address": _tron_address_to_hex(normalized_contract_address),
+        "owner_address": _tron_address_to_hex(normalized_owner_address),
         "function_selector": function_selector,
         "parameter": parameter,
     }
@@ -265,11 +273,14 @@ async def fetch_justlend_position_via_rpc(
 ) -> dict[str, Any]:
     if protocol.lower() != "trx":
         raise HTTPException(status_code=400, detail="protocol 仅支持 trx")
-    markets = [_tron_address_to_hex(item) for item in (market_addresses or []) if item]
+    normalized_address = _normalize_tron_address(address)
+    markets = [
+        _normalize_tron_address(item) for item in (market_addresses or []) if item
+    ]
     if not markets:
         raise NotImplementedError("JustLend RPC fetch requires configured markets")
 
-    user_address_hex = _tron_address_to_hex(address)
+    user_address_hex = _tron_address_to_hex(normalized_address)
     comptroller_cache: dict[str, dict[str, Any]] = {}
     oracle_price_cache: dict[tuple[str, str], int] = {}
     token_meta_cache: dict[str, dict[str, Any]] = {}
@@ -284,7 +295,7 @@ async def fetch_justlend_position_via_rpc(
         ) = await _call_account_snapshot(
             tron_rpc,
             contract_address=market_address,
-            user_address=address,
+            user_address=normalized_address,
         )
         if error_code != 0:
             raise HTTPException(
@@ -298,7 +309,7 @@ async def fetch_justlend_position_via_rpc(
             tron_rpc,
             contract_address=market_address,
             function_selector="comptroller()",
-            owner_address=address,
+            owner_address=normalized_address,
         )
         controller_state = comptroller_cache.get(comptroller_address)
         if controller_state is None:
@@ -306,7 +317,7 @@ async def fetch_justlend_position_via_rpc(
                 tron_rpc,
                 contract_address=comptroller_address,
                 function_selector="oracle()",
-                owner_address=address,
+                owner_address=normalized_address,
             )
             controller_state = {
                 "oracle_address": oracle_address,
@@ -326,7 +337,7 @@ async def fetch_justlend_position_via_rpc(
                 contract_address=controller_state["oracle_address"],
                 function_selector="getUnderlyingPrice(address)",
                 parameter=_encode_address_word(market_address),
-                owner_address=address,
+                owner_address=normalized_address,
             )
             oracle_price_cache[price_cache_key] = raw_price
 
@@ -336,27 +347,27 @@ async def fetch_justlend_position_via_rpc(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="symbol()",
-                owner_address=address,
+                owner_address=normalized_address,
             )
             try:
                 underlying_address = await _call_address(
                     tron_rpc,
                     contract_address=market_address,
                     function_selector="underlying()",
-                    owner_address=address,
+                    owner_address=normalized_address,
                 )
                 underlying_symbol = await _call_string(
                     tron_rpc,
                     contract_address=underlying_address,
                     function_selector="symbol()",
-                    owner_address=address,
+                    owner_address=normalized_address,
                 )
                 underlying_decimals = await _call_token_decimals(
                     tron_rpc,
                     token_address=underlying_address,
                 )
             except HTTPException:
-                underlying_address = _TRX_ADDRESS_HEX
+                underlying_address = _hex_to_tron_base58(_TRX_ADDRESS_HEX)
                 underlying_symbol = (
                     "TRX" if "TRX" in jtoken_symbol.upper() else jtoken_symbol
                 )
@@ -422,7 +433,9 @@ async def fetch_justlend_position_via_rpc(
                 discounted_collateral_usd += value_usd * item["collateral_factor"]
             assets.append(
                 {
-                    "asset_address": bytes.fromhex(str(item["underlying_address"])),
+                    "asset_address": bytes.fromhex(
+                        _tron_address_to_hex(str(item["underlying_address"]))
+                    ),
                     "side": "collateral",
                     "symbol": item["underlying_symbol"],
                     "decimals": item["underlying_decimals"],
@@ -431,9 +444,7 @@ async def fetch_justlend_position_via_rpc(
                     "value_usd": value_usd,
                     "extra_jsonb": {
                         "entered": item["entered"],
-                        "jtoken_address": _hex_to_tron_base58(
-                            str(item["market_address"])
-                        ),
+                        "jtoken_address": str(item["market_address"]),
                         "collateral_factor": str(item["collateral_factor"]),
                         "price_in_trx": str(item["price_in_trx"]),
                     },
@@ -444,7 +455,9 @@ async def fetch_justlend_position_via_rpc(
             total_debt_usd += value_usd
             assets.append(
                 {
-                    "asset_address": bytes.fromhex(str(item["underlying_address"])),
+                    "asset_address": bytes.fromhex(
+                        _tron_address_to_hex(str(item["underlying_address"]))
+                    ),
                     "side": "borrow",
                     "symbol": item["underlying_symbol"],
                     "decimals": item["underlying_decimals"],
@@ -453,9 +466,7 @@ async def fetch_justlend_position_via_rpc(
                     "value_usd": value_usd,
                     "extra_jsonb": {
                         "entered": item["entered"],
-                        "jtoken_address": _hex_to_tron_base58(
-                            str(item["market_address"])
-                        ),
+                        "jtoken_address": str(item["market_address"]),
                         "price_in_trx": str(item["price_in_trx"]),
                     },
                 }
@@ -495,7 +506,7 @@ async def fetch_justlend_position_via_rpc(
         "liquidation_threshold": liquidation_threshold,
         "extra_jsonb": {
             "source": "justlend_rpc",
-            "source_address": address,
+            "source_address": normalized_address,
             "trx_price_usd": str(trx_price_usd),
             "market_count": len(raw_positions),
         },
@@ -510,12 +521,13 @@ async def fetch_market_exchange_rates(
 ) -> dict[str, Decimal]:
     rates: dict[str, Decimal] = {}
     for market_address in market_addresses:
-        market_hex = _tron_address_to_hex(market_address)
+        normalized_market_address = _normalize_tron_address(market_address)
+        market_hex = _tron_address_to_hex(normalized_market_address)
         exchange_rate_raw = await _call_uint256(
             tron_rpc,
-            contract_address=market_hex,
+            contract_address=normalized_market_address,
             function_selector="exchangeRateStored()",
-            owner_address=market_hex,
+            owner_address=normalized_market_address,
         )
         rates[market_hex] = Decimal(exchange_rate_raw)
     return rates

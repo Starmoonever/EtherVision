@@ -103,7 +103,7 @@ async def get_supported_tron_price_assets(cfg: Any) -> list[dict[str, str]]:
     seen: set[tuple[str, str]] = set()
     assets: list[dict[str, str]] = []
     for token in token_list:
-        asset_address = str(token.get("underlyingAddress") or "").strip()
+        asset_address = _normalize_tron_address(token.get("underlyingAddress"))
         symbol = str(token.get("underlyingSymbol") or "").strip().upper()
         if not asset_address or not symbol:
             continue
@@ -188,6 +188,23 @@ def _tron_bytes_to_base58(address: bytes) -> str:
     return ("1" * pad) + encoded
 
 
+def _normalize_tron_address(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        if not raw:
+            return None
+        return _tron_bytes_to_base58(raw)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return _tron_bytes_to_base58(_tron_address_to_bytes(text))
+    except HTTPException:
+        return None
+
+
 def _record_ts(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -261,10 +278,7 @@ def _extract_market_address_from_contract(value: Any) -> str | None:
     contract_address = payload.get("contract_address")
     if contract_address is None:
         return None
-    try:
-        return _tron_bytes_to_base58(_tron_address_to_bytes(str(contract_address)))
-    except HTTPException:
-        return str(contract_address)
+    return _normalize_tron_address(contract_address)
 
 
 def _extract_market_address_from_parse_input(value: Any) -> str | None:
@@ -280,10 +294,7 @@ def _extract_market_address_from_parse_input(value: Any) -> str | None:
     asset = payload.get("asset")
     if asset is None:
         return None
-    try:
-        return _tron_bytes_to_base58(_tron_address_to_bytes(str(asset)))
-    except HTTPException:
-        return None
+    return _normalize_tron_address(asset)
 
 
 def _fallback_replay_brief(method_id: str | None, market: str | None) -> str:
@@ -342,6 +353,10 @@ def _format_brief_amount(amount: Decimal) -> str:
     return text or "0"
 
 
+def _format_brief_usd(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01')):.2f}"
+
+
 async def _fetch_justlend_market_catalog(
     cfg: Any,
     *,
@@ -372,14 +387,14 @@ async def _fetch_justlend_market_catalog(
 
     catalog: dict[str, dict[str, Any]] = {}
     for token in token_list:
-        market_address = str(token.get("address") or "").strip()
+        market_address = _normalize_tron_address(token.get("address"))
         if not market_address:
             continue
         market_bytes = _tron_address_to_bytes(market_address)
         market_hex = market_bytes.hex()
-        underlying_address = str(
-            token.get("underlyingAddress") or token.get("address") or ""
-        ).strip()
+        underlying_address = _normalize_tron_address(
+            token.get("underlyingAddress") or token.get("address")
+        )
         underlying_hex: str | None = None
         if underlying_address:
             try:
@@ -459,10 +474,7 @@ def _parse_tx_delta(
         underlying_address = tx_effect.get("underlying_address")
         meta = None
         for candidate in (market_address, underlying_address):
-            if isinstance(candidate, (bytes, bytearray, memoryview)):
-                candidate_value = _tron_bytes_to_base58(bytes(candidate))
-            else:
-                candidate_value = str(candidate or "").strip()
+            candidate_value = _normalize_tron_address(candidate)
             if not candidate_value:
                 continue
             try:
@@ -479,13 +491,13 @@ def _parse_tx_delta(
                     meta,
                 )
         if market_address is not None:
-            market_value = (
-                _tron_bytes_to_base58(bytes(market_address))
-                if isinstance(market_address, (bytes, bytearray, memoryview))
-                else str(market_address)
-            )
+            market_value = _normalize_tron_address(market_address)
             try:
-                market_hex = _tron_address_to_bytes(market_value).hex()
+                market_hex = (
+                    _tron_address_to_bytes(market_value).hex()
+                    if market_value is not None
+                    else None
+                )
             except HTTPException:
                 market_hex = None
         else:
@@ -538,9 +550,13 @@ def _build_tx_brief_from_delta(
     meta: dict[str, Any] | None,
 ) -> str:
     symbol = str((meta or {}).get("underlying_symbol") or "").strip()
+    price_usd = Decimal(str((meta or {}).get("price_usd") or "0"))
     if amount > 0 and symbol:
         action = _JUSTLEND_METHOD_BRIEF_MAP.get(str(tx.get("method_id") or ""), "更新")
-        return f"{action} {_format_brief_amount(amount)} {symbol}"
+        brief = f"{action} {_format_brief_amount(amount)} {symbol}"
+        if price_usd > 0:
+            return f"{brief} (价值 {_format_brief_usd(amount * price_usd)} usd)"
+        return brief
     return _build_tx_brief(
         method_id=tx.get("method_id"),
         market=tx.get("market"),
@@ -564,9 +580,9 @@ def _build_event_snapshot_row(
     market_bytes: bytes | None = None
     tx_meta = tx.get("_meta") if isinstance(tx.get("_meta"), dict) else None
     tx_market_address = (
-        str(tx_meta.get("market_address"))
+        _normalize_tron_address(tx_meta.get("market_address"))
         if tx_meta and tx_meta.get("market_address")
-        else str(tx.get("market") or "")
+        else _normalize_tron_address(tx.get("market"))
     )
     if tx_market_address:
         try:
@@ -589,7 +605,9 @@ def _build_event_snapshot_row(
             discounted_collateral_usd += value_usd * collateral_factor
             assets_jsonb.append(
                 {
-                    "asset_address": str(meta["underlying_address"]),
+                    "asset_address": _normalize_tron_address(
+                        meta["underlying_address"]
+                    ),
                     "symbol": meta["underlying_symbol"],
                     "side": "collateral",
                     "amount": str(supply_amount),
@@ -602,7 +620,9 @@ def _build_event_snapshot_row(
             total_debt_usd += value_usd
             assets_jsonb.append(
                 {
-                    "asset_address": str(meta["underlying_address"]),
+                    "asset_address": _normalize_tron_address(
+                        meta["underlying_address"]
+                    ),
                     "symbol": meta["underlying_symbol"],
                     "side": "borrow",
                     "amount": str(borrow_amount),
@@ -698,10 +718,9 @@ async def _collect_and_cache_replay_misses(
     for effect in tx_effects.values():
         for key in ("market_address", "underlying_address"):
             raw = effect.get(key)
-            if isinstance(raw, (bytes, bytearray, memoryview)):
-                market_addresses.add(_tron_bytes_to_base58(bytes(raw)))
-            elif raw:
-                market_addresses.add(str(raw))
+            normalized = _normalize_tron_address(raw)
+            if normalized:
+                market_addresses.add(normalized)
     market_catalog = await _fetch_justlend_market_catalog(
         cfg,
         tron_rpc=tron_rpc,
@@ -816,12 +835,9 @@ def _format_assets(assets: list[Any]) -> list[JustLendPositionAssetResponse]:
 
 def _map_position_asset(asset: Any) -> JustLendPositionAssetResponse:
     asset_address = asset.get("asset_address")
-    if isinstance(asset_address, str):
-        asset_address_str = asset_address
-    elif isinstance(asset_address, (bytes, bytearray, memoryview)):
-        asset_address_str = _tron_bytes_to_base58(bytes(asset_address))
-    else:
-        asset_address_str = str(asset_address or "")
+    asset_address_str = _normalize_tron_address(asset_address) or str(
+        asset_address or ""
+    )
     return JustLendPositionAssetResponse(
         asset_address=asset_address_str,
         symbol=asset.get("symbol"),
@@ -830,6 +846,23 @@ def _map_position_asset(asset: Any) -> JustLendPositionAssetResponse:
         price_usd=_fmt_decimal(Decimal(str(asset.get("price_usd") or "0"))),
         value_usd=_fmt_decimal(Decimal(str(asset.get("value_usd") or "0"))),
     )
+
+
+def _normalize_asset_items(value: Any) -> list[dict[str, Any]]:
+    payload = value
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return []
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(payload, dict):
+        return [payload]
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
 
 
 def _build_replay_brief(snapshot: Any) -> str:
@@ -1176,7 +1209,7 @@ async def get_position_replay(
         if detail:
             assets = [
                 _map_position_asset(item)
-                for item in list(_row_get(row, "assets_jsonb") or [])
+                for item in _normalize_asset_items(_row_get(row, "assets_jsonb"))
             ]
         points.append(
             JustLendPositionReplayPoint(
@@ -1259,7 +1292,7 @@ async def get_position_replay(
             if detail:
                 assets = [
                     _map_position_asset(item)
-                    for item in list(_row_get(row, "assets_jsonb") or [])
+                    for item in _normalize_asset_items(_row_get(row, "assets_jsonb"))
                 ]
             points.append(
                 JustLendPositionReplayPoint(

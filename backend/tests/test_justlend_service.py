@@ -352,6 +352,42 @@ def test_build_tx_brief_prefers_parse_summary_amount_symbol() -> None:
     assert brief == "存入 12.5 JST"
 
 
+def test_build_tx_brief_from_delta_includes_usd_value() -> None:
+    brief = service._build_tx_brief_from_delta(
+        tx={
+            "method_id": "a0712d68",
+            "market": None,
+            "parse_summary": "",
+            "parse_input": "",
+        },
+        amount=Decimal("1.5"),
+        meta={"underlying_symbol": "USDT", "price_usd": Decimal("1")},
+    )
+    assert brief == "存入 1.5 USDT (价值 1.50 usd)"
+
+
+def test_normalize_tron_address_prefers_base58() -> None:
+    expected = "TFxKt6qB8DJpHke6an8iBuc11dtMKywfsy"
+    assert (
+        service._normalize_tron_address("4141a614f803b6fd780986a42c78ec9c7f77e6ded3")
+        == expected
+    )
+    assert (
+        service._normalize_tron_address(
+            bytes.fromhex("4141a614f803b6fd780986a42c78ec9c7f77e6ded3")
+        )
+        == expected
+    )
+
+
+def test_normalize_asset_items_accepts_json_string_payload() -> None:
+    items = service._normalize_asset_items(
+        '[{"asset_address":"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t","symbol":"USDT","side":"borrow","amount":"1","price_usd":"1","value_usd":"1"}]'
+    )
+    assert len(items) == 1
+    assert items[0]["symbol"] == "USDT"
+
+
 def test_build_tx_brief_falls_back_to_parse_summary_text() -> None:
     brief = service._build_tx_brief(
         method_id="c5ebeaec",
@@ -457,7 +493,7 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
         "block_timestamp": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
         "market": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
         "_meta": catalog_entry,
-        "_brief": "存入 1.5 USDT",
+        "_brief": "存入 1.5 USDT (价值 1.50 usd)",
         "parse_summary": "",
         "parse_input": "",
     }
@@ -472,7 +508,7 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
     assert row.symbol == "USDT"
     assert row.has_open_position is True
     assert row.total_collateral_usd == Decimal("1.5")
-    assert row.brief == "存入 1.5 USDT"
+    assert row.brief == "存入 1.5 USDT (价值 1.50 usd)"
 
 
 @pytest.mark.asyncio
@@ -579,6 +615,10 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     market_b = "412222222222222222222222222222222222222222"
     underlying_a = "413333333333333333333333333333333333333333"
     underlying_b = "414444444444444444444444444444444444444444"
+    market_a_b58 = justlend_rpc._hex_to_tron_base58(market_a)
+    market_b_b58 = justlend_rpc._hex_to_tron_base58(market_b)
+    underlying_a_b58 = justlend_rpc._hex_to_tron_base58(underlying_a)
+    underlying_b_b58 = justlend_rpc._hex_to_tron_base58(underlying_b)
     user_address = "TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ"
 
     market_payload = {
@@ -646,32 +686,36 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
 
     def _address_response(function_selector: str, contract_address: str) -> str:
         if function_selector == "comptroller()":
-            return "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            return justlend_rpc._hex_to_tron_base58(
+                "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
         if function_selector == "oracle()":
-            return "41bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            return justlend_rpc._hex_to_tron_base58(
+                "41bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            )
         if function_selector == "underlying()":
-            if contract_address == market_a:
-                return underlying_a
-            if contract_address == market_b:
-                return underlying_b
+            if contract_address == market_a_b58:
+                return underlying_a_b58
+            if contract_address == market_b_b58:
+                return underlying_b_b58
         raise AssertionError((function_selector, contract_address))
 
     def _string_response(function_selector: str, contract_address: str) -> str:
         if function_selector == "symbol()":
             mapping = {
-                market_a: "jJST",
-                market_b: "jUSDT",
-                underlying_a: "JST",
-                underlying_b: "USDT",
+                market_a_b58: "jJST",
+                market_b_b58: "jUSDT",
+                underlying_a_b58: "JST",
+                underlying_b_b58: "USDT",
             }
             return mapping[contract_address]
         raise AssertionError((function_selector, contract_address))
 
     async def _mock_call_account_snapshot(*args, **kwargs):
         contract_address = kwargs["contract_address"]
-        if contract_address == market_a:
+        if contract_address == market_a_b58:
             return (0, 100 * 10**8, 0, 10**18)
-        if contract_address == market_b:
+        if contract_address == market_b_b58:
             return (0, 0, 20 * 10**6, 10**18)
         raise AssertionError(contract_address)
 
@@ -682,9 +726,9 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
 
     async def _mock_call_market_config(*args, **kwargs):
         market_address = kwargs["market_address"]
-        if market_address == market_a:
+        if market_address == market_a_b58:
             return True, Decimal("0.5")
-        if market_address == market_b:
+        if market_address == market_b_b58:
             return False, Decimal("0.8")
         raise AssertionError(market_address)
 
@@ -698,9 +742,9 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
             if parameter.endswith(market_b):
                 return 500000000000000000000000000000
         if function_selector == "decimals()":
-            if contract_address == underlying_a:
+            if contract_address == underlying_a_b58:
                 return 18
-            if contract_address == underlying_b:
+            if contract_address == underlying_b_b58:
                 return 6
         raise AssertionError((function_selector, contract_address, kwargs))
 
