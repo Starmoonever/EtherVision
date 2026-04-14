@@ -13,7 +13,7 @@ from crawler_shared.config import build_dataclass, load_yaml_config
 
 @dataclass
 class AppConfig:
-    rpc_url: str = ""
+    eth_rpc_url: str = ""
     protocol: str = "blue"
     log_level: str = "info"
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
@@ -28,7 +28,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         missing_message="Could not find config.yaml. Copy from config.yaml.example.",
     )
     return AppConfig(
-        rpc_url=raw.get("rpc_url", ""),
+        eth_rpc_url=raw.get("eth_rpc_url", ""),
         protocol=raw.get("protocol", "blue"),
         log_level=raw.get("log_level", "info"),
         postgres=build_dataclass(PostgresConfig, raw.get("postgres")),

@@ -20,6 +20,7 @@ import {
 } from '../api/justlend';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
+import { JustLendPositionReplayChart } from './JustLendPositionReplayChart';
 import { AutoFitText } from '../shared/components/AutoFitText';
 
 interface JustLendPersonalDashboardProps {
@@ -67,6 +68,34 @@ const explainItems: ExplainItem[] = [
     formula: '按 side=collateral 或 borrow 聚合 value_usd',
     meaning: '帮助你看清仓位集中在哪些抵押资产和债务资产。',
     riskHint: '单一资产过度集中时，局部波动会显著放大账户风险。',
+  },
+];
+
+const riskScoreExplainItems: ExplainItem[] = [
+  {
+    term: '风险评分基准',
+    formula: 'score = 96 - hfPenalty - gapPenalty - concentrationPenalty',
+    meaning:
+      '前端从 96 分起步，再根据健康因子、安全边际和集中度逐项扣分，最后把结果限制在 6 到 99 之间。',
+    riskHint: '分数越高代表越稳健，越低代表越接近风险区。',
+  },
+  {
+    term: '健康因子扣分',
+    formula: 'health_factor 越低，hfPenalty 越高',
+    meaning: '健康因子是最核心的安全指标，越接近 1，扣分越明显；无穷大时这项不扣分。',
+    riskHint: '如果健康因子已经接近 1，分数会快速下滑。',
+  },
+  {
+    term: '安全边际扣分',
+    formula: 'riskGap = liquidation_threshold - ltv',
+    meaning: 'LTV 越接近清算阈值，说明剩余缓冲越薄，系统会增加 gapPenalty。',
+    riskHint: '即使健康因子暂时不差，LTV 太贴近阈值也会把分数拉低。',
+  },
+  {
+    term: '集中度扣分',
+    formula: 'max(topCollateralShare, topBorrowShare)',
+    meaning: '如果抵押或债务过度集中在单一资产上，会增加 concentrationPenalty。',
+    riskHint: '单一资产占比过高时，局部波动更容易伤到整个仓位。',
   },
 ];
 
@@ -547,7 +576,10 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
       <div className="justlend-analytics-grid">
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-header">
-            <span className="card-title">风险评分</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span className="card-title">风险评分</span>
+              <ChartInfoButton title="风险评分说明" items={riskScoreExplainItems} />
+            </div>
             <span className={`badge ${riskToneClass}`}>{riskScoreLabel(riskScore)}</span>
           </div>
           <div className="justlend-score-layout">
@@ -993,6 +1025,8 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
           </table>
         </div>
       </div>
+
+      <JustLendPositionReplayChart address={address} protocol={data.protocol} />
     </div>
   );
 }

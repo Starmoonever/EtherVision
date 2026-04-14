@@ -605,7 +605,7 @@ async def run(
     )
     try:
         # 构建 token_address → atoken_address 映射（DataProvider，每次 run 调用一次）
-        token_to_atoken = await _build_token_to_atoken(pool, cfg.rpc_url, protocol)
+        token_to_atoken = await _build_token_to_atoken(pool, cfg.eth_rpc_url, protocol)
         if not token_to_atoken:
             logger.warning("token→atoken 映射为空，aToken Transfer 修正将不生效")
 

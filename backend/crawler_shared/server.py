@@ -28,6 +28,7 @@ from compound_crawler.api.routes import router as compound_router
 from compound_crawler.db import ensure_compound_event_snapshot_table
 from crawler_shared.api.routes import router as common_router
 from crawler_shared.database import close_engine, init_engine
+from crawler_shared.tron_rpc import build_tron_rpc_client
 from justlend_crawler.api.routes import router as justlend_router
 from justlend_crawler.config import load_config as load_justlend_config
 from justlend_crawler.db import ensure_justlend_tables
@@ -45,17 +46,13 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     application.state.w3 = w3
     application.state.cfg = cfg
     application.state.justlend_cfg = load_justlend_config()
+    application.state.tron_rpc = build_tron_rpc_client(
+        application.state.justlend_cfg.tron_rpc_url,
+    )
     logger.info("正在连接数据库...")
     pool = await create_pool(cfg.postgres)
     application.state.pool = pool
     init_engine(cfg.postgres)
-    for _tables in (TABLES_V3, TABLES_V2, TABLES_V3_BORROW, TABLES_V2_BORROW):
-        await ensure_tables(pool, _tables)
-    await ensure_snapshot_cache_table(pool)
-    await ensure_compound_event_snapshot_table(pool)
-    await ensure_justlend_tables(pool)
-    await ensure_morpho_tables(pool)
-    await ensure_eth_price_timestamp_table(pool)
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
     await pool.close()
@@ -64,6 +61,12 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
             await w3.provider.disconnect()
     except Exception:
         logger.debug("关闭 RPC provider 连接失败", exc_info=True)
+    tron_rpc = getattr(application.state, "tron_rpc", None)
+    if tron_rpc is not None:
+        try:
+            await tron_rpc.close()
+        except Exception:
+            logger.debug("关闭 TRON RPC client 失败", exc_info=True)
     await close_engine()
     _cache.clear()
     logger.info("API 服务关闭")

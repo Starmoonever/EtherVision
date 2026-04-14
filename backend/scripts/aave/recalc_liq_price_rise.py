@@ -155,7 +155,7 @@ async def main(config_path: str | None, dry_run: bool, protocol: str) -> None:
     base_protocol = protocol.replace("_borrow", "")
     contracts = get_contracts(base_protocol)
 
-    logger.info("连接 RPC：%s", cfg.rpc_url)
+    logger.info("连接 RPC：%s", cfg.eth_rpc_url)
     w3 = await build_web3(cfg)
     logger.info("获取储备资产列表...")
     reserve_tokens = await get_all_reserve_tokens(w3, contracts=contracts)
