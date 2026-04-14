@@ -53,13 +53,6 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     pool = await create_pool(cfg.postgres)
     application.state.pool = pool
     init_engine(cfg.postgres)
-    for _tables in (TABLES_V3, TABLES_V2, TABLES_V3_BORROW, TABLES_V2_BORROW):
-        await ensure_tables(pool, _tables)
-    await ensure_snapshot_cache_table(pool)
-    await ensure_compound_event_snapshot_table(pool)
-    await ensure_justlend_tables(pool)
-    await ensure_morpho_tables(pool)
-    await ensure_eth_price_timestamp_table(pool)
     logger.info("RPC 节点与数据库就绪，API 服务启动")
     yield
     await pool.close()
