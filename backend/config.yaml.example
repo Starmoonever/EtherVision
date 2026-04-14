@@ -5,7 +5,8 @@
 log_level: debug
 
 # Base 网络 RPC 端点（留空则自动使用公共节点）
-rpc_url: ""
+eth_rpc_url: ""
+tron_rpc_url: ""
 
 postgres:
   host: "127.0.0.1"
@@ -23,3 +24,7 @@ crawler:
   rpc_timeout: 20
   # 失败重试次数
   retry_count: 3
+
+justlend:
+  api_base_url: "https://openapi.just.network"
+  markets: []

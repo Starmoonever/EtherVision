@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
-from aave_crawler.api import service
+from crawler_shared.api import service
 
 
 class _FakePool:
@@ -92,7 +92,7 @@ async def test_get_eth_price_realtime_supports_compound_v3_asset() -> None:
                 new=AsyncMock(side_effect=Exception("execution reverted")),
             ),
         ):
-            resp = await service.get_eth_price(
+            resp = await service.get_price(
                 MagicMock(), "uni", pool=cast(asyncpg.Pool, pool)
             )
     finally:
@@ -141,13 +141,13 @@ async def test_get_price_period_supports_compound_v3_asset() -> None:
                 ),
             ),
         ):
-            resp = await service.get_price_period(
+            resp = await service.get_price_period_service(
                 MagicMock(),
-                "uni",
-                start_ts=start_ts,
-                end_ts=end_ts,
-                interval_minutes=60,
-                pool=cast(asyncpg.Pool, pool),
+                cast(asyncpg.Pool, pool),
+                asset="uni",
+                start=start_ts,
+                end=end_ts,
+                interval=60,
             )
     finally:
         service._cache.clear()
@@ -161,3 +161,72 @@ async def test_get_price_period_supports_compound_v3_asset() -> None:
         "2024-06-01T00:00:00Z",
         "2024-06-01T01:00:00Z",
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_eth_price_realtime_supports_evm_address_defillama_fallback() -> None:
+    token_address = "0x3333333333333333333333333333333333333333"
+    coin_key = f"ethereum:{token_address.lower()}"
+    payload = {
+        "coins": {
+            coin_key: {
+                "price": 123.456,
+                "timestamp": 1717200000,
+            }
+        }
+    }
+
+    with (
+        patch.object(service, "_get_common_data", new=AsyncMock()),
+        patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+        ),
+    ):
+        resp = await service.get_price(MagicMock(), token_address, pool=None)
+
+    assert resp.asset == token_address
+    assert resp.token_address == token_address
+    assert resp.price_usd == "123.46"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "defillama"
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_supports_direct_evm_address() -> None:
+    token_address = "0x4444444444444444444444444444444444444444"
+    coin_key = f"ethereum:{token_address.lower()}"
+    start_ts = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+    end_ts = int(datetime(2024, 6, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    payload = {
+        "coins": {
+            coin_key: {
+                "prices": [
+                    {"timestamp": start_ts, "price": 1.23},
+                    {"timestamp": end_ts, "price": 1.45},
+                ]
+            }
+        }
+    }
+
+    with (
+        patch.object(service, "_get_common_data", new=AsyncMock()),
+        patch.object(service, "upsert_eth_price_timestamp", new=AsyncMock()),
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+        ),
+    ):
+        resp = await service.get_price_period_service(
+            MagicMock(),
+            None,
+            asset=token_address,
+            start=start_ts,
+            end=end_ts,
+            interval=60,
+        )
+
+    assert resp.asset == token_address
+    assert resp.token_address == token_address
+    assert [item.price_usd for item in resp.prices] == ["1.23", "1.45"]

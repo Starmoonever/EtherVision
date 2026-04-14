@@ -363,7 +363,7 @@ _ACCOUNT_DATA_OUTPUT_TYPES = [
 async def build_web3(cfg: AppConfig) -> AsyncWeb3:
     """
     构建 AsyncWeb3 实例。
-    若配置了自定义 rpc_url，验证其 chain_id 是否为以太主网（1）；
+    若配置了自定义 eth_rpc_url，验证其 chain_id 是否为以太主网（1）；
     若不通过或未配置，则顺序尝试公共以太节点。
     """
     timeout = cfg.crawler.rpc_timeout
@@ -395,7 +395,7 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
             return None
 
     # 优先尝试自定义节点
-    custom = (cfg.rpc_url or "").strip()
+    custom = (cfg.eth_rpc_url or "").strip()
     if custom:
         w3 = await _try_url(custom)
         if w3:
@@ -408,7 +408,9 @@ async def build_web3(cfg: AppConfig) -> AsyncWeb3:
         if w3:
             return w3
 
-    raise RuntimeError("所有 RPC 节点均不可用，请检查网络或 config.yaml 中的 rpc_url")
+    raise RuntimeError(
+        "所有 RPC 节点均不可用，请检查网络或 config.yaml 中的 eth_rpc_url"
+    )
 
 
 # ── 合约调用封装 ──────────────────────────────────────────────────────────────

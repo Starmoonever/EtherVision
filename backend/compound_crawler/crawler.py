@@ -98,7 +98,7 @@ async def _build_web3(cfg: AppConfig) -> AsyncWeb3:
             await _safe_disconnect(w3)
             return None
 
-    custom = (cfg.rpc_url or "").strip()
+    custom = (cfg.eth_rpc_url or "").strip()
     if custom:
         w3 = await _try_url(custom)
         if w3 is not None:

@@ -12,6 +12,7 @@ def _build_client() -> TestClient:
     app = FastAPI()
     app.include_router(justlend_router)
     app.state.cfg = object()
+    app.state.tron_rpc = object()
 
     async def _override_pool():
         return object()
@@ -53,3 +54,54 @@ def test_justlend_position_route_ok() -> None:
     assert resp.status_code == 200
     assert resp.json() == payload
     mocked_service.assert_awaited_once()
+
+
+def test_justlend_position_replay_route_ok() -> None:
+    payload = {
+        "address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        "protocol": "trx",
+        "from_time": "2026-04-01T00:00:00Z",
+        "to_time": "2026-04-03T00:00:00Z",
+        "data_source": "cache",
+        "points": [],
+        "total_points": 0,
+        "total_tx_count": 0,
+        "cache_hit_rate": "1.00",
+    }
+
+    with patch(
+        "justlend_crawler.api.routes.get_position_replay",
+        new=AsyncMock(return_value=payload),
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get(
+                "/api/justlend/position/replay",
+                params={
+                    "address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+                    "protocol": "trx",
+                    "start": "2026-04-01",
+                    "end": "2026-04-03",
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_awaited_once()
+    await_args = mocked_service.await_args
+    assert await_args is not None
+    assert await_args.kwargs["tron_rpc"] is not None
+
+
+def test_justlend_position_replay_route_rejects_invalid_time() -> None:
+    with _build_client() as client:
+        resp = client.get(
+            "/api/justlend/position/replay",
+            params={
+                "address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+                "protocol": "trx",
+                "start": "invalid",
+                "end": "2026-04-03",
+            },
+        )
+
+    assert resp.status_code == 400

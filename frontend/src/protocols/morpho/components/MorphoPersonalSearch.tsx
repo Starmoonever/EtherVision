@@ -1,44 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isAddress } from 'viem';
+import { useMorphoSearchHistory } from '../../../hooks/useMorphoSearchHistory';
+import type { MorphoSearchRecord } from '../../../api/morpho-search-history';
 
-const STORAGE_KEY = 'search_history_morpho_personal_pairs';
 const MAX_HISTORY = 50;
-
-type PairRecord = {
-  address: string;
-  marketId: string;
-  ts: number;
-};
 
 function isBytes32Hex(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
 }
 
-function safeParsePairs(raw: string | null): PairRecord[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (item): item is PairRecord =>
-          typeof item === 'object' &&
-          item !== null &&
-          typeof (item as PairRecord).address === 'string' &&
-          typeof (item as PairRecord).marketId === 'string' &&
-          typeof (item as PairRecord).ts === 'number',
-      )
-      .slice(0, MAX_HISTORY);
-  } catch {
-    return [];
-  }
+function normalizeEvmAddress(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.startsWith('0x') || trimmed.startsWith('0X') ? trimmed : `0x${trimmed}`;
 }
 
-function dedupeByMostRecent(records: PairRecord[], key: 'address' | 'marketId'): PairRecord[] {
+function dedupeByMostRecent(
+  records: MorphoSearchRecord[],
+  key: 'address' | 'marketId',
+): MorphoSearchRecord[] {
   const seen = new Set<string>();
-  const result: PairRecord[] = [];
+  const result: MorphoSearchRecord[] = [];
   for (const r of records) {
-    const k = (r[key] ?? '').trim();
+    const k = (r[key] ?? '').trim().toLowerCase();
     if (!k || seen.has(k)) continue;
     seen.add(k);
     result.push(r);
@@ -63,16 +47,13 @@ export function MorphoPersonalSearch({
   onChangeMarketId,
   onSearch,
 }: MorphoPersonalSearchProps) {
-  const [pairs, setPairs] = useState<PairRecord[]>([]);
+  const history = useMorphoSearchHistory(MAX_HISTORY);
   const [showAddressHistory, setShowAddressHistory] = useState(false);
   const [showMarketHistory, setShowMarketHistory] = useState(false);
+  const [pendingHistorySide, setPendingHistorySide] = useState<'address' | 'market' | null>(null);
   const [localError, setLocalError] = useState('');
 
   const wrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setPairs(safeParsePairs(localStorage.getItem(STORAGE_KEY)));
-  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -85,44 +66,74 @@ export function MorphoPersonalSearch({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const addressHistory = useMemo(() => dedupeByMostRecent(pairs, 'address'), [pairs]);
-  const marketHistory = useMemo(() => dedupeByMostRecent(pairs, 'marketId'), [pairs]);
+  const recentHistory = history.getRecent(MAX_HISTORY);
+  const addressHistory = useMemo(() => {
+    const marketId = valueMarketId.trim();
+    const records = isBytes32Hex(marketId) ? history.getAddressesByMarket(marketId) : recentHistory;
+    return dedupeByMostRecent(records, 'address');
+  }, [history, recentHistory, valueMarketId]);
 
-  const persistPairs = (next: PairRecord[]) => {
-    const trimmed = next.slice(0, MAX_HISTORY);
-    setPairs(trimmed);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-  };
+  const marketHistory = useMemo(() => {
+    const address = normalizeEvmAddress(valueAddress);
+    const records = isAddress(address, { strict: false })
+      ? history.getMarketsByAddress(address)
+      : recentHistory;
+    return dedupeByMostRecent(records, 'marketId');
+  }, [history, recentHistory, valueAddress]);
 
   const savePair = (address: string, marketId: string) => {
     const a = address.trim();
     const m = marketId.trim();
     if (!a || !m) return;
-    const next: PairRecord[] = [
-      { address: a, marketId: m, ts: Date.now() },
-      ...pairs.filter((p) => !(p.address === a && p.marketId === m)),
-    ].slice(0, MAX_HISTORY);
-    persistPairs(next);
+    history.addRecord({ protocol: 'blue', address: a, marketId: m });
   };
 
   const clearHistory = () => {
-    setPairs([]);
-    localStorage.removeItem(STORAGE_KEY);
+    history.clearAll();
   };
 
-  const applyPair = async (record: PairRecord) => {
-    onChangeAddress(record.address);
-    onChangeMarketId(record.marketId);
+  const runSearch = async (address: string, marketId: string) => {
     setLocalError('');
     setShowAddressHistory(false);
     setShowMarketHistory(false);
-    savePair(record.address, record.marketId);
-    await onSearch(record.address, record.marketId);
+    setPendingHistorySide(null);
+    savePair(address, marketId);
+    await onSearch(address, marketId);
+  };
+
+  const handleMarketHistoryClick = async (record: MorphoSearchRecord) => {
+    const address = normalizeEvmAddress(valueAddress);
+    onChangeMarketId(record.marketId);
+    setLocalError('');
+
+    if (pendingHistorySide === 'address' && isAddress(address, { strict: false })) {
+      await runSearch(address, record.marketId);
+      return;
+    }
+
+    setPendingHistorySide('market');
+    setShowMarketHistory(false);
+    setShowAddressHistory(true);
+  };
+
+  const handleAddressHistoryClick = async (record: MorphoSearchRecord) => {
+    const marketId = valueMarketId.trim();
+    onChangeAddress(record.address);
+    setLocalError('');
+
+    if (pendingHistorySide === 'market' && isBytes32Hex(marketId)) {
+      await runSearch(record.address, marketId);
+      return;
+    }
+
+    setPendingHistorySide('address');
+    setShowAddressHistory(false);
+    setShowMarketHistory(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const address = valueAddress.trim();
+    const address = normalizeEvmAddress(valueAddress);
     const marketId = valueMarketId.trim();
 
     if (!address) {
@@ -143,6 +154,8 @@ export function MorphoPersonalSearch({
     }
 
     setLocalError('');
+    setPendingHistorySide(null);
+    onChangeAddress(address);
     savePair(address, marketId);
     await onSearch(address, marketId);
     setShowAddressHistory(false);
@@ -163,6 +176,7 @@ export function MorphoPersonalSearch({
             onChange={(event) => {
               onChangeMarketId(event.target.value);
               setLocalError('');
+              setPendingHistorySide(null);
             }}
             placeholder="输入 Morpho market id (bytes32)"
             className="address-input"
@@ -188,9 +202,10 @@ export function MorphoPersonalSearch({
               <ul className="history-list">
                 {marketHistory.map((r) => (
                   <li
-                    key={`${r.marketId}:${r.address}:${r.ts}`}
+                    key={`${r.marketId}:${r.address}:${r.timestamp}`}
                     className="history-item"
-                    onClick={() => applyPair(r)}
+                    onClick={() => handleMarketHistoryClick(r)}
+                    title={r.address}
                   >
                     {r.marketId}
                   </li>
@@ -211,6 +226,7 @@ export function MorphoPersonalSearch({
             onChange={(event) => {
               onChangeAddress(event.target.value);
               setLocalError('');
+              setPendingHistorySide(null);
             }}
             placeholder="输入 Morpho 钱包地址"
             className="address-input"
@@ -236,9 +252,10 @@ export function MorphoPersonalSearch({
               <ul className="history-list">
                 {addressHistory.map((r) => (
                   <li
-                    key={`${r.address}:${r.marketId}:${r.ts}`}
+                    key={`${r.address}:${r.marketId}:${r.timestamp}`}
                     className="history-item"
-                    onClick={() => applyPair(r)}
+                    onClick={() => handleAddressHistoryClick(r)}
+                    title={r.marketId}
                   >
                     {r.address}
                   </li>
