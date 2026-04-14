@@ -193,7 +193,6 @@ export function MorphoPersonalDashboard({
   if (!data) return null;
 
   const borrowAssets = toNum(data.borrow_assets);
-  const supplyAssets = toNum(data.supply_assets);
   const collateralAssets = toNum(data.collateral_assets);
   const collateralValueInLoanAsset = toNum(data.collateral_value_in_loan_asset);
   const currentPrice = toNum(data.price_quote);
@@ -211,16 +210,6 @@ export function MorphoPersonalDashboard({
       ? null
       : borrowAssets / (collateralAssets * lltvRatio);
 
-  const liquidationBuffer =
-    liquidationPrice === null || currentPrice <= 0
-      ? null
-      : Math.max(0, ((currentPrice - liquidationPrice) / currentPrice) * 100);
-  const liquidationGaugeValue =
-    liquidationBuffer === null
-      ? borrowAssets > 0
-        ? '--'
-        : '∞'
-      : `${formatNumberCompact(liquidationBuffer, 2)}%`;
   const formatGaugePrice = (price: number) =>
     `${quoteLooksUsd ? '$' : ''}${formatNumberCompact(price, 6)}`;
 
@@ -300,7 +289,7 @@ export function MorphoPersonalDashboard({
                 scientificIntegerDigitsThreshold={6}
               />
             </div>
-            <div className="protocol-risk-health-copy">
+            <div className="protocol-risk-health-copy morpho-risk-health-copy">
               当前抵押折算价值约为{' '}
               <strong>{formatNumberCompact(collateralValueInLoanAsset, 6)}</strong>{' '}
               {data.loan_token_symbol}，借款规模为{' '}
@@ -310,11 +299,14 @@ export function MorphoPersonalDashboard({
           </div>
 
           <div className="morpho-risk-gauge-grid">
-            <section className="morpho-risk-gauge-card">
+            <section className="morpho-risk-gauge-card morpho-risk-gauge-card-price">
               <div className="morpho-risk-gauge-heading">
-                <span>价格缓冲油量</span>
-                <strong>{liquidationGaugeValue}</strong>
+                <span>清算缓冲</span>
+                <span className="morpho-risk-gauge-tag">Buffer</span>
               </div>
+              <p className="morpho-risk-gauge-note">
+                左侧红点是清算价格，指针与高亮点表示当前报价；越靠右，安全边界越充足。
+              </p>
               <PriceGauge
                 className="price-gauge-no-stats"
                 currentPrice={currentPrice}
@@ -332,16 +324,6 @@ export function MorphoPersonalDashboard({
                 formatPercent={(value) => `${formatNumberCompact(value, 2)}%`}
               />
             </section>
-          </div>
-        </div>
-
-        <div className="protocol-banner protocol-banner-soft morpho-risk-brief">
-          <div className="protocol-banner-title">快速解读</div>
-          <div className="protocol-banner-copy">
-            当前供应为 <strong>{formatNumberCompact(supplyAssets, 6)}</strong>，抵押为{' '}
-            <strong>{formatNumberCompact(collateralAssets, 6)}</strong>，借款为{' '}
-            <strong>{formatNumberCompact(borrowAssets, 6)}</strong>。Morpho 中 LLTV
-            可视为该市场的清算 LTV 阈值；当 Current LTV 达到或超过 LLTV 时，仓位即可能被清算。
           </div>
         </div>
       </div>

@@ -840,6 +840,17 @@
   overflow-wrap: anywhere;
 }
 
+.protocol-risk-health-copy.morpho-risk-health-copy {
+  color: #a8b3c7;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.protocol-risk-health-copy.morpho-risk-health-copy strong {
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
 @media (max-width: 640px) {
   .justlend-risk-hero-top,
   .protocol-risk-hero-top {
@@ -893,11 +904,17 @@
 
 .morpho-risk-gauge-card {
   min-width: 0;
-  padding: 0.72rem;
+  padding: 0.88rem 0.92rem;
   border: 1px solid rgba(51, 65, 85, 0.76);
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.42)), rgba(2, 6, 23, 0.28);
+}
+
+.morpho-risk-gauge-card-price {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .morpho-risk-gauge-card-ltv .morpho-ltv-risk {
@@ -919,9 +936,30 @@
   font-size: 0.92rem;
 }
 
+.morpho-risk-gauge-tag {
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.26);
+  border-radius: 999px;
+  color: #fbbf24;
+  background: rgba(120, 53, 15, 0.18);
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.morpho-risk-gauge-note {
+  margin: 0.34rem 0 0;
+  max-width: 28rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .price-gauge {
   position: relative;
-  width: min(100%, 350px);
+  width: min(100%, 360px);
   margin: 0 auto;
   padding: 0;
 }
@@ -959,7 +997,7 @@
 
 .price-gauge-liquidation-tick line {
   stroke: #fecaca;
-  stroke-width: 4;
+  stroke-width: 5;
   stroke-linecap: round;
 }
 
@@ -967,6 +1005,7 @@
   fill: #ef4444;
   stroke: #fecaca;
   stroke-width: 2;
+  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
 }
 
 .price-gauge-liquidation-tick text:not(.price-gauge-liquidation-label) {
@@ -977,7 +1016,7 @@
 
 .price-gauge-liquidation-label {
   fill: #fca5a5;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   text-shadow: 0 2px 10px rgba(15, 23, 42, 0.82);
 }
@@ -993,6 +1032,13 @@
   fill: #38bdf8;
   stroke: #e0f2fe;
   stroke-width: 2;
+}
+
+.price-gauge-current-point {
+  fill: #e0f2fe;
+  stroke: #38bdf8;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 9px rgba(56, 189, 248, 0.5));
 }
 
 .price-gauge-hub {
@@ -1015,6 +1061,8 @@
 
 .price-gauge-side-label-mid {
   fill: #fde68a;
+  font-size: 10px;
+  opacity: 0.45;
 }
 
 .price-gauge-side-label-right {
@@ -1025,9 +1073,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 0.26rem;
   color: #94a3b8;
   font-size: 0.78rem;
-  line-height: 1.4;
+  line-height: 1.2;
   margin-top: -1.65rem;
 }
 
@@ -1043,7 +1092,36 @@
 }
 
 .price-gauge-no-stats {
-  margin-bottom: -0.35rem;
+  margin-top: -0.25rem;
+  margin-bottom: -0.42rem;
+}
+
+.price-gauge-no-stats .price-gauge-side-label {
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+.price-gauge-no-stats .price-gauge-side-label-left {
+  display: none;
+}
+
+.price-gauge-no-stats .price-gauge-side-label-mid {
+  display: none;
+}
+
+.price-gauge-no-stats .price-gauge-readout {
+  gap: 0.34rem;
+  margin-top: -1.55rem;
+}
+
+.price-gauge-no-stats .price-gauge-readout span,
+.price-gauge-no-stats .price-gauge-readout small {
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+
+.price-gauge-no-stats .price-gauge-readout strong {
+  font-size: 1.14rem;
 }
 
 .price-gauge-stats {

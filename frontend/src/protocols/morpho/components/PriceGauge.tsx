@@ -122,26 +122,24 @@ export function PriceGauge({
     startAngle,
     endAngle,
   );
-  const liquidationAngle =
-    safeLiquidationPrice === null
-      ? geometry.startAngle
-      : mapPriceToAngle(safeLiquidationPrice, safeMinPrice, safeMaxPrice, startAngle, endAngle);
+  const liquidationTickAngle = geometry.startAngle;
   const arcEndAngle = endAngle;
-  const bufferEndAngle = Math.max(currentAngle, liquidationAngle + 0.001);
+  const bufferEndAngle = Math.max(currentAngle, liquidationTickAngle + 0.001);
   const needleEnd = polarToCartesian(geometry.cx, geometry.cy, geometry.radius, currentAngle);
   const needleStart = polarToCartesian(geometry.cx, geometry.cy, 16, currentAngle);
   const liquidationTickStart = polarToCartesian(
     geometry.cx,
     geometry.cy,
     geometry.radius - 14,
-    liquidationAngle,
+    liquidationTickAngle,
   );
   const liquidationTickEnd = polarToCartesian(
     geometry.cx,
     geometry.cy,
     geometry.radius + 14,
-    liquidationAngle,
+    liquidationTickAngle,
   );
+  const currentPoint = polarToCartesian(geometry.cx, geometry.cy, geometry.radius, currentAngle);
   const isLowBuffer = bufferPercent !== null && bufferPercent < 10;
   const riskLevel = describeRiskLevel(bufferPercent);
   const absoluteDistance =
@@ -153,7 +151,7 @@ export function PriceGauge({
       ? '--'
       : bufferPercent < 0
         ? `低于清算价 ${Math.abs(bufferPercent).toFixed(2)}%`
-        : `${bufferPercent.toFixed(2)}% 缓冲`;
+        : `可下跌 ${bufferPercent.toFixed(2)}% 至清算`;
   const absoluteText = absoluteDistance === null ? '--' : formatPrice(Math.abs(absoluteDistance));
   const hoverText =
     bufferPercent === null
@@ -174,7 +172,8 @@ export function PriceGauge({
         <defs>
           <linearGradient id="price-gauge-risk-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
             <stop offset="0%" stopColor="#ef4444" />
-            <stop offset="45%" stopColor="#f59e0b" />
+            <stop offset="30%" stopColor="#ef4444" />
+            <stop offset="62%" stopColor="#f59e0b" />
             <stop offset="100%" stopColor="#22c55e" />
           </linearGradient>
           <linearGradient id="price-gauge-buffer-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
@@ -218,7 +217,7 @@ export function PriceGauge({
               geometry.cx,
               geometry.cy,
               geometry.radius,
-              liquidationAngle,
+              liquidationTickAngle,
               bufferEndAngle,
             )}
             strokeDasharray="8 6"
@@ -244,15 +243,20 @@ export function PriceGauge({
               y={liquidationTickEnd.y + 26}
               textAnchor="middle"
             >
-              清算价
+              清算价格
             </text>
           </g>
         )}
 
         <g className="price-gauge-needle">
           <line x1={needleStart.x} y1={needleStart.y} x2={needleEnd.x} y2={needleEnd.y} />
-          <circle cx={needleEnd.x} cy={needleEnd.y} r="6" />
         </g>
+        <circle
+          className="price-gauge-current-point"
+          cx={currentPoint.x}
+          cy={currentPoint.y}
+          r="7"
+        />
         <circle className="price-gauge-hub" cx={geometry.cx} cy={geometry.cy} r="10" />
 
         <text className="price-gauge-side-label price-gauge-side-label-left" x="94" y="178">
@@ -262,7 +266,7 @@ export function PriceGauge({
           价格递增 →
         </text>
         <text className="price-gauge-side-label price-gauge-side-label-right" x="326" y="178">
-          更安全
+          安全区
         </text>
       </svg>
 
