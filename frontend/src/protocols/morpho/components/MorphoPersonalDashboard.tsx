@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { fetchEthPrice } from '../../../api/price';
 import type { MorphoPositionResponse } from '../../../api/morpho';
 import { ChartInfoButton, type ExplainItem } from '../../../components/ChartAssist';
 import { AutoFitText } from '../../../shared/components/AutoFitText';
+import { MorphoLtvRiskScale } from './MorphoLtvRiskScale';
 import { MorphoPositionTable } from './MorphoPositionTable';
+import { PriceGauge } from './PriceGauge';
 
 interface MorphoPersonalDashboardProps {
   address: string;
@@ -157,19 +157,6 @@ export function MorphoPersonalDashboard({
           ? 'risk-status-danger'
           : 'risk-status-neutral';
 
-  const [externalEthPrice, setExternalEthPrice] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!data || data.loan_token_symbol.toUpperCase() !== 'WETH') return;
-    let cancelled = false;
-    void fetchEthPrice()
-      .then((price) => !cancelled && setExternalEthPrice(price))
-      .catch(() => !cancelled && setExternalEthPrice(null));
-    return () => {
-      cancelled = true;
-    };
-  }, [data]);
-
   if (loading) {
     return (
       <div
@@ -209,19 +196,15 @@ export function MorphoPersonalDashboard({
   const supplyAssets = toNum(data.supply_assets);
   const collateralAssets = toNum(data.collateral_assets);
   const collateralValueInLoanAsset = toNum(data.collateral_value_in_loan_asset);
-  const maxBorrowable = toNum(data.max_borrowable_in_loan_asset);
   const currentPrice = toNum(data.price_quote);
   const currentHF = data.health_factor ? toNum(data.health_factor) : null;
   const lltvRatio = toNum(data.lltv_ratio);
   const lltvPercent = clamp(lltvRatio * 100, 0, 100);
-  const quotePairLabel = `${data.loan_token_symbol}/${data.collateral_token_symbol}`;
   const quoteLooksUsd = isUsdLikeToken(data.loan_token_symbol);
 
-  const borrowUtilPercent =
-    maxBorrowable <= 0 ? 0 : clamp((borrowAssets / maxBorrowable) * 100, 0, 100);
-
-  const riskGap = Math.max(0, lltvPercent - borrowUtilPercent);
-  const bulletMarkersTooClose = Math.abs(lltvPercent - borrowUtilPercent) < 10;
+  const currentLtvPercent =
+    collateralValueInLoanAsset <= 0 ? 0 : (borrowAssets / collateralValueInLoanAsset) * 100;
+  const liquidationThresholdPercent = lltvPercent;
 
   const liquidationPrice =
     borrowAssets <= 0 || collateralAssets <= 0 || lltvRatio <= 0
@@ -232,6 +215,14 @@ export function MorphoPersonalDashboard({
     liquidationPrice === null || currentPrice <= 0
       ? null
       : Math.max(0, ((currentPrice - liquidationPrice) / currentPrice) * 100);
+  const liquidationGaugeValue =
+    liquidationBuffer === null
+      ? borrowAssets > 0
+        ? '--'
+        : '∞'
+      : `${formatNumberCompact(liquidationBuffer, 2)}%`;
+  const formatGaugePrice = (price: number) =>
+    `${quoteLooksUsd ? '$' : ''}${formatNumberCompact(price, 6)}`;
 
   return (
     <div className="protocol-dashboard">
@@ -288,7 +279,7 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <div className="protocol-risk-layout">
+      <div className="protocol-risk-layout protocol-risk-layout-focused">
         <div className="card protocol-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">风险判断</span>
@@ -314,110 +305,43 @@ export function MorphoPersonalDashboard({
               <strong>{formatNumberCompact(collateralValueInLoanAsset, 6)}</strong>{' '}
               {data.loan_token_symbol}，借款规模为{' '}
               <strong>{formatNumberCompact(borrowAssets, 6)}</strong> {data.loan_token_symbol}
-              。当借款使用率接近 LLTV 上限时，价格波动会快速压缩安全边际。
+              。当当前报价接近清算阈值时，价格波动会快速压缩安全边际。
             </div>
           </div>
 
-          <div className="risk-bullet-shell">
-            <div className="risk-bullet-header">
-              <span className="risk-bullet-title">借款使用率 vs LLTV</span>
-              <strong>
-                {formatNumberCompact(borrowUtilPercent, 2)}% / {formatNumberCompact(lltvPercent, 2)}
-                %
-              </strong>
-            </div>
-            <div className="risk-bullet-track">
-              <div
-                className={`risk-bullet-marker risk-bullet-marker-current ${
-                  bulletMarkersTooClose ? 'risk-bullet-marker-stagger-left' : ''
-                }`}
-                style={{ left: `${borrowUtilPercent}%` }}
-              >
-                <span>当前</span>
+          <div className="morpho-risk-gauge-grid">
+            <section className="morpho-risk-gauge-card">
+              <div className="morpho-risk-gauge-heading">
+                <span>价格缓冲油量</span>
+                <strong>{liquidationGaugeValue}</strong>
               </div>
-              <div
-                className={`risk-bullet-marker risk-bullet-marker-threshold ${
-                  bulletMarkersTooClose ? 'risk-bullet-marker-stagger-right' : ''
-                }`}
-                style={{ left: `${lltvPercent}%` }}
-              >
-                <span>LLTV</span>
-              </div>
-            </div>
-            <div className="risk-bullet-footer">
-              <span>安全区</span>
-              <span>观察区</span>
-              <span>敏感区</span>
-            </div>
-          </div>
+              <PriceGauge
+                className="price-gauge-no-stats"
+                currentPrice={currentPrice}
+                liquidationPrice={liquidationPrice}
+                formatPrice={formatGaugePrice}
+                showStats={false}
+              />
+            </section>
 
-          <div className="protocol-risk-markers">
-            <div className="protocol-risk-marker">
-              <span className="protocol-risk-dot" style={{ background: '#38bdf8' }} />
-              <span>当前借款使用率</span>
-              <strong>{formatNumberCompact(borrowUtilPercent, 2)}%</strong>
-            </div>
-            <div className="protocol-risk-marker">
-              <span className="protocol-risk-dot" style={{ background: '#ef4444' }} />
-              <span>LLTV 上限</span>
-              <strong>{formatNumberCompact(lltvPercent, 2)}%</strong>
-            </div>
-            <div className="protocol-risk-marker">
-              <span className="protocol-risk-dot" style={{ background: '#22c55e' }} />
-              <span>剩余安全边际</span>
-              <strong>{formatNumberCompact(riskGap, 2)}%</strong>
-            </div>
+            <section className="morpho-risk-gauge-card morpho-risk-gauge-card-ltv">
+              <MorphoLtvRiskScale
+                currentLtvPercent={currentLtvPercent}
+                lltvPercent={lltvPercent}
+                liquidationThresholdPercent={liquidationThresholdPercent}
+                formatPercent={(value) => `${formatNumberCompact(value, 2)}%`}
+              />
+            </section>
           </div>
         </div>
 
-        <div className="protocol-risk-side">
-          <div className="protocol-insight-grid">
-            <div className="metric-box">
-              <span className="metric-label">Oracle 报价</span>
-              <span className="metric-value blue">
-                {quoteLooksUsd ? '$' : ''}
-                {formatNumberCompact(currentPrice, 6)} {quotePairLabel}
-              </span>
-            </div>
-            <div className="metric-box">
-              <span className="metric-label">清算触发价</span>
-              <span className="metric-value red">
-                {liquidationPrice === null ? (
-                  '--'
-                ) : (
-                  <>
-                    {quoteLooksUsd ? '$' : ''}
-                    {formatNumberCompact(liquidationPrice, 6)} {quotePairLabel}
-                  </>
-                )}
-              </span>
-            </div>
-            <div className="metric-box">
-              <span className="metric-label">清算缓冲</span>
-              <span className="metric-value blue">
-                {liquidationBuffer === null
-                  ? borrowAssets > 0
-                    ? '--'
-                    : '∞'
-                  : `${formatNumberCompact(liquidationBuffer, 2)}%`}
-              </span>
-            </div>
-            <div className="metric-box">
-              <span className="metric-label">外部 ETH 参考价</span>
-              <span className="metric-value blue">
-                {externalEthPrice ? `$${formatNumberCompact(externalEthPrice, 2)}` : '--'}
-              </span>
-            </div>
-          </div>
-
-          <div className="protocol-banner protocol-banner-soft">
-            <div className="protocol-banner-title">快速解读</div>
-            <div className="protocol-banner-copy">
-              当前供应为 <strong>{formatNumberCompact(supplyAssets, 6)}</strong>，抵押为{' '}
-              <strong>{formatNumberCompact(collateralAssets, 6)}</strong>，借款为{' '}
-              <strong>{formatNumberCompact(borrowAssets, 6)}</strong>
-              。若借款持续上升或抵押折算价值下滑，请优先关注“借款使用率 vs LLTV”的差距是否快速收敛。
-            </div>
+        <div className="protocol-banner protocol-banner-soft morpho-risk-brief">
+          <div className="protocol-banner-title">快速解读</div>
+          <div className="protocol-banner-copy">
+            当前供应为 <strong>{formatNumberCompact(supplyAssets, 6)}</strong>，抵押为{' '}
+            <strong>{formatNumberCompact(collateralAssets, 6)}</strong>，借款为{' '}
+            <strong>{formatNumberCompact(borrowAssets, 6)}</strong>。Morpho 中 LLTV
+            可视为该市场的清算 LTV 阈值；当 Current LTV 达到或超过 LLTV 时，仓位即可能被清算。
           </div>
         </div>
       </div>
