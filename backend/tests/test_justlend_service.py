@@ -793,3 +793,31 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     assert rpc_result["liquidation_threshold"] == api_result["liquidation_threshold"]
     assert len(rpc_result["assets"]) == len(api_result["assets"])
     assert rpc_result["extra_jsonb"]["source"] == "justlend_rpc"
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_exchange_rates_skips_market_with_blank_rpc_payload() -> (
+    None
+):
+    market_ok = "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9"
+    market_bad = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+    async def _mock_call_contract_method(*_args, **kwargs):
+        contract_address = kwargs["contract_address"]
+        if contract_address == market_ok:
+            return "0" * 63 + "a"
+        if contract_address == market_bad:
+            return ""
+        raise AssertionError(contract_address)
+
+    with patch.object(
+        justlend_rpc,
+        "_call_contract_method",
+        new=AsyncMock(side_effect=_mock_call_contract_method),
+    ):
+        rates = await justlend_rpc.fetch_market_exchange_rates(
+            object(),  # type: ignore[arg-type]
+            market_addresses=[market_ok, market_bad],
+        )
+
+    assert rates == {justlend_rpc._tron_address_to_hex(market_ok): Decimal("10")}

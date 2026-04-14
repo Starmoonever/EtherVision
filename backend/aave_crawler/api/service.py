@@ -6,13 +6,20 @@
 
 import asyncio
 import logging
+import time as _time
+import aiohttp
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 import asyncpg
-from crawler_shared.api.constants import SUPPORTED_PRICE_ASSETS
+from crawler_shared.api.constants import (
+    ETHEREUM_PRICE_ASSET_BY_ADDRESS,
+    ETHEREUM_PRICE_ASSETS,
+    PRICE_ASSET_ALIASES,
+    SUPPORTED_PRICE_ASSETS,
+)
 from crawler_shared.api.schemas import (
     PriceAssetsResponse,
     PriceAssetSchema,
@@ -199,10 +206,21 @@ async def _get_common_data(w3: AsyncWeb3, protocol: str = "v3") -> tuple:
 
 
 def _normalize_price_asset(asset: str) -> str:
-    target = asset.upper()
-    if target == "ETH":
-        return "WETH"
-    return target
+    return asset.strip()
+
+
+def _is_evm_token_address(asset: str) -> bool:
+    value = asset.strip()
+    return value.startswith("0x") and len(value) == 42
+
+
+def _normalize_token_address(asset: str) -> str | None:
+    if not _is_evm_token_address(asset):
+        return None
+    try:
+        return AsyncWeb3.to_checksum_address(asset.strip())
+    except ValueError:
+        return None
 
 
 async def _resolve_price_asset(
@@ -212,9 +230,23 @@ async def _resolve_price_asset(
 ) -> tuple[str, str, bool]:
     from fastapi import HTTPException
 
+    normalized_asset = _normalize_price_asset(asset)
+    normalized_address = _normalize_token_address(normalized_asset)
+    if normalized_address is not None:
+        registered = ETHEREUM_PRICE_ASSET_BY_ADDRESS.get(normalized_address.lower())
+        if registered is not None:
+            registered_asset, token_address, _ = registered
+            return registered_asset, token_address, False
+        return normalized_address, normalized_address, False
+
+    target = PRICE_ASSET_ALIASES.get(normalized_asset.upper(), normalized_asset.upper())
+    registered = ETHEREUM_PRICE_ASSETS.get(target.upper())
+    if registered is not None:
+        registered_asset, token_address, _ = registered
+        return registered_asset, token_address, False
+
     await _get_common_data(w3, "v3")
 
-    target = _normalize_price_asset(asset)
     reserve_tokens = _cache["reserve_tokens_v3"]
     for rt in reserve_tokens:
         if rt.symbol.upper() == target:
@@ -226,6 +258,38 @@ async def _resolve_price_asset(
             return target, str(row["token_address"]), True
 
     raise HTTPException(status_code=404, detail=f"未找到资产 '{asset}'，请确认符号正确")
+
+
+async def _fetch_defillama_current_price(
+    token_address: str,
+) -> tuple[Decimal, int] | None:
+    import aiohttp
+    from fastapi import HTTPException
+
+    coin_key = f"ethereum:{token_address.lower()}"
+    url = f"https://coins.llama.fi/prices/current/{coin_key}"
+
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"DeFiLlama 返回 HTTP {resp.status}",
+                    )
+                data = await resp.json()
+    except aiohttp.ClientError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"无法连接 DeFiLlama: {exc}"
+        ) from exc
+
+    entry = data.get("coins", {}).get(coin_key)
+    if entry is None or entry.get("price") is None:
+        return None
+
+    return Decimal(str(entry["price"])), int(entry.get("timestamp", _time.time()))
 
 
 async def get_supported_price_assets(
@@ -1630,10 +1694,8 @@ async def get_eth_price(
         asset:     资产符号，如 ``eth``、``wbtc``；大小写不敏感
         timestamp: Unix 时间戳（秒），None 表示查当前价格
     """
-    import time as _time
     from datetime import datetime, timezone
 
-    import aiohttp
     from fastapi import HTTPException
 
     def _ts_to_utc_str(ts: int) -> str:
@@ -1641,7 +1703,7 @@ async def get_eth_price(
             "%Y-%m-%dT%H:%M:%SZ"
         )
 
-    target, token_address, compound_only = await _resolve_price_asset(
+    resolved_asset, token_address, compound_only = await _resolve_price_asset(
         w3, asset, pool=pool
     )
 
@@ -1657,7 +1719,7 @@ async def get_eth_price(
         if prices and prices[0] > 0:
             price = _raw_to_dec(prices[0], 8)
             return PriceResponse(
-                asset=asset.upper(),
+                asset=resolved_asset,
                 price_usd=_fmt(price, 2),
                 token_address=token_address,
                 timestamp=_ts_to_utc_str(int(_time.time())),
@@ -1669,12 +1731,23 @@ async def get_eth_price(
             if snapshot is not None:
                 price, snapshot_ts = snapshot
                 return PriceResponse(
-                    asset=asset.upper(),
+                    asset=resolved_asset,
                     price_usd=_fmt(price, 2),
                     token_address=token_address,
                     timestamp=_ts_to_utc_str(snapshot_ts),
                     source="compound-snapshot",
                 )
+
+        latest_price = await _fetch_defillama_current_price(token_address)
+        if latest_price is not None:
+            price, price_ts = latest_price
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(price_ts),
+                source="defillama",
+            )
 
         if oracle_exc is not None:
             logger.warning(
@@ -1697,7 +1770,7 @@ async def get_eth_price(
             cached_price = await get_cached_eth_price(pool, timestamp, token_address)
             if cached_price is not None:
                 return PriceResponse(
-                    asset=asset.upper(),
+                    asset=resolved_asset,
                     price_usd=_fmt(cached_price, 2),
                     token_address=token_address,
                     timestamp=_ts_to_utc_str(timestamp),
@@ -1735,7 +1808,12 @@ async def get_eth_price(
         if pool is not None:
             try:
                 await upsert_eth_price_timestamp(
-                    pool, timestamp, token_address, target, price, source="defillama"
+                    pool,
+                    timestamp,
+                    token_address,
+                    resolved_asset,
+                    price,
+                    source="defillama",
                 )
             except Exception as _cache_exc:
                 logger.warning(
@@ -1743,7 +1821,7 @@ async def get_eth_price(
                 )
 
         return PriceResponse(
-            asset=asset.upper(),
+            asset=resolved_asset,
             price_usd=_fmt(price, 2),
             token_address=token_address,
             timestamp=_ts_to_utc_str(actual_ts),
@@ -1792,7 +1870,7 @@ async def get_price_period(
     if interval_minutes < 1:
         raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
 
-    target, token_address, _ = await _resolve_price_asset(w3, asset, pool=pool)
+    resolved_asset, token_address, _ = await _resolve_price_asset(w3, asset, pool=pool)
     coin_key = f"ethereum:{token_address.lower()}"
 
     timeout = aiohttp.ClientTimeout(total=30)
@@ -1905,7 +1983,7 @@ async def get_price_period(
                             pool,
                             nearest_expected,  # 存在 expected_bucket，下次精确命中
                             token_address,
-                            target,
+                            resolved_asset,
                             Decimal(str(p["price"])),
                             source="defillama",
                         )
@@ -1932,7 +2010,7 @@ async def get_price_period(
             detail=f"DeFiLlama 未返回 '{asset}' 在指定区间的价格数据",
         )
     return PricePeriodResponse(
-        asset=asset.upper(),
+        asset=resolved_asset,
         token_address=token_address,
         source="defillama",
         prices=items,

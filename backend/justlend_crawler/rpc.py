@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -20,6 +21,8 @@ _JTOKEN_DECIMALS = 8
 _SCALE_18 = Decimal("1e18")
 _MAX_HF = Decimal("1e18")
 _STABLE_SYMBOLS = {"USDT", "USDD", "USDJ", "TUSD", "USDC"}
+
+logger = logging.getLogger(__name__)
 
 
 def _double_sha256(data: bytes) -> bytes:
@@ -132,7 +135,13 @@ async def _call_contract_method(
             status_code=502,
             detail=f"TRON RPC returned empty result: {function_selector}",
         )
-    return str(constant_result[0])
+    raw = str(constant_result[0]).strip()
+    if not raw:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TRON RPC returned blank result: {function_selector}",
+        )
+    return raw
 
 
 async def _call_uint256(
@@ -150,7 +159,19 @@ async def _call_uint256(
         parameter=parameter,
         owner_address=owner_address,
     )
-    return _decode_uint256(_decode_words(raw)[0])
+    try:
+        words = _decode_words(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TRON RPC returned malformed uint256 payload: {function_selector}",
+        ) from exc
+    if not words:
+        raise HTTPException(
+            status_code=502,
+            detail=f"TRON RPC returned no uint256 words: {function_selector}",
+        )
+    return _decode_uint256(words[0])
 
 
 async def _call_address(
@@ -523,11 +544,25 @@ async def fetch_market_exchange_rates(
     for market_address in market_addresses:
         normalized_market_address = _normalize_tron_address(market_address)
         market_hex = _tron_address_to_hex(normalized_market_address)
-        exchange_rate_raw = await _call_uint256(
-            tron_rpc,
-            contract_address=normalized_market_address,
-            function_selector="exchangeRateStored()",
-            owner_address=normalized_market_address,
-        )
+        try:
+            exchange_rate_raw = await _call_uint256(
+                tron_rpc,
+                contract_address=normalized_market_address,
+                function_selector="exchangeRateStored()",
+                owner_address=normalized_market_address,
+            )
+        except HTTPException:
+            logger.warning(
+                "failed to fetch JustLend exchange rate for market=%s",
+                normalized_market_address,
+            )
+            continue
+        except Exception:
+            logger.warning(
+                "failed to fetch JustLend exchange rate for market=%s",
+                normalized_market_address,
+                exc_info=True,
+            )
+            continue
         rates[market_hex] = Decimal(exchange_rate_raw)
     return rates

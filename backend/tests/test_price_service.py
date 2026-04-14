@@ -161,3 +161,71 @@ async def test_get_price_period_supports_compound_v3_asset() -> None:
         "2024-06-01T00:00:00Z",
         "2024-06-01T01:00:00Z",
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_eth_price_realtime_supports_evm_address_defillama_fallback() -> None:
+    token_address = "0x3333333333333333333333333333333333333333"
+    coin_key = f"ethereum:{token_address.lower()}"
+    payload = {
+        "coins": {
+            coin_key: {
+                "price": 123.456,
+                "timestamp": 1717200000,
+            }
+        }
+    }
+
+    with (
+        patch.object(service, "_get_common_data", new=AsyncMock()),
+        patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+        ),
+    ):
+        resp = await service.get_eth_price(MagicMock(), token_address)
+
+    assert resp.asset == token_address
+    assert resp.token_address == token_address
+    assert resp.price_usd == "123.46"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "defillama"
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_supports_direct_evm_address() -> None:
+    token_address = "0x4444444444444444444444444444444444444444"
+    coin_key = f"ethereum:{token_address.lower()}"
+    start_ts = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+    end_ts = int(datetime(2024, 6, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    payload = {
+        "coins": {
+            coin_key: {
+                "prices": [
+                    {"timestamp": start_ts, "price": 1.23},
+                    {"timestamp": end_ts, "price": 1.45},
+                ]
+            }
+        }
+    }
+
+    with (
+        patch.object(service, "_get_common_data", new=AsyncMock()),
+        patch.object(service, "upsert_eth_price_timestamp", new=AsyncMock()),
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+        ),
+    ):
+        resp = await service.get_price_period(
+            MagicMock(),
+            token_address,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            interval_minutes=60,
+        )
+
+    assert resp.asset == token_address
+    assert resp.token_address == token_address
+    assert [item.price_usd for item in resp.prices] == ["1.23", "1.45"]
