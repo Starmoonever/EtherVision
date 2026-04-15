@@ -318,7 +318,7 @@ async def test_ensure_compound_v3_current_position_tables_executes_ddl() -> None
         cast(asyncpg.Pool, _FakePool(conn))
     )
 
-    assert len(conn.execute_calls) == 6
+    assert len(conn.execute_calls) == 7
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_ensure_compound_v2_current_position_tables_executes_ddl() -> None
         cast(asyncpg.Pool, _FakePool(conn))
     )
 
-    assert len(conn.execute_calls) == 6
+    assert len(conn.execute_calls) == 7
 
 
 @pytest.mark.asyncio
