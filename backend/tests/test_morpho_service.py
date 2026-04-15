@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import cast
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
+import asyncpg
 import pytest
 
 from morpho_crawler.api.service import get_user_position
@@ -123,12 +126,28 @@ async def test_get_user_position_realtime_calculates_fields():
         ),
     }
 
-    response = await get_user_position(
-        _FakeW3(contracts),
-        address=user,
-        market_id=market_id,
-        protocol="blue",
-    )
+    with (
+        patch(
+            "morpho_crawler.api.service.fetch_current_user_positions",
+            new_callable=AsyncMock,
+            return_value=([], []),
+        ),
+        patch(
+            "morpho_crawler.api.service.upsert_market",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "morpho_crawler.api.service.upsert_current_user_position",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = await get_user_position(
+            _FakeW3(contracts),
+            pool=cast(asyncpg.Pool, object()),
+            address=user,
+            market_id=market_id,
+            protocol="blue",
+        )
 
     assert response.market_id == market_id
     assert response.loan_token_symbol == "USDC"

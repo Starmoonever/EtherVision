@@ -17,6 +17,7 @@ def _build_client(*, with_w3: bool = True) -> TestClient:
     app.include_router(morpho_router)
     if with_w3:
         app.state.w3 = object()
+    app.state.pool = object()
     return TestClient(app)
 
 
