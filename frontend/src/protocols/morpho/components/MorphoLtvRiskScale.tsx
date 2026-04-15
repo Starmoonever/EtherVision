@@ -8,9 +8,9 @@ interface MorphoLtvRiskScaleProps {
 type RiskTone = 'safe' | 'warning' | 'danger';
 
 const SVG_WIDTH = 520;
-const SVG_HEIGHT = 96;
+const SVG_HEIGHT = 108;
 const TRACK_X = 28;
-const TRACK_Y = 40;
+const TRACK_Y = 48;
 const TRACK_WIDTH = 464;
 const MAX_LTV_SCALE = 100;
 
@@ -66,14 +66,14 @@ export function MorphoLtvRiskScale({
               className="morpho-ltv-risk-help"
               tabIndex={0}
               role="note"
-              aria-label="快速解读：Current LTV 表示当前借款占抵押折算价值的比例；LLTV 是 Morpho 该市场的清算 LTV 阈值；当 Current LTV 达到或超过 LLTV 时，仓位可能被清算。"
-              data-tooltip="Current LTV 是当前借款占抵押折算价值的比例；LLTV 是 Morpho 该市场的清算 LTV 阈值；达到或超过 LLTV 时可能被清算。"
+              aria-label="快速解读：Current LTV 表示当前借款占抵押折算价值的比例；Morpho Blue 的极简设计中，清算阈值通常直接等同于该市场的 LLTV。当 Current LTV 达到或超过 LLTV 时，仓位可能被清算。"
+              data-tooltip="Current LTV 是当前借款占抵押折算价值的比例；LLTV 是 Morpho Blue市场的清算阈值；LTV达到或超过 LLTV 时可能被清算。"
             >
               ?
             </span>
           </span>
           <strong>{riskCopy(tone)}</strong>
-          <small>LLTV 即 Morpho 当前市场的清算 LTV 阈值，不是普通报错线。</small>
+          <small> Morpho Blue 的极简设计中，清算阈值通常直接等同于该市场的 LLTV。</small>
         </div>
         <span className="morpho-ltv-risk-badge">
           {tone === 'danger' ? '危险' : tone === 'warning' ? '观察' : '安全'}
@@ -146,23 +146,11 @@ export function MorphoLtvRiskScale({
 
         <g className="morpho-ltv-risk-current">
           <line x1={currentX} y1="16" x2={currentX} y2="70" />
-          <circle cx={currentX} cy={TRACK_Y} r="7" />
+          <circle cx={currentX} cy={TRACK_Y} r="8" />
           <text x={currentX} y="90" textAnchor="middle">
             当前 LTV
           </text>
         </g>
-
-        <text className="morpho-ltv-risk-axis-label" x={TRACK_X} y="84" textAnchor="middle">
-          0%
-        </text>
-        <text
-          className="morpho-ltv-risk-axis-label"
-          x={TRACK_X + TRACK_WIDTH}
-          y="84"
-          textAnchor="middle"
-        >
-          {formatPercent(MAX_LTV_SCALE)}
-        </text>
       </svg>
 
       <div className="morpho-ltv-risk-values">

@@ -196,6 +196,7 @@ export function MorphoPersonalDashboard({
   const collateralAssets = toNum(data.collateral_assets);
   const collateralValueInLoanAsset = toNum(data.collateral_value_in_loan_asset);
   const currentPrice = toNum(data.price_quote);
+  const oraclePredictedPrice = currentPrice;
   const currentHF = data.health_factor ? toNum(data.health_factor) : null;
   const lltvRatio = toNum(data.lltv_ratio);
   const lltvPercent = clamp(lltvRatio * 100, 0, 100);
@@ -211,7 +212,7 @@ export function MorphoPersonalDashboard({
       : borrowAssets / (collateralAssets * lltvRatio);
 
   const formatGaugePrice = (price: number) =>
-    `${quoteLooksUsd ? '$' : ''}${formatNumberCompact(price, 6)}`;
+    `${quoteLooksUsd ? '$' : ''}${formatNumberCompact(price, 4)}`;
 
   return (
     <div className="protocol-dashboard">
@@ -311,6 +312,7 @@ export function MorphoPersonalDashboard({
                 className="price-gauge-no-stats"
                 currentPrice={currentPrice}
                 liquidationPrice={liquidationPrice}
+                predictedPrice={oraclePredictedPrice}
                 formatPrice={formatGaugePrice}
                 showStats={false}
               />

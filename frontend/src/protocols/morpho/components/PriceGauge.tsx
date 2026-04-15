@@ -1,6 +1,7 @@
 interface PriceGaugeProps {
   currentPrice: number;
   liquidationPrice: number | null;
+  predictedPrice?: number | null;
   formatPrice: (price: number) => string;
   arcDegrees?: number;
   maxPrice?: number;
@@ -18,15 +19,28 @@ interface GaugeGeometry {
   gaugeAngle: number;
 }
 
-const SVG_WIDTH = 420;
-const SVG_HEIGHT = 188;
+const SVG_WIDTH = 500;
+const SVG_HEIGHT = 172;
 const DEFAULT_GEOMETRY: GaugeGeometry = {
-  cx: 210,
-  cy: 158,
-  radius: 116,
+  cx: 250,
+  cy: 130,
+  radius: 118,
   startAngle: -60,
   gaugeAngle: 120,
 };
+
+function formatGaugeLabelPrice(price: number, formatPrice: (price: number) => string) {
+  const formatted = formatPrice(price);
+  const match = formatted.match(/^([^0-9-]*)(-?\d+(?:\.\d+)?)(.*)$/);
+
+  if (!match) return formatted;
+
+  const [, prefix, numeric, suffix] = match;
+  const compact = Number(numeric)
+    .toFixed(4)
+    .replace(/\.?0+$/, '');
+  return `${prefix}${compact}${suffix}`;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -41,6 +55,17 @@ function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: numb
   return {
     x: cx + radius * Math.cos(angleRad),
     y: cy + radius * Math.sin(angleRad),
+  };
+}
+
+function pointBetween(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  progress: number,
+) {
+  return {
+    x: start.x + (end.x - start.x) * progress,
+    y: start.y + (end.y - start.y) * progress,
   };
 }
 
@@ -76,23 +101,25 @@ export function describeRiskLevel(bufferPercent: number | null) {
   if (bufferPercent <= 0) return '可清算';
   if (bufferPercent < 10) return '高风险';
   if (bufferPercent < 25) return '观察';
-  return '更安全';
+  return '安全区';
 }
 
 export function PriceGauge({
   currentPrice,
   liquidationPrice,
+  predictedPrice = null,
   formatPrice,
   arcDegrees = 120,
   maxPrice,
   minPrice,
-  valueLabel = '当前报价',
   showStats = true,
   className = '',
 }: PriceGaugeProps) {
   const safeCurrentPrice = Number.isFinite(currentPrice) ? currentPrice : 0;
   const safeLiquidationPrice = isFinitePositive(liquidationPrice) ? liquidationPrice : null;
+  const safePredictedPrice = isFinitePositive(predictedPrice) ? predictedPrice : null;
   const bufferPercent = getBufferPercent(safeCurrentPrice, safeLiquidationPrice);
+  const predictedBufferPercent = getBufferPercent(safePredictedPrice ?? 0, safeLiquidationPrice);
   const safeGaugeAngle = clamp(arcDegrees, 90, 180);
   const startAngle = -safeGaugeAngle / 2;
   const endAngle = safeGaugeAngle / 2;
@@ -101,6 +128,8 @@ export function PriceGauge({
     startAngle,
     gaugeAngle: safeGaugeAngle,
   };
+
+  const highestScenarioPrice = Math.max(safeCurrentPrice, safePredictedPrice ?? 0);
   const safeMinPrice =
     minPrice && Number.isFinite(minPrice)
       ? minPrice
@@ -108,13 +137,14 @@ export function PriceGauge({
         ? safeLiquidationPrice
         : Math.max(safeCurrentPrice * 0.8, 0);
   const inferredMaxPrice =
-    safeLiquidationPrice !== null && safeCurrentPrice > safeLiquidationPrice
-      ? safeLiquidationPrice + (safeCurrentPrice - safeLiquidationPrice) * 1.35
-      : Math.max(safeCurrentPrice * 1.25, safeMinPrice * 1.25, 1);
+    safeLiquidationPrice !== null && highestScenarioPrice > safeLiquidationPrice
+      ? safeLiquidationPrice + (highestScenarioPrice - safeLiquidationPrice) * 1.35
+      : Math.max(highestScenarioPrice * 1.25, safeMinPrice * 1.25, 1);
   const safeMaxPrice =
     maxPrice && Number.isFinite(maxPrice) && maxPrice > safeMinPrice
       ? maxPrice
-      : Math.max(inferredMaxPrice, safeCurrentPrice, safeMinPrice + 1e-12);
+      : Math.max(inferredMaxPrice, highestScenarioPrice, safeMinPrice + 1e-12);
+
   const currentAngle = mapPriceToAngle(
     safeCurrentPrice,
     safeMinPrice,
@@ -122,67 +152,110 @@ export function PriceGauge({
     startAngle,
     endAngle,
   );
-  const liquidationTickAngle = geometry.startAngle;
-  const arcEndAngle = endAngle;
-  const bufferEndAngle = Math.max(currentAngle, liquidationTickAngle + 0.001);
-  const needleEnd = polarToCartesian(geometry.cx, geometry.cy, geometry.radius, currentAngle);
-  const needleStart = polarToCartesian(geometry.cx, geometry.cy, 16, currentAngle);
+  const predictedAngle =
+    safePredictedPrice === null
+      ? null
+      : mapPriceToAngle(safePredictedPrice, safeMinPrice, safeMaxPrice, startAngle, endAngle);
+  const currentPoint = polarToCartesian(geometry.cx, geometry.cy, geometry.radius, currentAngle);
+  const needleBase = { x: geometry.cx, y: geometry.cy - 22 };
+  const needleEnd = pointBetween(needleBase, currentPoint, 0.46);
+  const predictedPoint =
+    predictedAngle === null
+      ? null
+      : polarToCartesian(geometry.cx, geometry.cy, geometry.radius, predictedAngle);
+  const predictedNeedleEnd =
+    predictedAngle === null ? null : pointBetween(needleBase, predictedPoint!, 0.42);
+  const predictedArcStart = predictedAngle === null ? null : Math.min(currentAngle, predictedAngle);
+  const predictedArcEnd = predictedAngle === null ? null : Math.max(currentAngle, predictedAngle);
+
   const liquidationTickStart = polarToCartesian(
     geometry.cx,
     geometry.cy,
     geometry.radius - 14,
-    liquidationTickAngle,
+    startAngle,
   );
   const liquidationTickEnd = polarToCartesian(
     geometry.cx,
     geometry.cy,
     geometry.radius + 14,
-    liquidationTickAngle,
+    startAngle,
   );
-  const currentPoint = polarToCartesian(geometry.cx, geometry.cy, geometry.radius, currentAngle);
+  const liquidationLabelPoint = polarToCartesian(
+    geometry.cx,
+    geometry.cy,
+    geometry.radius + 58,
+    startAngle - 1,
+  );
+  const rightLabelPoint = polarToCartesian(
+    geometry.cx,
+    geometry.cy,
+    geometry.radius + 52,
+    endAngle + 1,
+  );
   const isLowBuffer = bufferPercent !== null && bufferPercent < 10;
   const riskLevel = describeRiskLevel(bufferPercent);
-  const absoluteDistance =
-    safeLiquidationPrice === null || !isFinitePositive(safeCurrentPrice)
-      ? null
-      : safeCurrentPrice - safeLiquidationPrice;
-  const distanceText =
+  const isPredictedLiquidatable = predictedBufferPercent !== null && predictedBufferPercent <= 0;
+  const bufferText =
+    bufferPercent === null
+      ? '--'
+      : bufferPercent < 0
+        ? `低于清算价 ${Math.abs(bufferPercent).toFixed(2)}%`
+        : `${bufferPercent.toFixed(2)}% Buffer`;
+  const accessibleBufferText =
     bufferPercent === null
       ? '--'
       : bufferPercent < 0
         ? `低于清算价 ${Math.abs(bufferPercent).toFixed(2)}%`
         : `可下跌 ${bufferPercent.toFixed(2)}% 至清算`;
-  const absoluteText = absoluteDistance === null ? '--' : formatPrice(Math.abs(absoluteDistance));
   const hoverText =
     bufferPercent === null
       ? '当前仓位无法计算清算距离。'
       : bufferPercent < 0
         ? '当前价格已低于清算价。'
         : `价格下跌 ${bufferPercent.toFixed(2)}% 将触发清算`;
+  const shouldShowStats = showStats || safePredictedPrice !== null;
 
   return (
     <div className={`price-gauge ${isLowBuffer ? 'price-gauge-low-buffer' : ''} ${className}`}>
+      <div className="price-gauge-top-readout">
+        <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
+      </div>
+
       <svg
         className="price-gauge-svg"
         viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
         role="img"
-        aria-label={`清算风险仪表盘。风险等级 ${riskLevel}。清算价 ${safeLiquidationPrice === null ? '不可用' : formatPrice(safeLiquidationPrice)}，当前报价 ${safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '不可用'}，距离 ${distanceText}。`}
+        aria-label={`清算风险仪表盘。风险等级 ${riskLevel}。清算价 ${safeLiquidationPrice === null ? '不可用' : formatPrice(safeLiquidationPrice)}，当前报价 ${safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '不可用'}，距离 ${accessibleBufferText}。`}
       >
         <title>{hoverText}</title>
         <defs>
-          <linearGradient id="price-gauge-risk-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+          <linearGradient
+            id="price-gauge-risk-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="116"
+            x2="384"
+            y1="130"
+            y2="130"
+          >
             <stop offset="0%" stopColor="#ef4444" />
-            <stop offset="30%" stopColor="#ef4444" />
-            <stop offset="62%" stopColor="#f59e0b" />
+            <stop offset="34%" stopColor="#f97316" />
+            <stop offset="62%" stopColor="#facc15" />
             <stop offset="100%" stopColor="#22c55e" />
           </linearGradient>
-          <linearGradient id="price-gauge-buffer-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" stopColor="#ef4444" stopOpacity="0.95" />
-            <stop offset="55%" stopColor="#f59e0b" stopOpacity="0.92" />
+          <linearGradient
+            id="price-gauge-buffer-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="116"
+            x2="384"
+            y1="130"
+            y2="130"
+          >
+            <stop offset="0%" stopColor="#ef4444" stopOpacity="0.94" />
+            <stop offset="58%" stopColor="#f59e0b" stopOpacity="0.9" />
             <stop offset="100%" stopColor="#38bdf8" stopOpacity="1" />
           </linearGradient>
           <filter id="price-gauge-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />
+            <feGaussianBlur stdDeviation="2.8" result="coloredBlur" />
             <feMerge>
               <feMergeNode in="coloredBlur" />
               <feMergeNode in="SourceGraphic" />
@@ -192,106 +265,134 @@ export function PriceGauge({
 
         <path
           className="price-gauge-track"
-          d={describeArc(
-            geometry.cx,
-            geometry.cy,
-            geometry.radius,
-            geometry.startAngle,
-            arcEndAngle,
-          )}
+          d={describeArc(geometry.cx, geometry.cy, geometry.radius, startAngle, endAngle)}
         />
         <path
           className="price-gauge-risk-arc"
-          d={describeArc(
-            geometry.cx,
-            geometry.cy,
-            geometry.radius,
-            geometry.startAngle,
-            arcEndAngle,
-          )}
+          d={describeArc(geometry.cx, geometry.cy, geometry.radius, startAngle, endAngle)}
         />
         {safeLiquidationPrice !== null && (
           <path
             className="price-gauge-buffer-arc"
-            d={describeArc(
-              geometry.cx,
-              geometry.cy,
-              geometry.radius,
-              liquidationTickAngle,
-              bufferEndAngle,
-            )}
-            strokeDasharray="8 6"
+            d={describeArc(geometry.cx, geometry.cy, geometry.radius, startAngle, currentAngle)}
+            strokeDasharray="7 7"
             filter="url(#price-gauge-glow)"
           />
         )}
-
-        {safeLiquidationPrice !== null && (
-          <g className="price-gauge-liquidation-tick">
-            <line
-              x1={liquidationTickStart.x}
-              y1={liquidationTickStart.y}
-              x2={liquidationTickEnd.x}
-              y2={liquidationTickEnd.y}
+        {predictedArcStart !== null &&
+          predictedArcEnd !== null &&
+          Math.abs(predictedArcEnd - predictedArcStart) > 0.001 && (
+            <path
+              className={`price-gauge-predicted-delta ${
+                isPredictedLiquidatable ? 'price-gauge-predicted-delta-danger' : ''
+              }`}
+              d={describeArc(
+                geometry.cx,
+                geometry.cy,
+                geometry.radius + 8,
+                predictedArcStart,
+                predictedArcEnd,
+              )}
             />
-            <circle cx={liquidationTickEnd.x} cy={liquidationTickEnd.y} r="7" />
-            <text x={liquidationTickEnd.x} y={liquidationTickEnd.y - 14} textAnchor="middle">
-              !
-            </text>
-            <text
-              className="price-gauge-liquidation-label"
-              x={liquidationTickEnd.x}
-              y={liquidationTickEnd.y + 26}
-              textAnchor="middle"
-            >
-              清算价格
-            </text>
+          )}
+
+        <g className="price-gauge-liquidation-tick">
+          <line
+            x1={liquidationTickStart.x}
+            y1={liquidationTickStart.y}
+            x2={liquidationTickEnd.x}
+            y2={liquidationTickEnd.y}
+          />
+          <circle cx={liquidationTickEnd.x} cy={liquidationTickEnd.y} r="6" />
+          <text x={liquidationTickEnd.x} y={liquidationTickEnd.y - 14} textAnchor="middle">
+            !
+          </text>
+          <text
+            className="price-gauge-liquidation-label"
+            x={liquidationLabelPoint.x}
+            y={liquidationLabelPoint.y + 22}
+            textAnchor="middle"
+          >
+            Liq{' '}
+            {safeLiquidationPrice === null
+              ? '--'
+              : formatGaugeLabelPrice(safeLiquidationPrice, formatPrice)}
+          </text>
+        </g>
+
+        <text
+          className="price-gauge-side-label price-gauge-side-label-right"
+          x={rightLabelPoint.x}
+          y={rightLabelPoint.y + 18}
+          textAnchor="middle"
+        >
+          安全区
+        </text>
+
+        {predictedNeedleEnd !== null && (
+          <g
+            className={`price-gauge-predicted-needle ${
+              isPredictedLiquidatable ? 'price-gauge-predicted-danger' : ''
+            }`}
+          >
+            <line
+              x1={needleBase.x}
+              y1={needleBase.y}
+              x2={predictedNeedleEnd.x}
+              y2={predictedNeedleEnd.y}
+            />
           </g>
         )}
-
         <g className="price-gauge-needle">
-          <line x1={needleStart.x} y1={needleStart.y} x2={needleEnd.x} y2={needleEnd.y} />
+          <line x1={needleBase.x} y1={needleBase.y} x2={needleEnd.x} y2={needleEnd.y} />
         </g>
+        {predictedPoint !== null && (
+          <circle
+            className={`price-gauge-predicted-point ${
+              isPredictedLiquidatable ? 'price-gauge-predicted-danger' : ''
+            }`}
+            cx={predictedPoint.x}
+            cy={predictedPoint.y}
+            r="4"
+          />
+        )}
         <circle
           className="price-gauge-current-point"
           cx={currentPoint.x}
           cy={currentPoint.y}
-          r="7"
+          r="6"
         />
-        <circle className="price-gauge-hub" cx={geometry.cx} cy={geometry.cy} r="10" />
-
-        <text className="price-gauge-side-label price-gauge-side-label-left" x="94" y="178">
-          清算
-        </text>
-        <text className="price-gauge-side-label price-gauge-side-label-mid" x="210" y="58">
-          价格递增 →
-        </text>
-        <text className="price-gauge-side-label price-gauge-side-label-right" x="326" y="178">
-          安全区
-        </text>
+        <circle className="price-gauge-hub" cx={needleBase.x} cy={needleBase.y} r="4.5" />
       </svg>
 
-      <div className="price-gauge-readout">
-        <span>{valueLabel}</span>
-        <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
-        <small>{distanceText}</small>
+      <div className="price-gauge-bottom-cards">
+        <div className="price-gauge-bottom-card">
+          <span>清算报价</span>
+          <strong>
+            {safeLiquidationPrice === null ? '--' : formatPrice(safeLiquidationPrice)}
+          </strong>
+        </div>
+        <div className="price-gauge-bottom-card price-gauge-bottom-card-buffer">
+          <span>清算缓冲</span>
+          <strong>{bufferText}</strong>
+        </div>
+        <div className="price-gauge-bottom-card">
+          <span>当前报价</span>
+          <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
+        </div>
       </div>
 
-      {showStats && (
+      {shouldShowStats && showStats && (
         <div className="price-gauge-stats">
-          <div>
-            <span>清算价</span>
-            <strong>
-              {safeLiquidationPrice === null ? '--' : formatPrice(safeLiquidationPrice)}
-            </strong>
-          </div>
           <div>
             <span>当前报价</span>
             <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
           </div>
           <div>
-            <span>距离清算</span>
-            <strong>{bufferPercent === null ? '--' : `${bufferPercent.toFixed(2)}%`}</strong>
-            <small>{absoluteDistance !== null ? absoluteText : '--'}</small>
+            <span>清算报价</span>
+            <strong>
+              {safeLiquidationPrice === null ? '--' : formatPrice(safeLiquidationPrice)}
+            </strong>
           </div>
         </div>
       )}
