@@ -1,261 +1,157 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件用于说明本仓库的共享开发规则与 agent 协作约束。
 
-## Project Overview
+前半部分面向所有维护者，包括人类开发者与代码 agent。后半部分保留 agent 在本仓库内工作的额外注意事项。
 
-Aave V2/V3 Ethereum Mainnet liquidation monitoring system. Crawls user positions (collateral/borrow), calculates ETH liquidation prices for both long positions (ETH price drop risk) and short positions (ETH price rise risk for WETH borrowers).
+## 仓库概览
 
-**Architecture**: Python backend (FastAPI + asyncpg/SQLAlchemy + web3.py) + React frontend (TypeScript + Vite) + PostgreSQL + ClickHouse (for raw blockchain logs).
+这是一个多协议清算风险监测与仓位分析仓库，当前包含：
 
-## Development Commands
+- 后端：Python，统一承载 Aave、Compound、Morpho、JustLend 等协议的数据采集、持久化与 API
+- 前端：React + TypeScript + Vite，消费统一后端 API，提供个人仓位分析与市场看板
+- 数据库：PostgreSQL 为主，ClickHouse 用于部分链上原始日志查询
 
-### Backend (Python 3.12+, uv package manager)
+当前仓库不是单一 Aave 项目。Aave 仍然是历史最重、文档最丰富的模块，但 Morpho、Compound、JustLend 已经是正式的一部分。
+
+## 共享开发规则
+
+### 文档分工
+
+- 根 `README.md`：仓库入口、安装运行路径、模块地图、文档导航
+- `backend/README.md`：后端运行方式、模块职责、数据库说明、测试与常见坑
+- `frontend/README.md`：前端运行、构建、联调与目录结构
+- `AGENTS.md`：仓库规则、约定、agent 注意事项
+
+### 文档同步要求
+
+出现以下变更时，必须同步更新对应文档：
+
+- 仓库结构、启动方式、依赖前提发生变化：更新根 `README.md`
+- 后端命令、配置、API、数据库结构、模块职责发生变化：更新 `backend/README.md`
+- 前端环境变量、构建方式、页面结构、API 依赖发生变化：更新 `frontend/README.md`
+- 仓库级约定、地址存储规则、agent 工作边界发生变化：更新 `AGENTS.md`
+
+### 地址存储标准
+
+当前仓库中存在历史遗留的多种地址存储格式。下面是**后续新增表、新增列、以及地址相关重构的目标标准**，不代表所有现有表都已完成迁移。
+
+- 所有存储链上地址的数据库列，统一使用 PostgreSQL 列级 `STORAGE PLAIN`
+- 所有 TRON 地址必须以规范化 Base58 文本形式存储，并以 `T` 开头，例如 `Txxxxx`
+
+适用范围包括但不限于：
+
+- `user_address`
+- `walletAddress`
+- `token_address`
+- `contract_address`
+- `market`
+- `oracle_address`
+- `receiver`
+- `sender`
+- `borrower_address`
+- `payer_address`
+- `payee_address`
+- `liquidator_address`
+
+补充约束：
+
+- TRON 地址禁止以 `41...` 裸十六进制、raw bytes、或其他非 `T...` 形式落库
+- 兼容旧表时可以保留读路径兼容逻辑，但新写入应优先遵循上述标准
+- 对旧表做兼容性修补时，需要明确这是“兼容旧格式”还是“推进迁移到新标准”
+
+## 项目结构
+
+### 后端
+
+- `backend/aave_crawler/`：Aave 数据采集、仓位快照、历史回放、清算分析
+- `backend/compound_crawler/`：Compound V2/V3 市场、治理参数、仓位回放
+- `backend/morpho_crawler/`：Morpho Blue 当前仓位与市场信息
+- `backend/justlend_crawler/`：JustLend 当前仓位、趋势回放与说明文案
+- `backend/crawler_shared/`：共享配置、数据库与统一 API 入口
+- `backend/alembic/`：迁移脚本
+- `backend/tests/`：后端测试
+
+### 前端
+
+- `frontend/src/api/`：按协议拆分的 API 客户端
+- `frontend/src/components/`：各协议仪表盘与图表组件
+- `frontend/src/protocols/`：协议注册表
+- `frontend/src/shared/`：共享 UI 与类型
+- `frontend/src/hooks/`：共享 hooks
+- `frontend/src/theme/`：主题与设计 token
+
+## 后端关键约定
+
+### 数据库访问模式
+
+后端采用双访问模式：
+
+- SQLAlchemy AsyncSession：更适合 API 读操作与 ORM 模型管理
+- asyncpg Pool：更适合批量写入、显式事务、性能关键路径
+
+除非性能上已经证明 ORM 不够，否则 API 查询优先使用 SQLAlchemy。批量落库、回放缓存、批处理脚本优先使用 asyncpg。
+
+### Aave 现有核心约定
+
+- `-p/--protocol` 常见取值：`v2`、`v3`、`v2_borrow`、`v3_borrow`
+- Aave V3 预言机价格通常为 USD 8 位小数；Aave V2 需要注意 ETH 计价分支
+- `ETH_SYMBOLS` 用于定义 ETH 系资产范围
+- 清算价格分为两类：
+  - `liq_price`：ETH 下跌导致清算
+  - `liq_price_rise`：ETH 上涨导致 WETH 借款仓位清算
+
+### 外部数据依赖
+
+- PostgreSQL 中部分 schema 由外部系统维护，不属于本仓库迁移管理范围
+- ClickHouse 只用于特定日志分析，不是核心运行前提
+- 对外部表做假设时，必须先区分“本仓库管理”与“外部维护”
+
+## 常见开发命令
+
+### 后端
 
 ```bash
 cd backend
-
-# Install dependencies
 uv sync
-
-# Run CLI commands
-uv run aave-crawler sync-addresses              # Derive user addresses from history
-uv run aave-crawler crawl -p v3                 # Crawl V3 collateral positions
-uv run aave-crawler crawl -p v3_borrow          # Crawl V3 borrow positions
-uv run aave-crawler watch -p v3                 # Watch mode (continuous)
-uv run aave-crawler check 0xAddress             # Debug single address
-
-# Start API server
-uv run api                                      # Default: 0.0.0.0:8000
-uv run api --reload                             # Dev mode with hot reload
-uv run api --port 8080 --workers 4              # Production
-
-# Database migrations (Alembic)
-uv run alembic revision --autogenerate -m "description"
-uv run alembic upgrade head
-uv run alembic downgrade -1
-
-# Testing
+uv run api
 uv run pytest tests/ -q
-uv run pytest tests/test_routes.py -v
-
-# Type checking and linting (via pre-commit)
-pre-commit run --all-files
 ```
 
-### Frontend (Node.js 18+, pnpm)
+### 前端
 
 ```bash
 cd frontend
-
-# Install dependencies
 pnpm install
-
-# Development
-pnpm dev                    # Local only
-pnpm dev --host             # LAN access
-
-# Production build
-pnpm build                  # Output: dist/
-pnpm preview                # Preview production build
+pnpm dev
+pnpm build
 ```
 
-### Configuration Files
+## Agent 专用说明
 
-- `backend/config.yaml` - Backend config (RPC, PostgreSQL, ClickHouse, crawler settings)
-- `frontend/.env.local` - Frontend API endpoint override (VITE_API_BASE_URL)
+本节仅面向代码 agent。
 
-Both files are gitignored. Copy from `.example` files and modify.
+### 工作原则
 
-## Architecture Patterns
+- 先理解现状，再改文档或代码，不要凭印象补全
+- 涉及仓库结构、模块职责、命令、配置时，优先核对实际文件
+- 如果当前状态与文档不一致，应以代码和配置为准，再修正文档
 
-### Dual Database Access Pattern
+### 文档修改原则
 
-The backend uses **two PostgreSQL client libraries** for different use cases:
+- 文档一律使用简体中文，除非必须保留英文专有名词
+- 根 README 负责导航，不应复制过多 backend 细节
+- `backend/README.md` 可以详细，但不要再写成“只有 Aave 的项目”
+- `frontend/README.md` 只讲前端关心的运行、联调、结构，不重复后端实现细节
 
-1. **asyncpg** (`db.py`) - High-performance scenarios:
-   - Batch writes via native `COPY` protocol (10-50x faster than ORM)
-   - Complex transactions requiring explicit connection control
-   - Performance-critical queries (e.g., `simulate_liquidation_period`)
-   - Injected via `AsyncpgPool = Annotated[asyncpg.Pool, Depends(get_pool)]`
+### 对历史信息的处理
 
-2. **SQLAlchemy AsyncSession** (`database.py`, `orm_models.py`) - Type-safe queries:
-   - API layer read operations (`api/routes.py`, `api/service.py`)
-   - Provides full type hints and IDE autocomplete
-   - Alembic migration source of truth
-   - Injected via `DbSession = Annotated[AsyncSession, Depends(get_db)]`
+- 不要把“目标标准”写成“当前事实”
+- 不要删除仍对运维或排障有价值的历史说明，除非已确认过时
+- 如果仓库存在混合状态，文档必须显式写明“现状”和“后续标准”的区别
 
-**Rule**: Use SQLAlchemy for API queries unless performance profiling shows a bottleneck. Use asyncpg for batch operations and crawler writes.
+### 安全边界
 
-### Protocol Table Structure
-
-Four table sets per protocol version (v2/v3):
-
-```text
-loan.aave_{v2|v3}_eth_positions_collateral          # Collateral-side summary
-loan.aave_{v2|v3}_eth_positions_borrow              # Borrow-side summary
-loan.aave_{v2|v3}_eth_reserve_positions_collateral  # Per-reserve details
-loan.aave_{v2|v3}_eth_reserve_positions_borrow      # Per-reserve details
-```
-
-Source tables (user address lists):
-
-```text
-loan.aave_{v2|v3}_eth_weth_collateral
-loan.aave_{v2|v3}_eth_weth_borrow
-```
-
-**Naming convention**: `_eth_` infix indicates ETH-related assets only (WETH, wstETH, rETH, etc.). Market-wide tables omit this infix (e.g., `aave_v3_market_snapshots`).
-
-### Oracle Price Handling
-
-Critical difference between protocol versions:
-
-- **Aave V3**: Oracle returns USD price with 8 decimals → `oracle_price_in_eth=False`
-- **Aave V2**: Oracle returns ETH price with 18 decimals → `oracle_price_in_eth=True`
-  - Must multiply by ETH/USD to get USD price
-  - For historical blocks: use Chainlink ETH/USD (available from 2019), fallback to V3 oracle
-
-See `rpc.py:fetch_user_position()` and `rpc.py:fetch_user_position_at_block()` for implementation.
-
-### ETH Asset Symbols
-
-Defined in `constants.py:ETH_SYMBOLS`:
-
-```python
-ETH_SYMBOLS = {"WETH", "wstETH", "rETH", "cbETH", "WSTETH"}
-```
-
-Used for:
-
-- Filtering collateral positions (ETH downside risk)
-- Filtering borrow positions (WETH upside risk)
-- Address derivation from `aave.aave_history`
-
-### Liquidation Price Calculation
-
-Two directions:
-
-1. **Collateral side** (`liq_price`): ETH price drop triggers liquidation
-   - Calculated when user has ETH collateral + any debt
-   - Formula: `liq_price = total_debt_usd / (eth_collateral_amount * liq_threshold)`
-
-2. **Borrow side** (`liq_price_rise`): ETH price rise triggers liquidation
-   - Calculated when user borrows WETH with non-ETH collateral
-   - Formula: `liq_price_rise = (total_collateral_usd * liq_threshold) / weth_debt_amount`
-
-Both stored in position tables. Zero value means no liquidation risk in that direction.
-
-## Key File Locations
-
-### Backend Core
-
-- `aave_crawler/cli.py` - Click CLI entry point (all commands)
-- `aave_crawler/server.py` - FastAPI app factory + uvicorn entry
-- `aave_crawler/config.py` - Config loading (AppConfig, PostgresConfig, ClickHouseConfig)
-- `aave_crawler/rpc.py` - Web3 contract calls (fetch_user_position, fetch_user_position_at_block)
-- `aave_crawler/db.py` - asyncpg layer (DDL, UPSERT, sync_addresses_from_history)
-- `aave_crawler/database.py` - SQLAlchemy session management
-- `aave_crawler/orm_models.py` - SQLAlchemy ORM models (Alembic migration source)
-- `aave_crawler/models.py` - Pure dataclasses (UserPosition, ReserveConfig)
-- `aave_crawler/crawler.py` - Batch crawl main loop
-- `aave_crawler/watcher.py` - Incremental watch mode
-- `aave_crawler/clickhouse.py` - ClickHouse HTTP client (reads eth_defi.rrmt_logs)
-- `aave_crawler/constants.py` - ETH_SYMBOLS, MAX_UINT256, MAX_HF, LIQ_PRICE_CAP
-
-### Backend API
-
-- `aave_crawler/api/routes.py` - FastAPI route definitions
-- `aave_crawler/api/service.py` - Business logic layer
-- `aave_crawler/api/schemas.py` - Pydantic response models
-
-### Frontend
-
-- `src/App.tsx` - Root component (tabs, protocol/side toggles, routing)
-- `src/components/AddressInput.tsx` - Address input with viem validation
-- `src/components/SummaryCard.tsx` - Account overview card
-- `src/components/PositionTable.tsx` - Asset/liability detail tables
-- `src/components/MarketAssessment.tsx` - Market-wide analysis container
-- `src/components/LiquidationChart.tsx` - Liquidation distribution bar chart
-- `src/components/EthPriceTrend.tsx` - ETH price history line chart
-
-### Database
-
-- `alembic/versions/` - Migration scripts
-- `alembic.ini` - Alembic configuration
-
-## Important Patterns
-
-### CLI Protocol Parameter
-
-The `-p/--protocol` flag accepts four values:
-
-- `v2` - Aave V2 collateral side
-- `v3` - Aave V3 collateral side (default)
-- `v2_borrow` - Aave V2 borrow side
-- `v3_borrow` - Aave V3 borrow side
-
-This maps to `ProtocolTables` in `db.py` which defines table names for each combination.
-
-### Config Loading Priority
-
-`config.py:load_config()` searches in order:
-
-1. Explicitly passed path
-2. Current working directory `config.yaml`
-3. `backend/config.yaml` (relative to package)
-
-### Database Connection Injection
-
-FastAPI routes use dependency injection:
-
-```python
-from aave_crawler.database import get_db, get_pool
-
-async def route(
-    db: DbSession,              # SQLAlchemy AsyncSession
-    pool: AsyncpgPool,          # asyncpg Pool
-):
-    # Use db for ORM queries
-    # Use pool for raw SQL / COPY operations
-```
-
-### ClickHouse Log Querying
-
-`eth_defi.rrmt_logs` table stores all Ethereum event logs. Key columns:
-
-- `TopicHash` - Event signature (topic[0]), lowercase with 0x prefix
-- `Address` - Contract address, lowercase with 0x prefix
-- `Topics` - Comma-separated topic[1..N] (each 32-byte padded hex)
-- `Data` - ABI-encoded event data
-
-Example: Query aToken Transfer events:
-
-```sql
-WHERE TopicHash = '0xddf252ad...' AND Address = '0x4d5f47fa...'
-```
-
-Extract addresses from Topics: `splitByChar(',', Topics)[1]` gives padded from address.
-
-## Testing
-
-Backend tests (`tests/`) use pytest with full mocking - no real database or RPC required. See `tests/conftest.py` for fixtures.
-
-Frontend has no test suite currently.
-
-## Deployment Notes
-
-- Backend: Typical workflow is `sync-addresses` → `crawl` (all 4 sides) → `watch` (background) → `api`
-- Frontend: Static build in `dist/`, requires `VITE_API_BASE_URL` set at build time
-- Database: Requires PostgreSQL with `aave.aave_history` table (maintained by external chain-data-collector)
-- ClickHouse: Optional, only needed for aToken transfer analysis (not core functionality)
-
-## Common Gotchas
-
-1. **Alembic migrations**: Only cover `loan` schema. Other schemas (e.g., `aave`) are external.
-2. **Health factor infinity**: Stored as `1e18` in database (MAX_HF constant) when user has no debt.
-3. **Liquidation price cap**: Set to `1e9` (LIQ_PRICE_CAP) to prevent overflow in edge cases.
-4. **Address case sensitivity**: Database stores lowercase. API accepts both checksummed and lowercase.
-5. **Oracle price units**: Always check `oracle_price_in_eth` parameter when calling RPC functions.
-6. **Incremental crawl**: Use `--incremental` flag to skip already-crawled addresses (checks target table).
-7. **Watch mode water mark**: Stored in `loan.watcher_watermarks` table, tracks last processed timestamp.
+- 不要默认外部 schema、外部链数据表、外部服务的结构已经被本仓库控制
+- 修改涉及地址格式、数据库列类型、API 响应字段时，必须检查上下游兼容性
+- 发现旧逻辑依赖历史格式时，先记录并解释，不要盲目统一
