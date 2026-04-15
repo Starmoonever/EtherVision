@@ -48,6 +48,7 @@ interface ReplayPointView {
   healthFactorChartValue: number;
   healthFactorLabel: string;
   ltvPct: number;
+  ltvChartValue: number;
   liquidationThresholdPct: number;
   assets: JustLendPositionReplayAsset[];
 }
@@ -72,7 +73,15 @@ interface PositionTrendTooltipProps {
   label?: string;
 }
 
+interface OperationMarkerDotProps {
+  cx?: number;
+  cy?: number;
+  payload?: ReplayPointView;
+}
+
 type AssetSide = 'collateral' | 'borrow';
+type RiskViewMode = 'ALL' | 'LTV' | '健康因子' | '清算阈值';
+type BufferViewMode = 'ALL' | '总债务价值' | '折算抵押价值' | '清算缓冲';
 const JUSTLEND_HISTORY_START = '2020-12-01';
 
 const explainItems: ExplainItem[] = [
@@ -97,6 +106,29 @@ const explainItems: ExplainItem[] = [
 ];
 
 const assetColors = ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#ef4444'];
+
+const chartTheme = {
+  grid: '#1e293b',
+  axis: {
+    stroke: '#64748b',
+  },
+  tooltipBg: '#0f172a',
+  tooltipBorder: '#1e293b',
+  bufferTrend: {
+    primary: '#38bdf8',
+    secondary: '#ef4444',
+    tertiary: '#f59e0b',
+    hoverLine: '#38bdf8',
+    reference: '#ef4444',
+  },
+  riskTrend: {
+    healthFactor: '#38bdf8',
+    ltv: '#ef4444',
+    liquidationThreshold: '#f59e0b',
+    hoverLine: '#38bdf8',
+    reference: '#ef4444',
+  },
+} as const;
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -202,6 +234,7 @@ function buildReplayPoints(points: JustLendPositionReplayPoint[]): ReplayPointVi
         healthFactorChartValue: Math.min(2, toNum(point.health_factor)),
         healthFactorLabel: formatHealthFactorLabel(point.health_factor),
         ltvPct: ratioToPercent(point.ltv),
+        ltvChartValue: Math.min(100, ratioToPercent(point.ltv)),
         liquidationThresholdPct: ratioToPercent(point.liquidation_threshold),
         assets: Array.isArray(point.assets) ? point.assets : [],
       };
@@ -324,6 +357,25 @@ function PositionTrendTooltip({ active, payload, label }: PositionTrendTooltipPr
   );
 }
 
+function renderOperationMarker(
+  props: OperationMarkerDotProps,
+  selectedOperationType: string,
+  color: string,
+) {
+  const { cx, cy, payload } = props;
+  if (
+    selectedOperationType === 'ALL' ||
+    !payload ||
+    payload.operationType !== selectedOperationType ||
+    cx === undefined ||
+    cy === undefined
+  ) {
+    return null;
+  }
+
+  return <circle cx={cx} cy={cy} r={4.5} fill={color} stroke="#f8fafc" strokeWidth={1.4} />;
+}
+
 export function JustLendPositionReplayChart({
   address,
   protocol = 'trx',
@@ -341,6 +393,9 @@ export function JustLendPositionReplayChart({
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedTimestamp, setSelectedTimestamp] = useState<string | null>(null);
   const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
+  const [selectedOperationType, setSelectedOperationType] = useState<string>('ALL');
+  const [riskViewMode, setRiskViewMode] = useState<RiskViewMode>('ALL');
+  const [bufferViewMode, setBufferViewMode] = useState<BufferViewMode>('ALL');
 
   useEffect(() => {
     const nextRange = getDefaultHistoryRange();
@@ -349,6 +404,9 @@ export function JustLendPositionReplayChart({
     setDetailEnabled(false);
     setSelectedTimestamp(null);
     setHoveredTimestamp(null);
+    setSelectedOperationType('ALL');
+    setRiskViewMode('ALL');
+    setBufferViewMode('ALL');
   }, [address]);
 
   useEffect(() => {
@@ -448,6 +506,24 @@ export function JustLendPositionReplayChart({
     () => summarizeAssets(selectedPoint?.assets ?? [], 'borrow'),
     [selectedPoint],
   );
+  const availableOperationTypes = useMemo(() => {
+    const seen = new Set<string>();
+    const items: string[] = [];
+    for (const point of data) {
+      const type = point.operationType || 'unknown';
+      if (seen.has(type)) continue;
+      seen.add(type);
+      items.push(type);
+    }
+    return items;
+  }, [data]);
+
+  useEffect(() => {
+    if (selectedOperationType === 'ALL') return;
+    if (!availableOperationTypes.includes(selectedOperationType)) {
+      setSelectedOperationType('ALL');
+    }
+  }, [availableOperationTypes, selectedOperationType]);
 
   const assetStructureSection = (
     <div className="card" style={{ marginBottom: 0 }}>
@@ -743,6 +819,37 @@ export function JustLendPositionReplayChart({
               <span className="card-title">仓位规模趋势</span>
               <span className="badge green-badge">Overview</span>
             </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.55rem',
+                flexWrap: 'wrap',
+                marginBottom: '0.9rem',
+              }}
+            >
+              {['ALL', ...availableOperationTypes].map((operationType) => {
+                const active = selectedOperationType === operationType;
+                return (
+                  <button
+                    key={operationType}
+                    type="button"
+                    onClick={() => setSelectedOperationType(operationType)}
+                    style={{
+                      borderRadius: '999px',
+                      border: `1px solid ${active ? '#2563eb' : '#334155'}`,
+                      background: active ? '#2563eb' : '#0f172a',
+                      color: active ? '#eff6ff' : '#cbd5e1',
+                      padding: '0.38rem 0.8rem',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {operationType}
+                  </button>
+                );
+              })}
+            </div>
             <div style={{ height: 320 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart
@@ -755,21 +862,21 @@ export function JustLendPositionReplayChart({
                   }
                   onMouseLeave={() => setHoveredTimestamp(null)}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                   <XAxis
                     dataKey="timestamp"
-                    stroke="#64748b"
+                    stroke={chartTheme.axis.stroke}
                     tickFormatter={(value) => String(value).slice(0, 10)}
                     minTickGap={32}
                   />
                   <YAxis
-                    stroke="#64748b"
+                    stroke={chartTheme.axis.stroke}
                     tickFormatter={(value) => formatUsdCompact(Number(value))}
                   />
                   {hoveredTimestamp || selectedPoint ? (
                     <ReferenceLine
                       x={hoveredTimestamp ?? selectedPoint?.timestamp}
-                      stroke="#93c5fd"
+                      stroke={chartTheme.bufferTrend.hoverLine}
                       strokeWidth={1.5}
                       strokeDasharray="4 4"
                     />
@@ -782,16 +889,29 @@ export function JustLendPositionReplayChart({
                     name="总抵押价值"
                     stroke="#22c55e"
                     strokeWidth={2.2}
-                    dot={false}
+                    dot={
+                      selectedOperationType === 'ALL'
+                        ? false
+                        : (props) => renderOperationMarker(props, selectedOperationType, '#22c55e')
+                    }
                     activeDot={false}
                   />
                   <Line
                     type="monotone"
                     dataKey="totalDebtUsd"
                     name="总债务价值"
-                    stroke="#ef4444"
+                    stroke={chartTheme.bufferTrend.secondary}
                     strokeWidth={2.2}
-                    dot={false}
+                    dot={
+                      selectedOperationType === 'ALL'
+                        ? false
+                        : (props) =>
+                            renderOperationMarker(
+                              props,
+                              selectedOperationType,
+                              chartTheme.bufferTrend.secondary,
+                            )
+                    }
                     activeDot={false}
                   />
                 </LineChart>
@@ -809,32 +929,106 @@ export function JustLendPositionReplayChart({
                   Risk
                 </span>
               </div>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '0.55rem',
+                  flexWrap: 'wrap',
+                  marginBottom: '0.9rem',
+                }}
+              >
+                {(['ALL', 'LTV', '健康因子', '清算阈值'] as RiskViewMode[]).map((mode) => {
+                  const active = riskViewMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setRiskViewMode(mode)}
+                      style={{
+                        borderRadius: '999px',
+                        border: `1px solid ${active ? '#2563eb' : '#334155'}`,
+                        background: active ? '#2563eb' : '#0f172a',
+                        color: active ? '#eff6ff' : '#cbd5e1',
+                        padding: '0.38rem 0.8rem',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      {mode}
+                    </button>
+                  );
+                })}
+              </div>
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis
                       dataKey="timestamp"
-                      stroke="#64748b"
+                      stroke={chartTheme.axis.stroke}
                       tickFormatter={(value) => String(value).slice(0, 10)}
                       minTickGap={32}
                     />
-                    <YAxis
-                      yAxisId="hf"
-                      stroke="#f8fafc"
-                      domain={[0, 2]}
-                      ticks={[0, 0.5, 1, 1.5, 2]}
-                    />
-                    <YAxis
-                      yAxisId="ratio"
-                      orientation="right"
-                      stroke="#22c55e"
-                      domain={[0, 100]}
-                      tickFormatter={(value) => `${Number(value)}%`}
-                    />
-                    <ReferenceLine yAxisId="hf" y={1} stroke="#ef4444" strokeDasharray="4 4" />
+                    {riskViewMode === 'ALL' ? (
+                      <>
+                        <YAxis
+                          yAxisId="hf"
+                          stroke={chartTheme.axis.stroke}
+                          domain={[0, 2]}
+                          ticks={[0, 0.5, 1, 1.5, 2]}
+                        />
+                        <YAxis
+                          yAxisId="ratio"
+                          orientation="right"
+                          stroke={chartTheme.axis.stroke}
+                          domain={[0, 100]}
+                          tickFormatter={(value) => `${Number(value)}%`}
+                        />
+                        <ReferenceLine
+                          yAxisId="hf"
+                          y={1}
+                          stroke={chartTheme.riskTrend.reference}
+                          strokeDasharray="4 4"
+                        />
+                      </>
+                    ) : null}
+                    {riskViewMode === '健康因子' ? (
+                      <>
+                        <YAxis
+                          yAxisId="hf"
+                          stroke={chartTheme.axis.stroke}
+                          domain={[0, 2]}
+                          ticks={[0, 0.5, 1, 1.5, 2]}
+                        />
+                        <ReferenceLine
+                          yAxisId="hf"
+                          y={1}
+                          stroke={chartTheme.riskTrend.reference}
+                          strokeDasharray="4 4"
+                        />
+                      </>
+                    ) : null}
+                    {riskViewMode === '清算阈值' ? (
+                      <YAxis
+                        yAxisId="ratio"
+                        stroke={chartTheme.axis.stroke}
+                        domain={[0, 100]}
+                        tickFormatter={(value) => `${Number(value)}%`}
+                      />
+                    ) : null}
+                    {riskViewMode === 'LTV' ? (
+                      <YAxis
+                        yAxisId="ratio"
+                        stroke={chartTheme.axis.stroke}
+                        tickFormatter={(value) => `${Number(value)}%`}
+                      />
+                    ) : null}
                     <Tooltip
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                      contentStyle={{
+                        backgroundColor: chartTheme.tooltipBg,
+                        borderColor: chartTheme.tooltipBorder,
+                      }}
                       labelFormatter={(value) => formatDatetime(String(value))}
                       formatter={(
                         value: unknown,
@@ -845,41 +1039,56 @@ export function JustLendPositionReplayChart({
                         if (String(name) === '健康因子') {
                           return [point?.healthFactorLabel ?? String(value), String(name)];
                         }
+                        if (String(name) === 'LTV') {
+                          return [formatPercent(point?.ltvPct ?? Number(value ?? 0)), String(name)];
+                        }
+                        if (String(name) === '清算阈值') {
+                          return [
+                            formatPercent(point?.liquidationThresholdPct ?? Number(value ?? 0)),
+                            String(name),
+                          ];
+                        }
                         return [formatPercent(Number(value ?? 0)), String(name)];
                       }}
-                      cursor={false}
+                      cursor={{ stroke: '#f8fafc', strokeWidth: 1.5 }}
                     />
                     <Legend />
-                    <Line
-                      yAxisId="hf"
-                      type="monotone"
-                      dataKey="healthFactorChartValue"
-                      name="健康因子"
-                      stroke="#f8fafc"
-                      strokeWidth={2.1}
-                      dot={false}
-                      activeDot={false}
-                    />
-                    <Line
-                      yAxisId="ratio"
-                      type="monotone"
-                      dataKey="ltvPct"
-                      name="LTV"
-                      stroke="#f59e0b"
-                      strokeWidth={2.1}
-                      dot={false}
-                      activeDot={false}
-                    />
-                    <Line
-                      yAxisId="ratio"
-                      type="monotone"
-                      dataKey="liquidationThresholdPct"
-                      name="清算阈值"
-                      stroke="#22c55e"
-                      strokeWidth={2.1}
-                      dot={false}
-                      activeDot={false}
-                    />
+                    {riskViewMode === 'ALL' || riskViewMode === '健康因子' ? (
+                      <Line
+                        yAxisId="hf"
+                        type="monotone"
+                        dataKey="healthFactorChartValue"
+                        name="健康因子"
+                        stroke={chartTheme.riskTrend.healthFactor}
+                        strokeWidth={2.1}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ) : null}
+                    {riskViewMode === 'ALL' || riskViewMode === 'LTV' ? (
+                      <Line
+                        yAxisId="ratio"
+                        type="monotone"
+                        dataKey={riskViewMode === 'ALL' ? 'ltvChartValue' : 'ltvPct'}
+                        name="LTV"
+                        stroke={chartTheme.riskTrend.ltv}
+                        strokeWidth={2.1}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ) : null}
+                    {riskViewMode === 'ALL' || riskViewMode === '清算阈值' ? (
+                      <Line
+                        yAxisId="ratio"
+                        type="monotone"
+                        dataKey="liquidationThresholdPct"
+                        name="清算阈值"
+                        stroke={chartTheme.riskTrend.liquidationThreshold}
+                        strokeWidth={2.1}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ) : null}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -892,23 +1101,65 @@ export function JustLendPositionReplayChart({
                   Buffer
                 </span>
               </div>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '0.55rem',
+                  flexWrap: 'wrap',
+                  marginBottom: '0.9rem',
+                }}
+              >
+                {(['ALL', '总债务价值', '折算抵押价值', '清算缓冲'] as BufferViewMode[]).map(
+                  (mode) => {
+                    const active = bufferViewMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setBufferViewMode(mode)}
+                        style={{
+                          borderRadius: '999px',
+                          border: `1px solid ${active ? '#2563eb' : '#334155'}`,
+                          background: active ? '#2563eb' : '#0f172a',
+                          color: active ? '#eff6ff' : '#cbd5e1',
+                          padding: '0.38rem 0.8rem',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {mode}
+                      </button>
+                    );
+                  },
+                )}
+              </div>
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis
                       dataKey="timestamp"
-                      stroke="#64748b"
+                      stroke={chartTheme.axis.stroke}
                       tickFormatter={(value) => String(value).slice(0, 10)}
                       minTickGap={32}
                     />
                     <YAxis
-                      stroke="#64748b"
+                      stroke={chartTheme.axis.stroke}
                       tickFormatter={(value) => formatUsdCompact(Number(value))}
                     />
-                    <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
+                    {bufferViewMode === 'ALL' || bufferViewMode === '清算缓冲' ? (
+                      <ReferenceLine
+                        y={0}
+                        stroke={chartTheme.bufferTrend.reference}
+                        strokeDasharray="4 4"
+                      />
+                    ) : null}
                     <Tooltip
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                      contentStyle={{
+                        backgroundColor: chartTheme.tooltipBg,
+                        borderColor: chartTheme.tooltipBorder,
+                      }}
                       labelFormatter={(value) => formatDatetime(String(value))}
                       formatter={(value: unknown, name: unknown) => [
                         formatUsd(Number(value ?? 0)),
@@ -916,34 +1167,40 @@ export function JustLendPositionReplayChart({
                       ]}
                     />
                     <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="discountedCollateralUsd"
-                      name="折算抵押价值"
-                      stroke="#38bdf8"
-                      strokeWidth={2.1}
-                      dot={false}
-                      activeDot={{ r: 5 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="liquidationBufferUsd"
-                      name="清算缓冲"
-                      stroke="#ef4444"
-                      strokeWidth={2.1}
-                      dot={false}
-                      activeDot={{ r: 5 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="totalDebtUsd"
-                      name="总债务价值"
-                      stroke="#f59e0b"
-                      strokeWidth={1.8}
-                      strokeDasharray="5 4"
-                      dot={false}
-                      activeDot={{ r: 4 }}
-                    />
+                    {bufferViewMode === 'ALL' || bufferViewMode === '折算抵押价值' ? (
+                      <Line
+                        type="monotone"
+                        dataKey="discountedCollateralUsd"
+                        name="折算抵押价值"
+                        stroke={chartTheme.bufferTrend.primary}
+                        strokeWidth={2.1}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ) : null}
+                    {bufferViewMode === 'ALL' || bufferViewMode === '清算缓冲' ? (
+                      <Line
+                        type="monotone"
+                        dataKey="liquidationBufferUsd"
+                        name="清算缓冲"
+                        stroke={chartTheme.bufferTrend.secondary}
+                        strokeWidth={2.1}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                    ) : null}
+                    {bufferViewMode === 'ALL' || bufferViewMode === '总债务价值' ? (
+                      <Line
+                        type="monotone"
+                        dataKey="totalDebtUsd"
+                        name="总债务价值"
+                        stroke={chartTheme.bufferTrend.tertiary}
+                        strokeWidth={1.8}
+                        strokeDasharray="5 4"
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                    ) : null}
                   </LineChart>
                 </ResponsiveContainer>
               </div>

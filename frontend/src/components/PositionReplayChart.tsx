@@ -76,6 +76,11 @@ interface DotRenderProps {
   payload?: ReplayPoint;
 }
 
+function pointMatchesType(point: ReplayPoint, selectedType: string): boolean {
+  if (selectedType === 'all') return true;
+  return point.operation_type === selectedType || point.original_operation_type === selectedType;
+}
+
 const replayCache = new Map<string, { fetchedAt: number; data: ReplayPoint[] }>();
 const REPLAY_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -396,22 +401,15 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
     const startTs = new Date(appliedRange.start).getTime();
     const endTs = new Date(appliedRange.end).getTime();
 
-    let filtered = fullData.filter((pt) => {
+    const filtered = fullData.filter((pt) => {
       const ptTs = new Date(pt.timestamp).getTime();
       return ptTs >= startTs && ptTs <= endTs;
     });
 
-    // If a specific type is selected, filter by that type as well
-    if (selectedType !== 'all') {
-      filtered = filtered.filter(
-        (pt) => pt.operation_type === selectedType || pt.original_operation_type === selectedType,
-      );
-    }
-
     setData(filtered);
     setActiveTooltip(null);
     setSelectedPoint(null);
-  }, [appliedRange, fullData, selectedType]);
+  }, [appliedRange, fullData]);
 
   // Button click handler
   const handleSearch = () => {
@@ -698,7 +696,10 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                     return null;
                   }
 
-                  // If filtering by specific type, show prominent dots
+                  if (selectedType !== 'all') {
+                    return null;
+                  }
+
                   return (
                     <circle
                       key={payload.timestamp}
@@ -712,6 +713,40 @@ export function PositionReplayChart({ address, version }: PositionReplayProps) {
                 }}
                 name={primaryMetric === 'eth_collateral_usd' ? '抵押ETH价值' : '贷出ETH价值'}
               />
+              {selectedType !== 'all' ? (
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="eth_collateral_usd"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: DotRenderProps) => {
+                    const { cx, cy, payload } = props;
+                    if (cx === undefined || cy === undefined || !payload) {
+                      return null;
+                    }
+                    if (!pointMatchesType(payload, selectedType)) {
+                      return null;
+                    }
+
+                    return (
+                      <circle
+                        key={`marker-${selectedType}-${payload.timestamp}`}
+                        cx={cx}
+                        cy={cy}
+                        r={4.5}
+                        fill="#10b981"
+                        stroke="#ffffff"
+                        strokeWidth={1.5}
+                      />
+                    );
+                  }}
+                  activeDot={false}
+                  legendType="none"
+                  name=""
+                />
+              ) : null}
               <Line
                 yAxisId="right"
                 type="monotone"
