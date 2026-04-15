@@ -6,6 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, patch
+from urllib.error import URLError
 
 import asyncpg
 import pytest
@@ -51,7 +52,7 @@ def _mock_event_snapshot_row(
     market: bytes | None = None,
     symbol: str | None = "JST",
     operation_type: str | None = "deposit",
-    brief: str = "存入 JST 仓位",
+    brief: str = "供给 JST 仓位",
     assets_jsonb: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
@@ -282,7 +283,7 @@ async def test_get_position_replay_returns_cached_snapshots() -> None:
         _mock_event_snapshot_row(
             user_address=user_address,
             market=service._tron_address_to_bytes("TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9"),
-            brief="存入 JST 后，抵押 $100.00000000，债务 $20.00000000，HF 5.000000000000000000",
+            brief="供给 JST 后，抵押 $100.00000000，债务 $20.00000000，HF 5.000000000000000000",
             assets_jsonb=[
                 {
                     "asset_address": "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9",
@@ -336,7 +337,7 @@ async def test_get_position_replay_returns_cached_snapshots() -> None:
     assert result.cache_hit_rate == "1.00"
     assert result.total_points == 1
     assert result.total_tx_count == 1
-    assert result.points[0].brief.startswith("存入 JST")
+    assert result.points[0].brief.startswith("供给 JST")
     assert result.points[0].assets[0].symbol == "JST"
     assert result.points[0].tx_hash == "11" * 32
     fetch_snapshots.assert_awaited_once()
@@ -349,7 +350,36 @@ def test_build_tx_brief_prefers_parse_summary_amount_symbol() -> None:
         parse_summary="Mint 12.5 JST to supply",
         parse_input="",
     )
-    assert brief == "存入 12.5 JST"
+    assert brief == "供给 12.5 JST"
+
+
+def test_format_brief_amount_keeps_at_most_two_decimals() -> None:
+    assert service._format_brief_amount(Decimal("12")) == "12"
+    assert service._format_brief_amount(Decimal("12.3")) == "12.3"
+    assert service._format_brief_amount(Decimal("12.3456")) == "12.35"
+
+
+def test_clamp_db_ratio_caps_storage_overflow_values() -> None:
+    assert service._clamp_db_ratio(Decimal("-1")) == Decimal("0")
+    assert service._clamp_db_ratio(Decimal("1.234567")) == Decimal("1.234567")
+    assert service._clamp_db_ratio(Decimal("50000")) == Decimal("9999.999999")
+
+
+@pytest.mark.asyncio
+async def test_fetch_json_retries_after_connection_reset() -> None:
+    calls = {"count": 0}
+
+    def _fake_to_thread(fn):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise URLError(ConnectionResetError(54, "Connection reset by peer"))
+        return {"code": 0}
+
+    with patch.object(service.asyncio, "to_thread", side_effect=_fake_to_thread):
+        result = await service._fetch_json("https://api.justlend.invalid/test", 3.0)
+
+    assert result == {"code": 0}
+    assert calls["count"] == 2
 
 
 def test_build_tx_brief_from_delta_includes_usd_value() -> None:
@@ -363,7 +393,201 @@ def test_build_tx_brief_from_delta_includes_usd_value() -> None:
         amount=Decimal("1.5"),
         meta={"underlying_symbol": "USDT", "price_usd": Decimal("1")},
     )
-    assert brief == "存入 1.5 USDT (价值 1.50 usd)"
+    assert brief == "供给 1.5 USDT (价值 1.50 usd)"
+
+
+def test_resolve_brief_action_label_distinguishes_repay_roles() -> None:
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    other_address = service._tron_address_to_bytes("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+
+    assert (
+        service._resolve_brief_action_label(
+            operation_type="repay",
+            effect={"payer": user_address, "borrower": user_address},
+            user_address=user_address,
+        )
+        == "偿还"
+    )
+    assert (
+        service._resolve_brief_action_label(
+            operation_type="repay",
+            effect={"payer": user_address, "borrower": other_address},
+            user_address=user_address,
+        )
+        == "代偿"
+    )
+    assert (
+        service._resolve_brief_action_label(
+            operation_type="repay",
+            effect={"payer": other_address, "borrower": user_address},
+            user_address=user_address,
+        )
+        == "被代偿"
+    )
+
+
+def test_resolve_brief_action_label_distinguishes_liquidation_roles() -> None:
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    other_address = service._tron_address_to_bytes("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+
+    assert (
+        service._resolve_brief_action_label(
+            operation_type="liquidation",
+            effect={"liquidator": user_address, "borrower": other_address},
+            user_address=user_address,
+        )
+        == "执行清算"
+    )
+    assert (
+        service._resolve_brief_action_label(
+            operation_type="liquidation",
+            effect={"liquidator": other_address, "borrower": user_address},
+            user_address=user_address,
+        )
+        == "被清算"
+    )
+
+
+def test_build_tx_brief_from_delta_uses_repay_role_specific_label() -> None:
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    brief = service._build_tx_brief_from_delta(
+        tx={
+            "method_id": "0e752702",
+            "market": None,
+            "parse_summary": "",
+            "parse_input": "",
+            "_effect": {
+                "payer": service._tron_address_to_bytes(
+                    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+                ),
+                "borrower": user_address,
+            },
+        },
+        amount=Decimal("25"),
+        meta={"underlying_symbol": "USDT", "price_usd": Decimal("1")},
+        user_address=user_address,
+    )
+    assert brief == "被代偿 25 USDT (价值 25.00 usd)"
+
+
+def test_build_snapshot_brief_upgrades_deposit_to_new_collateral() -> None:
+    current_row = service.JustLendEventPositionSnapshotRow(
+        user_address=service._tron_address_to_bytes(
+            "TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ"
+        ),
+        chain="tron",
+        protocol="trx",
+        tx_hash="11" * 32,
+        block_number=1,
+        block_timestamp=datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+        market=None,
+        symbol="USDT",
+        method_id="a0712d68",
+        operation_type="deposit",
+        has_open_position=True,
+        is_liquidatable=False,
+        total_collateral_usd=Decimal("100"),
+        total_debt_usd=Decimal("0"),
+        available_borrow_usd=Decimal("80"),
+        discounted_collateral_usd=Decimal("80"),
+        liquidation_buffer_usd=Decimal("80"),
+        health_factor=Decimal("1e18"),
+        ltv=Decimal("0"),
+        liquidation_threshold=Decimal("0.8"),
+        assets_jsonb=[
+            {
+                "symbol": "USDT",
+                "side": "collateral",
+                "value_usd": "100",
+            }
+        ],
+        extra_jsonb={},
+        brief="",
+    )
+    brief = service._build_snapshot_brief(
+        tx={"method_id": "a0712d68", "_effect": {}},
+        amount=Decimal("100"),
+        meta={"underlying_symbol": "USDT", "price_usd": Decimal("1")},
+        user_address=current_row.user_address,
+        current_row=current_row,
+        previous_row=None,
+    )
+    assert brief == "新增抵押 100 USDT (价值 100.00 usd)"
+
+
+def test_build_snapshot_brief_upgrades_withdraw_to_remove_collateral() -> None:
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    previous_row = service.JustLendEventPositionSnapshotRow(
+        user_address=user_address,
+        chain="tron",
+        protocol="trx",
+        tx_hash="11" * 32,
+        block_number=1,
+        block_timestamp=datetime(2026, 4, 3, 9, 49, 30, tzinfo=timezone.utc),
+        market=None,
+        symbol="USDT",
+        method_id="a0712d68",
+        operation_type="deposit",
+        has_open_position=True,
+        is_liquidatable=False,
+        total_collateral_usd=Decimal("100"),
+        total_debt_usd=Decimal("0"),
+        available_borrow_usd=Decimal("80"),
+        discounted_collateral_usd=Decimal("80"),
+        liquidation_buffer_usd=Decimal("80"),
+        health_factor=Decimal("1e18"),
+        ltv=Decimal("0"),
+        liquidation_threshold=Decimal("0.8"),
+        assets_jsonb=[
+            {
+                "symbol": "USDT",
+                "side": "collateral",
+                "value_usd": "100",
+            }
+        ],
+        extra_jsonb={},
+        brief="",
+    )
+    current_row = service.JustLendEventPositionSnapshotRow(
+        user_address=user_address,
+        chain="tron",
+        protocol="trx",
+        tx_hash="22" * 32,
+        block_number=2,
+        block_timestamp=datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+        market=None,
+        symbol="USDT",
+        method_id="852a12e3",
+        operation_type="withdraw",
+        has_open_position=True,
+        is_liquidatable=False,
+        total_collateral_usd=Decimal("70"),
+        total_debt_usd=Decimal("0"),
+        available_borrow_usd=Decimal("56"),
+        discounted_collateral_usd=Decimal("56"),
+        liquidation_buffer_usd=Decimal("56"),
+        health_factor=Decimal("1e18"),
+        ltv=Decimal("0"),
+        liquidation_threshold=Decimal("0.8"),
+        assets_jsonb=[
+            {
+                "symbol": "USDT",
+                "side": "collateral",
+                "value_usd": "70",
+            }
+        ],
+        extra_jsonb={},
+        brief="",
+    )
+    brief = service._build_snapshot_brief(
+        tx={"method_id": "852a12e3", "_effect": {}},
+        amount=Decimal("30"),
+        meta={"underlying_symbol": "USDT", "price_usd": Decimal("1")},
+        user_address=user_address,
+        current_row=current_row,
+        previous_row=previous_row,
+    )
+    assert brief == "移除抵押 30 USDT (价值 30.00 usd)"
 
 
 def test_normalize_tron_address_prefers_base58() -> None:
@@ -493,7 +717,7 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
         "block_timestamp": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
         "market": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
         "_meta": catalog_entry,
-        "_brief": "存入 1.5 USDT (价值 1.50 usd)",
+        "_brief": "供给 1.5 USDT (价值 1.50 usd)",
         "parse_summary": "",
         "parse_input": "",
     }
@@ -508,7 +732,7 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
     assert row.symbol == "USDT"
     assert row.has_open_position is True
     assert row.total_collateral_usd == Decimal("1.5")
-    assert row.brief == "存入 1.5 USDT (价值 1.50 usd)"
+    assert row.brief == "供给 1.5 USDT (价值 1.50 usd)"
 
 
 @pytest.mark.asyncio
@@ -563,7 +787,7 @@ async def test_get_position_replay_raises_when_transaction_cache_missing() -> No
             user_address=user_address,
             market=service._tron_address_to_bytes("TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"),
             operation_type="deposit",
-            brief="存入 10 JST",
+            brief="供给 10 JST",
         )
     ]
     with (
@@ -606,6 +830,18 @@ async def test_get_position_replay_raises_when_transaction_cache_missing() -> No
     assert result.total_tx_count == 1
     rebuild.assert_awaited_once()
     assert get_cached.await_count == 1
+
+
+def test_get_supported_tx_operation_types_returns_constant_values() -> None:
+    assert service.get_supported_tx_operation_types() == [
+        "deposit",
+        "redeem",
+        "withdraw",
+        "borrow",
+        "repay",
+        "repay_behalf",
+        "liquidation",
+    ]
 
 
 @pytest.mark.asyncio

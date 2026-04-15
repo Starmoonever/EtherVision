@@ -18,6 +18,7 @@ from .service import (
     get_markets,
     get_position_replay,
     get_scaffold_status,
+    get_supported_tx_operation_types,
     get_user_position,
 )
 
@@ -110,3 +111,12 @@ async def position_replay(
         use_cache=use_cache,
         detail=detail,
     )
+
+
+@router.get(
+    "/tx/ops",
+    response_model=list[str],
+    summary="List JustLend transaction operation types",
+)
+async def tx_operation_types() -> list[str]:
+    return get_supported_tx_operation_types()

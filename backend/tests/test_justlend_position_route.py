@@ -105,3 +105,26 @@ def test_justlend_position_replay_route_rejects_invalid_time() -> None:
         )
 
     assert resp.status_code == 400
+
+
+def test_justlend_tx_ops_route_ok() -> None:
+    payload = [
+        "deposit",
+        "redeem",
+        "withdraw",
+        "borrow",
+        "repay",
+        "repay_behalf",
+        "liquidation",
+    ]
+
+    with patch(
+        "justlend_crawler.api.routes.get_supported_tx_operation_types",
+        return_value=payload,
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get("/api/justlend/tx/ops")
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_called_once()

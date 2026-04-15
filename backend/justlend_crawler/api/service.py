@@ -7,17 +7,30 @@ import hashlib
 import json
 import logging
 import re
+import socket
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import asyncpg
 from fastapi import HTTPException
 
 from crawler_shared.tron_rpc import TronRpcClient
-from ..constants import JUSTLEND_CHAIN, JUSTLEND_PROTOCOL
+from ..constants import (
+    JUSTLEND_CHAIN,
+    JUSTLEND_LIQUIDATION_BRIEF_LABELS,
+    JUSTLEND_METHOD_TO_OPERATION_TYPE,
+    JUSTLEND_OPERATION_BRIEF_LABELS,
+    JUSTLEND_PROTOCOL,
+    JUSTLEND_REPAY_BRIEF_LABELS,
+    JUSTLEND_REPLAY_METHOD_IDS,
+    JUSTLEND_SELF_IMPACT_METHOD_IDS,
+    JUSTLEND_SUPPLY_SIDE_BRIEF_LABELS,
+    TRON_REPLAY_CONTRACT_TYPES,
+)
 from ..db import (
     append_user_position_snapshot,
     fetch_current_user_position,
@@ -45,34 +58,9 @@ _BASE58_INDEX = {char: idx for idx, char in enumerate(_BASE58_ALPHABET)}
 _STABLE_SYMBOLS = ("USDT", "USDD", "USDJ", "TUSD", "USDC")
 _MAX_HF = Decimal("1e18")
 _SUMMARY_TOLERANCE_USD = Decimal("0.01")
-_JUSTLEND_REPLAY_METHOD_IDS = {
-    "a0712d68",  # mint
-    "db006a75",  # redeem
-    "852a12e3",  # redeemUnderlying
-    "c5ebeaec",  # borrow
-    "0e752702",  # repayBorrow
-    "2608f818",  # repayBorrowBehalf
-    "f5e3c462",  # liquidateBorrow
-}
-_JUSTLEND_SELF_IMPACT_METHOD_IDS = {
-    "a0712d68",
-    "db006a75",
-    "852a12e3",
-    "c5ebeaec",
-    "0e752702",
-}
-_JUSTLEND_METHOD_BRIEF_MAP = {
-    "a0712d68": "存入",
-    "db006a75": "赎回",
-    "852a12e3": "提取",
-    "c5ebeaec": "借入",
-    "0e752702": "还款",
-    "2608f818": "代还",
-    "f5e3c462": "清算",
-}
-_TRON_CONTRACT_TYPE_NAMES = {
-    31: "TriggerSmartContract",
-}
+_JUSTLEND_API_MAX_RETRIES = 3
+_JUSTLEND_API_RETRY_BACKOFF_SECONDS = 0.5
+_MAX_DB_RATIO = Decimal("9999.999999")
 
 
 def get_scaffold_status() -> JustLendScaffoldStatusResponse:
@@ -87,6 +75,10 @@ def get_scaffold_status() -> JustLendScaffoldStatusResponse:
 
 def get_markets() -> JustLendMarketResponse:
     return JustLendMarketResponse(chain=JUSTLEND_CHAIN, markets=[])
+
+
+def get_supported_tx_operation_types() -> list[str]:
+    return list(dict.fromkeys(JUSTLEND_METHOD_TO_OPERATION_TYPE.values()))
 
 
 async def get_supported_tron_price_assets(cfg: Any) -> list[dict[str, str]]:
@@ -248,11 +240,11 @@ def _normalize_method_id(value: Any) -> str | None:
 
 
 def _position_method(method_id: str | None) -> bool:
-    return method_id in _JUSTLEND_REPLAY_METHOD_IDS
+    return method_id in JUSTLEND_REPLAY_METHOD_IDS
 
 
 def _is_replay_self_impact_method(method_id: str | None) -> bool:
-    return method_id in _JUSTLEND_SELF_IMPACT_METHOD_IDS
+    return method_id in JUSTLEND_SELF_IMPACT_METHOD_IDS
 
 
 def _supports_replay_contract_type(value: Any) -> bool:
@@ -262,7 +254,7 @@ def _supports_replay_contract_type(value: Any) -> bool:
         contract_type = int(value)
     except (TypeError, ValueError):
         return False
-    return contract_type in _TRON_CONTRACT_TYPE_NAMES
+    return contract_type in TRON_REPLAY_CONTRACT_TYPES
 
 
 def _extract_market_address_from_contract(value: Any) -> str | None:
@@ -298,23 +290,15 @@ def _extract_market_address_from_parse_input(value: Any) -> str | None:
 
 
 def _fallback_replay_brief(method_id: str | None, market: str | None) -> str:
-    action = _JUSTLEND_METHOD_BRIEF_MAP.get(method_id or "", "更新仓位")
+    operation_type = _method_to_operation_type(method_id)
+    action = JUSTLEND_OPERATION_BRIEF_LABELS.get(operation_type or "", "更新仓位")
     if market:
         return f"{action} {market} 仓位"
     return action
 
 
 def _method_to_operation_type(method_id: str | None) -> str | None:
-    mapping = {
-        "a0712d68": "deposit",
-        "db006a75": "redeem",
-        "852a12e3": "withdraw",
-        "c5ebeaec": "borrow",
-        "0e752702": "repay",
-        "2608f818": "repay_behalf",
-        "f5e3c462": "liquidation",
-    }
-    return mapping.get(method_id or "")
+    return JUSTLEND_METHOD_TO_OPERATION_TYPE.get(method_id or "")
 
 
 def _extract_amount_and_symbol(text: str) -> tuple[str | None, str | None]:
@@ -334,12 +318,19 @@ def _build_tx_brief(
     market: str | None,
     parse_summary: str,
     parse_input: str,
+    effect: dict[str, Any] | None = None,
+    user_address: bytes | None = None,
 ) -> str:
+    operation_type = _method_to_operation_type(method_id)
     for raw_text in (parse_summary, parse_input):
         text = raw_text.strip()
         if text:
             amount, symbol = _extract_amount_and_symbol(text)
-            action = _JUSTLEND_METHOD_BRIEF_MAP.get(method_id or "", "更新")
+            action = _resolve_brief_action_label(
+                operation_type=operation_type,
+                effect=effect,
+                user_address=user_address,
+            )
             if amount and symbol:
                 return f"{action} {amount} {symbol}"
             return text
@@ -347,7 +338,7 @@ def _build_tx_brief(
 
 
 def _format_brief_amount(amount: Decimal) -> str:
-    text = format(amount.normalize(), "f")
+    text = format(amount.quantize(Decimal("0.01")).normalize(), "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
@@ -355,6 +346,200 @@ def _format_brief_amount(amount: Decimal) -> str:
 
 def _format_brief_usd(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01')):.2f}"
+
+
+def _effect_address_matches_user(
+    effect: dict[str, Any],
+    key: str,
+    user_address: bytes,
+) -> bool:
+    value = effect.get(key)
+    if value is None:
+        return False
+    if isinstance(value, memoryview):
+        value = bytes(value)
+    if isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        return value == user_address
+    normalized = _normalize_tron_address(value)
+    if normalized is None:
+        return False
+    return normalized == _normalize_tron_address(user_address)
+
+
+def _resolve_brief_action_label(
+    *,
+    operation_type: str | None,
+    effect: dict[str, Any] | None,
+    user_address: bytes | None,
+) -> str:
+    if operation_type == "repay" and effect is not None and user_address is not None:
+        payer_matches = _effect_address_matches_user(effect, "payer", user_address)
+        borrower_matches = _effect_address_matches_user(
+            effect, "borrower", user_address
+        )
+        if payer_matches and borrower_matches:
+            return JUSTLEND_REPAY_BRIEF_LABELS["self"]
+        if payer_matches:
+            return JUSTLEND_REPAY_BRIEF_LABELS["payer"]
+        if borrower_matches:
+            return JUSTLEND_REPAY_BRIEF_LABELS["borrower"]
+    if (
+        operation_type == "liquidation"
+        and effect is not None
+        and user_address is not None
+    ):
+        if _effect_address_matches_user(effect, "liquidator", user_address):
+            return JUSTLEND_LIQUIDATION_BRIEF_LABELS["liquidator"]
+        if _effect_address_matches_user(effect, "borrower", user_address):
+            return JUSTLEND_LIQUIDATION_BRIEF_LABELS["borrower"]
+    return JUSTLEND_OPERATION_BRIEF_LABELS.get(operation_type or "", "更新")
+
+
+def _clamp_db_ratio(value: Decimal) -> Decimal:
+    if value.is_nan():
+        return Decimal("0")
+    if value < 0:
+        return Decimal("0")
+    if value > _MAX_DB_RATIO:
+        return _MAX_DB_RATIO
+    return value
+
+
+def _asset_value_usd_for_symbol(
+    assets: list[dict[str, Any]],
+    *,
+    symbol: str | None,
+    side: str,
+) -> Decimal:
+    if not symbol:
+        return Decimal("0")
+    normalized_symbol = symbol.strip().upper()
+    total = Decimal("0")
+    for asset in assets:
+        if str(asset.get("side") or "") != side:
+            continue
+        if str(asset.get("symbol") or "").strip().upper() != normalized_symbol:
+            continue
+        total += Decimal(str(asset.get("value_usd") or "0"))
+    return total
+
+
+def _infer_supply_side_brief_label(
+    *,
+    operation_type: str | None,
+    symbol: str | None,
+    current_row: JustLendEventPositionSnapshotRow,
+    previous_row: JustLendEventPositionSnapshotRow | None,
+) -> str | None:
+    if operation_type not in {"deposit", "redeem", "withdraw"}:
+        return None
+    current_discounted = Decimal(str(current_row.discounted_collateral_usd))
+    previous_discounted = (
+        Decimal(str(previous_row.discounted_collateral_usd))
+        if previous_row is not None
+        else Decimal("0")
+    )
+    discounted_delta = current_discounted - previous_discounted
+    current_asset_value = _asset_value_usd_for_symbol(
+        current_row.assets_jsonb,
+        symbol=symbol,
+        side="collateral",
+    )
+    previous_asset_value = (
+        _asset_value_usd_for_symbol(
+            previous_row.assets_jsonb,
+            symbol=symbol,
+            side="collateral",
+        )
+        if previous_row is not None
+        else Decimal("0")
+    )
+    asset_delta = current_asset_value - previous_asset_value
+
+    if operation_type == "deposit":
+        if (
+            discounted_delta > _SUMMARY_TOLERANCE_USD
+            and asset_delta > _SUMMARY_TOLERANCE_USD
+        ):
+            return JUSTLEND_SUPPLY_SIDE_BRIEF_LABELS["deposit_collateral"]
+        return JUSTLEND_SUPPLY_SIDE_BRIEF_LABELS["deposit_supply"]
+
+    if operation_type in {"redeem", "withdraw"}:
+        if (
+            discounted_delta < -_SUMMARY_TOLERANCE_USD
+            and asset_delta < -_SUMMARY_TOLERANCE_USD
+        ):
+            return JUSTLEND_SUPPLY_SIDE_BRIEF_LABELS["withdraw_collateral"]
+        return JUSTLEND_SUPPLY_SIDE_BRIEF_LABELS["withdraw_supply"]
+    return None
+
+
+def _render_brief_with_amount(
+    *,
+    label: str,
+    amount: Decimal,
+    symbol: str | None,
+    price_usd: Decimal,
+) -> str | None:
+    if amount <= 0 or not symbol:
+        return None
+    brief = f"{label} {_format_brief_amount(amount)} {symbol}"
+    if price_usd > 0:
+        return f"{brief} (价值 {_format_brief_usd(amount * price_usd)} usd)"
+    return brief
+
+
+def _build_snapshot_brief(
+    *,
+    tx: dict[str, Any],
+    amount: Decimal,
+    meta: dict[str, Any] | None,
+    user_address: bytes | None,
+    current_row: JustLendEventPositionSnapshotRow,
+    previous_row: JustLendEventPositionSnapshotRow | None,
+) -> str:
+    symbol = str((meta or {}).get("underlying_symbol") or "").strip() or None
+    price_usd = Decimal(str((meta or {}).get("price_usd") or "0"))
+    effect = tx.get("_effect") if isinstance(tx.get("_effect"), dict) else None
+    operation_type = _method_to_operation_type(str(tx.get("method_id") or ""))
+    supply_side_label = _infer_supply_side_brief_label(
+        operation_type=operation_type,
+        symbol=symbol,
+        current_row=current_row,
+        previous_row=previous_row,
+    )
+    if supply_side_label:
+        rendered = _render_brief_with_amount(
+            label=supply_side_label,
+            amount=amount,
+            symbol=symbol,
+            price_usd=price_usd,
+        )
+        if rendered:
+            return rendered
+    action = _resolve_brief_action_label(
+        operation_type=operation_type,
+        effect=effect,
+        user_address=user_address,
+    )
+    rendered = _render_brief_with_amount(
+        label=action,
+        amount=amount,
+        symbol=symbol,
+        price_usd=price_usd,
+    )
+    if rendered:
+        return rendered
+    return _build_tx_brief(
+        method_id=tx.get("method_id"),
+        market=tx.get("market"),
+        parse_summary=tx.get("parse_summary") or "",
+        parse_input=tx.get("parse_input") or "",
+        effect=effect,
+        user_address=user_address,
+    )
 
 
 async def _fetch_justlend_market_catalog(
@@ -548,11 +733,18 @@ def _build_tx_brief_from_delta(
     tx: dict[str, Any],
     amount: Decimal,
     meta: dict[str, Any] | None,
+    user_address: bytes | None = None,
 ) -> str:
     symbol = str((meta or {}).get("underlying_symbol") or "").strip()
     price_usd = Decimal(str((meta or {}).get("price_usd") or "0"))
+    effect = tx.get("_effect") if isinstance(tx.get("_effect"), dict) else None
+    operation_type = _method_to_operation_type(str(tx.get("method_id") or ""))
     if amount > 0 and symbol:
-        action = _JUSTLEND_METHOD_BRIEF_MAP.get(str(tx.get("method_id") or ""), "更新")
+        action = _resolve_brief_action_label(
+            operation_type=operation_type,
+            effect=effect,
+            user_address=user_address,
+        )
         brief = f"{action} {_format_brief_amount(amount)} {symbol}"
         if price_usd > 0:
             return f"{brief} (价值 {_format_brief_usd(amount * price_usd)} usd)"
@@ -562,6 +754,8 @@ def _build_tx_brief_from_delta(
         market=tx.get("market"),
         parse_summary=tx.get("parse_summary") or "",
         parse_input=tx.get("parse_input") or "",
+        effect=effect,
+        user_address=user_address,
     )
 
 
@@ -678,8 +872,8 @@ def _build_event_snapshot_row(
         discounted_collateral_usd=discounted_collateral_usd,
         liquidation_buffer_usd=liquidation_buffer_usd,
         health_factor=health_factor,
-        ltv=ltv,
-        liquidation_threshold=liquidation_threshold,
+        ltv=_clamp_db_ratio(ltv),
+        liquidation_threshold=_clamp_db_ratio(liquidation_threshold),
         assets_jsonb=assets_jsonb,
         extra_jsonb={
             "source": "event_replay_approx",
@@ -728,10 +922,10 @@ async def _collect_and_cache_replay_misses(
     )
     balances: dict[str, dict[str, Decimal]] = {}
     rows: list[JustLendEventPositionSnapshotRow] = []
+    previous_row: JustLendEventPositionSnapshotRow | None = None
     for tx in full_txs:
         market_hex, amount, operation_type, meta = _parse_tx_delta(tx, market_catalog)
         tx["_meta"] = meta
-        tx["_brief"] = _build_tx_brief_from_delta(tx=tx, amount=amount, meta=meta)
         if market_hex is not None:
             position = balances.setdefault(
                 market_hex,
@@ -745,14 +939,22 @@ async def _collect_and_cache_replay_misses(
                 position["borrow"] += amount
             elif operation_type in {"repay", "repay_behalf"}:
                 position["borrow"] = max(position["borrow"] - amount, Decimal("0"))
-        rows.append(
-            _build_event_snapshot_row(
-                user_address=user_address,
-                tx=tx,
-                balances=balances,
-                market_catalog=market_catalog,
-            )
+        row = _build_event_snapshot_row(
+            user_address=user_address,
+            tx=tx,
+            balances=balances,
+            market_catalog=market_catalog,
         )
+        row.brief = _build_snapshot_brief(
+            tx=tx,
+            amount=amount,
+            meta=meta,
+            user_address=user_address,
+            current_row=row,
+            previous_row=previous_row,
+        )
+        rows.append(row)
+        previous_row = row
     if persist_cache and rows:
         await upsert_justlend_event_snapshots(pool, rows)
     return rows
@@ -915,19 +1117,50 @@ async def _persist_position_snapshot(
 
 
 async def _fetch_json(url: str, timeout: float) -> dict[str, Any]:
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "aave-liquidation/justlend-crawler",
+            "Connection": "close",
+        },
+    )
+
     def _load() -> dict[str, Any]:
-        with urlopen(url, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    try:
-        return await asyncio.to_thread(_load)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"failed to fetch JustLend API: {exc}",
-        ) from exc
+    last_exc: Exception | None = None
+    for attempt in range(1, _JUSTLEND_API_MAX_RETRIES + 1):
+        try:
+            return await asyncio.to_thread(_load)
+        except HTTPException:
+            raise
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            ConnectionResetError,
+            socket.timeout,
+            OSError,
+        ) as exc:
+            last_exc = exc
+            if attempt >= _JUSTLEND_API_MAX_RETRIES:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"failed to fetch JustLend API: {exc}",
+                ) from exc
+            logger.warning(
+                "JustLend API request failed, retrying (%s/%s): %s",
+                attempt,
+                _JUSTLEND_API_MAX_RETRIES,
+                exc,
+            )
+            await asyncio.sleep(_JUSTLEND_API_RETRY_BACKOFF_SECONDS * attempt)
+    raise HTTPException(
+        status_code=502,
+        detail=f"failed to fetch JustLend API: {last_exc}",
+    )
 
 
 def _infer_trx_price_usd(token_list: list[dict[str, Any]]) -> Decimal:
@@ -1086,8 +1319,8 @@ async def fetch_position_from_justlend_api(
         "total_debt_usd": total_debt_usd,
         "available_borrow_usd": available_borrow_usd,
         "health_factor": health_factor,
-        "ltv": ltv,
-        "liquidation_threshold": liquidation_threshold,
+        "ltv": _clamp_db_ratio(ltv),
+        "liquidation_threshold": _clamp_db_ratio(liquidation_threshold),
         "extra_jsonb": {
             "source": "justlend_api",
             "source_address": account.get("address")

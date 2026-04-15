@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import asyncpg
 from crawler_shared.config import PostgresConfig
 from crawler_shared.postgres import create_pool as create_asyncpg_pool
+from .constants import JUSTLEND_REPLAY_METHOD_IDS
 
 logger = logging.getLogger(__name__)
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -33,15 +34,6 @@ _CANDIDATE_HISTORY_USER_COLUMNS = (
 )
 _CANDIDATE_HISTORY_STATUS_COLUMNS = ("tx_status", "status")
 _CANDIDATE_HISTORY_CONTRACT_TYPE_COLUMNS = ("contract_type",)
-_JUSTLEND_REPLAY_METHOD_IDS = (
-    "a0712d68",
-    "db006a75",
-    "852a12e3",
-    "c5ebeaec",
-    "0e752702",
-    "2608f818",
-    "f5e3c462",
-)
 
 _DDL_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext($1));"
 _DDL_LOCK_NAME = "loan.justlend_scaffold_ddl"
@@ -571,7 +563,7 @@ async def fetch_justlend_replay_candidate_addresses(
         bind_values.append(to_dt)
         where_clauses.append(f"{time_col} <= ${len(bind_values)}::timestamptz")
 
-        bind_values.append(list(_JUSTLEND_REPLAY_METHOD_IDS))
+        bind_values.append(list(JUSTLEND_REPLAY_METHOD_IDS))
         where_clauses.append(f"{method_col} = ANY(${len(bind_values)}::text[])")
 
         if contract_type_col is not None:
@@ -597,6 +589,33 @@ async def fetch_justlend_replay_candidate_addresses(
         ]
 
 
+async def fetch_existing_justlend_snapshot_addresses(
+    pool: asyncpg.Pool,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+    protocol: str = "trx",
+    limit: int = 0,
+) -> list[bytes]:
+    bind_values: list[Any] = [protocol, from_dt, to_dt]
+    sql = """
+        SELECT user_address
+        FROM loan.justlend_position_snapshots
+        WHERE protocol = $1
+          AND block_timestamp >= $2::timestamptz
+          AND block_timestamp <= $3::timestamptz
+        GROUP BY user_address
+        ORDER BY MIN(block_timestamp) ASC, user_address
+    """
+    if limit > 0:
+        bind_values.append(limit)
+        sql += f"\nLIMIT ${len(bind_values)}"
+    rows = await pool.fetch(sql, *bind_values)
+    return [
+        bytes(row["user_address"]) for row in rows if row["user_address"] is not None
+    ]
+
+
 async def fetch_justlend_tx_effects(
     pool: asyncpg.Pool,
     *,
@@ -617,7 +636,11 @@ async def fetch_justlend_tx_effects(
                     'deposit'::text AS operation_type,
                     m.market_address,
                     m.underlying_address,
-                    COALESCE(m.underlying_amount_decimal, m.input_amount_decimal, 0) AS amount_decimal
+                    COALESCE(m.underlying_amount_decimal, m.input_amount_decimal, 0) AS amount_decimal,
+                    NULL::bytea AS payer,
+                    NULL::bytea AS borrower,
+                    NULL::bytea AS liquidator,
+                    NULL::bytea AS collateral_market
                 FROM justlend.justlend_mint m
                 JOIN txs ON encode(m.tx_hash, 'hex') = txs.tx_hash
                 UNION ALL
@@ -626,7 +649,11 @@ async def fetch_justlend_tx_effects(
                     'borrow'::text AS operation_type,
                     b.market_address,
                     b.underlying_address,
-                    COALESCE(b.underlying_amount_decimal, b.input_amount_decimal, 0) AS amount_decimal
+                    COALESCE(b.underlying_amount_decimal, b.input_amount_decimal, 0) AS amount_decimal,
+                    NULL::bytea AS payer,
+                    NULL::bytea AS borrower,
+                    NULL::bytea AS liquidator,
+                    NULL::bytea AS collateral_market
                 FROM justlend.justlend_borrow b
                 JOIN txs ON encode(b.tx_hash, 'hex') = txs.tx_hash
                 UNION ALL
@@ -635,7 +662,11 @@ async def fetch_justlend_tx_effects(
                     'withdraw'::text AS operation_type,
                     r.market_address,
                     r.underlying_address,
-                    COALESCE(r.underlying_amount_decimal, r.input_amount_decimal, 0) AS amount_decimal
+                    COALESCE(r.underlying_amount_decimal, r.input_amount_decimal, 0) AS amount_decimal,
+                    NULL::bytea AS payer,
+                    NULL::bytea AS borrower,
+                    NULL::bytea AS liquidator,
+                    NULL::bytea AS collateral_market
                 FROM justlend.justlend_redeem r
                 JOIN txs ON encode(r.tx_hash, 'hex') = txs.tx_hash
                 UNION ALL
@@ -644,9 +675,26 @@ async def fetch_justlend_tx_effects(
                     'repay'::text AS operation_type,
                     rp.market_address,
                     rp.underlying_address,
-                    COALESCE(rp.underlying_amount_decimal, rp.input_amount_decimal, 0) AS amount_decimal
+                    COALESCE(rp.underlying_amount_decimal, rp.input_amount_decimal, 0) AS amount_decimal,
+                    rp.payer,
+                    rp.borrower,
+                    NULL::bytea AS liquidator,
+                    NULL::bytea AS collateral_market
                 FROM justlend.justlend_repay rp
                 JOIN txs ON encode(rp.tx_hash, 'hex') = txs.tx_hash
+                UNION ALL
+                SELECT
+                    encode(l.tx_hash, 'hex') AS tx_hash,
+                    'liquidation'::text AS operation_type,
+                    l.market_address,
+                    l.underlying_address,
+                    COALESCE(l.underlying_amount_decimal, l.input_amount_decimal, 0) AS amount_decimal,
+                    NULL::bytea AS payer,
+                    l.borrower,
+                    l.liquidator,
+                    l.collateral_market
+                FROM justlend.justlend_liquidate l
+                JOIN txs ON encode(l.tx_hash, 'hex') = txs.tx_hash
             ) q
             """,
             tx_hashes,
@@ -658,6 +706,10 @@ async def fetch_justlend_tx_effects(
             "market_address": row["market_address"],
             "underlying_address": row["underlying_address"],
             "amount_decimal": Decimal(str(row["amount_decimal"] or "0")),
+            "payer": row["payer"],
+            "borrower": row["borrower"],
+            "liquidator": row["liquidator"],
+            "collateral_market": row["collateral_market"],
         }
     return effects
 

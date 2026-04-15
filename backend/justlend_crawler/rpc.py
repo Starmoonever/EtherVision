@@ -552,13 +552,13 @@ async def fetch_market_exchange_rates(
                 owner_address=normalized_market_address,
             )
         except HTTPException:
-            logger.warning(
+            logger.debug(
                 "failed to fetch JustLend exchange rate for market=%s",
                 normalized_market_address,
             )
             continue
         except Exception:
-            logger.warning(
+            logger.debug(
                 "failed to fetch JustLend exchange rate for market=%s",
                 normalized_market_address,
                 exc_info=True,

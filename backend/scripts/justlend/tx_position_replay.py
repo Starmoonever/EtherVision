@@ -3,6 +3,7 @@
 Examples:
     uv run python scripts/justlend/tx_position_replay.py --start 2026-04-01 --end 2026-04-10 --limit 20
     uv run python scripts/justlend/tx_position_replay.py --address TGBNfmp8j3rQKm9G6HzzKkrz9DXQpnTf5f --start 2026-04-01 --end 2026-04-10 --dry-run
+    uv run python scripts/justlend/tx_position_replay.py --start 2025-01-01 --end 2026-04-10T23:59:59Z --repair-existing --limit 100
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from justlend_crawler.config import load_config  # noqa: E402
 from justlend_crawler.db import (  # noqa: E402
     create_pool,
     ensure_justlend_tables,
+    fetch_existing_justlend_snapshot_addresses,
     fetch_justlend_replay_candidate_addresses,
 )
 
@@ -88,6 +90,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ignore existing replay cache and rebuild from history",
     )
     parser.add_argument(
+        "--repair-existing",
+        action="store_true",
+        default=False,
+        help="force rebuild and overwrite existing justlend_position_snapshots rows in the target window",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -103,19 +111,30 @@ async def _resolve_addresses(
     start_ts: int,
     end_ts: int,
     raw_addresses: list[str] | None,
+    protocol: str,
     limit: int,
+    repair_existing: bool,
 ) -> list[str]:
     if raw_addresses:
         addresses = [addr.strip() for addr in raw_addresses if addr.strip()]
         return addresses[:limit] if limit > 0 else addresses
 
-    user_rows = await fetch_justlend_replay_candidate_addresses(
-        pool,
-        from_dt=datetime.fromtimestamp(start_ts, tz=timezone.utc),
-        to_dt=datetime.fromtimestamp(end_ts, tz=timezone.utc),
-        only_success=True,
-        limit=limit,
-    )
+    if repair_existing:
+        user_rows = await fetch_existing_justlend_snapshot_addresses(
+            pool,
+            from_dt=datetime.fromtimestamp(start_ts, tz=timezone.utc),
+            to_dt=datetime.fromtimestamp(end_ts, tz=timezone.utc),
+            protocol=protocol,
+            limit=limit,
+        )
+    else:
+        user_rows = await fetch_justlend_replay_candidate_addresses(
+            pool,
+            from_dt=datetime.fromtimestamp(start_ts, tz=timezone.utc),
+            to_dt=datetime.fromtimestamp(end_ts, tz=timezone.utc),
+            only_success=True,
+            limit=limit,
+        )
     return [_tron_bytes_to_base58(user) for user in user_rows]
 
 
@@ -127,6 +146,8 @@ async def _run() -> None:
     end_ts = _parse_utc_time(args.end)
     if start_ts > end_ts:
         raise SystemExit("--start must be earlier than or equal to --end")
+    if args.repair_existing and args.dry_run:
+        raise SystemExit("--repair-existing cannot be combined with --dry-run")
 
     cfg = load_config(args.config)
     pool = await create_pool(cfg.postgres)
@@ -142,16 +163,22 @@ async def _run() -> None:
             start_ts=start_ts,
             end_ts=end_ts,
             raw_addresses=args.addresses,
+            protocol=args.protocol,
             limit=args.limit,
+            repair_existing=args.repair_existing,
         )
         if not addresses:
-            print("no JustLend replay candidates found")
+            if args.repair_existing:
+                print("no existing JustLend snapshot rows found in target window")
+            else:
+                print("no JustLend replay candidates found")
             return
 
         ok = 0
         failed = 0
         total_points = 0
         total_txs = 0
+        rebuild_cache = args.no_cache or args.repair_existing
         for index, address in enumerate(addresses, start=1):
             try:
                 result = await get_position_replay(
@@ -162,7 +189,7 @@ async def _run() -> None:
                     protocol=args.protocol,
                     from_ts=start_ts,
                     to_ts=end_ts,
-                    use_cache=not args.no_cache,
+                    use_cache=not rebuild_cache,
                     detail=args.detail,
                     persist_cache=not args.dry_run,
                 )
@@ -180,7 +207,8 @@ async def _run() -> None:
                 f"source={result.data_source} cache_hit_rate={result.cache_hit_rate}"
             )
 
-        label = "dry-run " if args.dry_run else ""
+        mode_prefix = "repair-existing " if args.repair_existing else ""
+        label = f"{mode_prefix}dry-run " if args.dry_run else mode_prefix
         print(
             f"{label}done: addresses={len(addresses)} ok={ok} failed={failed} "
             f"txs={total_txs} points={total_points}"
