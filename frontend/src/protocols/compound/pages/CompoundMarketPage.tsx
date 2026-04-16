@@ -26,7 +26,14 @@ export function CompoundMarketPage({
         title="Compound 宏观借贷抵押市场评估"
         subtitle="Compound 借贷抵押市场分析"
         controls={
-          <>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '0.75rem',
+            }}
+          >
             <SegmentedControl
               ariaLabel="Compound market version"
               value={marketVersion}
@@ -53,7 +60,7 @@ export function CompoundMarketPage({
                 label: item.symbol,
               }))}
             />
-          </>
+          </div>
         }
       />
       <Suspense fallback={<ChartFallback minHeight="420px" />}>

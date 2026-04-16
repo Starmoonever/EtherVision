@@ -16,23 +16,32 @@ export function AaveMarketPage({ marketVersion, onVersionChange }: AaveMarketPag
         title="Aave 宏观市场评估"
         subtitle="ETH 实时价格与清算模拟"
         controls={
-          <SegmentedControl
-            ariaLabel="Aave market version"
-            value={marketVersion}
-            onChange={onVersionChange}
-            options={[
-              {
-                value: 'v2',
-                label: 'V2',
-                activeClassName: 'active-purple',
-              },
-              {
-                value: 'v3',
-                label: 'V3',
-                activeClassName: 'active-purple',
-              },
-            ]}
-          />
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '0.75rem',
+            }}
+          >
+            <SegmentedControl
+              ariaLabel="Aave market version"
+              value={marketVersion}
+              onChange={onVersionChange}
+              options={[
+                {
+                  value: 'v2',
+                  label: 'V2',
+                  activeClassName: 'active-purple',
+                },
+                {
+                  value: 'v3',
+                  label: 'V3',
+                  activeClassName: 'active-purple',
+                },
+              ]}
+            />
+          </div>
         }
       />
 

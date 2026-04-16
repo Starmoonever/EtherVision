@@ -19,11 +19,39 @@ import { ChartDataStatus } from './ChartAssist';
 import { justLendChartTheme } from './justlendTheme';
 
 const marketPalette = justLendChartTheme.palettes.market;
+const USD_CALCULATION_SCALE = 10;
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
   const parsed = typeof value === 'number' ? value : parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function decimalToScaledBigInt(value: string | number | null | undefined, scale: number): bigint {
+  const normalized = String(value ?? '0').trim();
+  if (!normalized) return 0n;
+
+  const negative = normalized.startsWith('-');
+  const unsigned = negative ? normalized.slice(1) : normalized;
+  const [integerPartRaw, fractionPartRaw = ''] = unsigned.split('.');
+  const integerPart = integerPartRaw.replace(/\D/g, '') || '0';
+  const fractionPart = fractionPartRaw.replace(/\D/g, '').slice(0, scale).padEnd(scale, '0');
+  const scaled = BigInt(integerPart) * 10n ** BigInt(scale) + BigInt(fractionPart || '0');
+  return negative ? -scaled : scaled;
+}
+
+function multiplyDecimalStrings(
+  left: string | number | null | undefined,
+  right: string | number | null | undefined,
+  scale: number = USD_CALCULATION_SCALE,
+): number {
+  const factor = 10n ** BigInt(scale);
+  const leftScaled = decimalToScaledBigInt(left, scale);
+  const rightScaled = decimalToScaledBigInt(right, scale);
+  const product = leftScaled * rightScaled;
+  const rounded =
+    product >= 0 ? (product + factor / 2n) / factor : (product - factor / 2n) / factor;
+  return Number(rounded) / Number(factor);
 }
 
 function ratioToPercent(value: string | number): number {
@@ -143,10 +171,10 @@ export function JustLendMarketDashboard({
     const totalBorrows = toNum(marketState.total_borrows);
     const totalReserves = toNum(marketState.total_reserves);
     const totalSupply = toNum(marketState.total_supply);
-    const cashUsd = cash * priceUsd;
-    const borrowUsd = totalBorrows * priceUsd;
-    const reserveUsd = totalReserves * priceUsd;
-    const supplyUsd = totalSupply * priceUsd;
+    const cashUsd = multiplyDecimalStrings(marketState.cash, marketState.price_usd);
+    const borrowUsd = multiplyDecimalStrings(marketState.total_borrows, marketState.price_usd);
+    const reserveUsd = multiplyDecimalStrings(marketState.total_reserves, marketState.price_usd);
+    const supplyUsd = multiplyDecimalStrings(marketState.total_supply, marketState.price_usd);
     return {
       priceUsd,
       cash,
