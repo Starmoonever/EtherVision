@@ -353,6 +353,10 @@ export function MorphoPersonalDashboard({
         marketId={data.market_id}
         protocol={protocol}
         loanTokenSymbol={data.loan_token_symbol}
+        collateralTokenSymbol={data.collateral_token_symbol}
+        debtAmount={Math.abs(borrowAssets)}
+        collateralAmount={collateralAssets}
+        lltv={lltvRatio}
       />
 
       <MorphoPositionTable data={data} loading={loading} notFound={notFound} protocol={protocol} />

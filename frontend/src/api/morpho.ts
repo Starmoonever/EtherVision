@@ -11,6 +11,8 @@ export interface MorphoPositionAsset {
   symbol: string;
   decimals: number;
   amount: string;
+  price_usd?: string | null;
+  value_usd?: string | null;
 }
 
 export interface MorphoPositionResponse {
