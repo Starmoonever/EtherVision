@@ -45,7 +45,7 @@ backend/
 - `compound_crawler/`
   - Compound V2/V3 市场、治理、用户仓位与回放
 - `morpho_crawler/`
-  - Morpho Blue 市场与当前用户仓位
+  - Morpho Blue 市场、当前用户仓位与按请求懒加载的历史 replay
 - `justlend_crawler/`
   - JustLend 当前仓位、趋势回放、事件说明
 - `crawler_shared/`
@@ -90,6 +90,16 @@ uv sync
 1. 显式传入的配置路径
 2. 当前工作目录下的 `config.yaml`
 3. `backend/config.yaml`
+
+## 价格查询约定
+
+统一价格接口 `GET /api/price` 与 `GET /api/price/period` 当前对 Ethereum 资产采用 15 分钟时间桶语义：
+
+- 历史价格请求会先将请求时间对齐到 15 分钟桶，再查缓存或外部价格源
+- `loan.eth_price_timestamp` 虽然沿用历史表名，但实际存储的是 Ethereum 链上多资产的历史 USD 价格缓存，不是仅限 ETH 代币
+- 代码层已优先使用 `ensure_ethereum_price_cache_table`、`get_cached_ethereum_price_usd`、`upsert_ethereum_price_cache` 这组 helper；旧的 `eth_*` helper 名称仅保留兼容
+- `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
+- 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
 
 ## 常用命令
 
@@ -202,20 +212,69 @@ Morpho 模块当前聚焦 Morpho Blue：
 
 - 当前用户仓位查询
 - 市场信息缓存
+- 单市场个人仓位 replay
 - 资产与额外信息的 JSONB 存储
 
 Morpho 写路径里已经有较明确的“API 文本地址 -> DB bytes”的转换逻辑，改动时要连同读路径一起核对。
+
+当前 Morpho replay 的实现约定：
+
+- 接口为 `GET /api/morpho/position/replay`
+- 目前只支持单市场 replay，调用时必须传 `market_id`
+- replay 走“先查表，未命中再实时构建并写回缓存”的模式，不做批量回填
+- replay 快照表为 `loan.morpho_blue_position_snapshots`
+- replay 依赖历史区块 `eth_call` 与事件日志查询，生产环境应提供 archive 能力较完整的 EVM RPC
+
+`brief` 生成规则当前按 Morpho 事件聚合：
+
+- `supply` / `withdraw` / `borrow` / `repay` 使用 loan token 金额
+- `supplyCollateral` / `withdrawCollateral` 使用 collateral token 金额
+- 同一笔交易内若有多条相关事件，会按日志顺序合并成一个 `brief`
+- `liquidate` 当前面向 borrower 生成“被清算”说明
 
 ### JustLend
 
 JustLend 模块负责：
 
 - 当前仓位查询
+- 市场列表与市场状态查询
+- 市场最新态缓存与历史快照
 - 用户趋势回放
 - 交易 effect 解释
 - TRON 地址与说明文案处理
 
 这里的重点不是 EVM `0x...` 地址，而是 TRON Base58 地址与内部兼容表示之间的转换。
+
+当前已新增的 JustLend 市场数据表包括：
+
+- `loan.justlend_markets_current`
+- `loan.justlend_market_snapshots`
+
+设计约束：
+
+- 新增 JustLend 市场地址类字段按 Base58 文本存储
+- `current` 表用于最新状态查询
+- `snapshots` 表用于时间序列与区间查询
+
+当前新增的 JustLend 市场接口包括：
+
+- `GET /api/justlend/markets`
+- `GET /api/justlend/market/state`
+- `GET /api/justlend/market/state/period`
+
+当前可用的 JustLend 市场回填脚本：
+
+```bash
+cd backend
+uv run python scripts/justlend/market_state_backfill.py --dry-run
+uv run python scripts/justlend/market_state_backfill.py --market <MARKET_ADDRESS>
+```
+
+说明：
+
+- 第一版先打通数据库与只读查询链路
+- 当前脚本默认抓取最新市场状态，不提供任意历史块高回放
+- `borrow_cap`、`supply_cap` 等字段在第一版中仍可能为空，后续按可用链上方法补齐
 
 ## 数据库与迁移
 

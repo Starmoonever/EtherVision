@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
+from crawler_shared.price_history import get_historical_price_usd
 from ..config import load_config
 from ..constants import (
     COMPOUND_V2_MARKET_NAMES,
@@ -451,6 +452,7 @@ async def get_positions(
             for market_address in market_addresses:
                 snapshot_row = await _collect_v2_replay_snapshot_row(
                     active_w3,
+                    pool=None,
                     user_address=user_address_bytes,
                     event_market=bytes.fromhex(market_address[2:]),
                     block_number=block_number,
@@ -793,6 +795,7 @@ def _chunked[T](items: list[T], size: int) -> list[list[T]]:
 async def _collect_v2_replay_snapshot_row(
     w3: Any,
     *,
+    pool: Any | None = None,
     user_address: bytes,
     event_market: bytes,
     block_number: int,
@@ -841,15 +844,23 @@ async def _collect_v2_replay_snapshot_row(
         block_identifier=block_number
     )
     collateral_markets = {str(addr).lower() for addr in assets_in}
-    feed_key = (ETH_USD_PRICE_FEED.lower(), block_number)
+    feed_key = (WETH_MAINNET.lower(), int(point_ts.timestamp() // 900 * 900))
     if feed_price_cache is not None and feed_key in feed_price_cache:
         eth_price_usd_from_feed = feed_price_cache[feed_key]
     else:
-        eth_price_usd_from_feed = await _price_from_feed_direct(
-            w3,
-            ETH_USD_PRICE_FEED,
-            block_number,
-        )
+        if pool is not None:
+            eth_price_usd_from_feed, _, _ = await get_historical_price_usd(
+                pool,
+                token_address=WETH_MAINNET,
+                asset_label="ETH",
+                requested_ts=int(point_ts.timestamp()),
+            )
+        else:
+            eth_price_usd_from_feed = await _price_from_feed_direct(
+                w3,
+                ETH_USD_PRICE_FEED,
+                block_number,
+            )
         if feed_price_cache is not None:
             feed_price_cache[feed_key] = eth_price_usd_from_feed
 
@@ -1154,6 +1165,8 @@ async def _collect_and_cache_replay_misses(
                                 market_address=market_address,
                                 block_number=block_number,
                                 metadata_cache=metadata_cache,
+                                pool=pool,
+                                historical_price_ts=tx_group[0]["block_timestamp"],
                             )
                             snapshots = await _collect_user_snapshots_batch(
                                 active_w3,
@@ -1168,6 +1181,7 @@ async def _collect_and_cache_replay_misses(
                         else:
                             snapshot_row = await _collect_v2_replay_snapshot_row(
                                 active_w3,
+                                pool=pool,
                                 user_address=user_address,
                                 event_market=market_bytes,
                                 block_number=block_number,

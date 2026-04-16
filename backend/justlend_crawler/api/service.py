@@ -9,8 +9,8 @@ import logging
 import re
 import socket
 from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Any
+from decimal import Decimal, InvalidOperation, localcontext
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -33,17 +33,25 @@ from ..constants import (
 )
 from ..db import (
     append_user_position_snapshot,
+    fetch_justlend_market_state,
+    fetch_justlend_market_state_period,
+    fetch_justlend_markets_current,
     fetch_current_user_position,
     JustLendEventPositionSnapshotRow,
+    JustLendMarketStateRow,
     fetch_justlend_tx_effects,
     get_justlend_event_snapshots,
     fetch_justlend_user_tx_history,
     upsert_justlend_event_snapshots,
+    upsert_justlend_market_states,
     upsert_current_user_position,
 )
-from ..rpc import fetch_market_exchange_rates
+from ..rpc import fetch_justlend_market_states_via_rpc, fetch_market_exchange_rates
 from .schemas import (
     JustLendMarketResponse,
+    JustLendMarketListItem,
+    JustLendMarketStatePeriodResponse,
+    JustLendMarketStateResponse,
     JustLendPositionAssetResponse,
     JustLendPositionResponse,
     JustLendPositionReplayPoint,
@@ -73,8 +81,322 @@ def get_scaffold_status() -> JustLendScaffoldStatusResponse:
     )
 
 
-def get_markets() -> JustLendMarketResponse:
-    return JustLendMarketResponse(chain=JUSTLEND_CHAIN, markets=[])
+def _fmt_optional_decimal(value: Any, scale: int = 8) -> str | None:
+    if value is None:
+        return None
+    try:
+        decimal_value = _decimal(value)
+        return _fmt_decimal(decimal_value, scale=scale)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _iso_optional(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _record_ts(value)
+
+
+def _normalize_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            decoded = bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
+        try:
+            loaded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _build_market_state_response(row: Any) -> JustLendMarketStateResponse:
+    return JustLendMarketStateResponse(
+        chain=str(_row_get(row, "chain") or JUSTLEND_CHAIN),
+        protocol=str(_row_get(row, "protocol") or JUSTLEND_PROTOCOL),
+        market=str(_row_get(row, "market_address") or ""),
+        market_type=str(_row_get(row, "market_type") or "jtoken"),
+        symbol=_row_get(row, "symbol"),
+        underlying_address=_row_get(row, "underlying_address"),
+        underlying_symbol=_row_get(row, "underlying_symbol"),
+        underlying_decimals=_row_get(row, "underlying_decimals"),
+        jtoken_decimals=_row_get(row, "jtoken_decimals"),
+        comptroller_address=_row_get(row, "comptroller_address"),
+        oracle_address=_row_get(row, "oracle_address"),
+        is_listed=_row_get(row, "is_listed"),
+        is_entered_supported=_row_get(row, "is_entered_supported"),
+        collateral_factor=_fmt_optional_decimal(
+            _row_get(row, "collateral_factor"), scale=18
+        ),
+        reserve_factor=_fmt_optional_decimal(_row_get(row, "reserve_factor"), scale=18),
+        borrow_cap=_fmt_optional_decimal(_row_get(row, "borrow_cap"), scale=18),
+        supply_cap=_fmt_optional_decimal(_row_get(row, "supply_cap"), scale=18),
+        exchange_rate=_fmt_optional_decimal(_row_get(row, "exchange_rate"), scale=18),
+        cash=_fmt_optional_decimal(_row_get(row, "cash"), scale=18),
+        total_borrows=_fmt_optional_decimal(_row_get(row, "total_borrows"), scale=18),
+        total_reserves=_fmt_optional_decimal(_row_get(row, "total_reserves"), scale=18),
+        total_supply=_fmt_optional_decimal(_row_get(row, "total_supply"), scale=18),
+        utilization=_fmt_optional_decimal(_row_get(row, "utilization"), scale=18),
+        borrow_rate=_fmt_optional_decimal(_row_get(row, "borrow_rate"), scale=18),
+        supply_rate=_fmt_optional_decimal(_row_get(row, "supply_rate"), scale=18),
+        underlying_price_in_trx=_fmt_optional_decimal(
+            _row_get(row, "underlying_price_in_trx"), scale=12
+        ),
+        price_usd=_fmt_optional_decimal(_row_get(row, "price_usd"), scale=8),
+        timestamp=_record_ts(_row_get(row, "snapshot_at")),
+        block_timestamp=_iso_optional(_row_get(row, "block_timestamp")),
+        block_number=_row_get(row, "block_number"),
+        extra=_normalize_json_object(_row_get(row, "extra_jsonb")),
+    )
+
+
+async def get_markets(pool: asyncpg.Pool) -> JustLendMarketResponse:
+    rows = await fetch_justlend_markets_current(pool)
+    markets = [
+        JustLendMarketListItem(
+            market=str(_row_get(row, "market_address") or ""),
+            symbol=_row_get(row, "symbol"),
+            underlying_address=_row_get(row, "underlying_address"),
+            underlying_symbol=_row_get(row, "underlying_symbol"),
+            updated_at=_record_ts(_row_get(row, "updated_at")),
+        )
+        for row in rows
+    ]
+    return JustLendMarketResponse(chain=JUSTLEND_CHAIN, markets=markets)
+
+
+async def get_market_state(
+    pool: asyncpg.Pool,
+    *,
+    market: str,
+    date: datetime | None = None,
+) -> JustLendMarketStateResponse:
+    normalized_market = _normalize_tron_address(market)
+    if not normalized_market:
+        raise HTTPException(status_code=400, detail="invalid TRON market address")
+    row = await fetch_justlend_market_state(
+        pool,
+        market_address=normalized_market,
+        as_of=date,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="JustLend market state not found")
+    return _build_market_state_response(row)
+
+
+async def get_market_state_period(
+    pool: asyncpg.Pool,
+    *,
+    market: str,
+    from_ts: datetime,
+    to_ts: datetime,
+) -> JustLendMarketStatePeriodResponse:
+    normalized_market = _normalize_tron_address(market)
+    if not normalized_market:
+        raise HTTPException(status_code=400, detail="invalid TRON market address")
+    rows = await fetch_justlend_market_state_period(
+        pool,
+        market_address=normalized_market,
+        from_ts=from_ts,
+        to_ts=to_ts,
+    )
+    return JustLendMarketStatePeriodResponse(
+        points=[_build_market_state_response(row) for row in rows]
+    )
+
+
+async def fetch_and_optionally_persist_market_states(
+    *,
+    pool: asyncpg.Pool,
+    cfg: Any,
+    tron_rpc: TronRpcClient | None,
+    market_addresses: list[str] | None = None,
+    limit: int = 0,
+    persist_current: bool = True,
+    persist_snapshots: bool = True,
+    block_number: int | None = None,
+    snapshot_at: datetime | None = None,
+    require_rpc: bool = False,
+) -> list[JustLendMarketStateRow]:
+    market_catalog = await _fetch_justlend_market_catalog(
+        cfg,
+        tron_rpc=None,
+        market_addresses=[],
+    )
+    catalog_by_market = {
+        str(meta["market_address"]): meta
+        for meta in market_catalog.values()
+        if isinstance(meta, dict) and meta.get("market_address")
+    }
+    selected_markets = [
+        _normalize_tron_address(addr)
+        for addr in (
+            market_addresses
+            or getattr(getattr(cfg, "justlend", None), "markets", None)
+            or list(catalog_by_market.keys())
+        )
+        if addr
+    ]
+    deduped_markets: list[str] = []
+    seen_markets: set[str] = set()
+    for market in selected_markets:
+        if not market or market in seen_markets:
+            continue
+        seen_markets.add(market)
+        deduped_markets.append(market)
+    if limit > 0:
+        deduped_markets = deduped_markets[:limit]
+    if not deduped_markets:
+        return []
+
+    if require_rpc and tron_rpc is None:
+        raise HTTPException(status_code=503, detail="TRON RPC is required")
+    rpc_rows = []
+    if tron_rpc is not None:
+        rpc_rows = await fetch_justlend_market_states_via_rpc(
+            tron_rpc,
+            market_addresses=deduped_markets,
+            block_number=block_number,
+            snapshot_at=snapshot_at,
+        )
+    if require_rpc and len(rpc_rows) != len(deduped_markets):
+        fetched = {str(row.get("market_address") or "") for row in rpc_rows}
+        missing = [market for market in deduped_markets if market not in fetched]
+        raise HTTPException(
+            status_code=502,
+            detail=f"failed to fetch historical JustLend market state for: {', '.join(missing)}",
+        )
+    now = snapshot_at or datetime.now(timezone.utc)
+    rows: list[JustLendMarketStateRow] = []
+    for market_address in deduped_markets:
+        meta = catalog_by_market.get(market_address, {})
+        rpc_row = next(
+            (
+                item
+                for item in rpc_rows
+                if str(item.get("market_address") or "") == market_address
+            ),
+            {},
+        )
+        row_snapshot_at = rpc_row.get("block_timestamp") or now
+        underlying_price_in_trx = rpc_row.get("underlying_price_in_trx")
+        if underlying_price_in_trx is None:
+            underlying_price_in_trx = meta.get("price_in_trx")
+        price_usd = None
+        if rpc_row.get("underlying_price_in_trx") is not None and meta.get(
+            "price_in_trx"
+        ):
+            meta_price_in_trx = _decimal(meta["price_in_trx"])
+            if meta_price_in_trx > 0:
+                trx_price_usd = _decimal(meta["price_usd"]) / meta_price_in_trx
+                price_usd = _decimal(rpc_row["underlying_price_in_trx"]) * trx_price_usd
+        elif meta.get("price_usd") is not None:
+            price_usd = _decimal(meta["price_usd"])
+        symbol = cast(str | None, rpc_row.get("symbol"))
+        if symbol is None and meta.get("underlying_symbol"):
+            symbol = f"j{meta.get('underlying_symbol')}"
+        reserve_factor = cast(Decimal | None, rpc_row.get("reserve_factor")) or cast(
+            Decimal | None, meta.get("reserve_factor")
+        )
+        exchange_rate = cast(Decimal | None, rpc_row.get("exchange_rate")) or cast(
+            Decimal | None, meta.get("exchange_rate")
+        )
+        cash = cast(Decimal | None, rpc_row.get("cash")) or cast(
+            Decimal | None, meta.get("cash")
+        )
+        total_borrows = cast(Decimal | None, rpc_row.get("total_borrows")) or cast(
+            Decimal | None, meta.get("total_borrows")
+        )
+        total_reserves = cast(Decimal | None, rpc_row.get("total_reserves")) or cast(
+            Decimal | None, meta.get("total_reserves")
+        )
+        total_supply = cast(Decimal | None, rpc_row.get("total_supply")) or cast(
+            Decimal | None, meta.get("total_supply")
+        )
+        utilization = cast(Decimal | None, rpc_row.get("utilization"))
+        if utilization is None and cash is not None and total_borrows is not None:
+            denom = cash + total_borrows
+            if denom > 0:
+                utilization = total_borrows / denom
+        borrow_rate = cast(Decimal | None, rpc_row.get("borrow_rate")) or cast(
+            Decimal | None, meta.get("borrow_rate")
+        )
+        supply_rate = cast(Decimal | None, rpc_row.get("supply_rate")) or cast(
+            Decimal | None, meta.get("supply_rate")
+        )
+        borrow_cap = cast(Decimal | None, rpc_row.get("borrow_cap")) or cast(
+            Decimal | None, meta.get("borrow_cap")
+        )
+        supply_cap = cast(Decimal | None, rpc_row.get("supply_cap")) or cast(
+            Decimal | None, meta.get("supply_cap")
+        )
+
+        row = JustLendMarketStateRow(
+            market_address=market_address,
+            chain=JUSTLEND_CHAIN,
+            protocol=JUSTLEND_PROTOCOL,
+            market_type="jtoken",
+            underlying_address=cast(str | None, rpc_row.get("underlying_address"))
+            or cast(str | None, meta.get("underlying_address")),
+            comptroller_address=cast(str | None, rpc_row.get("comptroller_address")),
+            oracle_address=cast(str | None, rpc_row.get("oracle_address")),
+            symbol=symbol,
+            underlying_symbol=cast(str | None, rpc_row.get("underlying_symbol"))
+            or cast(str | None, meta.get("underlying_symbol")),
+            underlying_decimals=cast(int | None, rpc_row.get("underlying_decimals"))
+            or cast(int | None, meta.get("underlying_decimals")),
+            jtoken_decimals=cast(int | None, rpc_row.get("jtoken_decimals")),
+            is_listed=cast(bool | None, rpc_row.get("is_listed")),
+            is_entered_supported=cast(bool | None, rpc_row.get("is_entered_supported")),
+            collateral_factor=cast(Decimal | None, rpc_row.get("collateral_factor"))
+            or cast(Decimal | None, meta.get("collateral_factor")),
+            reserve_factor=reserve_factor,
+            borrow_cap=borrow_cap,
+            supply_cap=supply_cap,
+            exchange_rate=exchange_rate,
+            cash=cash,
+            total_borrows=total_borrows,
+            total_reserves=total_reserves,
+            total_supply=total_supply,
+            utilization=utilization,
+            borrow_rate=borrow_rate,
+            supply_rate=supply_rate,
+            underlying_price_in_trx=cast(Decimal | None, underlying_price_in_trx),
+            price_usd=price_usd,
+            snapshot_at=cast(datetime | None, row_snapshot_at),
+            block_timestamp=cast(datetime | None, rpc_row.get("block_timestamp")),
+            block_number=cast(int | None, rpc_row.get("block_number")),
+            extra_jsonb={
+                "source": "justlend_market_api_rpc"
+                if rpc_row
+                else "justlend_market_api",
+                "api_meta": {
+                    "market_hex": meta.get("market_hex"),
+                    "underlying_hex": meta.get("underlying_hex"),
+                },
+                "rpc_available": bool(rpc_row),
+                "cap_status": meta.get("cap_status") or "unknown",
+            },
+        )
+        rows.append(row)
+
+    if rows and (persist_current or persist_snapshots):
+        await upsert_justlend_market_states(
+            pool,
+            rows,
+            update_current=persist_current,
+            insert_snapshots=persist_snapshots,
+        )
+    return rows
 
 
 def get_supported_tx_operation_types() -> list[str]:
@@ -118,8 +440,38 @@ def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return _decimal(text)
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _first_decimal_field(
+    payload: dict[str, Any],
+    *keys: str,
+) -> Decimal | None:
+    for key in keys:
+        if key in payload:
+            value = _optional_decimal(payload.get(key))
+            if value is not None:
+                return value
+    return None
+
+
 def _fmt_decimal(value: Decimal, scale: int = 8) -> str:
-    return format(value.quantize(Decimal(10) ** -scale), "f")
+    if not value.is_finite():
+        raise InvalidOperation("non-finite decimal")
+    quant = Decimal(10) ** -scale
+    digits = len(value.as_tuple().digits)
+    with localcontext() as ctx:
+        ctx.prec = max(28, digits + scale + 4)
+        return format(value.quantize(quant), "f")
 
 
 def _fmt_ratio(value: Decimal) -> str:
@@ -587,6 +939,34 @@ async def _fetch_justlend_market_catalog(
             except HTTPException:
                 underlying_hex = None
         price_in_trx = _decimal(token.get("underlyingPriceInTrx", "0"))
+        api_exchange_rate = _first_decimal_field(token, "exchangeRate", "exchange_rate")
+        api_cash = _first_decimal_field(token, "cash")
+        api_total_borrows = _first_decimal_field(
+            token,
+            "totalBorrows",
+            "total_borrows",
+        )
+        api_total_supply = _first_decimal_field(token, "totalSupply", "total_supply")
+        api_total_reserves = _first_decimal_field(token, "reserves", "totalReserves")
+        api_reserve_factor = _first_decimal_field(
+            token,
+            "reserveFactor",
+            "reserve_factor",
+        )
+        api_supply_rate = _first_decimal_field(token, "supplyRate", "supply_rate")
+        api_borrow_rate = _first_decimal_field(token, "borrowRate", "borrow_rate")
+        api_borrow_cap = _first_decimal_field(
+            token,
+            "borrowCap",
+            "borrow_cap",
+            "borrowCapUnderlying",
+        )
+        api_supply_cap = _first_decimal_field(
+            token,
+            "supplyCap",
+            "supply_cap",
+            "supplyCapUnderlying",
+        )
         entry = {
             "market_address": market_address,
             "market_hex": market_hex,
@@ -596,9 +976,23 @@ async def _fetch_justlend_market_catalog(
             or None,
             "underlying_decimals": int(token.get("underlyingDecimal") or 6),
             "collateral_factor": _decimal(token.get("collateralFactor", "0")),
+            "reserve_factor": api_reserve_factor,
             "price_in_trx": price_in_trx,
             "price_usd": price_in_trx * trx_price_usd,
-            "exchange_rate": exchange_rate_map.get(market_hex),
+            "exchange_rate": exchange_rate_map.get(market_hex) or api_exchange_rate,
+            "cash": api_cash,
+            "total_borrows": api_total_borrows,
+            "total_supply": api_total_supply,
+            "total_reserves": api_total_reserves,
+            "supply_rate": api_supply_rate,
+            "borrow_rate": api_borrow_rate,
+            "borrow_cap": api_borrow_cap,
+            "supply_cap": api_supply_cap,
+            "cap_status": (
+                "api"
+                if api_borrow_cap is not None or api_supply_cap is not None
+                else "missing_in_current_api_payload"
+            ),
         }
         catalog[market_hex] = entry
         if underlying_hex and underlying_hex not in catalog:

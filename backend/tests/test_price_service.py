@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +10,7 @@ import asyncpg
 import pytest
 
 from crawler_shared.api import service
+from crawler_shared.price_history import bucket_timestamp, get_historical_prices_usd
 
 
 class _FakePool:
@@ -128,7 +130,9 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
     )
 
     with (
-        patch.object(service, "upsert_eth_price_timestamp", new=AsyncMock()),
+        patch(
+            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+        ),
         patch(
             "aiohttp.ClientSession",
             new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
@@ -148,6 +152,125 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
     assert resp.token_address == token_address
     assert resp.source == "defillama"
     assert [item.price_usd for item in resp.prices] == ["9.87", "9.91"]
+    assert [item.timestamp for item in resp.prices] == [
+        "2024-06-01T00:00:00Z",
+        "2024-06-01T01:00:00Z",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_historical_prices_usd_supports_multiple_assets() -> None:
+    bucket_ts = int(datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    pool = _FakePool(
+        cache_rows=[
+            {
+                "asset_address": "0x1111111111111111111111111111111111111111",
+                "price_usd": "1.23",
+            }
+        ]
+    )
+
+    def _payload(url: str):
+        assert "0x2222222222222222222222222222222222222222" in url.lower()
+        return {
+            "coins": {
+                "ethereum:0x2222222222222222222222222222222222222222": {
+                    "price": 4.56,
+                    "timestamp": bucket_ts,
+                }
+            }
+        }
+
+    with (
+        patch(
+            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+        ) as upsert_cache,
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(_payload, *args, **kwargs),
+        ),
+    ):
+        prices, used_bucket, source = await get_historical_prices_usd(
+            cast(asyncpg.Pool, pool),
+            assets=[
+                ("0x1111111111111111111111111111111111111111", "USDC"),
+                ("0x2222222222222222222222222222222222222222", "WETH"),
+            ],
+            requested_ts=bucket_ts + 123,
+        )
+
+    assert used_bucket == bucket_ts
+    assert source == "defillama"
+    assert prices["0x1111111111111111111111111111111111111111"] == Decimal("1.23")
+    assert prices["0x2222222222222222222222222222222222222222"] == Decimal("4.56")
+    upsert_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_price_historical_snaps_timestamp_to_bucket() -> None:
+    token_address = "0x8888888888888888888888888888888888888888"
+    coin_key = f"ethereum:{token_address.lower()}"
+    requested_ts = int(datetime(2024, 6, 1, 0, 7, 12, tzinfo=timezone.utc).timestamp())
+    bucket_ts = int(datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    payload = {
+        "coins": {
+            coin_key: {
+                "price": 10.25,
+                "timestamp": requested_ts,
+            }
+        }
+    }
+
+    with patch(
+        "aiohttp.ClientSession",
+        new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol=None,
+            address=token_address,
+            pool=None,
+            timestamp=requested_ts,
+        )
+
+    assert resp.price_usd == "10.25"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert bucket_timestamp(requested_ts) == bucket_ts
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_snaps_points_to_buckets() -> None:
+    token_address = "0x9999999999999999999999999999999999999999"
+    coin_key = f"ethereum:{token_address.lower()}"
+    start_ts = int(datetime(2024, 6, 1, 0, 7, 0, tzinfo=timezone.utc).timestamp())
+    end_ts = int(datetime(2024, 6, 1, 1, 7, 0, tzinfo=timezone.utc).timestamp())
+    bucket0 = int(datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket1 = int(datetime(2024, 6, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    payload = {
+        "coins": {
+            coin_key: {
+                "prices": [
+                    {"timestamp": bucket0, "price": 9.87},
+                    {"timestamp": bucket1, "price": 9.91},
+                ]
+            }
+        }
+    }
+
+    with patch(
+        "aiohttp.ClientSession",
+        new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),
+    ):
+        resp = await service.get_price_period_service(
+            MagicMock(),
+            None,
+            symbol=None,
+            address=token_address,
+            start=start_ts,
+            end=end_ts,
+            interval=60,
+        )
+
     assert [item.timestamp for item in resp.prices] == [
         "2024-06-01T00:00:00Z",
         "2024-06-01T01:00:00Z",
@@ -316,7 +439,9 @@ async def test_get_price_period_supports_registered_symbol() -> None:
     }
 
     with (
-        patch.object(service, "upsert_eth_price_timestamp", new=AsyncMock()),
+        patch(
+            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+        ),
         patch(
             "aiohttp.ClientSession",
             new=lambda *args, **kwargs: _FakeClientSession(payload, *args, **kwargs),

@@ -18,6 +18,7 @@ from eth_abi.abi import decode as _abi_decode
 from web3 import AsyncWeb3
 
 from aave_crawler.rpc import MULTICALL3_ABI, MULTICALL3_ADDRESS, MULTICALL3_DEPLOY_BLOCK
+from crawler_shared.price_history import get_historical_price_usd
 from .config import AppConfig
 from .constants import COMET_ABI, COMPOUND_V3_MARKET_NAMES
 from .crawler import (
@@ -304,6 +305,9 @@ async def _load_market_context(
     market_address: str,
     block_number: int,
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    *,
+    pool: asyncpg.Pool | None = None,
+    historical_price_ts: datetime | None = None,
 ) -> MarketContext:
     comet = w3.eth.contract(
         address=AsyncWeb3.to_checksum_address(market_address),
@@ -324,6 +328,18 @@ async def _load_market_context(
         comet.functions.baseTokenPriceFeed().call(block_identifier=block_number),
         comet.functions.numAssets().call(block_identifier=block_number),
     )
+
+    async def _eth_price_usd() -> Decimal:
+        if historical_price_ts is not None and pool is not None:
+            price, _, _ = await get_historical_price_usd(
+                pool,
+                token_address="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                asset_label="ETH",
+                requested_ts=int(historical_price_ts.timestamp()),
+            )
+            return price
+        return await _price_from_feed_direct(w3, ETH_USD_PRICE_FEED, block_number)
+
     (
         (base_symbol, base_decimals_meta),
         base_price_usd,
@@ -331,7 +347,7 @@ async def _load_market_context(
     ) = await asyncio.gather(
         _token_metadata(w3, base_token, block_number, metadata_cache),
         _base_token_usd_price(w3, comet, base_token, base_token_feed, block_number),
-        _price_from_feed_direct(w3, ETH_USD_PRICE_FEED, block_number),
+        _eth_price_usd(),
     )
     base_decimals = (
         base_decimals_meta
@@ -754,6 +770,7 @@ async def _collect_user_snapshots_batch(
 
 async def _collect_market_snapshot_rows(
     w3: AsyncWeb3,
+    pool: asyncpg.Pool | None,
     cfg: AppConfig,
     *,
     market: str,
@@ -761,12 +778,18 @@ async def _collect_market_snapshot_rows(
     block_number: int,
     users: list[bytes],
     metadata_cache: dict[str, tuple[str | None, int | None]],
+    historical_price_ts: datetime | None = None,
 ) -> tuple[
     MarketContext, list[UserPositionSnapshotRow], list[UserPositionAssetRow], int
 ]:
     market_address = _resolve_market_address(market)
     market_ctx = await _load_market_context(
-        w3, market_address, block_number, metadata_cache
+        w3,
+        market_address,
+        block_number,
+        metadata_cache,
+        pool=pool,
+        historical_price_ts=historical_price_ts,
     )
 
     user_batch_size = max(1, cfg.crawler.batch_size)
@@ -834,12 +857,14 @@ async def _collect_market_point(
 
     _, snapshot_rows, asset_rows, skipped_empty = await _collect_market_snapshot_rows(
         w3,
+        pool,
         cfg,
         market=market_name,
         point_ts=point_ts,
         block_number=block_number,
         users=pending_users,
         metadata_cache=metadata_cache,
+        historical_price_ts=point_ts,
     )
     stats.skipped_empty += skipped_empty
 
@@ -991,12 +1016,14 @@ async def collect_market_user_snapshots(
         metadata_cache: dict[str, tuple[str | None, int | None]] = {}
         market_ctx, snapshot_rows, asset_rows, _ = await _collect_market_snapshot_rows(
             w3,
+            pool,
             cfg,
             market=market_address,
             point_ts=timestamp,
             block_number=block_number,
             users=users,
             metadata_cache=metadata_cache,
+            historical_price_ts=point_ts,
         )
 
         if persist:

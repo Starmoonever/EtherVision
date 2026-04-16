@@ -10,11 +10,15 @@ from ..database import AsyncpgPool
 from ..config import load_config
 from .schemas import (
     JustLendMarketResponse,
+    JustLendMarketStatePeriodResponse,
+    JustLendMarketStateResponse,
     JustLendPositionResponse,
     JustLendPositionReplayResponse,
     JustLendScaffoldStatusResponse,
 )
 from .service import (
+    get_market_state,
+    get_market_state_period,
     get_markets,
     get_position_replay,
     get_scaffold_status,
@@ -59,10 +63,51 @@ async def status() -> JustLendScaffoldStatusResponse:
 @router.get(
     "/markets",
     response_model=JustLendMarketResponse,
-    summary="List JustLend markets reserved by the scaffold",
+    summary="List JustLend markets",
 )
-async def markets() -> JustLendMarketResponse:
-    return get_markets()
+async def markets(pool: AsyncpgPool) -> JustLendMarketResponse:
+    return await get_markets(pool)
+
+
+@router.get(
+    "/market/state",
+    response_model=JustLendMarketStateResponse,
+    summary="Query latest JustLend market state",
+)
+async def market_state(
+    pool: AsyncpgPool,
+    market: str = Query(..., description="JustLend 市场地址"),
+    date: str | None = Query(None, description="可选 UTC 时间；不传则返回最新状态"),
+) -> JustLendMarketStateResponse:
+    as_of = (
+        None
+        if date is None
+        else datetime.fromtimestamp(_parse_utc_time(date), tz=timezone.utc)
+    )
+    return await get_market_state(pool, market=market, date=as_of)
+
+
+@router.get(
+    "/market/state/period",
+    response_model=JustLendMarketStatePeriodResponse,
+    summary="Query JustLend market state changes over a period",
+)
+async def market_state_period(
+    pool: AsyncpgPool,
+    market: str = Query(..., description="JustLend 市场地址"),
+    start: str = Query(..., description="起始时间（UTC）"),
+    end: str = Query(..., description="结束时间（UTC）"),
+) -> JustLendMarketStatePeriodResponse:
+    from_ts = _parse_utc_time(start)
+    to_ts = _parse_utc_time(end)
+    if from_ts > to_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+    return await get_market_state_period(
+        pool,
+        market=market,
+        from_ts=datetime.fromtimestamp(from_ts, tz=timezone.utc),
+        to_ts=datetime.fromtimestamp(to_ts, tz=timezone.utc),
+    )
 
 
 @router.get(

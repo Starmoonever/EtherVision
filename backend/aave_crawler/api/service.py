@@ -17,6 +17,7 @@ from crawler_shared.api.schemas import (
     PricePeriodResponse,
     PriceResponse,
 )
+from crawler_shared.price_history import get_historical_prices_usd
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from web3 import AsyncWeb3
@@ -1696,49 +1697,39 @@ ORDER BY t.eth_amount DESC, t.address, u.token_symbol;
 """
 
 
-async def _defillama_prices_bulk(
-    token_map: dict[str, str],  # symbol → "ethereum:0x..." (or "coingecko:...")
+async def _historical_prices_bulk(
+    pool: asyncpg.Pool | None,
+    token_map: dict[str, str],  # symbol → token address
     timestamp: int,
 ) -> dict[str, Decimal]:
-    """批量从 DeFiLlama 获取多个资产在同一时间点的历史价格。
+    """批量获取多个资产在同一时间桶的历史价格。
+
+    稳定币直接视为 1 USD，其余 Ethereum 资产统一走共享时间桶缓存层。
     返回 symbol → Decimal(price_usd)。
-    稳定币直接返回 1，其余并发查询。
     """
 
-    import aiohttp
-
     result: dict[str, Decimal] = {}
-    to_fetch: list[tuple[str, str]] = []  # [(symbol, coin_key), ...]
+    assets: list[tuple[str, str]] = []
+    symbol_to_address: dict[str, str] = {}
 
-    for sym, coin_key in token_map.items():
+    for sym, token_address in token_map.items():
         if sym.upper() in _STABLECOINS:
             result[sym] = Decimal("1")
         else:
-            to_fetch.append((sym, coin_key))
+            normalized = token_address.lower()
+            symbol_to_address[sym] = normalized
+            assets.append((normalized, sym))
 
-    if not to_fetch:
+    if not assets:
         return result
 
-    async def _fetch_one(
-        session: aiohttp.ClientSession, sym: str, coin_key: str
-    ) -> tuple[str, Decimal]:
-        url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
-        try:
-            async with session.get(url) as resp:
-                data = await resp.json()
-                entry = data.get("coins", {}).get(coin_key, {})
-                price = (
-                    Decimal(str(entry["price"])) if "price" in entry else Decimal("0")
-                )
-        except Exception:
-            price = Decimal("0")
-        return sym, price
-
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
-        tasks = [_fetch_one(sess, sym, ck) for sym, ck in to_fetch]
-        results = await asyncio.gather(*tasks)
-        for sym, price in results:
-            result[sym] = price
+    prices, _, _ = await get_historical_prices_usd(
+        pool,
+        assets=assets,
+        requested_ts=timestamp,
+    )
+    for sym, normalized in symbol_to_address.items():
+        result[sym] = prices.get(normalized, Decimal("0"))
 
     return result
 
@@ -1753,7 +1744,7 @@ async def get_user_position_history(
 
     供给量使用 scaled balance × liquidity_index(T) 计算，含利息。
     但不包含用户最后一次操作到时间点 T 之间的利息累积。
-    历史 USD 价格来自 DeFiLlama。
+    历史 USD 价格统一按 15 分钟时间桶从共享价格层读取。
     """
     from datetime import datetime, timezone
 
@@ -1794,13 +1785,13 @@ async def get_user_position_history(
     # 收集需要查历史价格的 token
     # ETH 类代币：使用 WETH 地址代表 ETH 价格
     eth_syms = {"WETH", "ETH", "CBETH", "WSTETH", "RETH"}
-    token_map: dict[str, str] = {}  # symbol → defillama coin_key
+    token_map: dict[str, str] = {}  # symbol → token address
     for row in rows:
         sym = row["token_symbol"].upper()
         if sym not in _STABLECOINS:
-            token_map[sym] = f"ethereum:{row['token_addr'].lower()}"
+            token_map[sym] = row["token_addr"].lower()
 
-    prices = await _defillama_prices_bulk(token_map, at_time_ts)
+    prices = await _historical_prices_bulk(pool, token_map, at_time_ts)
 
     # 计算汇总
     eth_collateral = Decimal("0")
@@ -1865,7 +1856,7 @@ async def get_positions_history(
     """
     批量重建历史时间点的仓位（近似，不含利息），按 ETH 抵押量降序排列。
     仅扫描 aave.aave_history，无需逐行联 aave_reserve_data（速度快）。
-    历史 USD 价格来自 DeFiLlama。
+    历史 USD 价格统一按 15 分钟时间桶从共享价格层读取。
     """
     from datetime import datetime, timezone
 
@@ -1886,9 +1877,9 @@ async def get_positions_history(
     for row in rows:
         sym = row["token_symbol"].upper() if row["token_symbol"] else None
         if sym and sym not in _STABLECOINS:
-            token_map[sym] = f"ethereum:{row['token_addr'].lower()}"
+            token_map[sym] = row["token_addr"].lower()
 
-    prices = await _defillama_prices_bulk(token_map, at_time_ts)
+    prices = await _historical_prices_bulk(pool, token_map, at_time_ts)
     eth_price = prices.get("WETH") or prices.get("ETH") or Decimal("0")
     _DEFAULT_LIQ_THRESHOLD = Decimal("0.825")
 

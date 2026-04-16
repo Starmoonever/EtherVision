@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import asyncpg
 import pytest
+from web3 import AsyncWeb3
 
 from morpho_crawler.api.service import get_user_position
+from crawler_shared.api.schemas import PriceResponse
 
 
 class _Call:
@@ -140,9 +142,29 @@ async def test_get_user_position_realtime_calculates_fields():
             "morpho_crawler.api.service.upsert_current_user_position",
             new_callable=AsyncMock,
         ),
+        patch(
+            "morpho_crawler.api.service.get_price",
+            new_callable=AsyncMock,
+            side_effect=[
+                PriceResponse(
+                    asset="USDC",
+                    price_usd="1.00",
+                    token_address=loan,
+                    timestamp="2026-04-01T00:00:00Z",
+                    source="defillama",
+                ),
+                PriceResponse(
+                    asset="wstETH",
+                    price_usd="1500.00",
+                    token_address=collateral,
+                    timestamp="2026-04-01T00:00:00Z",
+                    source="defillama",
+                ),
+            ],
+        ),
     ):
         response = await get_user_position(
-            _FakeW3(contracts),
+            cast(AsyncWeb3, _FakeW3(contracts)),
             pool=cast(asyncpg.Pool, object()),
             address=user,
             market_id=market_id,
@@ -160,3 +182,7 @@ async def test_get_user_position_realtime_calculates_fields():
     assert response.health_factor == "19.199846401228790170"
     assert response.price_quote == "1.5"
     assert response.is_healthy is True
+    assert response.assets[0].price_usd == "1.00"
+    assert response.assets[0].value_usd == "0.20833200"
+    assert response.assets[1].price_usd == "1500.00"
+    assert response.assets[1].value_usd == "3000.00"

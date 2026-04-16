@@ -1468,3 +1468,84 @@ async def test_collect_v2_replay_snapshot_row_skips_undeployed_event_market() ->
     assert row.market == bytes.fromhex(undeployed_event_market[2:])
     assert row.symbol == undeployed_event_market
     assert row.total_collateral_usd > 0
+
+
+@pytest.mark.asyncio
+async def test_collect_v2_replay_snapshot_row_prefers_bucketed_eth_price_when_pool_available() -> (
+    None
+):
+    comptroller = "0x1111111111111111111111111111111111111111"
+    deployed_market = "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643"
+    underlying = "0x2222222222222222222222222222222222222222"
+    user_address = bytes.fromhex("44" * 20)
+
+    contracts = {
+        deployed_market: _ReplayFakeContract({"comptroller": comptroller}),
+        comptroller: _ReplayFakeContract(
+            {
+                "getAssetsIn": [deployed_market],
+                "markets": (True, 0, False),
+            }
+        ),
+    }
+    codes = {
+        deployed_market: b"\x01",
+        comptroller: b"\x01",
+    }
+    w3 = _ReplayFakeWeb3(contracts, codes)
+
+    with (
+        patch.object(
+            service,
+            "_is_contract_deployed_at_block",
+            new=AsyncMock(
+                side_effect=lambda _w3, address, *_args: (
+                    str(address).lower() == deployed_market
+                )
+            ),
+        ),
+        patch.object(
+            service,
+            "_token_metadata",
+            new=AsyncMock(return_value=("DAI", 18)),
+        ),
+        patch.object(
+            service,
+            "_v2_underlying_price_usd",
+            new=AsyncMock(return_value=Decimal("1")),
+        ),
+        patch.object(
+            service,
+            "_load_v2_accrued_balances",
+            new=AsyncMock(return_value=(10**8, 0, 2 * 10**28)),
+        ),
+        patch.object(
+            service,
+            "get_historical_price_usd",
+            new=AsyncMock(return_value=(Decimal("2500"), 1_711_584_000, "defillama")),
+        ) as get_hist_price,
+        patch.object(
+            service,
+            "_price_from_feed_direct",
+            new=AsyncMock(return_value=Decimal("2000")),
+        ) as direct_feed,
+    ):
+        contracts[deployed_market] = _ReplayFakeContract(
+            {
+                "comptroller": comptroller,
+                "underlying": underlying,
+            }
+        )
+        row = await service._collect_v2_replay_snapshot_row(
+            w3,
+            pool=cast(asyncpg.Pool, object()),
+            user_address=user_address,
+            event_market=bytes.fromhex(deployed_market[2:]),
+            block_number=123,
+            point_ts=datetime(2026, 3, 26, tzinfo=timezone.utc),
+            metadata_cache={},
+        )
+
+    assert row.eth_price_usd == Decimal("2500")
+    get_hist_price.assert_awaited_once()
+    direct_feed.assert_not_awaited()
