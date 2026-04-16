@@ -9,7 +9,10 @@ from decimal import Decimal
 from typing import Any
 
 from crawler_shared.api.service import get_price
-from crawler_shared.price_history import get_historical_price_usd
+from crawler_shared.price_history import (
+    get_historical_price_usd,
+    get_historical_prices_usd,
+)
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
@@ -264,20 +267,58 @@ async def _enrich_position_assets_with_prices(
     timestamp: int | None,
     cache: dict[tuple[str, int | None], Decimal | None],
 ) -> None:
-    loan_price_usd = await _get_asset_price_usd(
-        w3,
-        pool=pool,
-        token_address=response.loan_token,
-        timestamp=timestamp,
-        cache=cache,
-    )
-    collateral_price_usd = await _get_asset_price_usd(
-        w3,
-        pool=pool,
-        token_address=response.collateral_token,
-        timestamp=timestamp,
-        cache=cache,
-    )
+    loan_price_usd: Decimal | None = None
+    collateral_price_usd: Decimal | None = None
+    if timestamp is not None:
+        try:
+            prices, _, _ = await get_historical_prices_usd(
+                pool,
+                assets=[
+                    (
+                        response.loan_token,
+                        response.loan_token_symbol or response.loan_token,
+                    ),
+                    (
+                        response.collateral_token,
+                        response.collateral_token_symbol or response.collateral_token,
+                    ),
+                ],
+                requested_ts=timestamp,
+            )
+            loan_price_usd = prices.get(response.loan_token.lower())
+            collateral_price_usd = prices.get(response.collateral_token.lower())
+            cache[(response.loan_token.lower(), timestamp)] = loan_price_usd
+            cache[(response.collateral_token.lower(), timestamp)] = collateral_price_usd
+        except HTTPException:
+            loan_price_usd = await _get_asset_price_usd(
+                w3,
+                pool=pool,
+                token_address=response.loan_token,
+                timestamp=timestamp,
+                cache=cache,
+            )
+            collateral_price_usd = await _get_asset_price_usd(
+                w3,
+                pool=pool,
+                token_address=response.collateral_token,
+                timestamp=timestamp,
+                cache=cache,
+            )
+    else:
+        loan_price_usd = await _get_asset_price_usd(
+            w3,
+            pool=pool,
+            token_address=response.loan_token,
+            timestamp=timestamp,
+            cache=cache,
+        )
+        collateral_price_usd = await _get_asset_price_usd(
+            w3,
+            pool=pool,
+            token_address=response.collateral_token,
+            timestamp=timestamp,
+            cache=cache,
+        )
     for asset in response.assets:
         price_usd = (
             collateral_price_usd if asset.role == "collateral" else loan_price_usd

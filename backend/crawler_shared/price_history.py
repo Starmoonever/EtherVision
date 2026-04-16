@@ -91,6 +91,62 @@ async def get_historical_price_usd(
     return price, bucket_ts, "defillama"
 
 
+async def get_historical_prices_usd(
+    pool: asyncpg.Pool | None,
+    *,
+    assets: list[tuple[str, str]],
+    requested_ts: int,
+) -> tuple[dict[str, Decimal], int, str]:
+    bucket_ts = bucket_timestamp(requested_ts)
+    if not assets:
+        return {}, bucket_ts, "defillama"
+
+    results: dict[str, Decimal] = {}
+    by_address: dict[str, str] = {}
+    for token_address, asset_label in assets:
+        normalized = token_address.lower()
+        if normalized not in by_address:
+            by_address[normalized] = asset_label
+
+    if pool is not None:
+        rows = await pool.fetch(
+            """
+            SELECT asset_address, price_usd
+            FROM loan.eth_price_timestamp
+            WHERE timestamp_bucket = $1
+              AND asset_address = ANY($2::text[])
+            """,
+            bucket_ts,
+            list(by_address.keys()),
+        )
+        for row in rows:
+            results[str(row["asset_address"]).lower()] = Decimal(str(row["price_usd"]))
+
+    for token_address, asset_label in assets:
+        normalized = token_address.lower()
+        if normalized in results:
+            continue
+        price = await _fetch_defillama_historical_price(
+            token_address,
+            bucket_ts=bucket_ts,
+        )
+        results[normalized] = price
+        if pool is not None:
+            try:
+                await upsert_eth_price_timestamp(
+                    pool,
+                    bucket_ts,
+                    token_address,
+                    asset_label,
+                    price,
+                    source="defillama",
+                )
+            except Exception as exc:
+                logger.warning("failed to cache historical price: %s", exc)
+
+    return results, bucket_ts, "defillama"
+
+
 async def _fetch_cached_bucket_prices(
     pool: asyncpg.Pool,
     *,

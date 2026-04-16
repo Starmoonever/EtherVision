@@ -129,13 +129,17 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
             return_value=_mock_position(),
         ),
         patch(
-            "morpho_crawler.api.service.get_historical_price_usd",
+            "morpho_crawler.api.service.get_historical_prices_usd",
             new_callable=AsyncMock,
-            side_effect=[
-                (Decimal("1.00"), 1_711_929_600, "defillama"),
-                (Decimal("1500.00"), 1_711_929_600, "defillama"),
-            ],
-        ),
+            return_value=(
+                {
+                    "0x1111111111111111111111111111111111111111": Decimal("1.00"),
+                    "0x2222222222222222222222222222222222222222": Decimal("1500.00"),
+                },
+                1_711_929_600,
+                "defillama",
+            ),
+        ) as get_hist_prices,
         patch(
             "morpho_crawler.api.service.upsert_position_replay_snapshots",
             new_callable=AsyncMock,
@@ -165,6 +169,7 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
     )
     assert response.points[0].assets[0].price_usd == "1.00"
     assert response.points[0].assets[1].price_usd == "1500.00"
+    get_hist_prices.assert_awaited_once()
     upsert_replay.assert_awaited_once()
 
 

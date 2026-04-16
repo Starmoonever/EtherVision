@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +10,7 @@ import asyncpg
 import pytest
 
 from crawler_shared.api import service
-from crawler_shared.price_history import bucket_timestamp
+from crawler_shared.price_history import bucket_timestamp, get_historical_prices_usd
 
 
 class _FakePool:
@@ -155,6 +156,54 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
         "2024-06-01T00:00:00Z",
         "2024-06-01T01:00:00Z",
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_historical_prices_usd_supports_multiple_assets() -> None:
+    bucket_ts = int(datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    pool = _FakePool(
+        cache_rows=[
+            {
+                "asset_address": "0x1111111111111111111111111111111111111111",
+                "price_usd": "1.23",
+            }
+        ]
+    )
+
+    def _payload(url: str):
+        assert "0x2222222222222222222222222222222222222222" in url.lower()
+        return {
+            "coins": {
+                "ethereum:0x2222222222222222222222222222222222222222": {
+                    "price": 4.56,
+                    "timestamp": bucket_ts,
+                }
+            }
+        }
+
+    with (
+        patch(
+            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+        ) as upsert_cache,
+        patch(
+            "aiohttp.ClientSession",
+            new=lambda *args, **kwargs: _FakeClientSession(_payload, *args, **kwargs),
+        ),
+    ):
+        prices, used_bucket, source = await get_historical_prices_usd(
+            cast(asyncpg.Pool, pool),
+            assets=[
+                ("0x1111111111111111111111111111111111111111", "USDC"),
+                ("0x2222222222222222222222222222222222222222", "WETH"),
+            ],
+            requested_ts=bucket_ts + 123,
+        )
+
+    assert used_bucket == bucket_ts
+    assert source == "defillama"
+    assert prices["0x1111111111111111111111111111111111111111"] == Decimal("1.23")
+    assert prices["0x2222222222222222222222222222222222222222"] == Decimal("4.56")
+    upsert_cache.assert_awaited_once()
 
 
 @pytest.mark.asyncio
