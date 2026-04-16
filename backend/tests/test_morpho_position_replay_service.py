@@ -9,7 +9,6 @@ import asyncpg
 import pytest
 from web3 import AsyncWeb3
 
-from crawler_shared.api.schemas import PriceResponse
 from morpho_crawler.api.service import (
     _build_group_brief,
     get_position_replay,
@@ -130,23 +129,11 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
             return_value=_mock_position(),
         ),
         patch(
-            "morpho_crawler.api.service.get_price",
+            "morpho_crawler.api.service.get_historical_price_usd",
             new_callable=AsyncMock,
             side_effect=[
-                PriceResponse(
-                    asset="USDC",
-                    price_usd="1.00",
-                    token_address="0x1111111111111111111111111111111111111111",
-                    timestamp="2026-04-01T00:00:00Z",
-                    source="defillama",
-                ),
-                PriceResponse(
-                    asset="wstETH",
-                    price_usd="1500.00",
-                    token_address="0x2222222222222222222222222222222222222222",
-                    timestamp="2026-04-01T00:00:00Z",
-                    source="defillama",
-                ),
+                (Decimal("1.00"), 1_711_929_600, "defillama"),
+                (Decimal("1500.00"), 1_711_929_600, "defillama"),
             ],
         ),
         patch(

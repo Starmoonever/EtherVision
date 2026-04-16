@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from crawler_shared.api.service import get_price
+from crawler_shared.price_history import get_historical_price_usd
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
@@ -231,12 +232,21 @@ async def _get_asset_price_usd(
     if cache_key in cache:
         return cache[cache_key]
     try:
+        if timestamp is not None:
+            price, _, _ = await get_historical_price_usd(
+                pool,
+                token_address=token_address,
+                asset_label=token_address,
+                requested_ts=timestamp,
+            )
+            cache[cache_key] = price
+            return price
         result = await get_price(
             w3,
             symbol=None,
             address=token_address,
             pool=pool,
-            timestamp=timestamp,
+            timestamp=None,
         )
     except HTTPException:
         cache[cache_key] = None
