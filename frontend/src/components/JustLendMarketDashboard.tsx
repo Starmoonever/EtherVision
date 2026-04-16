@@ -4,14 +4,12 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import {
-  fetchJustLendMarketsWithMeta,
   fetchJustLendMarketStateWithMeta,
   type JustLendMarketItem,
   type JustLendMarketStateResponse,
@@ -20,7 +18,6 @@ import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMet
 import { ChartDataStatus } from './ChartAssist';
 import { justLendChartTheme } from './justlendTheme';
 
-const FEATURED_MARKETS = ['BTT', 'NFT', 'WIN', 'TRX', 'STRX'];
 const marketPalette = justLendChartTheme.palettes.market;
 
 function toNum(value: string | number | null | undefined): number {
@@ -52,6 +49,12 @@ function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
+function formatRawAmount(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 6,
+  });
+}
+
 function formatDateTime(value: string): string {
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return value;
@@ -60,15 +63,6 @@ function formatDateTime(value: string): string {
 
 function marketLabel(item: JustLendMarketItem): string {
   return item.underlying_symbol || item.symbol || item.market.slice(0, 6);
-}
-
-function formatAddress(value: string): string {
-  if (!value) return '--';
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function normalizeMarketSymbol(value: string): string {
-  return value.trim().toUpperCase();
 }
 
 const marketChartTick = { fill: justLendChartTheme.axis.secondary, fontSize: 12 };
@@ -84,57 +78,26 @@ const marketTooltipItemStyle = {
   color: justLendChartTheme.tooltip.text,
 };
 
-export function JustLendMarketDashboard() {
-  const [markets, setMarkets] = useState<JustLendMarketItem[]>([]);
-  const [selectedMarket, setSelectedMarket] = useState<string>('');
+interface JustLendMarketDashboardProps {
+  markets: JustLendMarketItem[];
+  selectedMarket: string;
+  marketsLoading?: boolean;
+  marketLoadError?: string;
+}
+
+export function JustLendMarketDashboard({
+  markets,
+  selectedMarket,
+  marketsLoading = false,
+  marketLoadError = '',
+}: JustLendMarketDashboardProps) {
   const [marketState, setMarketState] = useState<JustLendMarketStateResponse | null>(null);
-  const [showMore, setShowMore] = useState(false);
-  const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [loadingState, setLoadingState] = useState(false);
   const [error, setError] = useState('');
   const [meta, setMeta] = useState<AggregatedRequestMeta>({
     lastUpdatedAt: null,
     cacheStatus: 'none',
   });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadMarkets = async () => {
-      setLoadingMarkets(true);
-      setError('');
-      try {
-        const result = await fetchJustLendMarketsWithMeta();
-        if (cancelled) return;
-        const nextMarkets = result.data.markets ?? [];
-        setMarkets(nextMarkets);
-        setMeta(mergeRequestMetas([result.meta]));
-
-        if (!nextMarkets.length) {
-          setSelectedMarket('');
-          return;
-        }
-
-        const preferred = FEATURED_MARKETS.find((symbol) =>
-          nextMarkets.some((item) => normalizeMarketSymbol(item.underlying_symbol) === symbol),
-        );
-        const defaultMarket =
-          nextMarkets.find((item) => normalizeMarketSymbol(item.underlying_symbol) === preferred)
-            ?.market ?? nextMarkets[0]?.market;
-        setSelectedMarket((current) => current || defaultMarket || '');
-      } catch (loadError) {
-        if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : '无法加载 JustLend 市场列表');
-      } finally {
-        if (!cancelled) setLoadingMarkets(false);
-      }
-    };
-
-    void loadMarkets();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!selectedMarket) return;
@@ -167,19 +130,6 @@ export function JustLendMarketDashboard() {
       cancelled = true;
     };
   }, [selectedMarket]);
-
-  const featuredMarkets = useMemo(() => {
-    return FEATURED_MARKETS.map((symbol) =>
-      markets.find((item) => normalizeMarketSymbol(item.underlying_symbol) === symbol),
-    ).filter((item): item is JustLendMarketItem => Boolean(item));
-  }, [markets]);
-
-  const moreMarkets = useMemo(() => {
-    const featuredSet = new Set(featuredMarkets.map((item) => item.market));
-    return markets
-      .filter((item) => !featuredSet.has(item.market))
-      .sort((a, b) => marketLabel(a).localeCompare(marketLabel(b)));
-  }, [featuredMarkets, markets]);
 
   const selectedMarketItem = useMemo(
     () => markets.find((item) => item.market === selectedMarket) ?? null,
@@ -271,7 +221,67 @@ export function JustLendMarketDashboard() {
     ];
   }, [marketMetrics]);
 
-  if (loadingMarkets) {
+  const balanceDetails = useMemo(() => {
+    if (!marketMetrics) return [];
+    return [
+      {
+        name: 'Cash',
+        color: marketPalette[0],
+        primary: formatUsd(marketMetrics.cashUsd),
+        secondary: `数量 ${formatRawAmount(marketMetrics.cash)}`,
+      },
+      {
+        name: 'Borrows',
+        color: marketPalette[1],
+        primary: formatUsd(marketMetrics.borrowUsd),
+        secondary: `数量 ${formatRawAmount(marketMetrics.totalBorrows)}`,
+      },
+      {
+        name: 'Reserves',
+        color: marketPalette[2],
+        primary: formatUsd(marketMetrics.reserveUsd),
+        secondary: `数量 ${formatRawAmount(marketMetrics.totalReserves)}`,
+      },
+    ];
+  }, [marketMetrics]);
+
+  const rateAndFactorDetails = useMemo(() => {
+    if (!marketMetrics) return [];
+    return [
+      {
+        name: 'Borrow Rate',
+        color: justLendChartTheme.series.borrowRate,
+        primary: formatPercent(marketMetrics.borrowRatePct),
+        secondary: '当前借款利率',
+      },
+      {
+        name: 'Supply Rate',
+        color: justLendChartTheme.series.supplyRate,
+        primary: formatPercent(marketMetrics.supplyRatePct),
+        secondary: '当前供应利率',
+      },
+      {
+        name: 'Utilization',
+        color: justLendChartTheme.series.utilization,
+        primary: formatPercent(marketMetrics.utilizationPct),
+        secondary: '资金利用率',
+      },
+      {
+        name: 'Collateral Factor',
+        color: justLendChartTheme.series.collateralFactor,
+        primary: formatPercent(marketMetrics.collateralFactorPct),
+        secondary: '抵押系数',
+      },
+      {
+        name: 'Reserve Factor',
+        color: justLendChartTheme.series.reserveFactor,
+        primary: formatPercent(marketMetrics.reserveFactorPct),
+        secondary: '储备系数',
+      },
+    ];
+  }, [marketMetrics]);
+
+  if (marketsLoading) {
     return (
       <div
         className="card"
@@ -282,7 +292,7 @@ export function JustLendMarketDashboard() {
     );
   }
 
-  if (error && !marketState && !markets.length) {
+  if ((marketLoadError || error) && !marketState && !markets.length) {
     return (
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
@@ -293,7 +303,7 @@ export function JustLendMarketDashboard() {
         </div>
         <div className="justlend-banner justlend-banner-warn">
           <div className="justlend-banner-title">无法读取 JustLend 市场数据</div>
-          <div className="justlend-banner-copy">{error}</div>
+          <div className="justlend-banner-copy">{marketLoadError || error}</div>
         </div>
       </div>
     );
@@ -322,6 +332,12 @@ export function JustLendMarketDashboard() {
       ]
     : [];
 
+  const overviewMetaItems = [
+    { label: '市场地址', value: selectedMarketItem?.market ?? '--', mono: true },
+    { label: 'Underlying', value: marketState?.underlying_symbol ?? '--' },
+    { label: '快照时间', value: marketState ? formatDateTime(marketState.timestamp) : '--' },
+  ];
+
   return (
     <div className="justlend-market-board">
       <div className="card justlend-market-hero" style={{ marginBottom: 0 }}>
@@ -342,139 +358,103 @@ export function JustLendMarketDashboard() {
         </div>
 
         <div style={{ display: 'grid', gap: '0.9rem' }}>
-          <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
-            {featuredMarkets.map((item, index) => {
-              const active = item.market === selectedMarket;
-              return (
-                <button
-                  key={item.market}
-                  type="button"
-                  onClick={() => setSelectedMarket(item.market)}
-                  style={{
-                    borderRadius: '999px',
-                    border: `1px solid ${
-                      active
-                        ? marketPalette[index % marketPalette.length]
-                        : justLendChartTheme.controls.baseBorder
-                    }`,
-                    background: active
-                      ? marketPalette[index % marketPalette.length]
-                      : justLendChartTheme.controls.baseBackground,
-                    color: active
-                      ? justLendChartTheme.controls.activeText
-                      : justLendChartTheme.controls.baseText,
-                    padding: '0.42rem 0.9rem',
-                    cursor: 'pointer',
-                    fontSize: '0.83rem',
-                  }}
-                >
-                  {marketLabel(item)}
-                </button>
-              );
-            })}
-            {moreMarkets.length ? (
-              <button
-                type="button"
-                onClick={() => setShowMore((value) => !value)}
-                style={{
-                  borderRadius: '999px',
-                  border: `1px solid ${justLendChartTheme.controls.baseBorder}`,
-                  background: showMore
-                    ? justLendChartTheme.controls.infoBackground
-                    : justLendChartTheme.controls.baseBackground,
-                  color: justLendChartTheme.tooltip.text,
-                  padding: '0.42rem 0.9rem',
-                  cursor: 'pointer',
-                  fontSize: '0.83rem',
-                }}
-              >
-                More
-              </button>
-            ) : null}
-          </div>
-
-          {showMore && moreMarkets.length ? (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)',
+              gap: '1.25rem',
+              alignItems: 'stretch',
+            }}
+          >
             <div
               style={{
+                background: '#0f172a',
+                border: `1px solid ${justLendChartTheme.grid}`,
+                borderRadius: '16px',
+                padding: '1rem 1.1rem',
                 display: 'flex',
-                gap: '0.55rem',
-                overflowX: 'auto',
-                paddingBottom: '0.2rem',
-                scrollbarWidth: 'thin',
-              }}
-              onWheel={(event) => {
-                event.currentTarget.scrollLeft += event.deltaY;
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: '0.7rem',
+                minHeight: '176px',
               }}
             >
-              {moreMarkets.map((item) => {
-                const active = item.market === selectedMarket;
-                return (
-                  <button
-                    key={item.market}
-                    type="button"
-                    onClick={() => setSelectedMarket(item.market)}
-                    style={{
-                      flex: '0 0 auto',
-                      borderRadius: '999px',
-                      border: `1px solid ${
-                        active
-                          ? justLendChartTheme.controls.marketMoreActiveBackground
-                          : justLendChartTheme.controls.baseBorder
-                      }`,
-                      background: active
-                        ? justLendChartTheme.controls.marketMoreActiveBackground
-                        : justLendChartTheme.controls.baseBackground,
-                      color: active
-                        ? justLendChartTheme.controls.marketMoreActiveText
-                        : justLendChartTheme.controls.baseText,
-                      padding: '0.4rem 0.85rem',
-                      cursor: 'pointer',
-                      fontSize: '0.8rem',
-                    }}
-                  >
-                    {marketLabel(item)}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          <div className="justlend-banner justlend-banner-soft">
-            <div className="justlend-banner-title">当前只展示单市场最新状态</div>
-            <div className="justlend-banner-copy">
-              这版先聚焦“当前市场快照”，帮助你判断该市场此刻的规模、流动性、利用率、利率与参数边界。
-            </div>
-          </div>
-
-          <div className="justlend-market-hero-grid">
-            <div>
-              <div className="justlend-market-kicker">Selected Market</div>
-              <h2 className="justlend-market-title">
-                {selectedMarketItem ? `${marketLabel(selectedMarketItem)} 当前状态` : '请选择市场'}
-              </h2>
-              <p className="justlend-market-copy">
-                {marketState
-                  ? `当前展示 ${marketState.underlying_symbol} 市场的最新状态快照，更新时间 ${formatDateTime(marketState.timestamp)}。`
-                  : '市场列表已加载，正在读取该市场的最新状态。'}
-              </p>
-            </div>
-
-            <div className="justlend-market-summary-grid">
-              <div className="metric-box">
-                <span className="metric-label">市场地址</span>
-                <span className="metric-value">
-                  {selectedMarketItem ? formatAddress(selectedMarketItem.market) : '--'}
-                </span>
+              <div style={{ textAlign: 'center' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem',
+                    marginBottom: '0.65rem',
+                  }}
+                >
+                  <span className="card-title" style={{ fontSize: '1rem' }}>
+                    {selectedMarketItem ? marketLabel(selectedMarketItem) : 'Market'} 实时价格
+                  </span>
+                  <span className="badge green-badge">Live</span>
+                </div>
+                <div className="metric-value blue" style={{ fontSize: '2rem' }}>
+                  {marketMetrics ? formatUsd(marketMetrics.priceUsd) : '--'}
+                </div>
+                <div className="metric-label" style={{ marginTop: '0.35rem' }}>
+                  {marketMetrics
+                    ? `${marketMetrics.priceInTrx.toLocaleString(undefined, {
+                        maximumFractionDigits: 6,
+                      })} TRX`
+                    : 'TRON Oracle Snapshot'}
+                </div>
               </div>
-              <div className="metric-box">
-                <span className="metric-label">Underlying</span>
-                <span className="metric-value blue">{marketState?.underlying_symbol ?? '--'}</span>
+            </div>
+
+            <div
+              style={{
+                background: '#0b1220',
+                border: `1px solid ${justLendChartTheme.grid}`,
+                borderRadius: '16px',
+                padding: '1rem 1.1rem',
+                display: 'grid',
+                gap: '0.9rem',
+              }}
+            >
+              <div>
+                <div className="justlend-market-kicker">Selected Market</div>
+                <h2 className="justlend-market-title">
+                  {selectedMarketItem
+                    ? `${marketLabel(selectedMarketItem)} 当前状态`
+                    : '请选择市场'}
+                </h2>
+                <p className="justlend-market-copy">
+                  {marketState
+                    ? `当前展示 ${marketState.underlying_symbol} 市场的最新状态快照，更新时间 ${formatDateTime(
+                        marketState.timestamp,
+                      )}。`
+                    : '市场列表已加载，正在读取该市场的最新状态。'}
+                </p>
               </div>
-              <div className="metric-box">
-                <span className="metric-label">最后更新</span>
-                <span className="metric-value">
-                  {marketState ? formatDateTime(marketState.timestamp) : '--'}
-                </span>
+
+              <div className="justlend-overview-pills">
+                {overviewMetaItems.map((item) => (
+                  <div key={item.label} className="justlend-overview-pill">
+                    <span className="justlend-overview-pill-label">{item.label}</span>
+                    <span
+                      className={`justlend-overview-pill-value ${item.mono ? 'mono' : ''}`}
+                      title={item.value}
+                      style={
+                        item.mono
+                          ? {
+                              whiteSpace: 'normal',
+                              overflow: 'visible',
+                              textOverflow: 'unset',
+                              wordBreak: 'break-all',
+                            }
+                          : undefined
+                      }
+                    >
+                      {item.value}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -554,18 +534,19 @@ export function JustLendMarketDashboard() {
                 </ResponsiveContainer>
               </div>
               <div className="justlend-market-list">
-                <div className="justlend-market-list-item">
-                  <span className="check-dot dot-ok" />
-                  <span>Cash: {formatUsd(marketMetrics.cashUsd)}</span>
-                </div>
-                <div className="justlend-market-list-item">
-                  <span className="check-dot dot-ok" />
-                  <span>Total Borrows: {formatUsd(marketMetrics.borrowUsd)}</span>
-                </div>
-                <div className="justlend-market-list-item">
-                  <span className="check-dot dot-ok" />
-                  <span>Total Reserves: {formatUsd(marketMetrics.reserveUsd)}</span>
-                </div>
+                {balanceDetails.map((item) => (
+                  <div key={item.name} className="justlend-allocation-item">
+                    <div className="justlend-allocation-main">
+                      <span className="justlend-risk-dot" style={{ background: item.color }} />
+                      <span className="token-symbol">{item.name}</span>
+                      <span className="justlend-allocation-share">{item.primary}</span>
+                    </div>
+                    <div className="justlend-allocation-meta">
+                      <span className="mono">{item.secondary}</span>
+                      <span className="mono">{item.primary}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -601,20 +582,39 @@ export function JustLendMarketDashboard() {
                       itemStyle={marketTooltipItemStyle}
                       formatter={(value: unknown) => [formatPercent(Number(value ?? 0)), '当前值']}
                     />
-                    <Legend wrapperStyle={{ color: justLendChartTheme.legend.text }} />
-                    <Bar
-                      dataKey="value"
-                      name="当前值"
-                      radius={[8, 8, 0, 0]}
-                      maxBarSize={34}
-                      activeBar={false}
-                    >
+                    <Bar dataKey="value" radius={[8, 8, 0, 0]} maxBarSize={34} activeBar={false}>
                       {rateAndFactorData.map((item) => (
                         <Cell key={item.name} fill={item.fill} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+              </div>
+              <div
+                className="justlend-allocation-list"
+                style={{
+                  flexDirection: 'column',
+                  gap: '0.6rem',
+                  overflowX: 'hidden',
+                  overflowY: 'auto',
+                  maxHeight: '224px',
+                  paddingRight: '0.25rem',
+                  paddingBottom: 0,
+                }}
+              >
+                {rateAndFactorDetails.map((item) => (
+                  <div key={item.name} className="justlend-allocation-item">
+                    <div className="justlend-allocation-main">
+                      <span className="justlend-risk-dot" style={{ background: item.color }} />
+                      <span className="token-symbol">{item.name}</span>
+                      <span className="justlend-allocation-share">{item.primary}</span>
+                    </div>
+                    <div className="justlend-allocation-meta">
+                      <span>{item.secondary}</span>
+                      <span className="mono">{item.primary}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -650,9 +650,17 @@ export function JustLendMarketDashboard() {
                 </div>
                 <div className="metric-box">
                   <span className="metric-label">Exchange Rate</span>
-                  <span className="metric-value blue">
+                  <span
+                    className="metric-value blue"
+                    style={{
+                      fontSize: '0.84rem',
+                      lineHeight: 1.35,
+                      wordBreak: 'break-all',
+                      whiteSpace: 'normal',
+                    }}
+                  >
                     {marketMetrics.exchangeRate.toLocaleString(undefined, {
-                      maximumFractionDigits: 6,
+                      maximumFractionDigits: 12,
                     })}
                   </span>
                 </div>

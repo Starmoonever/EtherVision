@@ -1,17 +1,9 @@
 import { useEffect, useState } from 'react';
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetch } from '../api/client';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import type { AggregatedRequestMeta } from '../api/requestMeta';
+import { StableResponsiveContainer } from '../shared/components/StableResponsiveContainer';
 
 interface MarketHistoryChartProps {
   version: 'v2' | 'v3' | 'all';
@@ -323,60 +315,58 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
             >
               <span className="card-title">市场规模（ETH 市场 + ETH 价格）</span>
             </div>
-            <div style={{ height: 400 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis
-                    dataKey="timestamp"
-                    stroke="#64748b"
-                    tick={{ fontSize: 12 }}
-                    minTickGap={30}
-                  />
-                  <YAxis yAxisId="size" stroke="#64748b" tickFormatter={formatUsdTick} width={60} />
-                  <YAxis
-                    yAxisId="price"
-                    orientation="right"
-                    stroke="#f59e0b"
-                    tickFormatter={formatPriceTick}
-                    width={60}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                    formatter={formatTooltipValue}
-                  />
-                  <Legend />
-                  <Line
-                    yAxisId="size"
-                    type="monotone"
-                    dataKey="total_debt_usd"
-                    name="借出 ETH 总值"
-                    stroke="#ef4444"
-                    dot={false}
-                    strokeWidth={2}
-                  />
-                  <Line
-                    yAxisId="size"
-                    type="monotone"
-                    dataKey="available_liquidity_usd"
-                    name="剩余可借 ETH 总值"
-                    stroke="#10b981"
-                    dot={false}
-                    strokeWidth={2}
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="eth_price_usd"
-                    name="ETH 历史价格"
-                    stroke="#f59e0b"
-                    dot={false}
-                    strokeWidth={2}
-                    strokeDasharray="6 4"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <StableResponsiveContainer height={400} minHeight={400}>
+              <LineChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis
+                  dataKey="timestamp"
+                  stroke="#64748b"
+                  tick={{ fontSize: 12 }}
+                  minTickGap={30}
+                />
+                <YAxis yAxisId="size" stroke="#64748b" tickFormatter={formatUsdTick} width={60} />
+                <YAxis
+                  yAxisId="price"
+                  orientation="right"
+                  stroke="#f59e0b"
+                  tickFormatter={formatPriceTick}
+                  width={60}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  formatter={formatTooltipValue}
+                />
+                <Legend />
+                <Line
+                  yAxisId="size"
+                  type="monotone"
+                  dataKey="total_debt_usd"
+                  name="借出 ETH 总值"
+                  stroke="#ef4444"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="size"
+                  type="monotone"
+                  dataKey="available_liquidity_usd"
+                  name="剩余可借 ETH 总值"
+                  stroke="#10b981"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="price"
+                  type="monotone"
+                  dataKey="eth_price_usd"
+                  name="ETH 历史价格"
+                  stroke="#f59e0b"
+                  dot={false}
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                />
+              </LineChart>
+            </StableResponsiveContainer>
           </div>
 
           <div className="card">
@@ -386,83 +376,81 @@ export function MarketHistoryChart({ version }: MarketHistoryChartProps) {
             >
               <span className="card-title">抵押借贷利率、资金利用率与 ETH 价格</span>
             </div>
-            <div style={{ height: 400 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis
-                    dataKey="timestamp"
-                    stroke="#64748b"
-                    tick={{ fontSize: 12 }}
-                    minTickGap={30}
-                  />
-                  <YAxis
-                    yAxisId="utilization"
-                    stroke="#3b82f6"
-                    tickFormatter={(val) => `${Number(val).toFixed(0)}%`}
-                    width={48}
-                  />
-                  <YAxis
-                    yAxisId="apy"
-                    orientation="right"
-                    stroke="#ef4444"
-                    tickFormatter={(val) => `${Number(val).toFixed(2)}%`}
-                    width={56}
-                  />
-                  <YAxis
-                    yAxisId="price"
-                    hide
-                    orientation="right"
-                    stroke="#f59e0b"
-                    tickFormatter={formatPriceTick}
-                    width={60}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                    formatter={formatRateTooltipValue}
-                  />
-                  <Legend />
-                  <Line
-                    yAxisId="apy"
-                    type="monotone"
-                    dataKey="variable_borrow_apy"
-                    name="借款实际年化利息率"
-                    stroke="#ef4444"
-                    dot={false}
-                    strokeWidth={2}
-                  />
-                  <Line
-                    yAxisId="apy"
-                    type="monotone"
-                    dataKey="supply_apy"
-                    name="存款年化收益率"
-                    stroke="#10b981"
-                    dot={false}
-                    strokeWidth={2}
-                  />
-                  <Line
-                    yAxisId="utilization"
-                    type="monotone"
-                    dataKey="utilization_rate"
-                    name="资金利用率"
-                    stroke="#3b82f6"
-                    dot={false}
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="eth_price_usd"
-                    name="ETH 历史价格"
-                    stroke="#f59e0b"
-                    dot={false}
-                    strokeWidth={2}
-                    strokeDasharray="6 4"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <StableResponsiveContainer height={400} minHeight={400}>
+              <LineChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis
+                  dataKey="timestamp"
+                  stroke="#64748b"
+                  tick={{ fontSize: 12 }}
+                  minTickGap={30}
+                />
+                <YAxis
+                  yAxisId="utilization"
+                  stroke="#3b82f6"
+                  tickFormatter={(val) => `${Number(val).toFixed(0)}%`}
+                  width={48}
+                />
+                <YAxis
+                  yAxisId="apy"
+                  orientation="right"
+                  stroke="#ef4444"
+                  tickFormatter={(val) => `${Number(val).toFixed(2)}%`}
+                  width={56}
+                />
+                <YAxis
+                  yAxisId="price"
+                  hide
+                  orientation="right"
+                  stroke="#f59e0b"
+                  tickFormatter={formatPriceTick}
+                  width={60}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  formatter={formatRateTooltipValue}
+                />
+                <Legend />
+                <Line
+                  yAxisId="apy"
+                  type="monotone"
+                  dataKey="variable_borrow_apy"
+                  name="借款实际年化利息率"
+                  stroke="#ef4444"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="apy"
+                  type="monotone"
+                  dataKey="supply_apy"
+                  name="存款年化收益率"
+                  stroke="#10b981"
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line
+                  yAxisId="utilization"
+                  type="monotone"
+                  dataKey="utilization_rate"
+                  name="资金利用率"
+                  stroke="#3b82f6"
+                  dot={false}
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                />
+                <Line
+                  yAxisId="price"
+                  type="monotone"
+                  dataKey="eth_price_usd"
+                  name="ETH 历史价格"
+                  stroke="#f59e0b"
+                  dot={false}
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                />
+              </LineChart>
+            </StableResponsiveContainer>
           </div>
         </>
       )}

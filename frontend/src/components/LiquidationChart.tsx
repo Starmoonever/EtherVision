@@ -1,14 +1,5 @@
 import { Fragment, useState, useEffect } from 'react';
-import {
-  ComposedChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { fetchLiquidationDetail } from '../api';
 import { fetchLiquidationPeriodWithMeta } from '../api/liquidation';
 import { fetchUserPosition } from '../api';
@@ -16,6 +7,8 @@ import type { LiquidationDetailResponse as LiquidationData } from '../api';
 import type { UserPosition } from '../api';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import { StableResponsiveContainer } from '../shared/components/StableResponsiveContainer';
+import { copyToClipboard } from '../shared/utils/copyToClipboard';
 
 type SortField =
   | 'liq_price'
@@ -319,7 +312,10 @@ export function LiquidationChart({
 
   const handleCopyAddress = async (address: string) => {
     try {
-      await navigator.clipboard.writeText(address);
+      const copied = await copyToClipboard(address);
+      if (!copied) {
+        throw new Error('Clipboard unavailable');
+      }
       setCopiedAddress(address);
       window.setTimeout(() => {
         setCopiedAddress((prev) => (prev === address ? '' : prev));
@@ -438,7 +434,7 @@ export function LiquidationChart({
       </div>
 
       <div style={{ minWidth: 0 }}>
-        <ResponsiveContainer width="100%" height={300}>
+        <StableResponsiveContainer height={300} minHeight={300}>
           <ComposedChart
             data={highlightedData}
             margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
@@ -535,7 +531,7 @@ export function LiquidationChart({
               activeDot={{ r: 6 }}
             />
           </ComposedChart>
-        </ResponsiveContainer>
+        </StableResponsiveContainer>
       </div>
 
       {/* Modal Overlay */}

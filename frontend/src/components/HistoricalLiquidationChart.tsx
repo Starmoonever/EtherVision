@@ -1,15 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import {
-  ComposedChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import {
   fetchHistoricalLiquidationDetail,
   fetchHistoricalLiquidationWithMeta,
@@ -22,6 +12,8 @@ import type {
 import type { UserPosition } from '../api';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import { StableResponsiveContainer } from '../shared/components/StableResponsiveContainer';
+import { copyToClipboard } from '../shared/utils/copyToClipboard';
 
 interface HistoricalLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
@@ -294,7 +286,10 @@ export function HistoricalLiquidationChart({
 
   const handleCopyAddress = async (address: string) => {
     try {
-      await navigator.clipboard.writeText(address);
+      const copied = await copyToClipboard(address);
+      if (!copied) {
+        throw new Error('Clipboard unavailable');
+      }
       setCopiedAddress(address);
       window.setTimeout(() => {
         setCopiedAddress((prev) => (prev === address ? '' : prev));
@@ -436,194 +431,191 @@ export function HistoricalLiquidationChart({
         </button>
       </div>
 
-      <div style={{ width: '100%', height: 350 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis
-              dataKey="snapshot_date"
-              stroke="#64748b"
-              tickFormatter={(val) => {
-                const d = new Date(val);
-                return `${d.getMonth() + 1}-${d.getDate()}`;
-              }}
-              fontSize={12}
-            />
-            <YAxis
+      <StableResponsiveContainer width="100%" height={350} minHeight={350}>
+        <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+          <XAxis
+            dataKey="snapshot_date"
+            stroke="#64748b"
+            tickFormatter={(val) => {
+              const d = new Date(val);
+              return `${d.getMonth() + 1}-${d.getDate()}`;
+            }}
+            fontSize={12}
+          />
+          <YAxis
+            yAxisId="left"
+            stroke={side === 'collateral' ? '#10b981' : '#f59e0b'}
+            tickFormatter={(val) =>
+              version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`
+            }
+            domain={[0, 'auto']}
+          />
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            stroke="#3b82f6"
+            tickFormatter={(val) => `$${val}`}
+            domain={[0, side === 'borrow' ? 6000 : 3000]}
+            allowDataOverflow={true}
+          />
+          <YAxis yAxisId="hidden" hide={true} width={0} />
+          <Tooltip
+            cursor={{ fill: '#1e293b', opacity: 0.35 }}
+            contentStyle={{
+              backgroundColor: '#0f172a',
+              borderColor: '#1e293b',
+              color: '#e2e8f0',
+            }}
+            itemStyle={{ fontSize: '0.9rem' }}
+            formatter={(
+              value: ChartTooltipValue | undefined,
+              name: string | number | undefined,
+            ): [string, string] => {
+              const v = Number(Array.isArray(value) ? value[0] : (value ?? 0));
+              const n = String(name ?? '');
+              if (n === '模拟ETH价格' || n === 'sim_eth_price_num') return [`$${v}`, '模拟ETH价格'];
+              if (n === '该模拟价格下清算的抵押 ETH 总值' || n === 'total_eth_collateral_usd_num')
+                return [
+                  `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  '该模拟价格下清算的抵押 ETH 总值',
+                ];
+              if (n === '该模拟价格下清算的 ETH 债务总值' || n === 'total_weth_debt_usd_num')
+                return [
+                  `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                  '该模拟价格下清算的 ETH 债务总值',
+                ];
+              if (n === '模拟价格下清算账户数' || n === 'liquidation_cnt_num')
+                return [String(v), '模拟价格下清算账户数'];
+              if (n === '清算抵押ETH数量' || n === 'total_eth_collateral_amount_num')
+                return [
+                  v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+                  '清算抵押ETH数量',
+                ];
+              if (n === '清算ETH债务总数量' || n === 'total_weth_debt_amount_num')
+                return [
+                  v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+                  '清算ETH债务总数量',
+                ];
+              return [String(v), n];
+            }}
+            labelFormatter={(label) => `日期: ${label}（点击柱子可切换明细日期）`}
+          />
+          <Legend />
+          {side === 'collateral' ? (
+            <Bar
               yAxisId="left"
-              stroke={side === 'collateral' ? '#10b981' : '#f59e0b'}
-              tickFormatter={(val) =>
-                version === 'v2' ? `$${val}` : `$${(val / 1000000).toFixed(1)}M`
-              }
-              domain={[0, 'auto']}
-            />
-            <YAxis
-              yAxisId="right"
-              orientation="right"
-              stroke="#3b82f6"
-              tickFormatter={(val) => `$${val}`}
-              domain={[0, side === 'borrow' ? 6000 : 3000]}
-              allowDataOverflow={true}
-            />
-            <YAxis yAxisId="hidden" hide={true} width={0} />
-            <Tooltip
-              cursor={{ fill: '#1e293b', opacity: 0.35 }}
-              contentStyle={{
-                backgroundColor: '#0f172a',
-                borderColor: '#1e293b',
-                color: '#e2e8f0',
+              dataKey="total_eth_collateral_usd_num"
+              name="该模拟价格下清算的抵押 ETH 总值"
+              fill="#10b981"
+              opacity={0.8}
+              radius={[4, 4, 0, 0]}
+              onClick={(barData) => {
+                const nextDate = (barData as { snapshot_date?: string }).snapshot_date;
+                if (nextDate) setSelectedSnapshotDate(nextDate);
               }}
-              itemStyle={{ fontSize: '0.9rem' }}
-              formatter={(
-                value: ChartTooltipValue | undefined,
-                name: string | number | undefined,
-              ): [string, string] => {
-                const v = Number(Array.isArray(value) ? value[0] : (value ?? 0));
-                const n = String(name ?? '');
-                if (n === '模拟ETH价格' || n === 'sim_eth_price_num')
-                  return [`$${v}`, '模拟ETH价格'];
-                if (n === '该模拟价格下清算的抵押 ETH 总值' || n === 'total_eth_collateral_usd_num')
-                  return [
-                    `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-                    '该模拟价格下清算的抵押 ETH 总值',
-                  ];
-                if (n === '该模拟价格下清算的 ETH 债务总值' || n === 'total_weth_debt_usd_num')
-                  return [
-                    `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-                    '该模拟价格下清算的 ETH 债务总值',
-                  ];
-                if (n === '模拟价格下清算账户数' || n === 'liquidation_cnt_num')
-                  return [String(v), '模拟价格下清算账户数'];
-                if (n === '清算抵押ETH数量' || n === 'total_eth_collateral_amount_num')
-                  return [
-                    v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-                    '清算抵押ETH数量',
-                  ];
-                if (n === '清算ETH债务总数量' || n === 'total_weth_debt_amount_num')
-                  return [
-                    v.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-                    '清算ETH债务总数量',
-                  ];
-                return [String(v), n];
+              cursor="pointer"
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              shape={(props: any) => {
+                const { x, y, width, height, index } = props;
+                const entry = chartData[index as number];
+                const color = entry?.isSelected ? '#34d399' : '#10b981';
+                return (
+                  <rect
+                    onClick={() => {
+                      if (entry?.snapshot_date) setSelectedSnapshotDate(entry.snapshot_date);
+                    }}
+                    style={{ cursor: 'pointer' }}
+                    x={x}
+                    y={y}
+                    width={width}
+                    height={height}
+                    fill={color}
+                    rx={4}
+                    ry={4}
+                    opacity={entry?.isSelected ? 1 : 0.8}
+                  />
+                );
               }}
-              labelFormatter={(label) => `日期: ${label}（点击柱子可切换明细日期）`}
             />
-            <Legend />
-            {side === 'collateral' ? (
-              <Bar
-                yAxisId="left"
-                dataKey="total_eth_collateral_usd_num"
-                name="该模拟价格下清算的抵押 ETH 总值"
-                fill="#10b981"
-                opacity={0.8}
-                radius={[4, 4, 0, 0]}
-                onClick={(barData) => {
-                  const nextDate = (barData as { snapshot_date?: string }).snapshot_date;
-                  if (nextDate) setSelectedSnapshotDate(nextDate);
-                }}
-                cursor="pointer"
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                shape={(props: any) => {
-                  const { x, y, width, height, index } = props;
-                  const entry = chartData[index as number];
-                  const color = entry?.isSelected ? '#34d399' : '#10b981';
-                  return (
-                    <rect
-                      onClick={() => {
-                        if (entry?.snapshot_date) setSelectedSnapshotDate(entry.snapshot_date);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                      x={x}
-                      y={y}
-                      width={width}
-                      height={height}
-                      fill={color}
-                      rx={4}
-                      ry={4}
-                      opacity={entry?.isSelected ? 1 : 0.8}
-                    />
-                  );
-                }}
-              />
-            ) : (
-              <Bar
-                yAxisId="left"
-                dataKey="total_weth_debt_usd_num"
-                name="该模拟价格下清算的 ETH 债务总值"
-                fill="#f59e0b"
-                opacity={0.8}
-                radius={[4, 4, 0, 0]}
-                onClick={(barData) => {
-                  const nextDate = (barData as { snapshot_date?: string }).snapshot_date;
-                  if (nextDate) setSelectedSnapshotDate(nextDate);
-                }}
-                cursor="pointer"
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                shape={(props: any) => {
-                  const { x, y, width, height, index } = props;
-                  const entry = chartData[index as number];
-                  const color = entry?.isSelected ? '#fbbf24' : '#f59e0b';
-                  return (
-                    <rect
-                      onClick={() => {
-                        if (entry?.snapshot_date) setSelectedSnapshotDate(entry.snapshot_date);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                      x={x}
-                      y={y}
-                      width={width}
-                      height={height}
-                      fill={color}
-                      rx={4}
-                      ry={4}
-                      opacity={entry?.isSelected ? 1 : 0.8}
-                    />
-                  );
-                }}
-              />
-            )}
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="sim_eth_price_num"
-              name="模拟ETH价格"
-              stroke="#3b82f6"
-              strokeWidth={2}
-              dot={false}
+          ) : (
+            <Bar
+              yAxisId="left"
+              dataKey="total_weth_debt_usd_num"
+              name="该模拟价格下清算的 ETH 债务总值"
+              fill="#f59e0b"
+              opacity={0.8}
+              radius={[4, 4, 0, 0]}
+              onClick={(barData) => {
+                const nextDate = (barData as { snapshot_date?: string }).snapshot_date;
+                if (nextDate) setSelectedSnapshotDate(nextDate);
+              }}
+              cursor="pointer"
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              shape={(props: any) => {
+                const { x, y, width, height, index } = props;
+                const entry = chartData[index as number];
+                const color = entry?.isSelected ? '#fbbf24' : '#f59e0b';
+                return (
+                  <rect
+                    onClick={() => {
+                      if (entry?.snapshot_date) setSelectedSnapshotDate(entry.snapshot_date);
+                    }}
+                    style={{ cursor: 'pointer' }}
+                    x={x}
+                    y={y}
+                    width={width}
+                    height={height}
+                    fill={color}
+                    rx={4}
+                    ry={4}
+                    opacity={entry?.isSelected ? 1 : 0.8}
+                  />
+                );
+              }}
             />
-            <Line
-              yAxisId="hidden"
-              type="monotone"
-              dataKey="liquidation_cnt_num"
-              name="模拟价格下清算账户数"
-              stroke="none"
-              legendType="none"
-              dot={false}
-              activeDot={false}
-            />
-            <Line
-              yAxisId="hidden"
-              type="monotone"
-              dataKey="total_eth_collateral_amount_num"
-              name="清算抵押ETH数量"
-              stroke="none"
-              legendType="none"
-              dot={false}
-              activeDot={false}
-            />
-            <Line
-              yAxisId="hidden"
-              type="monotone"
-              dataKey="total_weth_debt_amount_num"
-              name="清算ETH债务总数量"
-              stroke="none"
-              legendType="none"
-              dot={false}
-              activeDot={false}
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+          )}
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="sim_eth_price_num"
+            name="模拟ETH价格"
+            stroke="#3b82f6"
+            strokeWidth={2}
+            dot={false}
+          />
+          <Line
+            yAxisId="hidden"
+            type="monotone"
+            dataKey="liquidation_cnt_num"
+            name="模拟价格下清算账户数"
+            stroke="none"
+            legendType="none"
+            dot={false}
+            activeDot={false}
+          />
+          <Line
+            yAxisId="hidden"
+            type="monotone"
+            dataKey="total_eth_collateral_amount_num"
+            name="清算抵押ETH数量"
+            stroke="none"
+            legendType="none"
+            dot={false}
+            activeDot={false}
+          />
+          <Line
+            yAxisId="hidden"
+            type="monotone"
+            dataKey="total_weth_debt_amount_num"
+            name="清算ETH债务总数量"
+            stroke="none"
+            legendType="none"
+            dot={false}
+            activeDot={false}
+          />
+        </ComposedChart>
+      </StableResponsiveContainer>
 
       <div style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.8rem' }}>
         点击柱状图选择历史日期，查询与展开的仓位明细均按该日 00:00 UTC 快照展示。

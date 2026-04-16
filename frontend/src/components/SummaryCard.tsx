@@ -1,4 +1,5 @@
 import type { UserPosition, BorrowPosition } from '../api';
+import { AutoFitText } from '../shared/components/AutoFitText';
 
 interface Props {
   address: string;
@@ -83,7 +84,7 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
         </div>
       </div>
 
-      <div className="summary-grid">
+      <div className="summary-grid aave-summary-grid">
         <div className="metric-box">
           <span className="metric-label">总抵押资产价值 (USD)</span>
           <span className="metric-value green">
@@ -141,9 +142,14 @@ export function SummaryCard({ address, data: summary, loading, notFound, version
 
         <div className="metric-box">
           <span className="metric-label">健康因子</span>
-          <span className="metric-value" style={{ color: hfColor, fontSize: '1.6rem' }}>
-            {summary.health_factor}
-          </span>
+          <AutoFitText
+            className="metric-value"
+            text={summary.health_factor}
+            maxFontSizePx={26}
+            minFontSizePx={12}
+            fontWeight={700}
+            style={{ color: hfColor }}
+          />
         </div>
 
         <div className="metric-box">
