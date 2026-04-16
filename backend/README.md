@@ -45,7 +45,7 @@ backend/
 - `compound_crawler/`
   - Compound V2/V3 市场、治理、用户仓位与回放
 - `morpho_crawler/`
-  - Morpho Blue 市场与当前用户仓位
+  - Morpho Blue 市场、当前用户仓位与按请求懒加载的历史 replay
 - `justlend_crawler/`
   - JustLend 当前仓位、趋势回放、事件说明
 - `crawler_shared/`
@@ -202,9 +202,25 @@ Morpho 模块当前聚焦 Morpho Blue：
 
 - 当前用户仓位查询
 - 市场信息缓存
+- 单市场个人仓位 replay
 - 资产与额外信息的 JSONB 存储
 
 Morpho 写路径里已经有较明确的“API 文本地址 -> DB bytes”的转换逻辑，改动时要连同读路径一起核对。
+
+当前 Morpho replay 的实现约定：
+
+- 接口为 `GET /api/morpho/position/replay`
+- 目前只支持单市场 replay，调用时必须传 `market_id`
+- replay 走“先查表，未命中再实时构建并写回缓存”的模式，不做批量回填
+- replay 快照表为 `loan.morpho_blue_position_snapshots`
+- replay 依赖历史区块 `eth_call` 与事件日志查询，生产环境应提供 archive 能力较完整的 EVM RPC
+
+`brief` 生成规则当前按 Morpho 事件聚合：
+
+- `supply` / `withdraw` / `borrow` / `repay` 使用 loan token 金额
+- `supplyCollateral` / `withdrawCollateral` 使用 collateral token 金额
+- 同一笔交易内若有多条相关事件，会按日志顺序合并成一个 `brief`
+- `liquidate` 当前面向 borrower 生成“被清算”说明
 
 ### JustLend
 

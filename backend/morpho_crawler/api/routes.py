@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
-from .schemas import MorphoPositionResponse
-from .service import get_user_position
+from .schemas import MorphoPositionReplayResponse, MorphoPositionResponse
+from .service import get_position_replay, get_user_position
 
 router = APIRouter(prefix="/api/morpho")
 
@@ -38,4 +38,42 @@ async def position(
         address=address,
         market_id=market_id,
         protocol=protocol,
+    )
+
+
+@router.get(
+    "/position/replay",
+    response_model=MorphoPositionReplayResponse,
+    summary="Replay Morpho Blue user position by cached snapshots",
+)
+async def position_replay(
+    request: Request,
+    pool: AsyncpgPool,
+    address: str = Query(..., description="EVM user address"),
+    market_id: str = Query(..., description="Morpho market id (bytes32 hex)"),
+    start: str = Query(..., description="起始时间（UTC）"),
+    end: str = Query(..., description="结束时间（UTC）"),
+    protocol: str = Query(
+        "blue", description='Morpho protocol selector; currently only "blue"'
+    ),
+    use_cache: bool = Query(True, description="是否优先使用缓存"),
+    detail: bool = Query(False, description="是否返回资产明细"),
+) -> MorphoPositionReplayResponse:
+    from .service import parse_utc_time
+
+    from_ts = parse_utc_time(start)
+    to_ts = parse_utc_time(end)
+    if from_ts > to_ts:
+        raise HTTPException(status_code=400, detail="start 必须早于或等于 end")
+
+    return await get_position_replay(
+        _w3(request),
+        pool=pool,
+        address=address,
+        market_id=market_id,
+        protocol=protocol,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        use_cache=use_cache,
+        detail=detail,
     )

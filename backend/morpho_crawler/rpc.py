@@ -6,11 +6,13 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal, cast
 
+from eth_abi.abi import decode
 from eth_typing import ChecksumAddress
 from fastapi import HTTPException
 from web3 import AsyncWeb3
+from web3.types import BlockData, BlockIdentifier, FilterParams
 
 from .constants import MORPHO_BLUE_ADDRESS
 
@@ -204,6 +206,26 @@ ERC20_ABI: list[dict[str, Any]] = [
     },
 ]
 
+MORPHO_REPLAY_EVENT_TYPES: dict[str, list[str]] = {
+    "supply": ["uint256", "uint256"],
+    "withdraw": ["address", "uint256", "uint256"],
+    "borrow": ["address", "uint256", "uint256"],
+    "repay": ["uint256", "uint256"],
+    "supply_collateral": ["uint256"],
+    "withdraw_collateral": ["address", "uint256"],
+    "liquidation": ["uint256", "uint256", "uint256", "uint256", "uint256"],
+}
+
+MORPHO_REPLAY_EVENT_SIGNATURES: dict[str, str] = {
+    "supply": "Supply(bytes32,address,address,uint256,uint256)",
+    "withdraw": "Withdraw(bytes32,address,address,address,uint256,uint256)",
+    "borrow": "Borrow(bytes32,address,address,address,uint256,uint256)",
+    "repay": "Repay(bytes32,address,address,uint256,uint256)",
+    "supply_collateral": "SupplyCollateral(bytes32,address,address,uint256)",
+    "withdraw_collateral": "WithdrawCollateral(bytes32,address,address,address,uint256)",
+    "liquidation": "Liquidate(bytes32,address,address,uint256,uint256,uint256,uint256,uint256)",
+}
+
 
 @dataclass
 class TokenMetadata:
@@ -235,6 +257,20 @@ class MorphoRealtimePosition:
     is_healthy: bool
     has_position: bool
     price_raw: int
+
+
+@dataclass
+class MorphoReplayEvent:
+    tx_hash: str
+    log_index: int
+    block_number: int
+    block_timestamp: datetime
+    operation_type: str
+    assets: int | None = None
+    shares: int | None = None
+    collateral_assets: int | None = None
+    repaid_assets: int | None = None
+    seized_assets: int | None = None
 
 
 def _normalize_address(address: str) -> ChecksumAddress:
@@ -315,18 +351,30 @@ async def fetch_realtime_position(
     address: str,
     market_id: str,
 ) -> MorphoRealtimePosition:
+    return await fetch_position_at_block(
+        w3,
+        address=address,
+        market_id=market_id,
+        block_identifier=cast(BlockIdentifier, "latest"),
+    )
+
+
+async def fetch_position_at_block(
+    w3: AsyncWeb3,
+    *,
+    address: str,
+    market_id: str,
+    block_identifier: BlockIdentifier,
+) -> MorphoRealtimePosition:
     morpho_address = _to_checksum(MORPHO_BLUE_ADDRESS)
     morpho = w3.eth.contract(address=morpho_address, abi=MORPHO_ABI)
     user_address = _normalize_address(address)
     market_id_bytes = _normalize_market_id(market_id)
     market_id_hex = f"0x{market_id_bytes.hex()}"
 
-    latest_block = await w3.eth.get_block("latest")
-    raw_block_number = latest_block.get("number")
-    raw_block_timestamp = latest_block.get("timestamp")
-    if raw_block_number is None or raw_block_timestamp is None:
-        raise HTTPException(status_code=502, detail="failed to fetch latest block")
-    block_number = int(raw_block_number)
+    latest_block = await w3.eth.get_block(block_identifier)
+    block_number = _require_block_number(latest_block)
+    raw_block_timestamp = _require_block_timestamp(latest_block)
     block_timestamp = datetime.fromtimestamp(
         int(raw_block_timestamp),
         tz=timezone.utc,
@@ -485,3 +533,159 @@ async def fetch_realtime_position(
         has_position=has_position,
         price_raw=price_raw,
     )
+
+
+def _pad_topic_address(address: str) -> str:
+    return "0x" + "0" * 24 + _normalize_address(address)[2:].lower()
+
+
+def _decode_log_data(log_data: Any, data_types: list[str]) -> tuple[Any, ...]:
+    if isinstance(log_data, str):
+        payload = bytes.fromhex(log_data.removeprefix("0x"))
+    else:
+        payload = bytes(log_data)
+    return decode(data_types, payload)
+
+
+def _require_block_number(block: BlockData) -> int:
+    value = block.get("number")
+    if value is None:
+        raise HTTPException(status_code=502, detail="failed to fetch block number")
+    return int(value)
+
+
+def _require_block_timestamp(block: BlockData) -> int:
+    value = block.get("timestamp")
+    if value is None:
+        raise HTTPException(status_code=502, detail="failed to fetch block timestamp")
+    return int(value)
+
+
+async def _resolve_block_from_timestamp(
+    w3: AsyncWeb3,
+    *,
+    timestamp: int,
+    latest_block_number: int,
+    latest_block_ts: int,
+    mode: Literal["ge", "le"],
+) -> int:
+    if timestamp <= 0:
+        return 0
+    earliest_block = await w3.eth.get_block(0)
+    earliest_ts = _require_block_timestamp(earliest_block)
+    if timestamp <= earliest_ts:
+        return 0
+    if timestamp >= latest_block_ts:
+        return latest_block_number
+
+    lo = 0
+    hi = latest_block_number
+    answer = latest_block_number if mode == "ge" else 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        mid_block = await w3.eth.get_block(mid)
+        mid_ts = _require_block_timestamp(mid_block)
+        if mode == "ge":
+            if mid_ts >= timestamp:
+                answer = mid
+                hi = mid - 1
+            else:
+                lo = mid + 1
+        else:
+            if mid_ts <= timestamp:
+                answer = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+    return answer
+
+
+async def fetch_user_market_replay_events(
+    w3: AsyncWeb3,
+    *,
+    address: str,
+    market_id: str,
+    from_ts: int,
+    to_ts: int,
+) -> list[MorphoReplayEvent]:
+    latest_block = await w3.eth.get_block(cast(BlockIdentifier, "latest"))
+    latest_block_number = _require_block_number(latest_block)
+    latest_block_ts = _require_block_timestamp(latest_block)
+    from_block = await _resolve_block_from_timestamp(
+        w3,
+        timestamp=from_ts,
+        latest_block_number=latest_block_number,
+        latest_block_ts=latest_block_ts,
+        mode="ge",
+    )
+    to_block = await _resolve_block_from_timestamp(
+        w3,
+        timestamp=to_ts,
+        latest_block_number=latest_block_number,
+        latest_block_ts=latest_block_ts,
+        mode="le",
+    )
+    if from_block > to_block:
+        return []
+
+    topic_zero = [
+        AsyncWeb3.keccak(text=signature).hex()
+        for signature in MORPHO_REPLAY_EVENT_SIGNATURES.values()
+    ]
+    user_topic = _pad_topic_address(address)
+    market_topic = f"0x{_normalize_market_id(market_id).hex()}"
+    filter_params = cast(
+        FilterParams,
+        {
+            "address": _to_checksum(MORPHO_BLUE_ADDRESS),
+            "fromBlock": from_block,
+            "toBlock": to_block,
+            "topics": [topic_zero, market_topic, None, user_topic],
+        },
+    )
+    raw_logs = await w3.eth.get_logs(filter_params)
+    if not raw_logs:
+        return []
+
+    signature_map = {
+        AsyncWeb3.keccak(text=signature).hex(): operation_type
+        for operation_type, signature in MORPHO_REPLAY_EVENT_SIGNATURES.items()
+    }
+    block_ts_cache: dict[int, datetime] = {}
+    rows: list[MorphoReplayEvent] = []
+    for raw_log in raw_logs:
+        topic0 = raw_log["topics"][0].hex()
+        operation_type = signature_map.get(topic0)
+        if operation_type is None:
+            continue
+        block_number = int(raw_log["blockNumber"])
+        if block_number not in block_ts_cache:
+            block = await w3.eth.get_block(block_number)
+            block_ts_cache[block_number] = datetime.fromtimestamp(
+                _require_block_timestamp(block), tz=timezone.utc
+            )
+        decoded = _decode_log_data(
+            raw_log["data"], MORPHO_REPLAY_EVENT_TYPES[operation_type]
+        )
+        row = MorphoReplayEvent(
+            tx_hash=raw_log["transactionHash"].hex(),
+            log_index=int(raw_log["logIndex"]),
+            block_number=block_number,
+            block_timestamp=block_ts_cache[block_number],
+            operation_type=operation_type,
+        )
+        if operation_type in {"supply", "withdraw", "borrow"}:
+            row.assets = int(decoded[-2])
+            row.shares = int(decoded[-1])
+        elif operation_type == "repay":
+            row.assets = int(decoded[0])
+            row.shares = int(decoded[1])
+        elif operation_type in {"supply_collateral", "withdraw_collateral"}:
+            row.collateral_assets = int(decoded[-1])
+        elif operation_type == "liquidation":
+            row.repaid_assets = int(decoded[0])
+            row.shares = int(decoded[1])
+            row.seized_assets = int(decoded[2])
+        rows.append(row)
+    rows.sort(key=lambda item: (item.block_number, item.log_index, item.tx_hash))
+    return rows

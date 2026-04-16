@@ -19,6 +19,8 @@ class MorphoPositionAssetResponse(BaseModel):
     symbol: str | None = Field(description="代币符号。")
     decimals: int = Field(description="代币 decimals。")
     amount: str = Field(description="按 decimals 缩放后的资产数量。")
+    price_usd: str | None = Field(default=None, description="资产单价（USD）。")
+    value_usd: str | None = Field(default=None, description="资产价值（USD）。")
 
 
 class MorphoPositionResponse(BaseModel):
@@ -60,3 +62,34 @@ class MorphoPositionResponse(BaseModel):
     )
     data_source: str = Field(description="数据来源：rpc。")
     assets: list[MorphoPositionAssetResponse] = Field(description="资产明细。")
+
+
+class MorphoPositionReplayPointResponse(BaseModel):
+    tx_hash: str = Field(description="交易哈希。")
+    timestamp: str = Field(description="交易所在区块时间。")
+    block_number: int = Field(description="交易所在区块号。")
+    operation_type: str | None = Field(description="主操作类型。")
+    brief: str = Field(description="面向前端展示的简短说明。")
+    has_position: bool = Field(description="交易后该市场是否仍有非零仓位。")
+    is_healthy: bool = Field(description="交易后仓位是否健康。")
+    collateral_value_in_loan_asset: str = Field(
+        description="交易后抵押价值，单位为 loan asset。"
+    )
+    borrow_assets: str = Field(description="交易后债务数量，单位为 loan asset。")
+    health_factor: str | None = Field(description="交易后健康因子。")
+    assets: list[MorphoPositionAssetResponse] = Field(description="交易后资产明细。")
+
+
+class MorphoPositionReplayResponse(BaseModel):
+    protocol: str = Field(description="协议标识。")
+    market_type: str = Field(description="Morpho 市场类型。")
+    chain: str = Field(description="链标识。")
+    market_id: str = Field(description="市场 id。")
+    address: str = Field(description="EVM 用户地址。")
+    from_time: str = Field(description="起始时间。")
+    to_time: str = Field(description="结束时间。")
+    data_source: str = Field(description="数据来源：cache 或 rpc。")
+    total_points: int = Field(description="返回的时间线点位数。")
+    total_tx_count: int = Field(description="命中的交易数。")
+    cache_hit_rate: str = Field(description="缓存命中率。")
+    points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
