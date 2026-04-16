@@ -3,17 +3,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
 import pytest
+from web3 import AsyncWeb3
 
 from compound_crawler.config import AppConfig
 from compound_crawler.user_position_snapshots import (
     BackfillStats,
     UserPositionAssetRow,
     UserPositionSnapshotRow,
+    _collect_market_snapshot_rows,
     iter_snapshot_points,
     parse_csv_address_cell,
     run_user_position_backfill,
@@ -193,3 +196,47 @@ async def test_run_user_position_backfill_flushes_in_batches() -> None:
     assert stats.snapshots == 2
     assert stats.assets == 2
     mocked_flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_collect_market_snapshot_rows_passes_historical_price_ts_to_market_context() -> (
+    None
+):
+    point_ts = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    with (
+        patch(
+            "compound_crawler.user_position_snapshots._load_market_context",
+            new=AsyncMock(
+                return_value=cast(
+                    object,
+                    type(
+                        "_Ctx",
+                        (),
+                        {
+                            "market_address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+                            "market_symbol": "USDC",
+                        },
+                    )(),
+                )
+            ),
+        ) as mocked_ctx,
+        patch(
+            "compound_crawler.user_position_snapshots._collect_user_snapshots_batch",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await _collect_market_snapshot_rows(
+            cast(AsyncWeb3, object()),
+            cast(asyncpg.Pool, object()),
+            cast(AppConfig, SimpleNamespace(crawler=SimpleNamespace(batch_size=100))),
+            market="0xc3d688b66703497daa19211eedff47f25384cdc3",
+            point_ts=point_ts,
+            block_number=123,
+            users=[bytes.fromhex("11" * 20)],
+            metadata_cache={},
+            historical_price_ts=point_ts,
+        )
+
+    mocked_ctx.assert_awaited_once()
+    assert mocked_ctx.await_args is not None
+    assert mocked_ctx.await_args.kwargs["historical_price_ts"] == point_ts

@@ -1165,6 +1165,8 @@ async def _collect_and_cache_replay_misses(
                                 market_address=market_address,
                                 block_number=block_number,
                                 metadata_cache=metadata_cache,
+                                pool=pool,
+                                historical_price_ts=tx_group[0]["block_timestamp"],
                             )
                             snapshots = await _collect_user_snapshots_batch(
                                 active_w3,
