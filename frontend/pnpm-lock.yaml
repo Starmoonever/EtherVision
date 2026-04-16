@@ -7,6 +7,9 @@ settings:
 importers:
   .:
     dependencies:
+      echarts:
+        specifier: ^6.0.0
+        version: 6.0.0
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
@@ -1551,6 +1554,12 @@ packages:
         integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==,
       }
 
+  echarts@6.0.0:
+    resolution:
+      {
+        integrity: sha512-Tte/grDQRiETQP4xz3iZWSvoHrkCQtwqd6hs+mifXcjrCuo2iKWbajFObuLJVBlDIJlOzgQPd1hsaKt/3+OMkQ==,
+      }
+
   electron-to-chromium@1.5.328:
     resolution:
       {
@@ -2260,6 +2269,12 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
+  tslib@2.3.0:
+    resolution:
+      {
+        integrity: sha512-N82ooyxVNm6h1riLCoyS9e3fuJ3AMG2zIZs2Gd1ATcSFjSA23Q0fzjjZeh0jbJvWVDZ0cJT8yaNNaaXHzueNjg==,
+      }
+
   type-check@0.4.0:
     resolution:
       {
@@ -2407,6 +2422,12 @@ packages:
         integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==,
       }
     engines: { node: '>=10' }
+
+  zrender@6.0.0:
+    resolution:
+      {
+        integrity: sha512-41dFXEEXuJpNecuUQq6JlbybmnHaqqpGlbH1yxnA5V9MMP4SbohSVZsJIwz+zdjQXSSlR1Vc34EgH1zxyTDvhg==,
+      }
 
 snapshots:
   '@adraffy/ens-normalize@1.11.1': {}
@@ -3152,6 +3173,11 @@ snapshots:
 
   deep-is@0.1.4: {}
 
+  echarts@6.0.0:
+    dependencies:
+      tslib: 2.3.0
+      zrender: 6.0.0
+
   electron-to-chromium@1.5.328: {}
 
   es-toolkit@1.45.1: {}
@@ -3593,6 +3619,8 @@ snapshots:
     dependencies:
       typescript: 5.6.3
 
+  tslib@2.3.0: {}
+
   type-check@0.4.0:
     dependencies:
       prelude-ls: 1.2.1
@@ -3680,3 +3708,7 @@ snapshots:
   yallist@3.1.1: {}
 
   yocto-queue@0.1.0: {}
+
+  zrender@6.0.0:
+    dependencies:
+      tslib: 2.3.0

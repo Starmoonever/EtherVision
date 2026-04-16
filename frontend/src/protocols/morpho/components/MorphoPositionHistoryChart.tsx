@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Bar,
-  BarChart,
+  Brush,
   CartesianGrid,
-  Cell,
   Legend,
   Line,
   LineChart,
@@ -22,12 +20,20 @@ import {
   ChartInfoButton,
   type ExplainItem,
 } from '../../../components/ChartAssist';
+import {
+  MorphoDynamicLiquidationChart,
+  type MorphoPricePoint,
+} from './MorphoDynamicLiquidationChart';
 
 interface MorphoPositionHistoryChartProps {
   address: string;
   marketId: string;
   protocol?: 'blue';
   loanTokenSymbol?: string | null;
+  collateralTokenSymbol?: string | null;
+  debtAmount?: number | null;
+  collateralAmount?: number | null;
+  lltv?: number | null;
 }
 
 interface MorphoHistoryPoint {
@@ -46,7 +52,27 @@ interface MorphoHistoryPoint {
   collateralValue: number;
   borrowAssets: number;
   depositValue: number;
+  collateralUnitAmount: number;
+  collateralPriceInLoanAsset: number | null;
+  loanPriceUsd: number | null;
+  collateralPriceUsd: number | null;
   operationAmount: number;
+  collateralOperationAmount: number | null;
+  supplyOperationAmount: number | null;
+  borrowOperationAmount: number | null;
+  repayOperationAmount: number | null;
+  withdrawCollateralOperationAmount: number | null;
+  withdrawSupplyOperationAmount: number | null;
+  liquidationOperationAmount: number | null;
+  neutralOperationAmount: number | null;
+  collateralOperationAmountDisplay: number | null;
+  supplyOperationAmountDisplay: number | null;
+  borrowOperationAmountDisplay: number | null;
+  repayOperationAmountDisplay: number | null;
+  withdrawCollateralOperationAmountDisplay: number | null;
+  withdrawSupplyOperationAmountDisplay: number | null;
+  liquidationOperationAmountDisplay: number | null;
+  neutralOperationAmountDisplay: number | null;
   ltvPercent: number | null;
   healthFactor: number | null;
 }
@@ -70,7 +96,8 @@ type OperationTone =
   | 'supply'
   | 'borrow'
   | 'repay'
-  | 'withdraw'
+  | 'withdrawCollateral'
+  | 'withdrawSupply'
   | 'liquidation'
   | 'neutral';
 type OperationToneSet = Set<OperationTone>;
@@ -83,17 +110,26 @@ interface OperationMeta {
 
 const MORPHO_BLUE_START_DATE = '2023-12-28 00:00:00';
 const OPERATION_ROWS: Array<{ rank: number; label: string; tone: OperationTone }> = [
-  { rank: 0, label: '抵押 / 补仓', tone: 'collateral' },
-  { rank: 1, label: '存款', tone: 'supply' },
-  { rank: 2, label: '借款', tone: 'borrow' },
+  { rank: 0, label: '新增抵押', tone: 'collateral' },
+  { rank: 1, label: '供给', tone: 'supply' },
+  { rank: 2, label: '借入', tone: 'borrow' },
   { rank: 3, label: '还款', tone: 'repay' },
-  { rank: 4, label: '撤回', tone: 'withdraw' },
-  { rank: 5, label: '清算', tone: 'liquidation' },
-  { rank: 6, label: '其他', tone: 'neutral' },
+  { rank: 4, label: '移除抵押', tone: 'withdrawCollateral' },
+  { rank: 5, label: '提取', tone: 'withdrawSupply' },
+  { rank: 6, label: '被清算', tone: 'liquidation' },
+  { rank: 7, label: '其他', tone: 'neutral' },
 ];
-const DEFAULT_SELECTED_OPERATION_TONES = new Set<OperationTone>(
-  OPERATION_ROWS.map((row) => row.tone),
-);
+
+const OPERATION_AMOUNT_DISPLAY_KEY_BY_TONE: Record<OperationTone, keyof MorphoHistoryPoint> = {
+  collateral: 'collateralOperationAmountDisplay',
+  supply: 'supplyOperationAmountDisplay',
+  borrow: 'borrowOperationAmountDisplay',
+  repay: 'repayOperationAmountDisplay',
+  withdrawCollateral: 'withdrawCollateralOperationAmountDisplay',
+  withdrawSupply: 'withdrawSupplyOperationAmountDisplay',
+  liquidation: 'liquidationOperationAmountDisplay',
+  neutral: 'neutralOperationAmountDisplay',
+} as Record<OperationTone, keyof MorphoHistoryPoint>;
 
 const explainItems: ExplainItem[] = [
   {
@@ -113,6 +149,27 @@ const explainItems: ExplainItem[] = [
     formula: 'health_factor',
     meaning: '交易后仓位距离清算边界的安全缓冲，越高越安全。',
     riskHint: '健康因子持续下行通常表示仓位在加杠杆；接近 1 时需要重点关注。',
+  },
+];
+
+const operationExplainItems: ExplainItem[] = [
+  {
+    term: '操作金额线',
+    formula: '按相邻两次快照的仓位差值估算',
+    meaning: '每种操作独立成线，同类操作点会连起来，用于观察该操作类型的金额变化趋势。',
+    riskHint: '大额借款、撤回抵押或清算点通常比普通存款更值得复盘。',
+  },
+  {
+    term: '操作总量',
+    formula: 'sum(operationAmount) by operation_type',
+    meaning: '对当前查询时间范围内同一类操作金额求和，显示在图表上方的小条形概览中。',
+    riskHint: '总量最大的操作类型通常代表账户主要行为模式，例如持续加杠杆或持续补抵押。',
+  },
+  {
+    term: '对数轴',
+    formula: 'log(operationAmount)',
+    meaning: '用对数轴减弱极大离群值的压制，让小额操作也能被看见。',
+    riskHint: '对数轴强调相对变化，精确金额请以 tooltip 和总量栏为准。',
   },
 ];
 
@@ -172,25 +229,31 @@ function getOperationMeta(value: string): OperationMeta {
   const normalized = value.toLowerCase();
 
   if (normalized.includes('liquidat')) {
-    return { label: '清算', rank: 5, tone: 'liquidation' };
+    return { label: '被清算', rank: 6, tone: 'liquidation' };
   }
   if (normalized.includes('repay')) {
     return { label: '还款', rank: 3, tone: 'repay' };
   }
   if (normalized.includes('borrow')) {
-    return { label: '借款', rank: 2, tone: 'borrow' };
+    return { label: '借入', rank: 2, tone: 'borrow' };
+  }
+  if (
+    (normalized.includes('withdraw') || normalized.includes('remove')) &&
+    normalized.includes('collateral')
+  ) {
+    return { label: '移除抵押', rank: 4, tone: 'withdrawCollateral' };
   }
   if (normalized.includes('withdraw') || normalized.includes('remove')) {
-    return { label: '撤回', rank: 4, tone: 'withdraw' };
+    return { label: '提取', rank: 5, tone: 'withdrawSupply' };
   }
   if (normalized.includes('collateral')) {
-    return { label: '抵押 / 补仓', rank: 0, tone: 'collateral' };
+    return { label: '新增抵押', rank: 0, tone: 'collateral' };
   }
   if (normalized.includes('supply') || normalized.includes('deposit')) {
-    return { label: '存款', rank: 1, tone: 'supply' };
+    return { label: '供给', rank: 1, tone: 'supply' };
   }
 
-  return { label: value === 'unknown' ? '其他操作' : value, rank: 6, tone: 'neutral' };
+  return { label: value === 'unknown' ? '其他操作' : value, rank: 7, tone: 'neutral' };
 }
 
 function getDepositValue(point: MorphoPositionReplayPoint): number {
@@ -201,10 +264,35 @@ function getDepositValue(point: MorphoPositionReplayPoint): number {
   }, 0);
 }
 
+function getCollateralUnitAmount(point: MorphoPositionReplayPoint): number {
+  return point.assets.reduce((total, asset) => {
+    if (asset.role !== 'collateral') return total;
+    return total + Math.abs(toNum(asset.amount));
+  }, 0);
+}
+
+function getAssetPriceUsd(
+  point: MorphoPositionReplayPoint,
+  role: 'loan' | 'collateral',
+): number | null {
+  const asset = point.assets.find((item) => item.role === role);
+  const price = toNullableNum(asset?.price_usd);
+  return price !== null && price > 0 ? price : null;
+}
+
 function normalizeReplayPoint(point: MorphoPositionReplayPoint, index: number): MorphoHistoryPoint {
   const collateralValue = toNum(point.collateral_value_in_loan_asset);
   const borrowAssets = Math.abs(toNum(point.borrow_assets));
   const depositValue = getDepositValue(point);
+  const collateralUnitAmount = getCollateralUnitAmount(point);
+  const loanPriceUsd = getAssetPriceUsd(point, 'loan');
+  const collateralPriceUsd = getAssetPriceUsd(point, 'collateral');
+  const collateralPriceInLoanAsset =
+    collateralValue > 0 && collateralUnitAmount > 0
+      ? collateralValue / collateralUnitAmount
+      : collateralPriceUsd !== null && loanPriceUsd !== null
+        ? collateralPriceUsd / loanPriceUsd
+        : null;
   const healthFactor = toNullableNum(point.health_factor);
   const operationType = point.operation_type || 'unknown';
   const operation = getOperationMeta(operationType);
@@ -225,7 +313,27 @@ function normalizeReplayPoint(point: MorphoPositionReplayPoint, index: number): 
     collateralValue,
     borrowAssets,
     depositValue,
+    collateralUnitAmount,
+    collateralPriceInLoanAsset,
+    loanPriceUsd,
+    collateralPriceUsd,
     operationAmount: 0,
+    collateralOperationAmount: null,
+    supplyOperationAmount: null,
+    borrowOperationAmount: null,
+    repayOperationAmount: null,
+    withdrawCollateralOperationAmount: null,
+    withdrawSupplyOperationAmount: null,
+    liquidationOperationAmount: null,
+    neutralOperationAmount: null,
+    collateralOperationAmountDisplay: null,
+    supplyOperationAmountDisplay: null,
+    borrowOperationAmountDisplay: null,
+    repayOperationAmountDisplay: null,
+    withdrawCollateralOperationAmountDisplay: null,
+    withdrawSupplyOperationAmountDisplay: null,
+    liquidationOperationAmountDisplay: null,
+    neutralOperationAmountDisplay: null,
     ltvPercent: collateralValue > 0 ? (borrowAssets / collateralValue) * 100 : null,
     healthFactor,
   };
@@ -244,11 +352,17 @@ function getOperationAmount(
   if (point.operationTone === 'borrow' || point.operationTone === 'repay') {
     return Math.abs(debtDelta);
   }
-  if (point.operationTone === 'withdraw') {
-    return Math.max(Math.abs(collateralDelta), Math.abs(depositDelta));
+  if (point.operationTone === 'withdrawCollateral') {
+    return Math.abs(collateralDelta);
   }
-  if (point.operationTone === 'collateral' || point.operationTone === 'supply') {
-    return Math.max(Math.abs(collateralDelta), Math.abs(depositDelta));
+  if (point.operationTone === 'withdrawSupply') {
+    return Math.abs(depositDelta);
+  }
+  if (point.operationTone === 'collateral') {
+    return Math.abs(collateralDelta);
+  }
+  if (point.operationTone === 'supply') {
+    return Math.abs(depositDelta);
   }
   if (point.operationTone === 'liquidation') {
     return Math.abs(collateralDelta) + Math.abs(debtDelta) + Math.abs(depositDelta);
@@ -258,56 +372,126 @@ function getOperationAmount(
 }
 
 function withOperationAmounts(points: MorphoHistoryPoint[]): MorphoHistoryPoint[] {
-  return points.map((point, index) => ({
-    ...point,
-    index,
-    operationAmount: getOperationAmount(point, points[index - 1]),
-  }));
+  return points.map((point, index) => {
+    const operationAmount = getOperationAmount(point, points[index - 1]);
+    const operationAmountDisplay = operationAmount > 0 ? Math.max(operationAmount, 1) : null;
+    return {
+      ...point,
+      index,
+      operationAmount,
+      collateralOperationAmount: point.operationTone === 'collateral' ? operationAmount : null,
+      supplyOperationAmount: point.operationTone === 'supply' ? operationAmount : null,
+      borrowOperationAmount: point.operationTone === 'borrow' ? operationAmount : null,
+      repayOperationAmount: point.operationTone === 'repay' ? operationAmount : null,
+      withdrawCollateralOperationAmount:
+        point.operationTone === 'withdrawCollateral' ? operationAmount : null,
+      withdrawSupplyOperationAmount:
+        point.operationTone === 'withdrawSupply' ? operationAmount : null,
+      liquidationOperationAmount: point.operationTone === 'liquidation' ? operationAmount : null,
+      neutralOperationAmount: point.operationTone === 'neutral' ? operationAmount : null,
+      collateralOperationAmountDisplay:
+        point.operationTone === 'collateral' ? operationAmountDisplay : null,
+      supplyOperationAmountDisplay:
+        point.operationTone === 'supply' ? operationAmountDisplay : null,
+      borrowOperationAmountDisplay:
+        point.operationTone === 'borrow' ? operationAmountDisplay : null,
+      repayOperationAmountDisplay: point.operationTone === 'repay' ? operationAmountDisplay : null,
+      withdrawCollateralOperationAmountDisplay:
+        point.operationTone === 'withdrawCollateral' ? operationAmountDisplay : null,
+      withdrawSupplyOperationAmountDisplay:
+        point.operationTone === 'withdrawSupply' ? operationAmountDisplay : null,
+      liquidationOperationAmountDisplay:
+        point.operationTone === 'liquidation' ? operationAmountDisplay : null,
+      neutralOperationAmountDisplay:
+        point.operationTone === 'neutral' ? operationAmountDisplay : null,
+    };
+  });
 }
 
 function getOperationToneColor(tone: OperationTone): string {
-  if (tone === 'collateral') return '#22c55e';
+  if (tone === 'collateral') return '#3fbb7d';
   if (tone === 'supply') return '#14b8a6';
-  if (tone === 'borrow') return '#f97316';
-  if (tone === 'repay') return '#38bdf8';
-  if (tone === 'withdraw') return '#facc15';
-  if (tone === 'liquidation') return '#ef4444';
+  if (tone === 'borrow') return '#e45c5c';
+  if (tone === 'repay') return '#4a90e2';
+  if (tone === 'withdrawCollateral') return '#f5a623';
+  if (tone === 'withdrawSupply') return '#8b5cf6';
+  if (tone === 'liquidation') return '#ffffff';
   return '#94a3b8';
 }
 
-function isOperationSelected(point: MorphoHistoryPoint, selectedTones: OperationToneSet): boolean {
-  return selectedTones.has(point.operationTone);
+type PositionLineKind = 'collateral' | 'debt' | 'deposit';
+
+function operationAffectsLine(point: MorphoHistoryPoint, line: PositionLineKind): boolean {
+  if (point.operationTone === 'liquidation') return line === 'collateral' || line === 'debt';
+  if (point.operationTone === 'collateral') return line === 'collateral';
+  if (point.operationTone === 'borrow' || point.operationTone === 'repay') return line === 'debt';
+  if (point.operationTone === 'supply' || point.operationTone === 'withdrawSupply') {
+    return line === 'deposit';
+  }
+  if (point.operationTone === 'withdrawCollateral') return line === 'collateral';
+  return false;
 }
 
-function ChartOperationDot(props: unknown, selectedTones: OperationToneSet) {
+function ChartOperationDot(
+  props: unknown,
+  selectedTones: OperationToneSet,
+  line: PositionLineKind,
+) {
   const { cx, cy, payload } = props as {
     cx?: number;
     cy?: number;
     payload?: MorphoHistoryPoint;
   };
   if (cx === undefined || cy === undefined || !payload) return <g />;
+  if (!selectedTones.has(payload.operationTone)) return <g />;
+  if (!operationAffectsLine(payload, line)) return <g />;
 
-  const selected = isOperationSelected(payload, selectedTones);
   const color = getOperationToneColor(payload.operationTone);
   const riskStroke = payload.isHealthy ? color : '#fecaca';
 
   return (
-    <g className={selected ? 'morpho-history-linked-dot' : 'morpho-history-linked-dot muted'}>
+    <g className="morpho-history-linked-dot">
+      <circle cx={cx} cy={cy} r={7.5} fill={color} opacity={0.2} />
       <circle
         cx={cx}
         cy={cy}
-        r={selected ? 7.5 : 3.2}
-        fill={color}
-        opacity={selected ? 0.2 : 0.08}
-      />
-      <circle
-        cx={cx}
-        cy={cy}
-        r={selected ? 4.2 : 2.3}
+        r={4.2}
         fill={color}
         stroke={riskStroke}
         strokeWidth={payload.isHealthy ? 1.1 : 1.8}
       />
+    </g>
+  );
+}
+
+function OperationAmountDot(props: unknown, color: string, selected: boolean) {
+  const { cx, cy, payload, value } = props as {
+    cx?: number;
+    cy?: number;
+    value?: number | null;
+    payload?: MorphoHistoryPoint;
+  };
+  if (cx === undefined || cy === undefined || !payload || value === null || value === undefined) {
+    return <g />;
+  }
+  const radius = Math.min(12, Math.max(4.2, Math.log(Math.max(payload.operationAmount, 1)) * 1.25));
+  const outerRadius = radius + 3.6;
+
+  return (
+    <g className={selected ? 'morpho-operation-amount-dot' : 'morpho-operation-amount-dot muted'}>
+      <title>{`${payload.operationLabel}: ${formatCompact(payload.operationAmount, 6)}`}</title>
+      <line
+        className="morpho-operation-stem-line"
+        x1={cx}
+        x2={cx}
+        y1={cy}
+        y2="92%"
+        stroke={color}
+        strokeOpacity={selected ? 0.2 : 0.08}
+        strokeWidth={selected ? 1.1 : 0.8}
+      />
+      <circle cx={cx} cy={cy} r={outerRadius} fill={color} opacity={selected ? 0.16 : 0.06} />
+      <circle cx={cx} cy={cy} r={radius} fill={color} stroke="#0f172a" strokeWidth={1.2} />
     </g>
   );
 }
@@ -323,32 +507,54 @@ function OperationTimeline({
   onToggleTone: (tone: OperationTone) => void;
   loanTokenSymbol: string;
 }) {
+  const brushStartIndex = Math.max(0, Math.floor(points.length * 0.7));
+  const brushEndIndex = Math.max(0, points.length - 1);
+  const operationTotals = OPERATION_ROWS.map((row) => ({
+    ...row,
+    total: points.reduce(
+      (sum, point) => sum + (point.operationTone === row.tone ? point.operationAmount : 0),
+      0,
+    ),
+  }));
+
   return (
     <div className="morpho-operation-timeline">
       <div className="morpho-operation-timeline-header">
         <div>
-          <strong>操作金额图</strong>
-          <span>柱高表示本次操作造成的仓位金额变化，颜色表示操作类型</span>
+          <div className="morpho-operation-title-row">
+            <strong>操作金额图</strong>
+            <ChartInfoButton title="操作金额图说明" items={operationExplainItems} />
+          </div>
+          <span>横轴为日期，纵轴为操作金额；竖线和圆点表示对应操作发生的金额</span>
         </div>
-        <div className="morpho-operation-legend">
-          {OPERATION_ROWS.map((row) => (
+      </div>
+
+      <div className="morpho-operation-total-grid morpho-operation-total-grid-compact">
+        {operationTotals.map((item) => {
+          const selected = selectedTones.size === 0 || selectedTones.has(item.tone);
+          return (
             <button
-              key={row.tone}
+              key={item.tone}
               type="button"
-              className={selectedTones.has(row.tone) ? 'active' : ''}
-              onClick={() => onToggleTone(row.tone)}
-              aria-pressed={selectedTones.has(row.tone)}
+              className={selected ? 'active' : ''}
+              onClick={() => onToggleTone(item.tone)}
+              aria-pressed={selected}
             >
-              <i style={{ background: getOperationToneColor(row.tone) }} />
-              {row.label.split(' / ')[0]}
+              <span className="morpho-operation-total-head">
+                <i style={{ background: getOperationToneColor(item.tone) }} />
+                {item.label}
+              </span>
+              <strong>
+                {formatCompact(item.total, 2)} {loanTokenSymbol}
+              </strong>
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       <div className="morpho-operation-chart-shell">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={points} margin={{ top: 10, right: 18, left: 4, bottom: 2 }}>
+          <LineChart data={points} margin={{ top: 10, right: 18, left: 4, bottom: 2 }}>
             <CartesianGrid stroke="#1f2a3d" strokeDasharray="4 8" vertical={false} />
             <XAxis
               dataKey="timeLabel"
@@ -358,22 +564,50 @@ function OperationTimeline({
               minTickGap={24}
             />
             <YAxis
+              type="number"
+              scale="log"
+              domain={[1, 'dataMax']}
+              allowDataOverflow
               tick={{ fill: '#94a3b8', fontSize: 11 }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(value) => formatCompact(Number(value), 2)}
             />
             <Tooltip content={<CustomTooltip loanTokenSymbol={loanTokenSymbol} />} />
-            <Bar dataKey="operationAmount" name="操作金额" radius={[8, 8, 2, 2]}>
-              {points.map((point) => (
-                <Cell
-                  key={`${point.txHash}-${point.blockNumber}`}
-                  fill={getOperationToneColor(point.operationTone)}
-                  fillOpacity={selectedTones.has(point.operationTone) ? 0.9 : 0.18}
+            {OPERATION_ROWS.map((row) => {
+              const selected = selectedTones.size === 0 || selectedTones.has(row.tone);
+              if (!selected) return null;
+              return (
+                <Line
+                  key={row.tone}
+                  type="linear"
+                  dataKey={OPERATION_AMOUNT_DISPLAY_KEY_BY_TONE[row.tone]}
+                  name={row.label}
+                  stroke={getOperationToneColor(row.tone)}
+                  strokeWidth={selected ? 1.8 : 1.1}
+                  strokeOpacity={selected ? 0.42 : 0.1}
+                  connectNulls
+                  dot={(props) =>
+                    OperationAmountDot(props, getOperationToneColor(row.tone), selected)
+                  }
+                  activeDot={{
+                    r: 5,
+                    strokeWidth: 2,
+                    fill: getOperationToneColor(row.tone),
+                  }}
                 />
-              ))}
-            </Bar>
-          </BarChart>
+              );
+            })}
+            <Brush
+              dataKey="timeLabel"
+              height={22}
+              startIndex={brushStartIndex}
+              endIndex={brushEndIndex}
+              travellerWidth={8}
+              stroke="#4a90e2"
+              fill="rgba(15, 23, 42, 0.88)"
+            />
+          </LineChart>
         </ResponsiveContainer>
       </div>
     </div>
@@ -433,12 +667,16 @@ export function MorphoPositionHistoryChart({
   marketId,
   protocol = 'blue',
   loanTokenSymbol,
+  collateralTokenSymbol,
+  debtAmount,
+  collateralAmount,
+  lltv,
 }: MorphoPositionHistoryChartProps) {
   const [range, setRange] = useState(() => getDefaultRange());
   const [appliedRange, setAppliedRange] = useState(range);
   const [points, setPoints] = useState<MorphoHistoryPoint[]>([]);
   const [selectedOperationTones, setSelectedOperationTones] = useState<OperationToneSet>(
-    () => new Set(DEFAULT_SELECTED_OPERATION_TONES),
+    () => new Set(),
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -464,7 +702,7 @@ export function MorphoPositionHistoryChart({
           appliedRange.start,
           appliedRange.end,
           protocol,
-          { detail: false },
+          { detail: true },
         );
 
         if (cancelled) return;
@@ -511,6 +749,37 @@ export function MorphoPositionHistoryChart({
       .filter((value): value is number => value !== null);
     return values.length > 0 ? Math.min(...values) : null;
   }, [points]);
+  const collateralSeries = useMemo<MorphoPricePoint[]>(
+    () =>
+      points
+        .filter((point) => point.collateralPriceInLoanAsset !== null)
+        .map((point) => ({
+          timestamp: point.timeLabel,
+          price:
+            point.loanPriceUsd !== null
+              ? (point.collateralPriceInLoanAsset ?? 0) * point.loanPriceUsd
+              : (point.collateralPriceInLoanAsset ?? 0),
+          amount: point.collateralUnitAmount,
+        })),
+    [points],
+  );
+  const debtSeries = useMemo<MorphoPricePoint[]>(
+    () =>
+      points
+        .filter((point) => point.collateralPriceInLoanAsset !== null)
+        .map((point) => ({
+          timestamp: point.timeLabel,
+          price: point.loanPriceUsd ?? 1,
+          amount: point.borrowAssets,
+        })),
+    [points],
+  );
+  const canShowDynamicLiquidationChart =
+    collateralSeries.length > 0 &&
+    debtSeries.length > 0 &&
+    (debtAmount ?? 0) > 0 &&
+    (collateralAmount ?? 0) > 0 &&
+    (lltv ?? 0) > 0;
   const handleSubmit = () => {
     setAppliedRange(range);
   };
@@ -523,7 +792,7 @@ export function MorphoPositionHistoryChart({
       } else {
         next.add(tone);
       }
-      return next.size > 0 ? next : new Set(DEFAULT_SELECTED_OPERATION_TONES);
+      return next;
     });
   };
 
@@ -650,8 +919,8 @@ export function MorphoPositionHistoryChart({
                   name={`总抵押值 (${symbol})`}
                   stroke="#38bdf8"
                   strokeWidth={2.2}
-                  dot={(props) => ChartOperationDot(props, selectedOperationTones)}
-                  activeDot={{ r: 5, stroke: '#bfdbfe', strokeWidth: 2 }}
+                  dot={(props) => ChartOperationDot(props, selectedOperationTones, 'collateral')}
+                  activeDot={false}
                 />
                 <Line
                   yAxisId="asset"
@@ -660,8 +929,8 @@ export function MorphoPositionHistoryChart({
                   name={`总债务值 (${symbol})`}
                   stroke="#f97316"
                   strokeWidth={2.1}
-                  dot={(props) => ChartOperationDot(props, selectedOperationTones)}
-                  activeDot={{ r: 5, stroke: '#fed7aa', strokeWidth: 2 }}
+                  dot={(props) => ChartOperationDot(props, selectedOperationTones, 'debt')}
+                  activeDot={false}
                 />
                 <Line
                   yAxisId="asset"
@@ -670,14 +939,26 @@ export function MorphoPositionHistoryChart({
                   name={`总存款值 (${symbol})`}
                   stroke="#22c55e"
                   strokeWidth={2.1}
-                  dot={(props) => ChartOperationDot(props, selectedOperationTones)}
-                  activeDot={{ r: 5, stroke: '#bbf7d0', strokeWidth: 2 }}
+                  dot={(props) => ChartOperationDot(props, selectedOperationTones, 'deposit')}
+                  activeDot={false}
                 />
               </LineChart>
             </ResponsiveContainer>
           )}
         </div>
       </section>
+
+      {canShowDynamicLiquidationChart && (
+        <MorphoDynamicLiquidationChart
+          collateralSeries={collateralSeries}
+          debtSeries={debtSeries}
+          debtAmount={debtAmount ?? 0}
+          collateralAmount={collateralAmount ?? 0}
+          lltv={lltv ?? 0}
+          collateralSymbol={collateralTokenSymbol || 'Collateral'}
+          debtSymbol={symbol}
+        />
+      )}
 
       <section className="card morpho-history-card morpho-operation-card">
         {loading ? (
