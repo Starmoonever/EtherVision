@@ -20,7 +20,11 @@ from ..constants import (
     MORPHO_DEFAULT_MARKET_TYPE,
     MORPHO_PROTOCOL,
 )
-from ..db import fetch_current_user_positions, upsert_current_user_position, upsert_market
+from ..db import (
+    fetch_current_user_positions,
+    upsert_current_user_position,
+    upsert_market,
+)
 from ..rpc import MorphoRealtimePosition, fetch_realtime_position
 
 
@@ -134,7 +138,9 @@ def _build_response_from_rpc(
             position.loan_token.decimals,
         ),
         health_factor=(
-            None if position.health_factor is None else _format_ratio(position.health_factor)
+            None
+            if position.health_factor is None
+            else _format_ratio(position.health_factor)
         ),
         price_quote=_format_oracle_price(
             position.price_raw,
@@ -231,10 +237,16 @@ def _build_response_from_db(position_row, asset_rows) -> MorphoPositionResponse 
         irm=str(extra.get("irm") or ""),
         lltv=str(extra.get("lltv") or "0"),
         lltv_ratio=str(extra.get("lltv_ratio") or "0"),
-        supply_shares=str(extra.get("supply_shares_raw") or position_row.get("supply_shares") or "0"),
-        borrow_shares=str(extra.get("borrow_shares_raw") or position_row.get("borrow_shares") or "0"),
+        supply_shares=str(
+            extra.get("supply_shares_raw") or position_row.get("supply_shares") or "0"
+        ),
+        borrow_shares=str(
+            extra.get("borrow_shares_raw") or position_row.get("borrow_shares") or "0"
+        ),
         collateral_assets_raw=str(
-            extra.get("collateral_assets_raw") or position_row.get("collateral_amount") or "0"
+            extra.get("collateral_assets_raw")
+            or position_row.get("collateral_amount")
+            or "0"
         ),
         supply_assets=str(extra.get("supply_assets") or "0"),
         borrow_assets=str(extra.get("borrow_assets") or "0"),
@@ -242,10 +254,13 @@ def _build_response_from_db(position_row, asset_rows) -> MorphoPositionResponse 
         collateral_value_in_loan_asset=str(
             extra.get("collateral_value_in_loan_asset") or "0"
         ),
-        max_borrowable_in_loan_asset=str(extra.get("max_borrowable_in_loan_asset") or "0"),
+        max_borrowable_in_loan_asset=str(
+            extra.get("max_borrowable_in_loan_asset") or "0"
+        ),
         health_factor=(
             None
-            if extra.get("health_factor") is None and Decimal(health_factor_raw or "0") == 0
+            if extra.get("health_factor") is None
+            and Decimal(health_factor_raw or "0") == 0
             else str(extra.get("health_factor") or health_factor_raw)
         ),
         price_quote=str(extra.get("price_quote") or "0"),
@@ -327,7 +342,9 @@ async def get_user_position(
             "oracle": position.oracle,
             "irm": position.irm,
             "lltv": str(position.lltv),
-            "lltv_ratio": _format_ratio(Decimal(position.lltv) / Decimal(10**18), "0.000000"),
+            "lltv_ratio": _format_ratio(
+                Decimal(position.lltv) / Decimal(10**18), "0.000000"
+            ),
             "loan_token": {
                 "address": position.loan_token.address,
                 "symbol": position.loan_token.symbol,
@@ -356,7 +373,8 @@ async def get_user_position(
                 "side": "loan",
                 "symbol": position.loan_token.symbol,
                 "decimals": position.loan_token.decimals,
-                "amount": Decimal(response.supply_assets) - Decimal(response.borrow_assets),
+                "amount": Decimal(response.supply_assets)
+                - Decimal(response.borrow_assets),
                 "price_usd": Decimal("0"),
                 "value_usd": Decimal("0"),
                 "extra_jsonb": {},

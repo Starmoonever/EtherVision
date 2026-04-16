@@ -14,26 +14,16 @@ from aave_crawler.api.routes import router as aave_router
 from aave_crawler.api.service import _cache
 from aave_crawler.config import load_config
 from aave_crawler.db import (
-    TABLES_V2,
-    TABLES_V2_BORROW,
-    TABLES_V3,
-    TABLES_V3_BORROW,
     create_pool,
-    ensure_eth_price_timestamp_table,
-    ensure_snapshot_cache_table,
-    ensure_tables,
 )
 from aave_crawler.rpc import build_web3
 from compound_crawler.api.routes import router as compound_router
-from compound_crawler.db import ensure_compound_event_snapshot_table
 from crawler_shared.api.routes import router as common_router
 from crawler_shared.database import close_engine, init_engine
 from crawler_shared.tron_rpc import build_tron_rpc_client
 from justlend_crawler.api.routes import router as justlend_router
 from justlend_crawler.config import load_config as load_justlend_config
-from justlend_crawler.db import ensure_justlend_tables
 from morpho_crawler.api.routes import router as morpho_router
-from morpho_crawler.db import ensure_morpho_tables
 
 logger = logging.getLogger(__name__)
 
