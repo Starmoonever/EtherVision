@@ -22,6 +22,10 @@ function formatAmount(value: string | number, decimals: number = 6): string {
   });
 }
 
+function formatAbsAmount(value: string | number, decimals: number = 6): string {
+  return formatAmount(Math.abs(toNum(value)), decimals);
+}
+
 // 保留 Morpho 原始 role 拆分，便于用户直接区分 loan leg 和 collateral leg。
 function renderRows(
   rows: MorphoPositionAsset[],
@@ -30,21 +34,26 @@ function renderRows(
   loanTokenPrice?: number,
   collateralTokenPrice?: number,
   borrowAssets?: string,
+  loanTokenSymbol?: string,
 ) {
   return rows.map((asset) => {
     let oracleValue: number | undefined;
     let borrowValue: number | undefined;
     let collateralUsdValue: number | undefined;
     let maxBorrowValue: number | undefined;
+    let debtValue: number | undefined;
 
     if (asset.role === 'loan') {
       // 借款价值 = 借款数量 × 借款 token USD 单价
       if (loanTokenPrice) {
-        borrowValue = toNum(asset.amount) * loanTokenPrice;
+        borrowValue = Math.abs(toNum(asset.amount)) * loanTokenPrice;
+        if (borrowAssets !== undefined) {
+          debtValue = Math.abs(toNum(borrowAssets)) * loanTokenPrice;
+        }
       }
       // 最大借款价值 = 市场最大可借数量（统一值）
-      if (maxBorrowable) {
-        maxBorrowValue = toNum(maxBorrowable);
+      if (maxBorrowable && loanTokenPrice) {
+        maxBorrowValue = toNum(maxBorrowable) * loanTokenPrice;
       }
     } else if (asset.role === 'collateral') {
       // 抵押价值（USD） = 抵押数量 × 抵押 token USD 单价
@@ -62,7 +71,7 @@ function renderRows(
         <td>
           <span className="token-symbol">{asset.symbol}</span>
         </td>
-        <td className="right mono bold">{formatAmount(asset.amount)}</td>
+        <td className="right mono bold">{formatAbsAmount(asset.amount)}</td>
 
         {/* 单价列 */}
         {asset.role === 'loan' && (
@@ -84,12 +93,12 @@ function renderRows(
         )}
         {asset.role === 'loan' && (
           <td className="right mono bold">
-            {borrowAssets !== undefined ? formatAmount(borrowAssets) : '-'}
+            {debtValue !== undefined ? `$${formatAmount(debtValue, 2)}` : '-'}
           </td>
         )}
         {asset.role === 'loan' && (
           <td className="right mono">
-            {maxBorrowValue !== undefined ? formatAmount(maxBorrowValue) : '-'}
+            {maxBorrowValue !== undefined ? `$${formatAmount(maxBorrowValue, 2)}` : '-'}
           </td>
         )}
 
@@ -100,7 +109,9 @@ function renderRows(
         )}
         {asset.role === 'collateral' && (
           <td className="right mono">
-            {oracleValue !== undefined ? formatAmount(oracleValue) : '-'}
+            {oracleValue !== undefined
+              ? `${loanTokenSymbol ?? ''}${formatAmount(oracleValue)}`
+              : '-'}
           </td>
         )}
         {asset.role === 'collateral' && <td className="right mono">-</td>}
@@ -213,25 +224,33 @@ export function MorphoPositionTable({
   const loanAssets = data.assets.filter((asset) => asset.role === 'loan');
   const collateralAssets = data.assets.filter((asset) => asset.role === 'collateral');
   const hasSupplyPosition = toNum(data.supply_assets) > 0 || toNum(data.supply_shares) > 0;
+  const hasAnyDetail = loanAssets.length > 0 || collateralAssets.length > 0 || hasSupplyPosition;
   const supplyValue =
     loanTokenPrice !== undefined ? toNum(data.supply_assets) * loanTokenPrice : undefined;
 
   return (
     <div className="positions-wrap">
-      <div className="card morpho-detail-card">
-        <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div>
-              <span className="card-title morpho-section-title">借款资产明细</span>
-            </div>
+      {!hasAnyDetail && (
+        <div className="card morpho-detail-card">
+          <div className="card-header">
+            <span className="card-title morpho-section-title">资产明细</span>
             {badge}
           </div>
-          <span className="badge red-badge">{loanAssets.length} 项</span>
+          <p className="empty-text">当前市场没有可展示的资产明细</p>
         </div>
+      )}
 
-        {loanAssets.length === 0 ? (
-          <p className="empty-text">当前市场没有贷款侧余额</p>
-        ) : (
+      {loanAssets.length > 0 && (
+        <div className="card morpho-detail-card">
+          <div className="card-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div>
+                <span className="card-title morpho-section-title">借款资产明细</span>
+              </div>
+              {badge}
+            </div>
+          </div>
+
           <div className="table-wrap">
             <table className="pos-table morpho-table">
               <colgroup>
@@ -248,7 +267,7 @@ export function MorphoPositionTable({
                   <th className="right">数量</th>
                   <th className="right">单价</th>
                   <th className="right">借款价值</th>
-                  <th className="right">负债</th>
+                  <th className="right">总债务价值</th>
                   <th className="right">最大借款价值</th>
                 </tr>
               </thead>
@@ -264,23 +283,20 @@ export function MorphoPositionTable({
               </tbody>
             </table>
           </div>
-        )}
-      </div>
-
-      <div className="card morpho-detail-card">
-        <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div>
-              <span className="card-title morpho-section-title">抵押资产明细</span>
-            </div>
-            {badge}
-          </div>
-          <span className="badge green-badge">{collateralAssets.length} 项</span>
         </div>
+      )}
 
-        {collateralAssets.length === 0 ? (
-          <p className="empty-text">当前市场没有抵押侧余额</p>
-        ) : (
+      {collateralAssets.length > 0 && (
+        <div className="card morpho-detail-card">
+          <div className="card-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div>
+                <span className="card-title morpho-section-title">抵押资产明细</span>
+              </div>
+              {badge}
+            </div>
+          </div>
+
           <div className="table-wrap">
             <table className="pos-table morpho-table">
               <colgroup>
@@ -308,27 +324,26 @@ export function MorphoPositionTable({
                   undefined,
                   undefined,
                   collateralTokenPrice,
+                  undefined,
+                  data.loan_token_symbol,
                 )}
               </tbody>
             </table>
           </div>
-        )}
-      </div>
-
-      <div className="card morpho-detail-card">
-        <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div>
-              <span className="card-title morpho-section-title">存款资产明细</span>
-            </div>
-            {badge}
-          </div>
-          <span className="badge green-badge">{hasSupplyPosition ? 1 : 0} 项</span>
         </div>
+      )}
 
-        {!hasSupplyPosition ? (
-          <p className="empty-text">当前市场没有存款侧余额</p>
-        ) : (
+      {hasSupplyPosition && (
+        <div className="card morpho-detail-card">
+          <div className="card-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div>
+                <span className="card-title morpho-section-title">存款资产明细</span>
+              </div>
+              {badge}
+            </div>
+          </div>
+
           <div className="table-wrap">
             <table className="pos-table morpho-table">
               <colgroup>
@@ -354,7 +369,7 @@ export function MorphoPositionTable({
                   <td>
                     <span className="token-symbol">{data.loan_token_symbol}</span>
                   </td>
-                  <td className="right mono bold">{formatAmount(data.supply_assets)}</td>
+                  <td className="right mono bold">{formatAbsAmount(data.supply_assets)}</td>
                   <td className="right mono">
                     {loanTokenPrice !== undefined ? `$${formatAmount(loanTokenPrice, 2)}` : '-'}
                   </td>
@@ -367,8 +382,8 @@ export function MorphoPositionTable({
               </tbody>
             </table>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

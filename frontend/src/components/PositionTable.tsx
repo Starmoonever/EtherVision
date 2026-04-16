@@ -82,7 +82,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
 
   if (!position) return null;
 
-  // 筛选抵押资产: use_as_collateral 为 true
+  // 筛选抵押资产：use_as_collateral 为 true
   const supplies: PositionRow[] = position.reserves
     .filter((r) => r.use_as_collateral)
     .map((r) => ({
@@ -94,7 +94,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
       isCollateral: true,
     }));
 
-  // 筛选负债: total_debt_amount 不为 0
+  // 筛选负债：total_debt_amount 不为 0
   const borrows: PositionRow[] = position.reserves
     .filter((r) => parseFloat(r.total_debt_amount || '0') !== 0)
     .map((r) => ({
@@ -181,7 +181,7 @@ export function PositionTable({ data: position, loading, notFound, version }: Po
                   border: '1px solid #334155',
                 }}
               >
-                可借额度: $
+                可借额度：$
                 {parseFloat(position.available_borrows_usd).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,

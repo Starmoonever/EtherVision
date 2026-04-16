@@ -6,6 +6,7 @@ interface PriceGaugeProps {
   arcDegrees?: number;
   maxPrice?: number;
   minPrice?: number;
+  priceUnit?: string;
   valueLabel?: string;
   showStats?: boolean;
   className?: string;
@@ -112,6 +113,7 @@ export function PriceGauge({
   arcDegrees = 120,
   maxPrice,
   minPrice,
+  priceUnit,
   showStats = true,
   className = '',
 }: PriceGaugeProps) {
@@ -310,7 +312,7 @@ export function PriceGauge({
           <text
             className="price-gauge-liquidation-label"
             x={liquidationLabelPoint.x}
-            y={liquidationLabelPoint.y + 22}
+            y={liquidationLabelPoint.y + 50}
             textAnchor="middle"
           >
             Liq{' '}
@@ -322,8 +324,8 @@ export function PriceGauge({
 
         <text
           className="price-gauge-side-label price-gauge-side-label-right"
-          x={rightLabelPoint.x}
-          y={rightLabelPoint.y + 18}
+          x={rightLabelPoint.x - 20}
+          y={rightLabelPoint.y + 45}
           textAnchor="middle"
         >
           安全区
@@ -368,9 +370,12 @@ export function PriceGauge({
       <div className="price-gauge-bottom-cards">
         <div className="price-gauge-bottom-card">
           <span>清算报价</span>
-          <strong>
-            {safeLiquidationPrice === null ? '--' : formatPrice(safeLiquidationPrice)}
-          </strong>
+          <div className="price-gauge-bottom-value-row">
+            <strong>
+              {safeLiquidationPrice === null ? '--' : formatPrice(safeLiquidationPrice)}
+            </strong>
+            {safeLiquidationPrice !== null && priceUnit && <small>{priceUnit}</small>}
+          </div>
         </div>
         <div className="price-gauge-bottom-card price-gauge-bottom-card-buffer">
           <span>清算缓冲</span>
@@ -378,7 +383,10 @@ export function PriceGauge({
         </div>
         <div className="price-gauge-bottom-card">
           <span>当前报价</span>
-          <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
+          <div className="price-gauge-bottom-value-row">
+            <strong>{safeCurrentPrice > 0 ? formatPrice(safeCurrentPrice) : '--'}</strong>
+            {safeCurrentPrice > 0 && priceUnit && <small>{priceUnit}</small>}
+          </div>
         </div>
       </div>
 
