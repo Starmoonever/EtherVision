@@ -1,0 +1,73 @@
+export const justLendChartTheme = {
+  grid: '#1e293b',
+  axis: {
+    primary: '#64748b',
+    secondary: '#94a3b8',
+    reference: '#475569',
+  },
+  tooltip: {
+    background: '#0f172a',
+    border: '#1e293b',
+    text: '#e2e8f0',
+    accent: '#22c55e',
+  },
+  stroke: {
+    asset: '#151c2c',
+  },
+  legend: {
+    text: '#cbd5e1',
+  },
+  badge: {
+    neutral: {
+      background: '#0f172a',
+      color: '#cbd5e1',
+    },
+    info: {
+      background: '#172554',
+      color: '#bfdbfe',
+    },
+    success: {
+      background: '#052e16',
+      color: '#86efac',
+    },
+    danger: {
+      background: '#3f0d0d',
+      color: '#fca5a5',
+    },
+  },
+  controls: {
+    baseBackground: '#0f172a',
+    baseBorder: '#334155',
+    baseText: '#cbd5e1',
+    activeText: '#eff6ff',
+    infoBackground: '#1d4ed8',
+    marketMoreActiveBackground: '#38bdf8',
+    marketMoreActiveText: '#082f49',
+  },
+  series: {
+    collateral: '#22c55e',
+    borrow: '#ef4444',
+    cash: '#38bdf8',
+    reserves: '#f59e0b',
+    supplyRate: '#22c55e',
+    borrowRate: '#ef4444',
+    utilization: '#38bdf8',
+    collateralFactor: '#f59e0b',
+    reserveFactor: '#8b5cf6',
+    riskHealthFactor: '#38bdf8',
+    riskLtv: '#ef4444',
+    riskLiquidationThreshold: '#f59e0b',
+    riskHoverLine: '#38bdf8',
+    bufferDiscountedCollateral: '#38bdf8',
+    bufferDebt: '#ef4444',
+    bufferLiquidation: '#f59e0b',
+    bufferHoverLine: '#38bdf8',
+    bufferReference: '#ef4444',
+  },
+  palettes: {
+    collateral: ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#eab308'],
+    borrow: ['#f87171', '#fb7185', '#f97316', '#fbbf24', '#ef4444', '#f43f5e'],
+    asset: ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#ef4444'],
+    market: ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'],
+  },
+} as const;
