@@ -316,6 +316,23 @@
   gap: 1rem;
 }
 
+.aave-summary-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.aave-summary-grid .metric-box {
+  padding: 0.75rem 0.8rem;
+}
+
+.aave-summary-grid .metric-label {
+  font-size: 0.68rem;
+}
+
+.aave-summary-grid .metric-value {
+  font-size: 1.05rem;
+}
+
 .compound-overview-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
@@ -2627,6 +2644,10 @@
 }
 
 @media (max-width: 1300px) {
+  .aave-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .justlend-summary-grid,
   .protocol-summary-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2666,12 +2687,17 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .aave-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .justlend-allocation-layout {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 640px) {
+  .aave-summary-grid,
   .justlend-summary-grid,
   .protocol-summary-grid {
     grid-template-columns: 1fr;

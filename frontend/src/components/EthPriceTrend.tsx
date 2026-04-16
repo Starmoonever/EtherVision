@@ -1,17 +1,10 @@
 import { useState, useEffect } from 'react';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { fetchEthPricePeriodWithMeta } from '../api/price';
 import type { PricePeriodItem } from '../api';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import { StableResponsiveContainer } from '../shared/components/StableResponsiveContainer';
 
 interface PricePoint {
   time: string;
@@ -182,7 +175,7 @@ export function EthPriceTrend() {
             <div className="spinner"></div>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={220}>
+          <StableResponsiveContainer height={220} minHeight={220}>
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} minTickGap={40} />
@@ -216,7 +209,7 @@ export function EthPriceTrend() {
                 activeDot={{ r: 6 }}
               />
             </LineChart>
-          </ResponsiveContainer>
+          </StableResponsiveContainer>
         )}
       </div>
     </>

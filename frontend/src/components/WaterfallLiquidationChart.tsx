@@ -1,19 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  ComposedChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { fetchWaterfallLiquidationWithMeta } from '../api/liquidation';
 import type { WaterfallResponse } from '../api/liquidation';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import { StableResponsiveContainer } from '../shared/components/StableResponsiveContainer';
 
 interface WaterfallLiquidationChartProps {
   version: 'v2' | 'v3' | 'all';
@@ -612,7 +603,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                 暂无数据
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <StableResponsiveContainer height="100%" minHeight={350}>
                 <ComposedChart
                   data={chartData}
                   margin={{ top: 20, right: 50, left: 20, bottom: 20 }}
@@ -706,7 +697,7 @@ export function WaterfallLiquidationChart({ version }: WaterfallLiquidationChart
                     animationEasing="ease-out"
                   />
                 </ComposedChart>
-              </ResponsiveContainer>
+              </StableResponsiveContainer>
             )}
           </div>
         </div>
