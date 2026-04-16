@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
@@ -1057,6 +1057,67 @@ async def test_fetch_market_exchange_rates_skips_market_with_blank_rpc_payload()
         )
 
     assert rates == {justlend_rpc._tron_address_to_hex(market_ok): Decimal("10")}
+
+
+@pytest.mark.asyncio
+async def test_probe_historical_constant_call_support_returns_true() -> None:
+    with (
+        patch.object(
+            justlend_rpc,
+            "_get_now_block",
+            new=AsyncMock(
+                return_value=(12345, datetime(2026, 4, 16, tzinfo=timezone.utc))
+            ),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_call_string",
+            new=AsyncMock(return_value="jUSDT"),
+        ),
+    ):
+        ok = await justlend_rpc.probe_historical_constant_call_support(
+            object(),  # type: ignore[arg-type]
+            contract_address="TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd",
+        )
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_find_block_at_or_before_timestamp_binary_searches_blocks() -> None:
+    target = datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+    latest_ts = datetime(2026, 4, 16, 0, 0, 0, tzinfo=timezone.utc)
+
+    async def _mock_get_block_by_number(*_args, **kwargs):
+        block_number = kwargs["block_number"]
+        ts = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc) + timedelta(
+            minutes=block_number
+        )
+        return block_number, ts
+
+    with (
+        patch.object(
+            justlend_rpc,
+            "_get_now_block",
+            new=AsyncMock(return_value=(20000, latest_ts)),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_get_block_by_number",
+            new=AsyncMock(side_effect=_mock_get_block_by_number),
+        ),
+    ):
+        block_number, block_ts = await justlend_rpc.find_block_at_or_before_timestamp(
+            object(),  # type: ignore[arg-type]
+            timestamp=target,
+        )
+
+    assert block_number >= 0
+    assert block_ts <= target
+    next_ts = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc) + timedelta(
+        minutes=block_number + 1
+    )
+    assert next_ts > target
 
 
 @pytest.mark.asyncio

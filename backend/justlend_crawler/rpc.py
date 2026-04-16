@@ -112,17 +112,20 @@ async def _call_contract_method(
     function_selector: str,
     parameter: str = "",
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> str:
     normalized_contract_address = _normalize_tron_address(contract_address)
     normalized_owner_address = _normalize_tron_address(
         owner_address or normalized_contract_address
     )
-    payload = {
+    payload: dict[str, Any] = {
         "contract_address": _tron_address_to_hex(normalized_contract_address),
         "owner_address": _tron_address_to_hex(normalized_owner_address),
         "function_selector": function_selector,
         "parameter": parameter,
     }
+    if block_number is not None:
+        payload["block_number"] = block_number
     response = await tron_rpc.post("/wallet/triggerconstantcontract", payload)
     if not response.get("result", {}).get("result"):
         raise HTTPException(
@@ -151,6 +154,7 @@ async def _call_uint256(
     function_selector: str,
     parameter: str = "",
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> int:
     raw = await _call_contract_method(
         tron_rpc,
@@ -158,6 +162,7 @@ async def _call_uint256(
         function_selector=function_selector,
         parameter=parameter,
         owner_address=owner_address,
+        block_number=block_number,
     )
     try:
         words = _decode_words(raw)
@@ -181,6 +186,7 @@ async def _call_address(
     function_selector: str,
     parameter: str = "",
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> str:
     raw = await _call_contract_method(
         tron_rpc,
@@ -188,6 +194,7 @@ async def _call_address(
         function_selector=function_selector,
         parameter=parameter,
         owner_address=owner_address,
+        block_number=block_number,
     )
     return _decode_address(_decode_words(raw)[0])
 
@@ -199,6 +206,7 @@ async def _call_bool(
     function_selector: str,
     parameter: str = "",
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> bool:
     raw = await _call_contract_method(
         tron_rpc,
@@ -206,6 +214,7 @@ async def _call_bool(
         function_selector=function_selector,
         parameter=parameter,
         owner_address=owner_address,
+        block_number=block_number,
     )
     return _decode_bool(_decode_words(raw)[0])
 
@@ -216,12 +225,14 @@ async def _call_string(
     contract_address: str,
     function_selector: str,
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> str:
     raw = await _call_contract_method(
         tron_rpc,
         contract_address=contract_address,
         function_selector=function_selector,
         owner_address=owner_address,
+        block_number=block_number,
     )
     return _decode_string(raw)
 
@@ -231,6 +242,7 @@ async def _call_account_snapshot(
     *,
     contract_address: str,
     user_address: str,
+    block_number: int | None = None,
 ) -> tuple[int, int, int, int]:
     raw = await _call_contract_method(
         tron_rpc,
@@ -238,6 +250,7 @@ async def _call_account_snapshot(
         function_selector="getAccountSnapshot(address)",
         parameter=_encode_address_word(user_address),
         owner_address=user_address,
+        block_number=block_number,
     )
     words = _decode_words(raw)
     if len(words) < 4:
@@ -250,6 +263,7 @@ async def _call_market_config(
     *,
     comptroller_address: str,
     market_address: str,
+    block_number: int | None = None,
 ) -> tuple[bool, Decimal]:
     raw = await _call_contract_method(
         tron_rpc,
@@ -257,6 +271,7 @@ async def _call_market_config(
         function_selector="markets(address)",
         parameter=_encode_address_word(market_address),
         owner_address=comptroller_address,
+        block_number=block_number,
     )
     words = _decode_words(raw)
     if len(words) < 2:
@@ -268,12 +283,14 @@ async def _call_token_decimals(
     tron_rpc: TronRpcClient,
     *,
     token_address: str,
+    block_number: int | None = None,
 ) -> int:
     return await _call_uint256(
         tron_rpc,
         contract_address=token_address,
         function_selector="decimals()",
         owner_address=token_address,
+        block_number=block_number,
     )
 
 
@@ -311,6 +328,97 @@ async def _get_now_block(
     return parsed_number, parsed_ts
 
 
+async def _get_block_by_number(
+    tron_rpc: TronRpcClient,
+    *,
+    block_number: int,
+) -> tuple[int | None, datetime | None]:
+    try:
+        response = await tron_rpc.post("/wallet/getblockbynum", {"num": block_number})
+    except Exception:
+        logger.debug(
+            "failed to fetch TRON block by number=%s", block_number, exc_info=True
+        )
+        return None, None
+    raw_data = response.get("block_header", {}).get("raw_data", {})
+    raw_number = raw_data.get("number")
+    ts_ms = raw_data.get("timestamp")
+    try:
+        parsed_number = int(raw_number) if raw_number is not None else None
+    except (TypeError, ValueError):
+        parsed_number = None
+    try:
+        parsed_ts = (
+            datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc)
+            if ts_ms is not None
+            else None
+        )
+    except (TypeError, ValueError, OSError):
+        parsed_ts = None
+    return parsed_number, parsed_ts
+
+
+async def probe_historical_constant_call_support(
+    tron_rpc: TronRpcClient,
+    *,
+    contract_address: str,
+) -> bool:
+    latest_block, _ = await _get_now_block(tron_rpc)
+    if latest_block is None or latest_block < 5:
+        return False
+    probe_block = latest_block - 5
+    try:
+        await _call_string(
+            tron_rpc,
+            contract_address=contract_address,
+            function_selector="symbol()",
+            owner_address=contract_address,
+            block_number=probe_block,
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def find_block_at_or_before_timestamp(
+    tron_rpc: TronRpcClient,
+    *,
+    timestamp: datetime,
+) -> tuple[int, datetime]:
+    if timestamp.tzinfo is None:
+        target_ts = timestamp.replace(tzinfo=timezone.utc)
+    else:
+        target_ts = timestamp.astimezone(timezone.utc)
+
+    latest_block, latest_ts = await _get_now_block(tron_rpc)
+    if latest_block is None or latest_ts is None:
+        raise HTTPException(status_code=502, detail="failed to fetch TRON latest block")
+    if target_ts > latest_ts:
+        return latest_block, latest_ts
+
+    low = 0
+    high = latest_block
+    best_block = 0
+    best_ts = datetime.fromtimestamp(0, tz=timezone.utc)
+
+    while low <= high:
+        mid = (low + high) // 2
+        mid_block, mid_ts = await _get_block_by_number(tron_rpc, block_number=mid)
+        if mid_block is None or mid_ts is None:
+            raise HTTPException(
+                status_code=502,
+                detail=f"failed to fetch TRON block metadata at block={mid}",
+            )
+        if mid_ts <= target_ts:
+            best_block = mid_block
+            best_ts = mid_ts
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    return best_block, best_ts
+
+
 async def _call_optional_uint256(
     tron_rpc: TronRpcClient,
     *,
@@ -318,6 +426,7 @@ async def _call_optional_uint256(
     function_selector: str,
     parameter: str = "",
     owner_address: str | None = None,
+    block_number: int | None = None,
 ) -> int | None:
     try:
         return await _call_uint256(
@@ -326,6 +435,7 @@ async def _call_optional_uint256(
             function_selector=function_selector,
             parameter=parameter,
             owner_address=owner_address,
+            block_number=block_number,
         )
     except Exception:
         logger.debug(
@@ -341,6 +451,8 @@ async def fetch_justlend_market_states_via_rpc(
     tron_rpc: TronRpcClient,
     *,
     market_addresses: list[str],
+    block_number: int | None = None,
+    snapshot_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     normalized_markets = [
         _normalize_tron_address(item) for item in market_addresses if item
@@ -348,7 +460,15 @@ async def fetch_justlend_market_states_via_rpc(
     if not normalized_markets:
         return []
 
-    block_number, block_timestamp = await _get_now_block(tron_rpc)
+    effective_block_number = block_number
+    block_timestamp = snapshot_at
+    if effective_block_number is None:
+        effective_block_number, block_timestamp = await _get_now_block(tron_rpc)
+    elif block_timestamp is None:
+        _, block_timestamp = await _get_block_by_number(
+            tron_rpc,
+            block_number=effective_block_number,
+        )
     rows: list[dict[str, Any]] = []
     comptroller_cache: dict[str, dict[str, Any]] = {}
 
@@ -359,6 +479,7 @@ async def fetch_justlend_market_states_via_rpc(
                 contract_address=market_address,
                 function_selector="comptroller()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             controller_state = comptroller_cache.get(comptroller_address)
             if controller_state is None:
@@ -367,6 +488,7 @@ async def fetch_justlend_market_states_via_rpc(
                     contract_address=comptroller_address,
                     function_selector="oracle()",
                     owner_address=comptroller_address,
+                    block_number=effective_block_number,
                 )
                 controller_state = {"oracle_address": oracle_address}
                 comptroller_cache[comptroller_address] = controller_state
@@ -375,18 +497,21 @@ async def fetch_justlend_market_states_via_rpc(
                 tron_rpc,
                 comptroller_address=comptroller_address,
                 market_address=market_address,
+                block_number=effective_block_number,
             )
             jtoken_symbol = await _call_string(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="symbol()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             jtoken_decimals = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="decimals()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             try:
                 underlying_address = await _call_address(
@@ -394,16 +519,19 @@ async def fetch_justlend_market_states_via_rpc(
                     contract_address=market_address,
                     function_selector="underlying()",
                     owner_address=market_address,
+                    block_number=effective_block_number,
                 )
                 underlying_symbol = await _call_string(
                     tron_rpc,
                     contract_address=underlying_address,
                     function_selector="symbol()",
                     owner_address=market_address,
+                    block_number=effective_block_number,
                 )
                 underlying_decimals = await _call_token_decimals(
                     tron_rpc,
                     token_address=underlying_address,
+                    block_number=effective_block_number,
                 )
             except HTTPException:
                 underlying_address = _hex_to_tron_base58(_TRX_ADDRESS_HEX)
@@ -418,48 +546,56 @@ async def fetch_justlend_market_states_via_rpc(
                 function_selector="getUnderlyingPrice(address)",
                 parameter=_encode_address_word(market_address),
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             exchange_rate_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="exchangeRateStored()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             cash_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="getCash()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             total_borrows_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="totalBorrows()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             total_reserves_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="totalReserves()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             reserve_factor_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="reserveFactorMantissa()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             borrow_rate_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="borrowRatePerBlock()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
             supply_rate_raw = await _call_optional_uint256(
                 tron_rpc,
                 contract_address=market_address,
                 function_selector="supplyRatePerBlock()",
                 owner_address=market_address,
+                block_number=effective_block_number,
             )
 
             cash = (
@@ -540,7 +676,7 @@ async def fetch_justlend_market_states_via_rpc(
                         if raw_price is not None
                         else None
                     ),
-                    "block_number": block_number,
+                    "block_number": effective_block_number,
                     "block_timestamp": block_timestamp,
                 }
             )

@@ -223,6 +223,9 @@ async def fetch_and_optionally_persist_market_states(
     limit: int = 0,
     persist_current: bool = True,
     persist_snapshots: bool = True,
+    block_number: int | None = None,
+    snapshot_at: datetime | None = None,
+    require_rpc: bool = False,
 ) -> list[JustLendMarketStateRow]:
     market_catalog = await _fetch_justlend_market_catalog(
         cfg,
@@ -255,15 +258,24 @@ async def fetch_and_optionally_persist_market_states(
     if not deduped_markets:
         return []
 
-    rpc_rows = (
-        await fetch_justlend_market_states_via_rpc(
+    if require_rpc and tron_rpc is None:
+        raise HTTPException(status_code=503, detail="TRON RPC is required")
+    rpc_rows = []
+    if tron_rpc is not None:
+        rpc_rows = await fetch_justlend_market_states_via_rpc(
             tron_rpc,
             market_addresses=deduped_markets,
+            block_number=block_number,
+            snapshot_at=snapshot_at,
         )
-        if tron_rpc is not None
-        else []
-    )
-    now = datetime.now(timezone.utc)
+    if require_rpc and len(rpc_rows) != len(deduped_markets):
+        fetched = {str(row.get("market_address") or "") for row in rpc_rows}
+        missing = [market for market in deduped_markets if market not in fetched]
+        raise HTTPException(
+            status_code=502,
+            detail=f"failed to fetch historical JustLend market state for: {', '.join(missing)}",
+        )
+    now = snapshot_at or datetime.now(timezone.utc)
     rows: list[JustLendMarketStateRow] = []
     for market_address in deduped_markets:
         meta = catalog_by_market.get(market_address, {})
@@ -275,7 +287,7 @@ async def fetch_and_optionally_persist_market_states(
             ),
             {},
         )
-        snapshot_at = rpc_row.get("block_timestamp") or now
+        row_snapshot_at = rpc_row.get("block_timestamp") or now
         underlying_price_in_trx = rpc_row.get("underlying_price_in_trx")
         if underlying_price_in_trx is None:
             underlying_price_in_trx = meta.get("price_in_trx")
@@ -360,7 +372,7 @@ async def fetch_and_optionally_persist_market_states(
             supply_rate=supply_rate,
             underlying_price_in_trx=cast(Decimal | None, underlying_price_in_trx),
             price_usd=price_usd,
-            snapshot_at=cast(datetime | None, snapshot_at),
+            snapshot_at=cast(datetime | None, row_snapshot_at),
             block_timestamp=cast(datetime | None, rpc_row.get("block_timestamp")),
             block_number=cast(int | None, rpc_row.get("block_number")),
             extra_jsonb={
