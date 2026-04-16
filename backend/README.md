@@ -236,10 +236,19 @@ JustLend 模块负责：
 - `GET /api/justlend/market/state`
 - `GET /api/justlend/market/state/period`
 
+当前可用的 JustLend 市场回填脚本：
+
+```bash
+cd backend
+uv run python scripts/justlend/market_state_backfill.py --dry-run
+uv run python scripts/justlend/market_state_backfill.py --market <MARKET_ADDRESS>
+```
+
 说明：
 
 - 第一版先打通数据库与只读查询链路
-- 市场数据回填脚本与更完整的链上抓取逻辑会继续按阶段补齐
+- 当前脚本默认抓取最新市场状态，不提供任意历史块高回放
+- `borrow_cap`、`supply_cap` 等字段在第一版中仍可能为空，后续按可用链上方法补齐
 
 ## 数据库与迁移
 

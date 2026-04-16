@@ -285,6 +285,276 @@ def _price_in_trx(raw_price: int, underlying_decimals: int) -> Decimal:
     return Decimal(raw_price) / (Decimal(10) ** (36 - underlying_decimals))
 
 
+async def _get_now_block(
+    tron_rpc: TronRpcClient,
+) -> tuple[int | None, datetime | None]:
+    try:
+        response = await tron_rpc.post("/wallet/getnowblock", {})
+    except Exception:
+        logger.debug("failed to fetch TRON latest block", exc_info=True)
+        return None, None
+    raw_data = response.get("block_header", {}).get("raw_data", {})
+    block_number = raw_data.get("number")
+    ts_ms = raw_data.get("timestamp")
+    try:
+        parsed_number = int(block_number) if block_number is not None else None
+    except (TypeError, ValueError):
+        parsed_number = None
+    try:
+        parsed_ts = (
+            datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc)
+            if ts_ms is not None
+            else None
+        )
+    except (TypeError, ValueError, OSError):
+        parsed_ts = None
+    return parsed_number, parsed_ts
+
+
+async def _call_optional_uint256(
+    tron_rpc: TronRpcClient,
+    *,
+    contract_address: str,
+    function_selector: str,
+    parameter: str = "",
+    owner_address: str | None = None,
+) -> int | None:
+    try:
+        return await _call_uint256(
+            tron_rpc,
+            contract_address=contract_address,
+            function_selector=function_selector,
+            parameter=parameter,
+            owner_address=owner_address,
+        )
+    except Exception:
+        logger.debug(
+            "failed optional TRON uint256 call: contract=%s fn=%s",
+            contract_address,
+            function_selector,
+            exc_info=True,
+        )
+        return None
+
+
+async def fetch_justlend_market_states_via_rpc(
+    tron_rpc: TronRpcClient,
+    *,
+    market_addresses: list[str],
+) -> list[dict[str, Any]]:
+    normalized_markets = [
+        _normalize_tron_address(item) for item in market_addresses if item
+    ]
+    if not normalized_markets:
+        return []
+
+    block_number, block_timestamp = await _get_now_block(tron_rpc)
+    rows: list[dict[str, Any]] = []
+    comptroller_cache: dict[str, dict[str, Any]] = {}
+
+    for market_address in normalized_markets:
+        try:
+            comptroller_address = await _call_address(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="comptroller()",
+                owner_address=market_address,
+            )
+            controller_state = comptroller_cache.get(comptroller_address)
+            if controller_state is None:
+                oracle_address = await _call_address(
+                    tron_rpc,
+                    contract_address=comptroller_address,
+                    function_selector="oracle()",
+                    owner_address=comptroller_address,
+                )
+                controller_state = {"oracle_address": oracle_address}
+                comptroller_cache[comptroller_address] = controller_state
+
+            is_listed, collateral_factor = await _call_market_config(
+                tron_rpc,
+                comptroller_address=comptroller_address,
+                market_address=market_address,
+            )
+            jtoken_symbol = await _call_string(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="symbol()",
+                owner_address=market_address,
+            )
+            jtoken_decimals = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="decimals()",
+                owner_address=market_address,
+            )
+            try:
+                underlying_address = await _call_address(
+                    tron_rpc,
+                    contract_address=market_address,
+                    function_selector="underlying()",
+                    owner_address=market_address,
+                )
+                underlying_symbol = await _call_string(
+                    tron_rpc,
+                    contract_address=underlying_address,
+                    function_selector="symbol()",
+                    owner_address=market_address,
+                )
+                underlying_decimals = await _call_token_decimals(
+                    tron_rpc,
+                    token_address=underlying_address,
+                )
+            except HTTPException:
+                underlying_address = _hex_to_tron_base58(_TRX_ADDRESS_HEX)
+                underlying_symbol = (
+                    "TRX" if "TRX" in jtoken_symbol.upper() else jtoken_symbol
+                )
+                underlying_decimals = _TRX_DECIMALS
+
+            raw_price = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=controller_state["oracle_address"],
+                function_selector="getUnderlyingPrice(address)",
+                parameter=_encode_address_word(market_address),
+                owner_address=market_address,
+            )
+            exchange_rate_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="exchangeRateStored()",
+                owner_address=market_address,
+            )
+            cash_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="getCash()",
+                owner_address=market_address,
+            )
+            total_borrows_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="totalBorrows()",
+                owner_address=market_address,
+            )
+            total_reserves_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="totalReserves()",
+                owner_address=market_address,
+            )
+            reserve_factor_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="reserveFactorMantissa()",
+                owner_address=market_address,
+            )
+            borrow_rate_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="borrowRatePerBlock()",
+                owner_address=market_address,
+            )
+            supply_rate_raw = await _call_optional_uint256(
+                tron_rpc,
+                contract_address=market_address,
+                function_selector="supplyRatePerBlock()",
+                owner_address=market_address,
+            )
+
+            cash = (
+                _decimalize(cash_raw, underlying_decimals)
+                if cash_raw is not None
+                else None
+            )
+            total_borrows = (
+                _decimalize(total_borrows_raw, underlying_decimals)
+                if total_borrows_raw is not None
+                else None
+            )
+            total_reserves = (
+                _decimalize(total_reserves_raw, underlying_decimals)
+                if total_reserves_raw is not None
+                else None
+            )
+            total_supply = None
+            if (
+                cash is not None
+                and total_borrows is not None
+                and total_reserves is not None
+            ):
+                total_supply = cash + total_borrows - total_reserves
+
+            utilization = None
+            if (
+                cash is not None
+                and total_borrows is not None
+                and (cash + total_borrows) > 0
+            ):
+                utilization = total_borrows / (cash + total_borrows)
+
+            rows.append(
+                {
+                    "market_address": market_address,
+                    "comptroller_address": comptroller_address,
+                    "oracle_address": controller_state["oracle_address"],
+                    "symbol": jtoken_symbol,
+                    "underlying_address": underlying_address,
+                    "underlying_symbol": underlying_symbol,
+                    "underlying_decimals": underlying_decimals,
+                    "jtoken_decimals": int(jtoken_decimals)
+                    if jtoken_decimals is not None
+                    else _JTOKEN_DECIMALS,
+                    "is_listed": is_listed,
+                    "is_entered_supported": True,
+                    "collateral_factor": collateral_factor,
+                    "reserve_factor": (
+                        Decimal(reserve_factor_raw) / _SCALE_18
+                        if reserve_factor_raw is not None
+                        else None
+                    ),
+                    "borrow_cap": None,
+                    "supply_cap": None,
+                    "exchange_rate": (
+                        Decimal(exchange_rate_raw) / _SCALE_18
+                        if exchange_rate_raw is not None
+                        else None
+                    ),
+                    "cash": cash,
+                    "total_borrows": total_borrows,
+                    "total_reserves": total_reserves,
+                    "total_supply": total_supply,
+                    "utilization": utilization,
+                    "borrow_rate": (
+                        Decimal(borrow_rate_raw) / _SCALE_18
+                        if borrow_rate_raw is not None
+                        else None
+                    ),
+                    "supply_rate": (
+                        Decimal(supply_rate_raw) / _SCALE_18
+                        if supply_rate_raw is not None
+                        else None
+                    ),
+                    "underlying_price_in_trx": (
+                        _price_in_trx(raw_price, underlying_decimals)
+                        if raw_price is not None
+                        else None
+                    ),
+                    "block_number": block_number,
+                    "block_timestamp": block_timestamp,
+                }
+            )
+        except Exception:
+            logger.warning(
+                "failed to fetch JustLend market state via RPC: market=%s",
+                market_address,
+                exc_info=True,
+            )
+            continue
+
+    return rows
+
+
 async def fetch_justlend_position_via_rpc(
     tron_rpc: TronRpcClient,
     *,

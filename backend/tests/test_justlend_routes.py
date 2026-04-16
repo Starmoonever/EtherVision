@@ -160,6 +160,24 @@ def test_market_state_route_returns_latest_row() -> None:
     assert payload["timestamp"] == "2026-04-16T08:00:00Z"
 
 
+def test_market_state_route_parses_stringified_extra_jsonb() -> None:
+    ts = datetime(2026, 4, 16, 8, 0, 0, tzinfo=timezone.utc)
+    row = _market_row(ts)
+    row["extra_jsonb"] = '{"source":"justlend_market_api_rpc","rpc_available":true}'
+    with _build_client(state_row=row) as client:
+        response = client.get(
+            "/api/justlend/market/state",
+            params={"market": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["extra"] == {
+        "source": "justlend_market_api_rpc",
+        "rpc_available": True,
+    }
+
+
 def test_market_state_period_route_returns_points() -> None:
     ts1 = datetime(2026, 4, 16, 8, 0, 0, tzinfo=timezone.utc)
     ts2 = datetime(2026, 4, 16, 9, 0, 0, tzinfo=timezone.utc)

@@ -38,13 +38,15 @@ from ..db import (
     fetch_justlend_markets_current,
     fetch_current_user_position,
     JustLendEventPositionSnapshotRow,
+    JustLendMarketStateRow,
     fetch_justlend_tx_effects,
     get_justlend_event_snapshots,
     fetch_justlend_user_tx_history,
     upsert_justlend_event_snapshots,
+    upsert_justlend_market_states,
     upsert_current_user_position,
 )
-from ..rpc import fetch_market_exchange_rates
+from ..rpc import fetch_justlend_market_states_via_rpc, fetch_market_exchange_rates
 from .schemas import (
     JustLendMarketResponse,
     JustLendMarketListItem,
@@ -92,6 +94,28 @@ def _iso_optional(value: Any) -> str | None:
     return _record_ts(value)
 
 
+def _normalize_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            decoded = bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
+        try:
+            loaded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
 def _build_market_state_response(row: Any) -> JustLendMarketStateResponse:
     return JustLendMarketStateResponse(
         chain=str(_row_get(row, "chain") or JUSTLEND_CHAIN),
@@ -128,7 +152,7 @@ def _build_market_state_response(row: Any) -> JustLendMarketStateResponse:
         timestamp=_record_ts(_row_get(row, "snapshot_at")),
         block_timestamp=_iso_optional(_row_get(row, "block_timestamp")),
         block_number=_row_get(row, "block_number"),
-        extra=cast(dict[str, Any], _row_get(row, "extra_jsonb") or {}),
+        extra=_normalize_json_object(_row_get(row, "extra_jsonb")),
     )
 
 
@@ -185,6 +209,144 @@ async def get_market_state_period(
     return JustLendMarketStatePeriodResponse(
         points=[_build_market_state_response(row) for row in rows]
     )
+
+
+async def fetch_and_optionally_persist_market_states(
+    *,
+    pool: asyncpg.Pool,
+    cfg: Any,
+    tron_rpc: TronRpcClient | None,
+    market_addresses: list[str] | None = None,
+    limit: int = 0,
+    persist_current: bool = True,
+    persist_snapshots: bool = True,
+) -> list[JustLendMarketStateRow]:
+    market_catalog = await _fetch_justlend_market_catalog(
+        cfg,
+        tron_rpc=None,
+        market_addresses=[],
+    )
+    catalog_by_market = {
+        str(meta["market_address"]): meta
+        for meta in market_catalog.values()
+        if isinstance(meta, dict) and meta.get("market_address")
+    }
+    selected_markets = [
+        _normalize_tron_address(addr)
+        for addr in (
+            market_addresses
+            or getattr(getattr(cfg, "justlend", None), "markets", None)
+            or list(catalog_by_market.keys())
+        )
+        if addr
+    ]
+    deduped_markets: list[str] = []
+    seen_markets: set[str] = set()
+    for market in selected_markets:
+        if not market or market in seen_markets:
+            continue
+        seen_markets.add(market)
+        deduped_markets.append(market)
+    if limit > 0:
+        deduped_markets = deduped_markets[:limit]
+    if not deduped_markets:
+        return []
+
+    rpc_rows = (
+        await fetch_justlend_market_states_via_rpc(
+            tron_rpc,
+            market_addresses=deduped_markets,
+        )
+        if tron_rpc is not None
+        else []
+    )
+    now = datetime.now(timezone.utc)
+    rows: list[JustLendMarketStateRow] = []
+    for market_address in deduped_markets:
+        meta = catalog_by_market.get(market_address, {})
+        rpc_row = next(
+            (
+                item
+                for item in rpc_rows
+                if str(item.get("market_address") or "") == market_address
+            ),
+            {},
+        )
+        snapshot_at = rpc_row.get("block_timestamp") or now
+        underlying_price_in_trx = rpc_row.get("underlying_price_in_trx")
+        if underlying_price_in_trx is None:
+            underlying_price_in_trx = meta.get("price_in_trx")
+        price_usd = None
+        if rpc_row.get("underlying_price_in_trx") is not None and meta.get(
+            "price_in_trx"
+        ):
+            meta_price_in_trx = _decimal(meta["price_in_trx"])
+            if meta_price_in_trx > 0:
+                trx_price_usd = _decimal(meta["price_usd"]) / meta_price_in_trx
+                price_usd = _decimal(rpc_row["underlying_price_in_trx"]) * trx_price_usd
+        elif meta.get("price_usd") is not None:
+            price_usd = _decimal(meta["price_usd"])
+        symbol = cast(str | None, rpc_row.get("symbol"))
+        if symbol is None and meta.get("underlying_symbol"):
+            symbol = f"j{meta.get('underlying_symbol')}"
+
+        row = JustLendMarketStateRow(
+            market_address=market_address,
+            chain=JUSTLEND_CHAIN,
+            protocol=JUSTLEND_PROTOCOL,
+            market_type="jtoken",
+            underlying_address=cast(str | None, rpc_row.get("underlying_address"))
+            or cast(str | None, meta.get("underlying_address")),
+            comptroller_address=cast(str | None, rpc_row.get("comptroller_address")),
+            oracle_address=cast(str | None, rpc_row.get("oracle_address")),
+            symbol=symbol,
+            underlying_symbol=cast(str | None, rpc_row.get("underlying_symbol"))
+            or cast(str | None, meta.get("underlying_symbol")),
+            underlying_decimals=cast(int | None, rpc_row.get("underlying_decimals"))
+            or cast(int | None, meta.get("underlying_decimals")),
+            jtoken_decimals=cast(int | None, rpc_row.get("jtoken_decimals")),
+            is_listed=cast(bool | None, rpc_row.get("is_listed")),
+            is_entered_supported=cast(bool | None, rpc_row.get("is_entered_supported")),
+            collateral_factor=cast(Decimal | None, rpc_row.get("collateral_factor"))
+            or cast(Decimal | None, meta.get("collateral_factor")),
+            reserve_factor=cast(Decimal | None, rpc_row.get("reserve_factor")),
+            borrow_cap=cast(Decimal | None, rpc_row.get("borrow_cap")),
+            supply_cap=cast(Decimal | None, rpc_row.get("supply_cap")),
+            exchange_rate=cast(Decimal | None, rpc_row.get("exchange_rate"))
+            or cast(Decimal | None, meta.get("exchange_rate")),
+            cash=cast(Decimal | None, rpc_row.get("cash")),
+            total_borrows=cast(Decimal | None, rpc_row.get("total_borrows")),
+            total_reserves=cast(Decimal | None, rpc_row.get("total_reserves")),
+            total_supply=cast(Decimal | None, rpc_row.get("total_supply")),
+            utilization=cast(Decimal | None, rpc_row.get("utilization")),
+            borrow_rate=cast(Decimal | None, rpc_row.get("borrow_rate")),
+            supply_rate=cast(Decimal | None, rpc_row.get("supply_rate")),
+            underlying_price_in_trx=cast(Decimal | None, underlying_price_in_trx),
+            price_usd=price_usd,
+            snapshot_at=cast(datetime | None, snapshot_at),
+            block_timestamp=cast(datetime | None, rpc_row.get("block_timestamp")),
+            block_number=cast(int | None, rpc_row.get("block_number")),
+            extra_jsonb={
+                "source": "justlend_market_api_rpc"
+                if rpc_row
+                else "justlend_market_api",
+                "api_meta": {
+                    "market_hex": meta.get("market_hex"),
+                    "underlying_hex": meta.get("underlying_hex"),
+                },
+                "rpc_available": bool(rpc_row),
+            },
+        )
+        rows.append(row)
+
+    if rows and (persist_current or persist_snapshots):
+        await upsert_justlend_market_states(
+            pool,
+            rows,
+            update_current=persist_current,
+            insert_snapshots=persist_snapshots,
+        )
+    return rows
 
 
 def get_supported_tx_operation_types() -> list[str]:
