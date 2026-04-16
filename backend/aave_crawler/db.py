@@ -1302,10 +1302,11 @@ async def upsert_snapshot_cache(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETH 历史价格缓存（eth_price_timestamp）
+# Ethereum 历史价格缓存（eth_price_timestamp）
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# 以 15 分钟为最小时间粒度，缓存从外部 API（DeFiLlama）查询到的资产历史价格。
+# 历史沿用 `eth_price_timestamp` 表名，但这里的 `eth` 指 Ethereum 链，而不是 ETH 代币。
+# 以 15 分钟为最小时间粒度，缓存从外部 API（DeFiLlama）查询到的 Ethereum 多资产历史 USD 价格。
 # timestamp_bucket = (unix_ts // 900) * 900，同一桶内只存一条记录。
 
 _DDL_ETH_PRICE_TIMESTAMP = """
@@ -1351,14 +1352,19 @@ def _eth_price_bucket(unix_ts: int) -> int:
 
 
 async def ensure_eth_price_timestamp_table(pool: asyncpg.Pool) -> None:
-    """若价格缓存表不存在则自动创建（幂等）。建议在服务启动时调用一次。"""
+    """兼容旧名称的入口；语义上等同 ensure_ethereum_price_cache_table。"""
+    await ensure_ethereum_price_cache_table(pool)
+
+
+async def ensure_ethereum_price_cache_table(pool: asyncpg.Pool) -> None:
+    """确保 Ethereum 多资产历史 USD 价格缓存表存在。"""
     async with pool.acquire() as conn:
         ddl_conn = cast(Any, conn)
         async with conn.transaction():
             await _acquire_ddl_lock(ddl_conn, "loan.aave.eth_price_timestamp_ddl")
             await conn.execute(_DDL_ETH_PRICE_TIMESTAMP)
             await conn.execute(_DDL_ETH_PRICE_TIMESTAMP_INDEX)
-    logger.info("ETH 价格缓存表已就绪：loan.eth_price_timestamp")
+    logger.info("Ethereum 历史价格缓存表已就绪：loan.eth_price_timestamp")
 
 
 async def get_cached_eth_price(
@@ -1366,7 +1372,21 @@ async def get_cached_eth_price(
     unix_ts: int,
     asset_address: str,
 ) -> "Decimal | None":
-    """从缓存中查询 ETH/资产历史价格（15 分钟桶命中即返回）。
+    """兼容旧名称的入口；语义上等同 get_cached_ethereum_price_usd。
+
+    :param unix_ts:        请求时间点（unix 秒）
+    :param asset_address:  小写 token address
+    :returns: 价格 Decimal，或 None（未命中）
+    """
+    return await get_cached_ethereum_price_usd(pool, unix_ts, asset_address)
+
+
+async def get_cached_ethereum_price_usd(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+) -> "Decimal | None":
+    """从缓存中查询 Ethereum 资产历史 USD 价格（15 分钟桶命中即返回）。
 
     :param unix_ts:        请求时间点（unix 秒）
     :param asset_address:  小写 token address
@@ -1387,7 +1407,26 @@ async def upsert_eth_price_timestamp(
     price_usd: "Decimal",
     source: str = "defillama",
 ) -> None:
-    """写入（或更新）价格缓存。
+    """兼容旧名称的入口；语义上等同 upsert_ethereum_price_cache。"""
+    await upsert_ethereum_price_cache(
+        pool,
+        unix_ts,
+        asset_address,
+        asset_symbol,
+        price_usd,
+        source,
+    )
+
+
+async def upsert_ethereum_price_cache(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+    asset_symbol: str,
+    price_usd: "Decimal",
+    source: str = "defillama",
+) -> None:
+    """写入（或更新）Ethereum 多资产历史 USD 价格缓存。
 
     :param unix_ts:        实际价格对应时间点（unix 秒），函数内部自动取整到 15 分钟
     :param asset_address:  token address（会自动转为小写）

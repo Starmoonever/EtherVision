@@ -1,4 +1,4 @@
-"""Shared historical price bucket helpers for Ethereum assets."""
+"""Shared 15-minute bucket historical USD price helpers for Ethereum assets."""
 
 from __future__ import annotations
 
@@ -9,12 +9,20 @@ import aiohttp
 import asyncpg
 from fastapi import HTTPException
 
-from aave_crawler.db import get_cached_eth_price, upsert_eth_price_timestamp
+from aave_crawler.db import (
+    get_cached_ethereum_price_usd,
+    upsert_ethereum_price_cache,
+)
 
 logger = logging.getLogger(__name__)
 
 PRICE_BUCKET_SECONDS = 15 * 60
 _MAX_CHART_BUCKETS = 400
+
+# Backward-compatible aliases for older tests and call sites that still patch
+# the historical ETH-named helpers from this module.
+get_cached_eth_price = get_cached_ethereum_price_usd
+upsert_eth_price_timestamp = upsert_ethereum_price_cache
 
 
 def bucket_timestamp(unix_ts: int) -> int:
@@ -71,14 +79,14 @@ async def get_historical_price_usd(
 ) -> tuple[Decimal, int, str]:
     bucket_ts = bucket_timestamp(requested_ts)
     if pool is not None:
-        cached = await get_cached_eth_price(pool, bucket_ts, token_address)
+        cached = await get_cached_ethereum_price_usd(pool, bucket_ts, token_address)
         if cached is not None:
             return cached, bucket_ts, "defillama"
 
     price = await _fetch_defillama_historical_price(token_address, bucket_ts=bucket_ts)
     if pool is not None:
         try:
-            await upsert_eth_price_timestamp(
+            await upsert_ethereum_price_cache(
                 pool,
                 bucket_ts,
                 token_address,
@@ -133,7 +141,7 @@ async def get_historical_prices_usd(
         results[normalized] = price
         if pool is not None:
             try:
-                await upsert_eth_price_timestamp(
+                await upsert_ethereum_price_cache(
                     pool,
                     bucket_ts,
                     token_address,
@@ -252,7 +260,7 @@ async def get_historical_bucket_prices_usd(
         else:
             if pool is not None:
                 try:
-                    await upsert_eth_price_timestamp(
+                    await upsert_ethereum_price_cache(
                         pool,
                         bucket,
                         token_address,

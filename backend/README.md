@@ -97,6 +97,7 @@ uv sync
 
 - 历史价格请求会先将请求时间对齐到 15 分钟桶，再查缓存或外部价格源
 - `loan.eth_price_timestamp` 虽然沿用历史表名，但实际存储的是 Ethereum 链上多资产的历史 USD 价格缓存，不是仅限 ETH 代币
+- 代码层已优先使用 `ensure_ethereum_price_cache_table`、`get_cached_ethereum_price_usd`、`upsert_ethereum_price_cache` 这组 helper；旧的 `eth_*` helper 名称仅保留兼容
 - `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
 - 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
 
