@@ -15,7 +15,57 @@ class JustLendScaffoldStatusResponse(BaseModel):
 
 class JustLendMarketResponse(BaseModel):
     chain: str = Field(description="目标链。")
-    markets: list[str] = Field(description="当前预留的市场列表。")
+    markets: list["JustLendMarketListItem"] = Field(description="当前市场列表。")
+
+
+class JustLendMarketListItem(BaseModel):
+    market: str = Field(description="JustLend 市场地址。")
+    symbol: str | None = Field(description="jToken 符号。")
+    underlying_address: str | None = Field(description="标的资产地址。")
+    underlying_symbol: str | None = Field(description="标的资产符号。")
+    updated_at: str = Field(description="最近更新时间。")
+
+
+class JustLendMarketStateResponse(BaseModel):
+    chain: str = Field(description="目标链。")
+    protocol: str = Field(description="协议标识。")
+    market: str = Field(description="JustLend 市场地址。")
+    market_type: str = Field(description="市场类型。")
+    symbol: str | None = Field(description="jToken 符号。")
+    underlying_address: str | None = Field(description="标的资产地址。")
+    underlying_symbol: str | None = Field(description="标的资产符号。")
+    underlying_decimals: int | None = Field(description="标的资产 decimals。")
+    jtoken_decimals: int | None = Field(description="jToken decimals。")
+    comptroller_address: str | None = Field(description="Comptroller 地址。")
+    oracle_address: str | None = Field(description="Oracle 地址。")
+    is_listed: bool | None = Field(description="市场是否已上市。")
+    is_entered_supported: bool | None = Field(
+        description="是否支持作为 entered market。"
+    )
+    collateral_factor: str | None = Field(description="抵押系数。")
+    reserve_factor: str | None = Field(description="储备系数。")
+    borrow_cap: str | None = Field(description="借款上限。")
+    supply_cap: str | None = Field(description="供给上限。")
+    exchange_rate: str | None = Field(description="exchange rate。")
+    cash: str | None = Field(description="市场可用现金。")
+    total_borrows: str | None = Field(description="总借款量。")
+    total_reserves: str | None = Field(description="总储备量。")
+    total_supply: str | None = Field(description="总供给量。")
+    utilization: str | None = Field(description="利用率。")
+    borrow_rate: str | None = Field(description="原始 borrow rate。")
+    supply_rate: str | None = Field(description="原始 supply rate。")
+    underlying_price_in_trx: str | None = Field(description="标的价格，TRX 计价。")
+    price_usd: str | None = Field(description="标的价格，USD 计价。")
+    timestamp: str = Field(description="快照时间。")
+    block_timestamp: str | None = Field(description="链上时间。")
+    block_number: int | None = Field(description="链上区块号。")
+    extra: dict = Field(description="附加原始字段。")
+
+
+class JustLendMarketStatePeriodResponse(BaseModel):
+    points: list[JustLendMarketStateResponse] = Field(
+        description="时间区间内的市场状态点。"
+    )
 
 
 class JustLendPositionAssetResponse(BaseModel):

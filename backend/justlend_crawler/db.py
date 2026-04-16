@@ -344,6 +344,280 @@ CREATE TABLE IF NOT EXISTS loan.justlend_watcher_watermarks (
 );
 """
 
+_DDL_MARKETS_CURRENT = """
+CREATE TABLE IF NOT EXISTS loan.justlend_markets_current (
+    market_address TEXT PRIMARY KEY,
+    chain TEXT NOT NULL DEFAULT 'tron',
+    protocol TEXT NOT NULL DEFAULT 'justlend',
+    market_type TEXT NOT NULL DEFAULT 'jtoken',
+    underlying_address TEXT,
+    comptroller_address TEXT,
+    oracle_address TEXT,
+    symbol TEXT,
+    underlying_symbol TEXT,
+    underlying_decimals INTEGER,
+    jtoken_decimals INTEGER,
+    is_listed BOOLEAN,
+    is_entered_supported BOOLEAN,
+    collateral_factor NUMERIC(20, 18),
+    reserve_factor NUMERIC(20, 18),
+    borrow_cap NUMERIC(40, 18),
+    supply_cap NUMERIC(40, 18),
+    exchange_rate NUMERIC(40, 18),
+    cash NUMERIC(40, 18),
+    total_borrows NUMERIC(40, 18),
+    total_reserves NUMERIC(40, 18),
+    total_supply NUMERIC(40, 18),
+    utilization NUMERIC(20, 18),
+    borrow_rate NUMERIC(38, 18),
+    supply_rate NUMERIC(38, 18),
+    underlying_price_in_trx NUMERIC(30, 12),
+    price_usd NUMERIC(30, 8),
+    snapshot_at TIMESTAMPTZ NOT NULL,
+    block_timestamp TIMESTAMPTZ,
+    block_number BIGINT,
+    extra_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+_DDL_MARKETS_CURRENT_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_justlend_markets_current_updated_at
+    ON loan.justlend_markets_current (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_justlend_markets_current_underlying
+    ON loan.justlend_markets_current (underlying_address);
+CREATE INDEX IF NOT EXISTS idx_justlend_markets_current_symbol
+    ON loan.justlend_markets_current (symbol);
+"""
+
+_DDL_MARKET_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS loan.justlend_market_snapshots (
+    snapshot_at TIMESTAMPTZ NOT NULL,
+    market_address TEXT NOT NULL,
+    chain TEXT NOT NULL DEFAULT 'tron',
+    protocol TEXT NOT NULL DEFAULT 'justlend',
+    market_type TEXT NOT NULL DEFAULT 'jtoken',
+    underlying_address TEXT,
+    comptroller_address TEXT,
+    oracle_address TEXT,
+    symbol TEXT,
+    underlying_symbol TEXT,
+    underlying_decimals INTEGER,
+    jtoken_decimals INTEGER,
+    is_listed BOOLEAN,
+    is_entered_supported BOOLEAN,
+    collateral_factor NUMERIC(20, 18),
+    reserve_factor NUMERIC(20, 18),
+    borrow_cap NUMERIC(40, 18),
+    supply_cap NUMERIC(40, 18),
+    exchange_rate NUMERIC(40, 18),
+    cash NUMERIC(40, 18),
+    total_borrows NUMERIC(40, 18),
+    total_reserves NUMERIC(40, 18),
+    total_supply NUMERIC(40, 18),
+    utilization NUMERIC(20, 18),
+    borrow_rate NUMERIC(38, 18),
+    supply_rate NUMERIC(38, 18),
+    underlying_price_in_trx NUMERIC(30, 12),
+    price_usd NUMERIC(30, 8),
+    block_timestamp TIMESTAMPTZ,
+    block_number BIGINT,
+    extra_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (snapshot_at, market_address)
+);
+"""
+
+_DDL_MARKET_SNAPSHOTS_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_justlend_market_snapshots_market_ts
+    ON loan.justlend_market_snapshots (market_address, snapshot_at DESC);
+CREATE INDEX IF NOT EXISTS idx_justlend_market_snapshots_ts
+    ON loan.justlend_market_snapshots (snapshot_at DESC);
+CREATE INDEX IF NOT EXISTS idx_justlend_market_snapshots_underlying_ts
+    ON loan.justlend_market_snapshots (underlying_address, snapshot_at DESC);
+"""
+
+_SQL_UPSERT_MARKET_CURRENT = """
+INSERT INTO loan.justlend_markets_current (
+    market_address,
+    chain,
+    protocol,
+    market_type,
+    underlying_address,
+    comptroller_address,
+    oracle_address,
+    symbol,
+    underlying_symbol,
+    underlying_decimals,
+    jtoken_decimals,
+    is_listed,
+    is_entered_supported,
+    collateral_factor,
+    reserve_factor,
+    borrow_cap,
+    supply_cap,
+    exchange_rate,
+    cash,
+    total_borrows,
+    total_reserves,
+    total_supply,
+    utilization,
+    borrow_rate,
+    supply_rate,
+    underlying_price_in_trx,
+    price_usd,
+    snapshot_at,
+    block_timestamp,
+    block_number,
+    extra_jsonb,
+    updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+    $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+    $31, NOW()
+)
+ON CONFLICT (market_address) DO UPDATE SET
+    chain = EXCLUDED.chain,
+    protocol = EXCLUDED.protocol,
+    market_type = EXCLUDED.market_type,
+    underlying_address = EXCLUDED.underlying_address,
+    comptroller_address = EXCLUDED.comptroller_address,
+    oracle_address = EXCLUDED.oracle_address,
+    symbol = EXCLUDED.symbol,
+    underlying_symbol = EXCLUDED.underlying_symbol,
+    underlying_decimals = EXCLUDED.underlying_decimals,
+    jtoken_decimals = EXCLUDED.jtoken_decimals,
+    is_listed = EXCLUDED.is_listed,
+    is_entered_supported = EXCLUDED.is_entered_supported,
+    collateral_factor = EXCLUDED.collateral_factor,
+    reserve_factor = EXCLUDED.reserve_factor,
+    borrow_cap = EXCLUDED.borrow_cap,
+    supply_cap = EXCLUDED.supply_cap,
+    exchange_rate = EXCLUDED.exchange_rate,
+    cash = EXCLUDED.cash,
+    total_borrows = EXCLUDED.total_borrows,
+    total_reserves = EXCLUDED.total_reserves,
+    total_supply = EXCLUDED.total_supply,
+    utilization = EXCLUDED.utilization,
+    borrow_rate = EXCLUDED.borrow_rate,
+    supply_rate = EXCLUDED.supply_rate,
+    underlying_price_in_trx = EXCLUDED.underlying_price_in_trx,
+    price_usd = EXCLUDED.price_usd,
+    snapshot_at = EXCLUDED.snapshot_at,
+    block_timestamp = EXCLUDED.block_timestamp,
+    block_number = EXCLUDED.block_number,
+    extra_jsonb = EXCLUDED.extra_jsonb,
+    updated_at = NOW()
+"""
+
+_SQL_INSERT_MARKET_SNAPSHOT = """
+INSERT INTO loan.justlend_market_snapshots (
+    snapshot_at,
+    market_address,
+    chain,
+    protocol,
+    market_type,
+    underlying_address,
+    comptroller_address,
+    oracle_address,
+    symbol,
+    underlying_symbol,
+    underlying_decimals,
+    jtoken_decimals,
+    is_listed,
+    is_entered_supported,
+    collateral_factor,
+    reserve_factor,
+    borrow_cap,
+    supply_cap,
+    exchange_rate,
+    cash,
+    total_borrows,
+    total_reserves,
+    total_supply,
+    utilization,
+    borrow_rate,
+    supply_rate,
+    underlying_price_in_trx,
+    price_usd,
+    block_timestamp,
+    block_number,
+    extra_jsonb
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+    $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+    $31
+)
+ON CONFLICT (snapshot_at, market_address) DO UPDATE SET
+    chain = EXCLUDED.chain,
+    protocol = EXCLUDED.protocol,
+    market_type = EXCLUDED.market_type,
+    underlying_address = EXCLUDED.underlying_address,
+    comptroller_address = EXCLUDED.comptroller_address,
+    oracle_address = EXCLUDED.oracle_address,
+    symbol = EXCLUDED.symbol,
+    underlying_symbol = EXCLUDED.underlying_symbol,
+    underlying_decimals = EXCLUDED.underlying_decimals,
+    jtoken_decimals = EXCLUDED.jtoken_decimals,
+    is_listed = EXCLUDED.is_listed,
+    is_entered_supported = EXCLUDED.is_entered_supported,
+    collateral_factor = EXCLUDED.collateral_factor,
+    reserve_factor = EXCLUDED.reserve_factor,
+    borrow_cap = EXCLUDED.borrow_cap,
+    supply_cap = EXCLUDED.supply_cap,
+    exchange_rate = EXCLUDED.exchange_rate,
+    cash = EXCLUDED.cash,
+    total_borrows = EXCLUDED.total_borrows,
+    total_reserves = EXCLUDED.total_reserves,
+    total_supply = EXCLUDED.total_supply,
+    utilization = EXCLUDED.utilization,
+    borrow_rate = EXCLUDED.borrow_rate,
+    supply_rate = EXCLUDED.supply_rate,
+    underlying_price_in_trx = EXCLUDED.underlying_price_in_trx,
+    price_usd = EXCLUDED.price_usd,
+    block_timestamp = EXCLUDED.block_timestamp,
+    block_number = EXCLUDED.block_number,
+    extra_jsonb = EXCLUDED.extra_jsonb
+"""
+
+
+@dataclass
+class JustLendMarketStateRow:
+    market_address: str
+    chain: str = "tron"
+    protocol: str = "justlend"
+    market_type: str = "jtoken"
+    underlying_address: str | None = None
+    comptroller_address: str | None = None
+    oracle_address: str | None = None
+    symbol: str | None = None
+    underlying_symbol: str | None = None
+    underlying_decimals: int | None = None
+    jtoken_decimals: int | None = None
+    is_listed: bool | None = None
+    is_entered_supported: bool | None = None
+    collateral_factor: Decimal | None = None
+    reserve_factor: Decimal | None = None
+    borrow_cap: Decimal | None = None
+    supply_cap: Decimal | None = None
+    exchange_rate: Decimal | None = None
+    cash: Decimal | None = None
+    total_borrows: Decimal | None = None
+    total_reserves: Decimal | None = None
+    total_supply: Decimal | None = None
+    utilization: Decimal | None = None
+    borrow_rate: Decimal | None = None
+    supply_rate: Decimal | None = None
+    underlying_price_in_trx: Decimal | None = None
+    price_usd: Decimal | None = None
+    snapshot_at: datetime | None = None
+    block_timestamp: datetime | None = None
+    block_number: int | None = None
+    extra_jsonb: dict[str, Any] | None = None
+
 
 async def create_pool(pg: PostgresConfig, timeout: float = 10.0) -> asyncpg.Pool:
     return await create_asyncpg_pool(pg, timeout=timeout, min_size=2, max_size=10)
@@ -421,6 +695,10 @@ async def ensure_justlend_tables(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_EVENT_POSITION_SNAPSHOTS)
             await conn.execute(_DDL_EVENT_POSITION_SNAPSHOTS_INDEXES)
             await conn.execute(_DDL_WATCHER_WATERMARKS)
+            await conn.execute(_DDL_MARKETS_CURRENT)
+            await conn.execute(_DDL_MARKETS_CURRENT_INDEXES)
+            await conn.execute(_DDL_MARKET_SNAPSHOTS)
+            await conn.execute(_DDL_MARKET_SNAPSHOTS_INDEXES)
     logger.info("JustLend scaffold tables are ready")
 
 
@@ -1143,3 +1421,295 @@ async def get_justlend_event_snapshots(
         to_ts,
         market,
     )
+
+
+def _market_state_values(row: JustLendMarketStateRow) -> tuple[Any, ...]:
+    return (
+        row.market_address,
+        row.chain,
+        row.protocol,
+        row.market_type,
+        row.underlying_address,
+        row.comptroller_address,
+        row.oracle_address,
+        row.symbol,
+        row.underlying_symbol,
+        row.underlying_decimals,
+        row.jtoken_decimals,
+        row.is_listed,
+        row.is_entered_supported,
+        row.collateral_factor,
+        row.reserve_factor,
+        row.borrow_cap,
+        row.supply_cap,
+        row.exchange_rate,
+        row.cash,
+        row.total_borrows,
+        row.total_reserves,
+        row.total_supply,
+        row.utilization,
+        row.borrow_rate,
+        row.supply_rate,
+        row.underlying_price_in_trx,
+        row.price_usd,
+        row.snapshot_at,
+        row.block_timestamp,
+        row.block_number,
+        json.dumps(row.extra_jsonb or {}, ensure_ascii=False),
+    )
+
+
+async def upsert_justlend_market_states(
+    pool: asyncpg.Pool,
+    rows: list[JustLendMarketStateRow],
+    *,
+    update_current: bool = True,
+    insert_snapshots: bool = True,
+) -> int:
+    if not rows:
+        return 0
+
+    current_values = [_market_state_values(row) for row in rows]
+    snapshot_values = []
+    if insert_snapshots:
+        snapshot_values = [
+            (
+                row.snapshot_at,
+                row.market_address,
+                row.chain,
+                row.protocol,
+                row.market_type,
+                row.underlying_address,
+                row.comptroller_address,
+                row.oracle_address,
+                row.symbol,
+                row.underlying_symbol,
+                row.underlying_decimals,
+                row.jtoken_decimals,
+                row.is_listed,
+                row.is_entered_supported,
+                row.collateral_factor,
+                row.reserve_factor,
+                row.borrow_cap,
+                row.supply_cap,
+                row.exchange_rate,
+                row.cash,
+                row.total_borrows,
+                row.total_reserves,
+                row.total_supply,
+                row.utilization,
+                row.borrow_rate,
+                row.supply_rate,
+                row.underlying_price_in_trx,
+                row.price_usd,
+                row.block_timestamp,
+                row.block_number,
+                json.dumps(row.extra_jsonb or {}, ensure_ascii=False),
+            )
+            for row in rows
+            if row.snapshot_at is not None
+        ]
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if update_current:
+                await conn.executemany(_SQL_UPSERT_MARKET_CURRENT, current_values)
+            if snapshot_values:
+                await conn.executemany(_SQL_INSERT_MARKET_SNAPSHOT, snapshot_values)
+    return len(rows)
+
+
+async def fetch_justlend_markets_current(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT
+                market_address,
+                chain,
+                protocol,
+                market_type,
+                underlying_address,
+                comptroller_address,
+                oracle_address,
+                symbol,
+                underlying_symbol,
+                underlying_decimals,
+                jtoken_decimals,
+                is_listed,
+                is_entered_supported,
+                collateral_factor,
+                reserve_factor,
+                borrow_cap,
+                supply_cap,
+                exchange_rate,
+                cash,
+                total_borrows,
+                total_reserves,
+                total_supply,
+                utilization,
+                borrow_rate,
+                supply_rate,
+                underlying_price_in_trx,
+                price_usd,
+                snapshot_at,
+                block_timestamp,
+                block_number,
+                extra_jsonb,
+                created_at,
+                updated_at
+            FROM loan.justlend_markets_current
+            ORDER BY COALESCE(underlying_symbol, symbol, market_address), market_address
+            """
+        )
+
+
+async def fetch_justlend_market_state(
+    pool: asyncpg.Pool,
+    *,
+    market_address: str,
+    as_of: datetime | None = None,
+) -> asyncpg.Record | None:
+    async with pool.acquire() as conn:
+        if as_of is None:
+            return await conn.fetchrow(
+                """
+                SELECT
+                    market_address,
+                    chain,
+                    protocol,
+                    market_type,
+                    underlying_address,
+                    comptroller_address,
+                    oracle_address,
+                    symbol,
+                    underlying_symbol,
+                    underlying_decimals,
+                    jtoken_decimals,
+                    is_listed,
+                    is_entered_supported,
+                    collateral_factor,
+                    reserve_factor,
+                    borrow_cap,
+                    supply_cap,
+                    exchange_rate,
+                    cash,
+                    total_borrows,
+                    total_reserves,
+                    total_supply,
+                    utilization,
+                    borrow_rate,
+                    supply_rate,
+                    underlying_price_in_trx,
+                    price_usd,
+                    snapshot_at,
+                    block_timestamp,
+                    block_number,
+                    extra_jsonb,
+                    created_at,
+                    updated_at
+                FROM loan.justlend_markets_current
+                WHERE market_address = $1
+                """,
+                market_address,
+            )
+
+        return await conn.fetchrow(
+            """
+            SELECT
+                market_address,
+                chain,
+                protocol,
+                market_type,
+                underlying_address,
+                comptroller_address,
+                oracle_address,
+                symbol,
+                underlying_symbol,
+                underlying_decimals,
+                jtoken_decimals,
+                is_listed,
+                is_entered_supported,
+                collateral_factor,
+                reserve_factor,
+                borrow_cap,
+                supply_cap,
+                exchange_rate,
+                cash,
+                total_borrows,
+                total_reserves,
+                total_supply,
+                utilization,
+                borrow_rate,
+                supply_rate,
+                underlying_price_in_trx,
+                price_usd,
+                snapshot_at,
+                block_timestamp,
+                block_number,
+                extra_jsonb,
+                created_at,
+                created_at AS updated_at
+            FROM loan.justlend_market_snapshots
+            WHERE market_address = $1
+              AND snapshot_at <= $2
+            ORDER BY snapshot_at DESC
+            LIMIT 1
+            """,
+            market_address,
+            as_of,
+        )
+
+
+async def fetch_justlend_market_state_period(
+    pool: asyncpg.Pool,
+    *,
+    market_address: str,
+    from_ts: datetime,
+    to_ts: datetime,
+) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT
+                market_address,
+                chain,
+                protocol,
+                market_type,
+                underlying_address,
+                comptroller_address,
+                oracle_address,
+                symbol,
+                underlying_symbol,
+                underlying_decimals,
+                jtoken_decimals,
+                is_listed,
+                is_entered_supported,
+                collateral_factor,
+                reserve_factor,
+                borrow_cap,
+                supply_cap,
+                exchange_rate,
+                cash,
+                total_borrows,
+                total_reserves,
+                total_supply,
+                utilization,
+                borrow_rate,
+                supply_rate,
+                underlying_price_in_trx,
+                price_usd,
+                snapshot_at,
+                block_timestamp,
+                block_number,
+                extra_jsonb,
+                created_at,
+                created_at AS updated_at
+            FROM loan.justlend_market_snapshots
+            WHERE market_address = $1
+              AND snapshot_at BETWEEN $2 AND $3
+            ORDER BY snapshot_at ASC
+            """,
+            market_address,
+            from_ts,
+            to_ts,
+        )

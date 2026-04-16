@@ -211,11 +211,35 @@ Morpho 写路径里已经有较明确的“API 文本地址 -> DB bytes”的转
 JustLend 模块负责：
 
 - 当前仓位查询
+- 市场列表与市场状态查询
+- 市场最新态缓存与历史快照
 - 用户趋势回放
 - 交易 effect 解释
 - TRON 地址与说明文案处理
 
 这里的重点不是 EVM `0x...` 地址，而是 TRON Base58 地址与内部兼容表示之间的转换。
+
+当前已新增的 JustLend 市场数据表包括：
+
+- `loan.justlend_markets_current`
+- `loan.justlend_market_snapshots`
+
+设计约束：
+
+- 新增 JustLend 市场地址类字段按 Base58 文本存储
+- `current` 表用于最新状态查询
+- `snapshots` 表用于时间序列与区间查询
+
+当前新增的 JustLend 市场接口包括：
+
+- `GET /api/justlend/markets`
+- `GET /api/justlend/market/state`
+- `GET /api/justlend/market/state/period`
+
+说明：
+
+- 第一版先打通数据库与只读查询链路
+- 市场数据回填脚本与更完整的链上抓取逻辑会继续按阶段补齐
 
 ## 数据库与迁移
 
