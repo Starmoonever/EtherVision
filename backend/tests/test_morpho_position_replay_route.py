@@ -71,3 +71,19 @@ def test_morpho_position_replay_rejects_reverse_time_range() -> None:
         )
 
     assert resp.status_code == 400
+
+
+def test_morpho_position_replay_rejects_invalid_evm_address() -> None:
+    with _build_client() as client:
+        resp = client.get(
+            "/api/morpho/position/replay",
+            params={
+                "address": "0x9BDF55AFE3832ABFF223C7D10B2AF529B395EC2489E32D872156421C32EC7A5F",
+                "market_id": "0x" + "11" * 32,
+                "start": "2026-04-01T00:00:00Z",
+                "end": "2026-04-02T00:00:00Z",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid EVM address"

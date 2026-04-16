@@ -629,7 +629,7 @@ async def fetch_user_market_replay_events(
         return []
 
     topic_zero = [
-        AsyncWeb3.keccak(text=signature).hex()
+        AsyncWeb3.to_hex(AsyncWeb3.keccak(text=signature))
         for signature in MORPHO_REPLAY_EVENT_SIGNATURES.values()
     ]
     user_topic = _pad_topic_address(address)
@@ -648,13 +648,13 @@ async def fetch_user_market_replay_events(
         return []
 
     signature_map = {
-        AsyncWeb3.keccak(text=signature).hex(): operation_type
+        AsyncWeb3.to_hex(AsyncWeb3.keccak(text=signature)): operation_type
         for operation_type, signature in MORPHO_REPLAY_EVENT_SIGNATURES.items()
     }
     block_ts_cache: dict[int, datetime] = {}
     rows: list[MorphoReplayEvent] = []
     for raw_log in raw_logs:
-        topic0 = raw_log["topics"][0].hex()
+        topic0 = AsyncWeb3.to_hex(raw_log["topics"][0])
         operation_type = signature_map.get(topic0)
         if operation_type is None:
             continue

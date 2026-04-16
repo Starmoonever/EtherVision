@@ -120,8 +120,18 @@ def _normalize_market_id_text(market_id: str) -> str:
 
 
 def _evm_to_db_bytes(address: str) -> bytes:
-    checksum = AsyncWeb3.to_checksum_address(address)
+    try:
+        checksum = AsyncWeb3.to_checksum_address(address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid EVM address") from exc
     return bytes.fromhex(checksum[2:])
+
+
+def _normalize_evm_address(address: str) -> str:
+    try:
+        return AsyncWeb3.to_checksum_address(address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid EVM address") from exc
 
 
 def _db_bytes_to_evm(value: bytes | bytearray | memoryview | str | None) -> str:
@@ -558,7 +568,7 @@ def _build_replay_snapshot_row(
     assets_jsonb = [
         {
             "side": asset.role,
-            "asset_address": _evm_to_db_bytes(asset.token_address),
+            "asset_address": asset.token_address,
             "symbol": asset.symbol,
             "decimals": asset.decimals,
             "amount": asset.amount,
@@ -702,7 +712,7 @@ async def get_position_replay(
                 market_type=MORPHO_DEFAULT_MARKET_TYPE,
                 chain=MORPHO_CHAIN,
                 market_id=normalized_market_id,
-                address=AsyncWeb3.to_checksum_address(address),
+                address=_normalize_evm_address(address),
                 from_time=_record_ts(from_dt),
                 to_time=_record_ts(to_dt),
                 data_source="cache",
@@ -725,7 +735,7 @@ async def get_position_replay(
             market_type=MORPHO_DEFAULT_MARKET_TYPE,
             chain=MORPHO_CHAIN,
             market_id=normalized_market_id,
-            address=AsyncWeb3.to_checksum_address(address),
+            address=_normalize_evm_address(address),
             from_time=_record_ts(from_dt),
             to_time=_record_ts(to_dt),
             data_source="rpc",
@@ -778,7 +788,7 @@ async def get_position_replay(
         market_type=MORPHO_DEFAULT_MARKET_TYPE,
         chain=MORPHO_CHAIN,
         market_id=normalized_market_id,
-        address=AsyncWeb3.to_checksum_address(address),
+        address=_normalize_evm_address(address),
         from_time=_record_ts(from_dt),
         to_time=_record_ts(to_dt),
         data_source="rpc",
