@@ -11,7 +11,6 @@ from decimal import ROUND_HALF_UP, Decimal
 import asyncpg
 from web3 import AsyncWeb3
 
-from aave_crawler.db import get_cached_eth_price, upsert_eth_price_timestamp
 from aave_crawler.rpc import (
     CONTRACTS_V3,
     ORACLE_ABI,
@@ -20,6 +19,11 @@ from aave_crawler.rpc import (
     get_assets_prices,
     get_contracts,
     get_reserve_config,
+)
+from crawler_shared.price_history import (
+    bucket_timestamps,
+    get_historical_bucket_prices_usd,
+    get_historical_price_usd,
 )
 from .constants import (
     ETHEREUM_PRICE_ASSET_BY_ADDRESS,
@@ -360,67 +364,19 @@ async def get_price(
             detail=f"无法获取资产 '{symbol or address}' 的实时价格",
         )
 
-    import aiohttp
-
-    coin_key = f"ethereum:{token_address.lower()}"
-    url = f"https://coins.llama.fi/prices/historical/{timestamp}/{coin_key}"
-
-    if pool is not None:
-        cached_price = await get_cached_eth_price(pool, timestamp, token_address)
-        if cached_price is not None:
-            return PriceResponse(
-                asset=resolved_asset,
-                price_usd=_fmt(cached_price, 2),
-                token_address=token_address,
-                timestamp=_ts_to_utc_str(timestamp),
-                source="defillama",
-            )
-
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"DeFiLlama 返回 HTTP {resp.status}",
-                    )
-                data = await resp.json()
-    except aiohttp.ClientError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"无法连接 DeFiLlama: {exc}"
-        ) from exc
-
-    coins = data.get("coins", {})
-    if coin_key not in coins:
-        raise HTTPException(
-            status_code=404,
-            detail=f"DeFiLlama 未返回 '{symbol or address}' 在该时间点的价格数据",
-        )
-    entry = coins[coin_key]
-    price = Decimal(str(entry["price"]))
-    actual_ts = int(entry.get("timestamp", timestamp))
-
-    if pool is not None:
-        try:
-            await upsert_eth_price_timestamp(
-                pool,
-                timestamp,
-                token_address,
-                resolved_asset,
-                price,
-                source="defillama",
-            )
-        except Exception as cache_exc:
-            logger.warning("failed to cache historical price: %s", cache_exc)
+    price, bucket_ts, source = await get_historical_price_usd(
+        pool,
+        token_address=token_address,
+        asset_label=resolved_asset,
+        requested_ts=timestamp,
+    )
 
     return PriceResponse(
         asset=resolved_asset,
         price_usd=_fmt(price, 2),
         token_address=token_address,
-        timestamp=_ts_to_utc_str(actual_ts),
-        source="defillama",
+        timestamp=_ts_to_utc_str(bucket_ts),
+        source=source,
     )
 
 
@@ -435,7 +391,6 @@ async def get_price_period_service(
     interval: int,
 ) -> PricePeriodResponse:
     from fastapi import HTTPException
-    import aiohttp
 
     if end < start:
         raise HTTPException(status_code=400, detail="end 必须晚于或等于 start")
@@ -446,119 +401,21 @@ async def get_price_period_service(
         symbol=symbol,
         address=address,
     )
-    coin_key = f"ethereum:{token_address.lower()}"
-    timeout = aiohttp.ClientTimeout(total=30)
-
     step = interval * 60
-    n_points = (end - start) // step + 1
-    period_str = f"{interval}m" if interval < 60 else f"{interval // 60}h"
-    max_span = 500
-    expected_buckets = [(start + i * step) // 900 * 900 for i in range(n_points)]
-
-    raw_prices: list[dict] = []
-    chunk_offset = 0
-
-    while chunk_offset < n_points:
-        chunk_n = min(max_span, n_points - chunk_offset)
-        chunk_buckets = expected_buckets[chunk_offset : chunk_offset + chunk_n]
-        chunk_start = start + chunk_offset * step
-        chunk_cached: dict[int, Decimal] = {}
-
-        if pool is not None:
-            import bisect
-
-            tolerance = min(step // 2, 7200)
-            rows = await pool.fetch(
-                "SELECT timestamp_bucket, price_usd "
-                "FROM loan.eth_price_timestamp "
-                "WHERE asset_address = lower($1) "
-                "AND timestamp_bucket >= $2 AND timestamp_bucket <= $3 "
-                "ORDER BY timestamp_bucket ASC",
-                token_address,
-                chunk_buckets[0] - tolerance,
-                chunk_buckets[-1] + tolerance,
-            )
-            stored_buckets = [row["timestamp_bucket"] for row in rows]
-            stored_map = {
-                row["timestamp_bucket"]: Decimal(str(row["price_usd"])) for row in rows
-            }
-            for expected_bucket in chunk_buckets:
-                idx = bisect.bisect_left(stored_buckets, expected_bucket)
-                best_bucket, best_delta = None, tolerance + 1
-                for candidate_index in (idx - 1, idx):
-                    if 0 <= candidate_index < len(stored_buckets):
-                        delta = abs(stored_buckets[candidate_index] - expected_bucket)
-                        if delta <= tolerance and delta < best_delta:
-                            best_delta = delta
-                            best_bucket = stored_buckets[candidate_index]
-                if best_bucket is not None:
-                    chunk_cached[expected_bucket] = stored_map[best_bucket]
-
-        if len(chunk_cached) >= chunk_n:
-            raw_prices.extend(
-                {"timestamp": bucket, "price": str(chunk_cached[bucket])}
-                for bucket in chunk_buckets
-            )
-        else:
-            chunk_url = (
-                f"https://coins.llama.fi/chart/{coin_key}"
-                f"?start={chunk_start}&span={chunk_n}&period={period_str}"
-            )
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                try:
-                    async with sess.get(chunk_url) as resp:
-                        if resp.status != 200:
-                            body = await resp.text()
-                            raise HTTPException(
-                                status_code=502,
-                                detail=f"DeFiLlama /chart/ 返回 HTTP {resp.status}: {body[:200]}",
-                            )
-                        data = await resp.json()
-                except aiohttp.ClientError as exc:
-                    raise HTTPException(
-                        status_code=502, detail=f"请求 DeFiLlama 失败: {exc}"
-                    ) from exc
-
-            chunk_prices = data.get("coins", {}).get(coin_key, {}).get("prices", [])
-            raw_prices.extend(chunk_prices)
-
-            if pool is not None:
-                expected_index = 0
-                for item in chunk_prices:
-                    if "price" not in item or "timestamp" not in item:
-                        continue
-                    actual_ts = int(item["timestamp"])
-                    while expected_index < chunk_n - 1 and abs(
-                        chunk_buckets[expected_index + 1] - actual_ts
-                    ) < abs(chunk_buckets[expected_index] - actual_ts):
-                        expected_index += 1
-                    nearest_expected = chunk_buckets[expected_index]
-                    if abs(nearest_expected - actual_ts) > step:
-                        continue
-                    if nearest_expected in chunk_cached:
-                        continue
-                    try:
-                        await upsert_eth_price_timestamp(
-                            pool,
-                            nearest_expected,
-                            token_address,
-                            resolved_asset,
-                            Decimal(str(item["price"])),
-                            source="defillama",
-                        )
-                    except Exception as cache_exc:
-                        logger.warning("failed to cache period price: %s", cache_exc)
-                        break
-
-        chunk_offset += chunk_n
-
+    expected_buckets = bucket_timestamps(start, end, step)
+    price_map = await get_historical_bucket_prices_usd(
+        pool,
+        token_address=token_address,
+        asset_label=resolved_asset,
+        buckets=expected_buckets,
+    )
     items = [
         PricePeriodItem(
-            price_usd=_fmt(Decimal(str(item["price"])), 2),
-            timestamp=_ts_to_utc_str(int(item["timestamp"])),
+            price_usd=_fmt(price_map[bucket], 2),
+            timestamp=_ts_to_utc_str(bucket),
         )
-        for item in raw_prices
-        if "price" in item and "timestamp" in item
+        for bucket in expected_buckets
+        if bucket in price_map
     ]
     if not items:
         raise HTTPException(

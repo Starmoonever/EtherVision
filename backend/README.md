@@ -91,6 +91,15 @@ uv sync
 2. 当前工作目录下的 `config.yaml`
 3. `backend/config.yaml`
 
+## 价格查询约定
+
+统一价格接口 `GET /api/price` 与 `GET /api/price/period` 当前对 Ethereum 资产采用 15 分钟时间桶语义：
+
+- 历史价格请求会先将请求时间对齐到 15 分钟桶，再查缓存或外部价格源
+- `loan.eth_price_timestamp` 虽然沿用历史表名，但实际存储的是 Ethereum 链上多资产的历史 USD 价格缓存，不是仅限 ETH 代币
+- `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
+- 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
+
 ## 常用命令
 
 ### 启动 API
