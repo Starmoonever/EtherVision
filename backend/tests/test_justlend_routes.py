@@ -178,6 +178,21 @@ def test_market_state_route_parses_stringified_extra_jsonb() -> None:
     }
 
 
+def test_market_state_route_handles_high_precision_decimal_fields() -> None:
+    ts = datetime(2026, 4, 16, 8, 0, 0, tzinfo=timezone.utc)
+    row = _market_row(ts)
+    row["cash"] = "12345678901234567890.123456789012345678"
+    with _build_client(state_row=row) as client:
+        response = client.get(
+            "/api/justlend/market/state",
+            params={"market": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cash"] == "12345678901234567890.123456789012345678"
+
+
 def test_market_state_period_route_returns_points() -> None:
     ts1 = datetime(2026, 4, 16, 8, 0, 0, tzinfo=timezone.utc)
     ts2 = datetime(2026, 4, 16, 9, 0, 0, tzinfo=timezone.utc)

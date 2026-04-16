@@ -9,7 +9,7 @@ import logging
 import re
 import socket
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -84,8 +84,11 @@ def get_scaffold_status() -> JustLendScaffoldStatusResponse:
 def _fmt_optional_decimal(value: Any, scale: int = 8) -> str | None:
     if value is None:
         return None
-    decimal_value = _decimal(value)
-    return _fmt_decimal(decimal_value, scale=scale)
+    try:
+        decimal_value = _decimal(value)
+        return _fmt_decimal(decimal_value, scale=scale)
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _iso_optional(value: Any) -> str | None:
@@ -391,7 +394,13 @@ def _decimal(value: Any) -> Decimal:
 
 
 def _fmt_decimal(value: Decimal, scale: int = 8) -> str:
-    return format(value.quantize(Decimal(10) ** -scale), "f")
+    if not value.is_finite():
+        raise InvalidOperation("non-finite decimal")
+    quant = Decimal(10) ** -scale
+    digits = len(value.as_tuple().digits)
+    with localcontext() as ctx:
+        ctx.prec = max(28, digits + scale + 4)
+        return format(value.quantize(quant), "f")
 
 
 def _fmt_ratio(value: Decimal) -> str:
