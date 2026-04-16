@@ -4,7 +4,28 @@ import { JustLendMarketDashboard } from '../../../components/JustLendMarketDashb
 import { PageHero } from '../../../shared/components/PageHero';
 import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 
-const FEATURED_MARKETS = ['BTT', 'NFT', 'WIN', 'TRX', 'STRX'];
+const FEATURED_MARKETS = ['BTC', 'BTCB', 'ETH', 'ETHB', 'WBTC'];
+
+function normalizeSymbol(value: string | null | undefined): string {
+  return value?.trim().toUpperCase() ?? '';
+}
+
+function marketButtonLabel(item: JustLendMarketItem, markets: JustLendMarketItem[]): string {
+  const base = item.underlying_symbol || item.symbol || item.market;
+  const normalizedBase = normalizeSymbol(item.underlying_symbol || item.symbol);
+  if (!normalizedBase) return base;
+
+  const duplicateCount = markets.filter(
+    (candidate) =>
+      normalizeSymbol(candidate.underlying_symbol || candidate.symbol) === normalizedBase,
+  ).length;
+
+  if (duplicateCount > 1 && item.symbol && normalizeSymbol(item.symbol) !== normalizedBase) {
+    return `${base} · ${item.symbol}`;
+  }
+
+  return base;
+}
 
 export function JustLendMarketPage() {
   const [markets, setMarkets] = useState<JustLendMarketItem[]>([]);
@@ -31,10 +52,10 @@ export function JustLendMarketPage() {
         }
 
         const preferred = FEATURED_MARKETS.find((symbol) =>
-          nextMarkets.some((item) => item.underlying_symbol?.trim().toUpperCase() === symbol),
+          nextMarkets.some((item) => normalizeSymbol(item.underlying_symbol) === symbol),
         );
         const defaultMarket =
-          nextMarkets.find((item) => item.underlying_symbol?.trim().toUpperCase() === preferred)
+          nextMarkets.find((item) => normalizeSymbol(item.underlying_symbol) === preferred)
             ?.market ?? nextMarkets[0]?.market;
         setSelectedMarket((current) => current || defaultMarket || '');
       } catch (error) {
@@ -53,7 +74,7 @@ export function JustLendMarketPage() {
 
   const featuredMarkets = useMemo(() => {
     return FEATURED_MARKETS.map((symbol) =>
-      markets.find((item) => item.underlying_symbol?.trim().toUpperCase() === symbol),
+      markets.find((item) => normalizeSymbol(item.underlying_symbol) === symbol),
     ).filter((item): item is JustLendMarketItem => Boolean(item));
   }, [markets]);
 
@@ -91,7 +112,7 @@ export function JustLendMarketPage() {
                 onChange={setSelectedMarket}
                 options={selectorMarkets.map((item) => ({
                   value: item.market,
-                  label: item.underlying_symbol || item.symbol,
+                  label: marketButtonLabel(item, markets),
                   title: item.symbol || item.market,
                 }))}
               />
@@ -102,6 +123,7 @@ export function JustLendMarketPage() {
                 onClick={() => setShowMore((value) => !value)}
                 className="switch-btn"
                 style={{
+                  marginLeft: selectorMarkets.length ? '1rem' : 0,
                   border: '1px solid var(--border-strong)',
                   background: showMore ? 'var(--accent-primary)' : 'var(--surface-muted)',
                   color: showMore ? 'var(--text-strong)' : 'var(--text-muted)',
@@ -134,7 +156,7 @@ export function JustLendMarketPage() {
             onChange={setSelectedMarket}
             options={moreMarkets.map((item) => ({
               value: item.market,
-              label: item.underlying_symbol || item.symbol,
+              label: marketButtonLabel(item, markets),
               title: item.symbol || item.market,
             }))}
           />
