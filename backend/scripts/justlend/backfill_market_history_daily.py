@@ -19,6 +19,8 @@ import sys
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from fastapi import HTTPException
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(os.path.abspath(str(ROOT)))
 
@@ -162,6 +164,7 @@ async def _run() -> None:
 
         total_rows = 0
         skipped_existing = 0
+        skipped_unavailable = 0
         current_day = start_day
         while current_day <= end_day:
             point_ts = _day_start(current_day)
@@ -189,21 +192,32 @@ async def _run() -> None:
                 point_markets = pending
 
             if point_markets:
-                rows = await service.fetch_and_optionally_persist_market_states(
-                    pool=pool,
-                    cfg=cfg,
-                    tron_rpc=tron_rpc,
-                    market_addresses=point_markets,
-                    persist_current=False,
-                    persist_snapshots=not args.dry_run,
-                    block_number=block_number,
-                    snapshot_at=block_ts,
-                    require_rpc=True,
-                )
-                total_rows += len(rows)
+                written_this_day = 0
+                for market in point_markets:
+                    try:
+                        rows = await service.fetch_and_optionally_persist_market_states(
+                            pool=pool,
+                            cfg=cfg,
+                            tron_rpc=tron_rpc,
+                            market_addresses=[market],
+                            persist_current=False,
+                            persist_snapshots=not args.dry_run,
+                            block_number=block_number,
+                            snapshot_at=block_ts,
+                            require_rpc=True,
+                        )
+                    except HTTPException as exc:
+                        skipped_unavailable += 1
+                        print(
+                            f"skip {current_day.isoformat()} block={block_number} "
+                            f"market={market} detail={exc.detail}"
+                        )
+                        continue
+                    written_this_day += len(rows)
+                    total_rows += len(rows)
                 print(
                     f"{current_day.isoformat()} block={block_number} "
-                    f"markets={len(rows)} dry_run={args.dry_run}"
+                    f"markets={written_this_day} dry_run={args.dry_run}"
                 )
 
             current_day += timedelta(days=args.interval_days)
@@ -215,6 +229,7 @@ async def _run() -> None:
             f"interval_days={args.interval_days} "
             f"written_rows={total_rows} "
             f"skipped_existing={skipped_existing} "
+            f"skipped_unavailable={skipped_unavailable} "
             f"dry_run={args.dry_run}"
         )
     finally:
