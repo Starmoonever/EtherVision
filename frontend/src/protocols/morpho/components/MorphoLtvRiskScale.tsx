@@ -2,6 +2,7 @@ interface MorphoLtvRiskScaleProps {
   currentLtvPercent: number;
   lltvPercent: number;
   liquidationThresholdPercent: number;
+  isHealthy?: boolean;
   formatPercent?: (value: number) => string;
 }
 
@@ -22,26 +23,20 @@ function valueToX(value: number, maxValue: number): number {
   return TRACK_X + (clamp(value, 0, maxValue) / maxValue) * TRACK_WIDTH;
 }
 
-function getRiskTone(
-  currentLtvPercent: number,
-  lltvPercent: number,
-  liquidationThresholdPercent: number,
-): RiskTone {
-  if (currentLtvPercent >= liquidationThresholdPercent) return 'danger';
-  if (currentLtvPercent > lltvPercent) return 'warning';
-  return 'safe';
+function getRiskTone(isHealthy: boolean | undefined): RiskTone {
+  return isHealthy === false ? 'danger' : 'safe';
 }
 
 function riskCopy(tone: RiskTone): string {
-  if (tone === 'danger') return '已达到清算条件';
-  if (tone === 'warning') return '因价格变化高于借款参考线';
-  return '处于借款参考线以内';
+  if (tone === 'danger') return '协议标记为不健康';
+  return '协议标记为健康';
 }
 
 export function MorphoLtvRiskScale({
   currentLtvPercent,
   lltvPercent,
   liquidationThresholdPercent,
+  isHealthy,
   formatPercent = (value) => `${value.toFixed(2)}%`,
 }: MorphoLtvRiskScaleProps) {
   const safeCurrentLtv = Number.isFinite(currentLtvPercent) ? currentLtvPercent : 0;
@@ -52,7 +47,7 @@ export function MorphoLtvRiskScale({
   const currentX = valueToX(safeCurrentLtv, MAX_LTV_SCALE);
   const lltvX = valueToX(safeLltv, MAX_LTV_SCALE);
   const thresholdX = valueToX(safeThreshold, MAX_LTV_SCALE);
-  const tone = getRiskTone(safeCurrentLtv, safeLltv, safeThreshold);
+  const tone = getRiskTone(isHealthy);
   const thresholdEqualsLltv = Math.abs(safeThreshold - safeLltv) < 0.01;
   const headroomPercent = Math.max(0, safeThreshold - safeCurrentLtv);
 
@@ -66,14 +61,14 @@ export function MorphoLtvRiskScale({
               className="morpho-ltv-risk-help"
               tabIndex={0}
               role="note"
-              aria-label="快速解读：Current LTV 表示当前借款占抵押折算价值的比例；Morpho Blue 的极简设计中，清算阈值通常直接等同于该市场的 LLTV。当 Current LTV 达到或超过 LLTV 时，仓位可能被清算。"
-              data-tooltip="Current LTV 是当前借款占抵押折算价值的比例；LLTV 是 Morpho Blue市场的清算阈值；LTV达到或超过 LLTV 时可能被清算。"
+              aria-label="快速解读：Current LTV 表示当前借款占抵押折算价值的比例；LLTV 是 Morpho Blue 市场的清算阈值；安全/危险状态由接口返回的 is_healthy 判断。"
+              data-tooltip="Current LTV 是当前借款占抵押折算价值的比例；LLTV 是 Morpho Blue 市场的清算阈值；此卡片的安全状态由接口返回的 is_healthy 判断。"
             >
               ?
             </span>
           </span>
           <strong>{riskCopy(tone)}</strong>
-          <small> Morpho Blue 的极简设计中，清算阈值通常直接等同于该市场的 LLTV。</small>
+          <small>安全状态由 is_healthy 判断；LTV 刻度用于展示仓位相对阈值的位置。</small>
         </div>
         <span className="morpho-ltv-risk-badge">
           {tone === 'danger' ? '危险' : tone === 'warning' ? '观察' : '安全'}
@@ -130,7 +125,7 @@ export function MorphoLtvRiskScale({
 
         <g className="morpho-ltv-risk-marker morpho-ltv-risk-marker-lltv">
           <line x1={lltvX} y1="24" x2={lltvX} y2="60" />
-          <text x={lltvX} y={thresholdEqualsLltv ? 18 : 16} textAnchor="middle">
+          <text x={lltvX} y={thresholdEqualsLltv ? 14 : 16} textAnchor="middle">
             {thresholdEqualsLltv ? 'LLTV / 清算阈值' : 'LLTV'}
           </text>
         </g>
@@ -164,7 +159,7 @@ export function MorphoLtvRiskScale({
         </div>
         <div>
           <span>距离阈值</span>
-          <strong>{tone === 'danger' ? '0.00%' : formatPercent(headroomPercent)}</strong>
+          <strong>{formatPercent(headroomPercent)}</strong>
         </div>
       </div>
     </div>

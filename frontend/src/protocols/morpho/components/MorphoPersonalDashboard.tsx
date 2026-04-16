@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react';
+import { fetchAssetPrice } from '../../../api';
 import type { MorphoPositionResponse } from '../../../api/morpho';
 import { ChartInfoButton, type ExplainItem } from '../../../components/ChartAssist';
 import { AutoFitText } from '../../../shared/components/AutoFitText';
 import { MorphoLtvRiskScale } from './MorphoLtvRiskScale';
+import { MorphoPositionHistoryChart } from './MorphoPositionHistoryChart';
 import { MorphoPositionTable } from './MorphoPositionTable';
 import { PriceGauge } from './PriceGauge';
 
@@ -106,30 +109,13 @@ function buildRiskTone(data: MorphoPositionResponse | null): RiskState {
     };
   }
 
-  if (!data.health_factor) {
-    return {
-      label: 'Safe',
-      tone: 'safe',
-      headline: '状态：安全（Safe）',
-      description: '接口没有返回健康因子，通常意味着没有活跃借款或当前仓位尚未进入风险计算区间。',
-    };
-  }
-  // 健康因子小于 1 的话，说明已经处于清算边缘了，但是没有展示
-  const hf = toNum(data.health_factor);
-  if (hf < 1.1) {
+  if (!data.is_healthy) {
     return {
       label: 'Danger',
       tone: 'danger',
       headline: '状态：高风险（Danger）',
-      description: '健康因子已经靠近清算边缘，需要尽快补抵押或降杠杆。',
-    };
-  }
-  if (hf < 1.5) {
-    return {
-      label: 'Warning',
-      tone: 'watch',
-      headline: '状态：需观察（Warning）',
-      description: '仓位仍有缓冲，但价格波动可能快速压缩借款安全边际。',
+      description:
+        '接口返回 is_healthy=false，当前仓位已被协议标记为不健康，需要尽快补抵押或降杠杆。',
     };
   }
 
@@ -137,7 +123,7 @@ function buildRiskTone(data: MorphoPositionResponse | null): RiskState {
     label: 'Safe',
     tone: 'safe',
     headline: '状态：安全（Safe）',
-    description: '当前仓位与 LLTV 尚有一定距离，但仍需关注抵押品价格变化。',
+    description: '接口返回 is_healthy=true，当前仓位被协议标记为健康，但仍需关注抵押品价格变化。',
   };
 }
 
@@ -147,6 +133,7 @@ export function MorphoPersonalDashboard({
   loading,
   notFound,
 }: MorphoPersonalDashboardProps) {
+  const [loanTokenPrice, setLoanTokenPrice] = useState<number | undefined>(undefined);
   const risk = buildRiskTone(data);
   const riskToneClass =
     risk.tone === 'safe'
@@ -156,6 +143,27 @@ export function MorphoPersonalDashboard({
         : risk.tone === 'danger'
           ? 'risk-status-danger'
           : 'risk-status-neutral';
+
+  useEffect(() => {
+    if (!data?.loan_token) {
+      setLoanTokenPrice(undefined);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetchAssetPrice(data.loan_token)
+      .then((price) => {
+        if (!cancelled) setLoanTokenPrice(price);
+      })
+      .catch(() => {
+        if (!cancelled) setLoanTokenPrice(undefined);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.loan_token]);
 
   if (loading) {
     return (
@@ -193,6 +201,8 @@ export function MorphoPersonalDashboard({
   if (!data) return null;
 
   const borrowAssets = toNum(data.borrow_assets);
+  const debtValueUsd =
+    loanTokenPrice !== undefined ? Math.abs(borrowAssets) * loanTokenPrice : undefined;
   const collateralAssets = toNum(data.collateral_assets);
   const collateralValueInLoanAsset = toNum(data.collateral_value_in_loan_asset);
   const currentPrice = toNum(data.price_quote);
@@ -201,6 +211,7 @@ export function MorphoPersonalDashboard({
   const lltvRatio = toNum(data.lltv_ratio);
   const lltvPercent = clamp(lltvRatio * 100, 0, 100);
   const quoteLooksUsd = isUsdLikeToken(data.loan_token_symbol);
+  const priceUnit = `${data.loan_token_symbol}/${data.collateral_token_symbol}`;
 
   const currentLtvPercent =
     collateralValueInLoanAsset <= 0 ? 0 : (borrowAssets / collateralValueInLoanAsset) * 100;
@@ -294,7 +305,12 @@ export function MorphoPersonalDashboard({
               当前抵押折算价值约为{' '}
               <strong>{formatNumberCompact(collateralValueInLoanAsset, 6)}</strong>{' '}
               {data.loan_token_symbol}，借款规模为{' '}
-              <strong>{formatNumberCompact(borrowAssets, 6)}</strong> {data.loan_token_symbol}
+              <strong>
+                {debtValueUsd !== undefined
+                  ? `$${formatNumberCompact(debtValueUsd, 2)}`
+                  : formatNumberCompact(Math.abs(borrowAssets), 6)}
+              </strong>
+              {debtValueUsd === undefined && <> {data.loan_token_symbol}</>}
               。当当前报价接近清算阈值时，价格波动会快速压缩安全边际。
             </div>
           </div>
@@ -314,6 +330,7 @@ export function MorphoPersonalDashboard({
                 liquidationPrice={liquidationPrice}
                 predictedPrice={oraclePredictedPrice}
                 formatPrice={formatGaugePrice}
+                priceUnit={priceUnit}
                 showStats={false}
               />
             </section>
@@ -323,12 +340,20 @@ export function MorphoPersonalDashboard({
                 currentLtvPercent={currentLtvPercent}
                 lltvPercent={lltvPercent}
                 liquidationThresholdPercent={liquidationThresholdPercent}
+                isHealthy={data.is_healthy}
                 formatPercent={(value) => `${formatNumberCompact(value, 2)}%`}
               />
             </section>
           </div>
         </div>
       </div>
+
+      <MorphoPositionHistoryChart
+        address={data.address}
+        marketId={data.market_id}
+        protocol={protocol}
+        loanTokenSymbol={data.loan_token_symbol}
+      />
 
       <MorphoPositionTable data={data} loading={loading} notFound={notFound} protocol={protocol} />
     </div>

@@ -913,13 +913,28 @@
     linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.42)), rgba(2, 6, 23, 0.28);
 }
 
-.morpho-risk-gauge-card-price {
+.morpho-risk-gauge-card-price,
+.morpho-risk-gauge-card-ltv {
   justify-content: stretch;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
 }
 
 .morpho-risk-gauge-card-ltv .morpho-ltv-risk {
   flex: 1;
   box-shadow: none;
+}
+
+.morpho-risk-gauge-card-price:hover,
+.morpho-risk-gauge-card-ltv:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.42);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.46)), rgba(2, 6, 23, 0.32);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.28);
 }
 
 .morpho-risk-gauge-heading {
@@ -958,6 +973,416 @@
   line-height: 1.36;
 }
 
+.morpho-history-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.morpho-history-card {
+  margin-top: 1rem;
+  margin-bottom: 0;
+  padding: 1.05rem;
+  border: 1px solid rgba(51, 65, 85, 0.74);
+  background:
+    radial-gradient(circle at 16% 0%, rgba(56, 189, 248, 0.1), transparent 32%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.58));
+}
+
+.morpho-history-stack .morpho-history-card {
+  margin-top: 0;
+}
+
+.morpho-history-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.morpho-history-title-wrap {
+  min-width: 0;
+}
+
+.morpho-history-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.morpho-history-title-wrap p {
+  margin: 0.32rem 0 0;
+  max-width: 46rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.morpho-history-health-note {
+  display: inline-flex;
+  margin-top: 0.5rem;
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  border-radius: 999px;
+  background: rgba(22, 101, 52, 0.14);
+  color: #86efac;
+  padding: 0.18rem 0.52rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.morpho-history-health-note-danger {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+}
+
+.morpho-history-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  align-items: flex-end;
+}
+
+.morpho-history-range {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: #64748b;
+  font-size: 0.74rem;
+}
+
+.morpho-history-range input {
+  width: 150px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.42);
+  color: #dbeafe;
+  padding: 0.38rem 0.52rem;
+  font-size: 0.74rem;
+  outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.morpho-history-range input:focus {
+  border-color: rgba(56, 189, 248, 0.72);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+}
+
+.morpho-history-range button {
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 10px;
+  background: rgba(14, 116, 144, 0.35);
+  color: #e0f2fe;
+  padding: 0.38rem 0.7rem;
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.morpho-history-range button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.72);
+  background: rgba(14, 116, 144, 0.52);
+}
+
+.morpho-history-range button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.morpho-history-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.58rem;
+  margin-top: 0.88rem;
+}
+
+.morpho-history-summary > div {
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.24);
+  padding: 0.62rem 0.68rem;
+}
+
+.morpho-history-summary span {
+  display: block;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.morpho-history-summary strong {
+  display: block;
+  margin-top: 0.22rem;
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-history-summary .danger-text {
+  color: #fca5a5;
+}
+
+.morpho-history-chart-shell {
+  position: relative;
+  height: 330px;
+  margin-top: 0.9rem;
+  border: 1px solid rgba(30, 41, 59, 0.74);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.14), rgba(2, 6, 23, 0.32)), rgba(15, 23, 42, 0.32);
+  padding: 0.55rem 0.4rem 0.3rem;
+  overflow: hidden;
+}
+
+.morpho-history-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 0.84rem;
+}
+
+.morpho-history-error {
+  color: #fca5a5;
+}
+
+.morpho-history-tooltip {
+  min-width: 230px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 14px;
+  background: rgba(8, 13, 24, 0.96);
+  padding: 0.72rem;
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.58);
+}
+
+.morpho-history-tooltip-time {
+  color: #bae6fd;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.morpho-history-tooltip-op {
+  display: inline-flex;
+  margin-top: 0.42rem;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 999px;
+  background: rgba(14, 116, 144, 0.18);
+  color: #bae6fd;
+  padding: 0.16rem 0.48rem;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.morpho-history-tooltip-brief {
+  margin-top: 0.28rem;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.morpho-history-tooltip-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.32rem 0.72rem;
+  margin-top: 0.6rem;
+  font-size: 0.74rem;
+}
+
+.morpho-history-tooltip-grid span {
+  color: #64748b;
+}
+
+.morpho-history-tooltip-grid strong {
+  color: #f8fafc;
+  text-align: right;
+}
+
+.morpho-history-status-safe,
+.morpho-history-status-danger {
+  margin-top: 0.62rem;
+  border-radius: 999px;
+  padding: 0.24rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.morpho-history-status-safe {
+  background: rgba(22, 101, 52, 0.22);
+  color: #86efac;
+}
+
+.morpho-history-status-danger {
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+}
+
+.morpho-history-tooltip-hash {
+  margin-top: 0.45rem;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+.morpho-operation-timeline {
+  border-radius: 16px;
+}
+
+.morpho-operation-timeline-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.38rem;
+}
+
+.morpho-operation-card {
+  background:
+    radial-gradient(circle at 14% 0%, rgba(34, 197, 94, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.56));
+}
+
+.morpho-operation-state {
+  min-height: 180px;
+}
+
+.morpho-operation-timeline-header > div:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.morpho-operation-timeline-header strong {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+}
+
+.morpho-operation-timeline-header span {
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.morpho-operation-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.36rem;
+}
+
+.morpho-operation-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  border: 1px solid rgba(51, 65, 85, 0.62);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.54);
+  color: #cbd5e1;
+  padding: 0.16rem 0.44rem;
+  font-size: 0.64rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease,
+    transform 0.16s ease;
+}
+
+.morpho-operation-legend button.active {
+  border-color: rgba(125, 211, 252, 0.38);
+  background: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+}
+
+.morpho-operation-legend button:not(.active) {
+  opacity: 0.42;
+}
+
+.morpho-operation-legend button:hover {
+  transform: translateY(-1px);
+  opacity: 1;
+}
+
+.morpho-operation-legend i {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.morpho-operation-timeline svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.morpho-operation-row-label {
+  fill: #94a3b8;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.morpho-operation-row-line {
+  stroke: rgba(71, 85, 105, 0.42);
+  stroke-width: 1;
+  stroke-dasharray: 6 9;
+}
+
+.morpho-operation-node line {
+  stroke: rgba(148, 163, 184, 0.62);
+  stroke-width: 1;
+}
+
+.morpho-operation-node circle {
+  transition:
+    r 0.16s ease,
+    opacity 0.16s ease,
+    filter 0.16s ease;
+}
+
+.morpho-operation-node.muted {
+  opacity: 0.28;
+}
+
+.morpho-operation-node.selected {
+  opacity: 1;
+}
+
+.morpho-operation-node:hover circle {
+  filter: drop-shadow(0 0 10px rgba(125, 211, 252, 0.42));
+}
+
+.morpho-history-linked-dot {
+  transition: opacity 0.16s ease;
+}
+
+.morpho-history-linked-dot.muted {
+  opacity: 0.28;
+}
+
+.morpho-operation-time-label {
+  fill: #64748b;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .price-gauge {
   position: relative;
   display: flex;
@@ -994,7 +1419,7 @@
 .price-gauge-svg {
   width: 100%;
   height: auto;
-  max-height: 160px;
+  max-height: 180px;
   overflow: visible;
 }
 
@@ -1145,8 +1570,8 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.42rem;
   width: 100%;
-  margin-top: auto;
-  padding-top: 0.14rem;
+  margin-top: -3rem;
+  padding-top: 0.18rem;
 }
 
 .price-gauge-bottom-card {
@@ -1159,6 +1584,18 @@
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(51, 65, 85, 0.66);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.price-gauge-bottom-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.22);
 }
 
 .price-gauge-bottom-card span {
@@ -1172,6 +1609,14 @@
   color: #f8fafc;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
+}
+
+.price-gauge-bottom-value-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.26rem;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .price-gauge-bottom-card small {
@@ -1238,11 +1683,13 @@
 .morpho-ltv-risk-warning {
   border-color: rgba(245, 158, 11, 0.42);
   box-shadow: 0 14px 34px rgba(245, 158, 11, 0.12);
+  animation: morpho-ltv-warning-alert 1.9s ease-in-out infinite;
 }
 
 .morpho-ltv-risk-danger {
   border-color: rgba(239, 68, 68, 0.5);
   box-shadow: 0 14px 34px rgba(239, 68, 68, 0.14);
+  animation: morpho-ltv-danger-alert 1.45s ease-in-out infinite;
 }
 
 .morpho-ltv-risk-header {
@@ -1357,11 +1804,13 @@
 .morpho-ltv-risk-warning .morpho-ltv-risk-badge {
   border-color: rgba(245, 158, 11, 0.45);
   color: #fde68a;
+  animation: morpho-ltv-warning-badge 1.9s ease-in-out infinite;
 }
 
 .morpho-ltv-risk-danger .morpho-ltv-risk-badge {
   border-color: rgba(239, 68, 68, 0.52);
   color: #fecaca;
+  animation: morpho-ltv-danger-badge 1.45s ease-in-out infinite;
 }
 
 .morpho-ltv-risk-svg {
@@ -1423,6 +1872,15 @@
   stroke: #38bdf8;
   stroke-width: 3;
   filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.36));
+  animation: morpho-ltv-current-safe 2.2s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-warning .morpho-ltv-risk-current circle {
+  animation: morpho-ltv-current-warning 1.9s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-danger .morpho-ltv-risk-current circle {
+  animation: morpho-ltv-current-danger 1.45s ease-in-out infinite;
 }
 
 .morpho-ltv-risk-current text {
@@ -1438,7 +1896,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.42rem;
   margin-top: auto;
-  padding-top: 0.06rem;
+  padding-top: 0.18rem;
 }
 
 .morpho-ltv-risk-values div {
@@ -1451,6 +1909,18 @@
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(51, 65, 85, 0.66);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.morpho-ltv-risk-values div:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.22);
 }
 
 .morpho-ltv-risk-values span {
@@ -1475,9 +1945,99 @@
   }
 }
 
+@keyframes morpho-ltv-current-safe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.28));
+  }
+  50% {
+    filter: drop-shadow(0 0 13px rgba(56, 189, 248, 0.52));
+  }
+}
+
+@keyframes morpho-ltv-warning-alert {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(245, 158, 11, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.28));
+  }
+}
+
+@keyframes morpho-ltv-danger-alert {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(239, 68, 68, 0.4));
+  }
+}
+
+@keyframes morpho-ltv-warning-badge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.32);
+  }
+}
+
+@keyframes morpho-ltv-danger-badge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(239, 68, 68, 0);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.38);
+  }
+}
+
+@keyframes morpho-ltv-current-warning {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.28));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.58));
+  }
+}
+
+@keyframes morpho-ltv-current-danger {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(239, 68, 68, 0.66));
+  }
+}
+
 @media (max-width: 640px) {
   .morpho-risk-gauge-grid {
     grid-template-columns: 1fr;
+  }
+
+  .morpho-history-header {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-history-controls {
+    align-items: stretch;
+  }
+
+  .morpho-history-range {
+    justify-content: stretch;
+  }
+
+  .morpho-history-range input {
+    width: 100%;
+  }
+
+  .morpho-history-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .price-gauge-bottom-cards,
