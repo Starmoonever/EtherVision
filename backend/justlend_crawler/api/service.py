@@ -292,6 +292,41 @@ async def fetch_and_optionally_persist_market_states(
         symbol = cast(str | None, rpc_row.get("symbol"))
         if symbol is None and meta.get("underlying_symbol"):
             symbol = f"j{meta.get('underlying_symbol')}"
+        reserve_factor = cast(Decimal | None, rpc_row.get("reserve_factor")) or cast(
+            Decimal | None, meta.get("reserve_factor")
+        )
+        exchange_rate = cast(Decimal | None, rpc_row.get("exchange_rate")) or cast(
+            Decimal | None, meta.get("exchange_rate")
+        )
+        cash = cast(Decimal | None, rpc_row.get("cash")) or cast(
+            Decimal | None, meta.get("cash")
+        )
+        total_borrows = cast(Decimal | None, rpc_row.get("total_borrows")) or cast(
+            Decimal | None, meta.get("total_borrows")
+        )
+        total_reserves = cast(Decimal | None, rpc_row.get("total_reserves")) or cast(
+            Decimal | None, meta.get("total_reserves")
+        )
+        total_supply = cast(Decimal | None, rpc_row.get("total_supply")) or cast(
+            Decimal | None, meta.get("total_supply")
+        )
+        utilization = cast(Decimal | None, rpc_row.get("utilization"))
+        if utilization is None and cash is not None and total_borrows is not None:
+            denom = cash + total_borrows
+            if denom > 0:
+                utilization = total_borrows / denom
+        borrow_rate = cast(Decimal | None, rpc_row.get("borrow_rate")) or cast(
+            Decimal | None, meta.get("borrow_rate")
+        )
+        supply_rate = cast(Decimal | None, rpc_row.get("supply_rate")) or cast(
+            Decimal | None, meta.get("supply_rate")
+        )
+        borrow_cap = cast(Decimal | None, rpc_row.get("borrow_cap")) or cast(
+            Decimal | None, meta.get("borrow_cap")
+        )
+        supply_cap = cast(Decimal | None, rpc_row.get("supply_cap")) or cast(
+            Decimal | None, meta.get("supply_cap")
+        )
 
         row = JustLendMarketStateRow(
             market_address=market_address,
@@ -312,18 +347,17 @@ async def fetch_and_optionally_persist_market_states(
             is_entered_supported=cast(bool | None, rpc_row.get("is_entered_supported")),
             collateral_factor=cast(Decimal | None, rpc_row.get("collateral_factor"))
             or cast(Decimal | None, meta.get("collateral_factor")),
-            reserve_factor=cast(Decimal | None, rpc_row.get("reserve_factor")),
-            borrow_cap=cast(Decimal | None, rpc_row.get("borrow_cap")),
-            supply_cap=cast(Decimal | None, rpc_row.get("supply_cap")),
-            exchange_rate=cast(Decimal | None, rpc_row.get("exchange_rate"))
-            or cast(Decimal | None, meta.get("exchange_rate")),
-            cash=cast(Decimal | None, rpc_row.get("cash")),
-            total_borrows=cast(Decimal | None, rpc_row.get("total_borrows")),
-            total_reserves=cast(Decimal | None, rpc_row.get("total_reserves")),
-            total_supply=cast(Decimal | None, rpc_row.get("total_supply")),
-            utilization=cast(Decimal | None, rpc_row.get("utilization")),
-            borrow_rate=cast(Decimal | None, rpc_row.get("borrow_rate")),
-            supply_rate=cast(Decimal | None, rpc_row.get("supply_rate")),
+            reserve_factor=reserve_factor,
+            borrow_cap=borrow_cap,
+            supply_cap=supply_cap,
+            exchange_rate=exchange_rate,
+            cash=cash,
+            total_borrows=total_borrows,
+            total_reserves=total_reserves,
+            total_supply=total_supply,
+            utilization=utilization,
+            borrow_rate=borrow_rate,
+            supply_rate=supply_rate,
             underlying_price_in_trx=cast(Decimal | None, underlying_price_in_trx),
             price_usd=price_usd,
             snapshot_at=cast(datetime | None, snapshot_at),
@@ -338,6 +372,7 @@ async def fetch_and_optionally_persist_market_states(
                     "underlying_hex": meta.get("underlying_hex"),
                 },
                 "rpc_available": bool(rpc_row),
+                "cap_status": meta.get("cap_status") or "unknown",
             },
         )
         rows.append(row)
@@ -391,6 +426,30 @@ async def get_supported_tron_price_assets(cfg: Any) -> list[dict[str, str]]:
 
 def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return _decimal(text)
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _first_decimal_field(
+    payload: dict[str, Any],
+    *keys: str,
+) -> Decimal | None:
+    for key in keys:
+        if key in payload:
+            value = _optional_decimal(payload.get(key))
+            if value is not None:
+                return value
+    return None
 
 
 def _fmt_decimal(value: Decimal, scale: int = 8) -> str:
@@ -868,6 +927,34 @@ async def _fetch_justlend_market_catalog(
             except HTTPException:
                 underlying_hex = None
         price_in_trx = _decimal(token.get("underlyingPriceInTrx", "0"))
+        api_exchange_rate = _first_decimal_field(token, "exchangeRate", "exchange_rate")
+        api_cash = _first_decimal_field(token, "cash")
+        api_total_borrows = _first_decimal_field(
+            token,
+            "totalBorrows",
+            "total_borrows",
+        )
+        api_total_supply = _first_decimal_field(token, "totalSupply", "total_supply")
+        api_total_reserves = _first_decimal_field(token, "reserves", "totalReserves")
+        api_reserve_factor = _first_decimal_field(
+            token,
+            "reserveFactor",
+            "reserve_factor",
+        )
+        api_supply_rate = _first_decimal_field(token, "supplyRate", "supply_rate")
+        api_borrow_rate = _first_decimal_field(token, "borrowRate", "borrow_rate")
+        api_borrow_cap = _first_decimal_field(
+            token,
+            "borrowCap",
+            "borrow_cap",
+            "borrowCapUnderlying",
+        )
+        api_supply_cap = _first_decimal_field(
+            token,
+            "supplyCap",
+            "supply_cap",
+            "supplyCapUnderlying",
+        )
         entry = {
             "market_address": market_address,
             "market_hex": market_hex,
@@ -877,9 +964,23 @@ async def _fetch_justlend_market_catalog(
             or None,
             "underlying_decimals": int(token.get("underlyingDecimal") or 6),
             "collateral_factor": _decimal(token.get("collateralFactor", "0")),
+            "reserve_factor": api_reserve_factor,
             "price_in_trx": price_in_trx,
             "price_usd": price_in_trx * trx_price_usd,
-            "exchange_rate": exchange_rate_map.get(market_hex),
+            "exchange_rate": exchange_rate_map.get(market_hex) or api_exchange_rate,
+            "cash": api_cash,
+            "total_borrows": api_total_borrows,
+            "total_supply": api_total_supply,
+            "total_reserves": api_total_reserves,
+            "supply_rate": api_supply_rate,
+            "borrow_rate": api_borrow_rate,
+            "borrow_cap": api_borrow_cap,
+            "supply_cap": api_supply_cap,
+            "cap_status": (
+                "api"
+                if api_borrow_cap is not None or api_supply_cap is not None
+                else "missing_in_current_api_payload"
+            ),
         }
         catalog[market_hex] = entry
         if underlying_hex and underlying_hex not in catalog:

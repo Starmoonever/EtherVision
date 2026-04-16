@@ -67,11 +67,11 @@
 
 ### Checklist
 
-- [ ] 确认新增能力不依赖修改外部 schema
-- [ ] 确认市场数据与用户仓位数据的边界
-- [ ] 确认地址存储标准与兼容策略
-- [ ] 确认第一版 API 范围
-- [ ] 确认脚本入口命名与职责
+- [x] 确认新增能力不依赖修改外部 schema
+- [x] 确认市场数据与用户仓位数据的边界
+- [x] 确认地址存储标准与兼容策略
+- [x] 确认第一版 API 范围
+- [x] 确认脚本入口命名与职责
 
 ---
 
@@ -172,12 +172,12 @@
 
 ### Checklist
 
-- [ ] 确认表名与仓库命名风格一致
-- [ ] 确认地址字段全部为 Base58 文本
-- [ ] 确认主键与唯一键满足 upsert 需求
-- [ ] 确认索引覆盖核心查询路径
-- [ ] 确认 `extra_jsonb` 已预留
-- [ ] 确认 migration 可重复执行或具备存在性保护
+- [x] 确认表名与仓库命名风格一致
+- [x] 确认地址字段全部为 Base58 文本
+- [x] 确认主键与唯一键满足 upsert 需求
+- [x] 确认索引覆盖核心查询路径
+- [x] 确认 `extra_jsonb` 已预留
+- [x] 确认 migration 可重复执行或具备存在性保护
 
 ---
 
@@ -277,12 +277,19 @@
 
 ### Checklist
 
-- [ ] 复用现有 `/lend/jtoken` 抓取逻辑
-- [ ] 补齐市场级 RPC 调用
-- [ ] 统一数值精度与字符串/Decimal 处理
+- [x] 复用现有 `/lend/jtoken` 抓取逻辑
+- [x] 补齐市场级 RPC 调用
+- [x] 统一数值精度与字符串/Decimal 处理
 - [ ] 明确 rate/APR 口径
-- [ ] 处理部分字段缺失或 RPC revert
-- [ ] 为日志记录保留足够上下文
+- [x] 处理部分字段缺失或 RPC revert
+- [x] 为日志记录保留足够上下文
+
+当前补充说明：
+
+- 官方 `GET https://openapi.just.network/lend/jtoken` 已确认提供 `cash`、`totalBorrows`、`totalSupply`、`reserves`、`exchangeRate`、`reserveFactor`、`supplyRate`、`borrowRate`
+- 当前实现已支持从 OpenAPI 解析 `borrowCap` / `supplyCap` 及其常见变体字段
+- 但截至当前核对结果，官方 OpenAPI 实际响应中未观测到 cap 字段；公开 `justlend-protocol` `Comptroller.sol` 也未发现 `borrowCaps` / `supplyCaps` 方法
+- 因此 `borrow_cap` / `supply_cap` 的剩余问题已从“代码未解析”收敛为“当前官方数据源未提供”
 
 ---
 
@@ -350,12 +357,12 @@
 
 ### Checklist
 
-- [ ] 新脚本命名和职责明确
-- [ ] CLI 参数与现有脚本风格一致
-- [ ] 支持 dry-run
-- [ ] 支持按 market 过滤
-- [ ] 支持 current/snapshot 分别控制写入
-- [ ] 输出成功/失败统计
+- [x] 新脚本命名和职责明确
+- [x] CLI 参数与现有脚本风格一致
+- [x] 支持 dry-run
+- [x] 支持按 market 过滤
+- [x] 支持 current/snapshot 分别控制写入
+- [x] 输出成功/失败统计
 
 ---
 
@@ -463,12 +470,12 @@
 
 ### Checklist
 
-- [ ] `markets` 接口改为真实查询
-- [ ] 增加 single market state 接口
-- [ ] 增加 market state period 接口
-- [ ] 响应地址统一为 Base58
-- [ ] 时间格式统一为 UTC ISO8601
-- [ ] 与现有 Compound 风格尽量对齐
+- [x] `markets` 接口改为真实查询
+- [x] 增加 single market state 接口
+- [x] 增加 market state period 接口
+- [x] 响应地址统一为 Base58
+- [x] 时间格式统一为 UTC ISO8601
+- [x] 与现有 Compound 风格尽量对齐
 
 ---
 
@@ -520,11 +527,11 @@
 
 ### Checklist
 
-- [ ] 补 service 测试
-- [ ] 补 route 测试
+- [x] 补 service 测试
+- [x] 补 route 测试
 - [ ] 补数据库读写测试或等效覆盖
-- [ ] 覆盖部分失败场景
-- [ ] 覆盖地址标准化场景
+- [x] 覆盖部分失败场景
+- [x] 覆盖地址标准化场景
 - [ ] 覆盖 dry-run 场景
 
 ---
@@ -577,11 +584,11 @@
 
 ### Checklist
 
-- [ ] 更新 `backend/README.md`
+- [x] 更新 `backend/README.md`
 - [ ] 如有必要更新根 `README.md`
-- [ ] 说明新表与脚本入口
-- [ ] 说明 API 路由
-- [ ] 说明当前限制与后续方向
+- [x] 说明新表与脚本入口
+- [x] 说明 API 路由
+- [x] 说明当前限制与后续方向
 - [ ] 完成上线前检查
 
 ---

@@ -1060,6 +1060,68 @@ async def test_fetch_market_exchange_rates_skips_market_with_blank_rpc_payload()
 
 
 @pytest.mark.asyncio
+async def test_fetch_justlend_market_catalog_parses_live_api_market_fields() -> None:
+    market_payload = {
+        "code": 0,
+        "data": {
+            "tokenList": [
+                {
+                    "address": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd",
+                    "symbol": "jUSDT",
+                    "underlyingAddress": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+                    "underlyingSymbol": "USDT",
+                    "underlyingDecimal": 6,
+                    "underlyingPriceInTrx": "0.5",
+                    "collateralFactor": "0.75",
+                    "reserveFactor": "0.10",
+                    "supplyRate": "0.01",
+                    "borrowRate": "0.02",
+                    "exchangeRate": "1.03",
+                    "cash": "1000",
+                    "totalBorrows": "400",
+                    "totalSupply": "1500",
+                    "reserves": "20",
+                    "borrowCap": "2000",
+                    "supplyCap": "5000",
+                }
+            ]
+        },
+    }
+    cfg = SimpleNamespace(
+        justlend=SimpleNamespace(
+            api_base_url="https://api.justlend.invalid",
+            api_timeout_seconds=3.0,
+        )
+    )
+
+    with patch.object(
+        service,
+        "_fetch_json",
+        new=AsyncMock(return_value=market_payload),
+    ):
+        catalog = await service._fetch_justlend_market_catalog(
+            cfg,
+            tron_rpc=None,
+            market_addresses=[],
+        )
+
+    market_key = service._tron_address_to_bytes(
+        "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"
+    ).hex()
+    entry = catalog[market_key]
+    assert entry["reserve_factor"] == Decimal("0.10")
+    assert entry["supply_rate"] == Decimal("0.01")
+    assert entry["borrow_rate"] == Decimal("0.02")
+    assert entry["cash"] == Decimal("1000")
+    assert entry["total_borrows"] == Decimal("400")
+    assert entry["total_supply"] == Decimal("1500")
+    assert entry["total_reserves"] == Decimal("20")
+    assert entry["borrow_cap"] == Decimal("2000")
+    assert entry["supply_cap"] == Decimal("5000")
+    assert entry["cap_status"] == "api"
+
+
+@pytest.mark.asyncio
 async def test_fetch_and_optionally_persist_market_states_merges_api_and_rpc() -> None:
     market = "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"
     cfg = SimpleNamespace(justlend=SimpleNamespace(markets=[]))
@@ -1075,6 +1137,9 @@ async def test_fetch_and_optionally_persist_market_states_merges_api_and_rpc() -
             "price_in_trx": Decimal("0.5"),
             "price_usd": Decimal("1"),
             "exchange_rate": None,
+            "borrow_cap": Decimal("2000"),
+            "supply_cap": Decimal("5000"),
+            "cap_status": "api",
         }
     }
     rpc_rows = [
@@ -1158,6 +1223,9 @@ async def test_fetch_and_optionally_persist_market_states_supports_api_only() ->
             "price_in_trx": Decimal("0.5"),
             "price_usd": Decimal("1"),
             "exchange_rate": None,
+            "borrow_cap": Decimal("2000"),
+            "supply_cap": Decimal("5000"),
+            "cap_status": "api",
         }
     }
 
@@ -1184,7 +1252,10 @@ async def test_fetch_and_optionally_persist_market_states_supports_api_only() ->
     assert len(rows) == 1
     assert rows[0].symbol == "jUSDT"
     assert rows[0].price_usd == Decimal("1")
+    assert rows[0].borrow_cap == Decimal("2000")
+    assert rows[0].supply_cap == Decimal("5000")
     extra_jsonb = rows[0].extra_jsonb
     assert extra_jsonb is not None
     assert extra_jsonb["rpc_available"] is False
+    assert extra_jsonb["cap_status"] == "api"
     upsert_mock.assert_not_called()
