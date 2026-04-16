@@ -9,6 +9,7 @@ import asyncpg
 import pytest
 from web3 import AsyncWeb3
 
+from crawler_shared.api.schemas import PriceResponse
 from morpho_crawler.api.service import (
     _build_group_brief,
     get_position_replay,
@@ -129,6 +130,26 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
             return_value=_mock_position(),
         ),
         patch(
+            "morpho_crawler.api.service.get_price",
+            new_callable=AsyncMock,
+            side_effect=[
+                PriceResponse(
+                    asset="USDC",
+                    price_usd="1.00",
+                    token_address="0x1111111111111111111111111111111111111111",
+                    timestamp="2026-04-01T00:00:00Z",
+                    source="defillama",
+                ),
+                PriceResponse(
+                    asset="wstETH",
+                    price_usd="1500.00",
+                    token_address="0x2222222222222222222222222222222222222222",
+                    timestamp="2026-04-01T00:00:00Z",
+                    source="defillama",
+                ),
+            ],
+        ),
+        patch(
             "morpho_crawler.api.service.upsert_position_replay_snapshots",
             new_callable=AsyncMock,
         ) as upsert_replay,
@@ -151,7 +172,12 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
     assert response.data_source == "rpc"
     assert response.total_points == 1
     assert response.points[0].operation_type == "batch"
-    assert response.points[0].brief == "新增抵押 2 wstETH；借入 1.25 USDC"
+    assert (
+        response.points[0].brief
+        == "新增抵押 2 wstETH (价值 3000.00 usd)；借入 1.25 USDC (价值 1.25 usd)"
+    )
+    assert response.points[0].assets[0].price_usd == "1.00"
+    assert response.points[0].assets[1].price_usd == "1500.00"
     upsert_replay.assert_awaited_once()
 
 
@@ -179,7 +205,9 @@ def test_build_group_brief_combines_and_deduplicates_event_briefs() -> None:
         collateral_symbol="wstETH",
         loan_decimals=6,
         collateral_decimals=18,
+        loan_price_usd=Decimal("1"),
+        collateral_price_usd=Decimal("1500"),
     )
 
     assert operation_type == "borrow"
-    assert brief == "借入 1.25 USDC"
+    assert brief == "借入 1.25 USDC (价值 1.25 usd)"

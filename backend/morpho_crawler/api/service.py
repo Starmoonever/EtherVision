@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from crawler_shared.api.service import get_price
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
@@ -112,6 +113,10 @@ def _format_brief_amount(amount: Decimal) -> str:
     return text or "0"
 
 
+def _format_brief_usd(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01')):.2f}"
+
+
 def _normalize_market_id_text(market_id: str) -> str:
     value = market_id.strip().lower()
     if not value.startswith("0x"):
@@ -212,6 +217,64 @@ def _build_asset_responses(
         )
         for asset in assets
     ]
+
+
+async def _get_asset_price_usd(
+    w3: AsyncWeb3,
+    *,
+    pool: AsyncpgPool,
+    token_address: str,
+    timestamp: int | None,
+    cache: dict[tuple[str, int | None], Decimal | None],
+) -> Decimal | None:
+    cache_key = (token_address.lower(), timestamp)
+    if cache_key in cache:
+        return cache[cache_key]
+    try:
+        result = await get_price(
+            w3,
+            symbol=None,
+            address=token_address,
+            pool=pool,
+            timestamp=timestamp,
+        )
+    except HTTPException:
+        cache[cache_key] = None
+        return None
+    price = Decimal(str(result.price_usd))
+    cache[cache_key] = price
+    return price
+
+
+async def _enrich_position_assets_with_prices(
+    w3: AsyncWeb3,
+    *,
+    pool: AsyncpgPool,
+    response: MorphoPositionResponse,
+    timestamp: int | None,
+    cache: dict[tuple[str, int | None], Decimal | None],
+) -> None:
+    loan_price_usd = await _get_asset_price_usd(
+        w3,
+        pool=pool,
+        token_address=response.loan_token,
+        timestamp=timestamp,
+        cache=cache,
+    )
+    collateral_price_usd = await _get_asset_price_usd(
+        w3,
+        pool=pool,
+        token_address=response.collateral_token,
+        timestamp=timestamp,
+        cache=cache,
+    )
+    for asset in response.assets:
+        price_usd = (
+            collateral_price_usd if asset.role == "collateral" else loan_price_usd
+        )
+        amount = Decimal(str(asset.amount or "0"))
+        asset.price_usd = None if price_usd is None else str(price_usd)
+        asset.value_usd = None if price_usd is None else str(amount * price_usd)
 
 
 def _build_response_from_rpc(
@@ -492,30 +555,46 @@ def _build_single_event_brief(
     collateral_symbol: str | None,
     loan_decimals: int,
     collateral_decimals: int,
+    loan_price_usd: Decimal | None,
+    collateral_price_usd: Decimal | None,
 ) -> str:
     label = BRIEF_LABELS.get(event.operation_type, "更新仓位")
     if event.operation_type in {"supply", "withdraw", "borrow", "repay"}:
         amount = Decimal(event.assets or 0) / (Decimal(10) ** loan_decimals)
+        value_suffix = ""
+        if loan_price_usd is not None and loan_price_usd > 0:
+            value_suffix = f" (价值 {_format_brief_usd(amount * loan_price_usd)} usd)"
         if loan_symbol:
-            return f"{label} {_format_brief_amount(amount)} {loan_symbol}"
+            return f"{label} {_format_brief_amount(amount)} {loan_symbol}{value_suffix}"
         return label
     if event.operation_type in {"supply_collateral", "withdraw_collateral"}:
         amount = Decimal(event.collateral_assets or 0) / (
             Decimal(10) ** collateral_decimals
         )
+        value_suffix = ""
+        if collateral_price_usd is not None and collateral_price_usd > 0:
+            value_suffix = (
+                f" (价值 {_format_brief_usd(amount * collateral_price_usd)} usd)"
+            )
         if collateral_symbol:
-            return f"{label} {_format_brief_amount(amount)} {collateral_symbol}"
+            return f"{label} {_format_brief_amount(amount)} {collateral_symbol}{value_suffix}"
         return label
     if event.operation_type == "liquidation":
         parts: list[str] = []
         if event.seized_assets:
             amount = Decimal(event.seized_assets) / (Decimal(10) ** collateral_decimals)
             if collateral_symbol:
-                parts.append(f"扣押 {_format_brief_amount(amount)} {collateral_symbol}")
+                part = f"扣押 {_format_brief_amount(amount)} {collateral_symbol}"
+                if collateral_price_usd is not None and collateral_price_usd > 0:
+                    part += f" (价值 {_format_brief_usd(amount * collateral_price_usd)} usd)"
+                parts.append(part)
         if event.repaid_assets:
             amount = Decimal(event.repaid_assets) / (Decimal(10) ** loan_decimals)
             if loan_symbol:
-                parts.append(f"偿还 {_format_brief_amount(amount)} {loan_symbol}")
+                part = f"偿还 {_format_brief_amount(amount)} {loan_symbol}"
+                if loan_price_usd is not None and loan_price_usd > 0:
+                    part += f" (价值 {_format_brief_usd(amount * loan_price_usd)} usd)"
+                parts.append(part)
         if parts:
             return f"{label}，" + "，".join(parts)
         return label
@@ -529,6 +608,8 @@ def _build_group_brief(
     collateral_symbol: str | None,
     loan_decimals: int,
     collateral_decimals: int,
+    loan_price_usd: Decimal | None,
+    collateral_price_usd: Decimal | None,
 ) -> tuple[str | None, str]:
     operations: list[str] = []
     briefs: list[str] = []
@@ -541,6 +622,8 @@ def _build_group_brief(
                 collateral_symbol=collateral_symbol,
                 loan_decimals=loan_decimals,
                 collateral_decimals=collateral_decimals,
+                loan_price_usd=loan_price_usd,
+                collateral_price_usd=collateral_price_usd,
             )
         )
     deduped_briefs: list[str] = []
@@ -651,6 +734,7 @@ async def get_user_position(
 
     normalized_market_id = _normalize_market_id_text(market_id)
     user_key = _evm_to_db_bytes(address)
+    price_cache: dict[tuple[str, int | None], Decimal | None] = {}
 
     cached_positions, cached_assets = await fetch_current_user_positions(
         pool,
@@ -668,6 +752,13 @@ async def get_user_position(
         market_id=normalized_market_id,
     )
     response = _build_response_from_rpc(position, data_source="rpc")
+    await _enrich_position_assets_with_prices(
+        w3,
+        pool=pool,
+        response=response,
+        timestamp=None,
+        cache=price_cache,
+    )
     await _upsert_market_from_position(pool, position=position)
     await _cache_current_position(pool, position=position, response=response)
     return response
@@ -694,6 +785,7 @@ async def get_position_replay(
     user_key = _evm_to_db_bytes(address)
     from_dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
     to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
+    price_cache: dict[tuple[str, int | None], Decimal | None] = {}
 
     if use_cache:
         cached_rows = await fetch_position_replay_snapshots(
@@ -764,13 +856,32 @@ async def get_position_replay(
             block_identifier=block_number,
         )
         response = _build_response_from_rpc(position, data_source="rpc")
+        await _enrich_position_assets_with_prices(
+            w3,
+            pool=pool,
+            response=response,
+            timestamp=int(position.block_timestamp.timestamp()),
+            cache=price_cache,
+        )
         await _upsert_market_from_position(pool, position=position)
+        loan_price_usd = (
+            Decimal(response.assets[0].price_usd)
+            if response.assets and response.assets[0].price_usd is not None
+            else None
+        )
+        collateral_price_usd = (
+            Decimal(response.assets[1].price_usd)
+            if len(response.assets) > 1 and response.assets[1].price_usd is not None
+            else None
+        )
         operation_type, brief = _build_group_brief(
             tx_events,
             loan_symbol=response.loan_token_symbol,
             collateral_symbol=response.collateral_token_symbol,
             loan_decimals=response.loan_token_decimals,
             collateral_decimals=response.collateral_token_decimals,
+            loan_price_usd=loan_price_usd,
+            collateral_price_usd=collateral_price_usd,
         )
         row = _build_replay_snapshot_row(
             position=position,
