@@ -6,7 +6,7 @@ export function JustLendMarketPage() {
     <>
       <PageHero
         title="JustLend 宏观市场评估"
-        subtitle="先搭好分析框架，等待 TRON 市场级接口与历史序列接入"
+        subtitle="JustLend 市场规模、流动性、利率参数与风险状态综合分析"
       />
 
       <JustLendMarketDashboard />
