@@ -837,33 +837,7 @@ async def get_position_replay(
     from_dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
     to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
     price_cache: dict[tuple[str, int | None], Decimal | None] = {}
-
-    if use_cache:
-        cached_rows = await fetch_position_replay_snapshots(
-            pool,
-            user_address=user_key,
-            market_id=normalized_market_id,
-            from_ts=from_dt,
-            to_ts=to_dt,
-        )
-        if cached_rows:
-            points = [
-                _map_replay_row_to_point(row, detail=detail) for row in cached_rows
-            ]
-            return MorphoPositionReplayResponse(
-                protocol=MORPHO_PROTOCOL,
-                market_type=MORPHO_DEFAULT_MARKET_TYPE,
-                chain=MORPHO_CHAIN,
-                market_id=normalized_market_id,
-                address=_normalize_evm_address(address),
-                from_time=_record_ts(from_dt),
-                to_time=_record_ts(to_dt),
-                data_source="cache",
-                total_points=len(points),
-                total_tx_count=len(points),
-                cache_hit_rate="1.00",
-                points=points,
-            )
+    cached_map: dict[str, Any] = {}
 
     events = await fetch_user_market_replay_events(
         w3,
@@ -884,7 +858,7 @@ async def get_position_replay(
             data_source="rpc",
             total_points=0,
             total_tx_count=0,
-            cache_hit_rate="0.00" if use_cache else "0.00",
+            cache_hit_rate="0.00",
             points=[],
         )
 
@@ -892,12 +866,59 @@ async def get_position_replay(
     for event in events:
         grouped[event.tx_hash].append(event)
 
+    if use_cache:
+        cached_rows = await fetch_position_replay_snapshots(
+            pool,
+            user_address=user_key,
+            market_id=normalized_market_id,
+            from_ts=from_dt,
+            to_ts=to_dt,
+        )
+        for row in cached_rows:
+            tx_hash = str(row.get("tx_hash") or "")
+            if not tx_hash:
+                continue
+            cached_map[tx_hash] = row
+
+        if len(cached_map) == len(grouped):
+            points = []
+            for tx_hash, _tx_events in sorted(
+                grouped.items(),
+                key=lambda item: (
+                    item[1][-1].block_number,
+                    item[1][-1].log_index,
+                    item[0],
+                ),
+            ):
+                row = cached_map.get(tx_hash)
+                if row is None:
+                    continue
+                points.append(_map_replay_row_to_point(row, detail=detail))
+            return MorphoPositionReplayResponse(
+                protocol=MORPHO_PROTOCOL,
+                market_type=MORPHO_DEFAULT_MARKET_TYPE,
+                chain=MORPHO_CHAIN,
+                market_id=normalized_market_id,
+                address=_normalize_evm_address(address),
+                from_time=_record_ts(from_dt),
+                to_time=_record_ts(to_dt),
+                data_source="cache",
+                total_points=len(points),
+                total_tx_count=len(points),
+                cache_hit_rate="1.00",
+                points=points,
+            )
+
     snapshot_rows: list[dict[str, Any]] = []
     points: list[MorphoPositionReplayPointResponse] = []
     for tx_hash, tx_events in sorted(
         grouped.items(),
         key=lambda item: (item[1][-1].block_number, item[1][-1].log_index, item[0]),
     ):
+        cached_row = cached_map.get(tx_hash)
+        if cached_row is not None:
+            points.append(_map_replay_row_to_point(cached_row, detail=detail))
+            continue
         tx_events.sort(key=lambda item: item.log_index)
         block_number = tx_events[-1].block_number
         position = await fetch_position_at_block(
@@ -944,7 +965,9 @@ async def get_position_replay(
         snapshot_rows.append(row)
         points.append(_map_replay_row_to_point(row, detail=detail))
 
-    await upsert_position_replay_snapshots(pool, rows=snapshot_rows)
+    if snapshot_rows:
+        await upsert_position_replay_snapshots(pool, rows=snapshot_rows)
+    cached_count = len(grouped) - len(snapshot_rows)
     return MorphoPositionReplayResponse(
         protocol=MORPHO_PROTOCOL,
         market_type=MORPHO_DEFAULT_MARKET_TYPE,
@@ -956,6 +979,6 @@ async def get_position_replay(
         data_source="rpc",
         total_points=len(points),
         total_tx_count=len(grouped),
-        cache_hit_rate="0.00",
+        cache_hit_rate=format(Decimal(cached_count) / Decimal(len(grouped)), ".2f"),
         points=points,
     )

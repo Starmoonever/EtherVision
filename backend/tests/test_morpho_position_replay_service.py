@@ -52,6 +52,17 @@ def _mock_position(block_number: int = 123) -> MorphoRealtimePosition:
 
 @pytest.mark.asyncio
 async def test_get_position_replay_prefers_cache_when_rows_exist() -> None:
+    events = [
+        MorphoReplayEvent(
+            tx_hash="0xabc",
+            log_index=1,
+            block_number=123,
+            block_timestamp=datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            operation_type="borrow",
+            assets=1_250_000,
+            shares=1000,
+        )
+    ]
     cached_row = {
         "tx_hash": "0xabc",
         "block_timestamp": datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
@@ -67,14 +78,15 @@ async def test_get_position_replay_prefers_cache_when_rows_exist() -> None:
     }
     with (
         patch(
+            "morpho_crawler.api.service.fetch_user_market_replay_events",
+            new_callable=AsyncMock,
+            return_value=events,
+        ) as fetch_events,
+        patch(
             "morpho_crawler.api.service.fetch_position_replay_snapshots",
             new_callable=AsyncMock,
             return_value=[cached_row],
         ),
-        patch(
-            "morpho_crawler.api.service.fetch_user_market_replay_events",
-            new_callable=AsyncMock,
-        ) as fetch_events,
     ):
         response = await get_position_replay(
             cast(AsyncWeb3, object()),
@@ -88,7 +100,7 @@ async def test_get_position_replay_prefers_cache_when_rows_exist() -> None:
 
     assert response.data_source == "cache"
     assert response.total_points == 1
-    fetch_events.assert_not_awaited()
+    fetch_events.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -170,6 +182,97 @@ async def test_get_position_replay_builds_rpc_snapshots_and_writes_cache() -> No
     assert response.points[0].assets[0].price_usd == "1.00"
     assert response.points[0].assets[1].price_usd == "1500.00"
     get_hist_prices.assert_awaited_once()
+    upsert_replay.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_position_replay_rebuilds_missing_snapshots_when_cache_is_partial() -> (
+    None
+):
+    events = [
+        MorphoReplayEvent(
+            tx_hash="0xaaa",
+            log_index=1,
+            block_number=120,
+            block_timestamp=datetime(2026, 3, 31, 0, 0, tzinfo=timezone.utc),
+            operation_type="supply_collateral",
+            collateral_assets=2 * 10**18,
+        ),
+        MorphoReplayEvent(
+            tx_hash="0xbbb",
+            log_index=1,
+            block_number=123,
+            block_timestamp=datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc),
+            operation_type="borrow",
+            assets=1_250_000,
+            shares=1000,
+        ),
+    ]
+    cached_row = {
+        "tx_hash": "0xaaa",
+        "block_timestamp": datetime(2026, 3, 31, 0, 0, tzinfo=timezone.utc),
+        "block_number": 120,
+        "operation_type": "supply_collateral",
+        "brief": "新增抵押 2 wstETH",
+        "has_position": True,
+        "is_healthy": True,
+        "collateral_value_in_loan_asset": Decimal("0"),
+        "borrow_assets": Decimal("0"),
+        "health_factor": Decimal("0"),
+        "assets_jsonb": [],
+    }
+    with (
+        patch(
+            "morpho_crawler.api.service.fetch_user_market_replay_events",
+            new_callable=AsyncMock,
+            return_value=events,
+        ),
+        patch(
+            "morpho_crawler.api.service.fetch_position_replay_snapshots",
+            new_callable=AsyncMock,
+            return_value=[cached_row],
+        ),
+        patch(
+            "morpho_crawler.api.service.fetch_position_at_block",
+            new_callable=AsyncMock,
+            return_value=_mock_position(),
+        ) as fetch_position,
+        patch(
+            "morpho_crawler.api.service.get_historical_prices_usd",
+            new_callable=AsyncMock,
+            return_value=(
+                {
+                    "0x1111111111111111111111111111111111111111": Decimal("1.00"),
+                    "0x2222222222222222222222222222222222222222": Decimal("1500.00"),
+                },
+                1_711_929_600,
+                "defillama",
+            ),
+        ),
+        patch(
+            "morpho_crawler.api.service.upsert_position_replay_snapshots",
+            new_callable=AsyncMock,
+        ) as upsert_replay,
+        patch(
+            "morpho_crawler.api.service.upsert_market",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = await get_position_replay(
+            cast(AsyncWeb3, object()),
+            pool=cast(asyncpg.Pool, object()),
+            address="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            market_id="0x" + "11" * 32,
+            protocol="blue",
+            from_ts=int(datetime(2026, 3, 31, 0, 0, tzinfo=timezone.utc).timestamp()),
+            to_ts=int(datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc).timestamp()),
+        )
+
+    assert response.data_source == "rpc"
+    assert response.total_points == 2
+    assert [point.tx_hash for point in response.points] == ["0xaaa", "0xbbb"]
+    assert response.cache_hit_rate == "0.50"
+    fetch_position.assert_awaited_once()
     upsert_replay.assert_awaited_once()
 
 
