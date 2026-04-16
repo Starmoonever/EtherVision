@@ -76,9 +76,51 @@ export interface JustLendStatusResponse {
   message: string;
 }
 
+export interface JustLendMarketItem {
+  market: string;
+  symbol: string;
+  underlying_address: string;
+  underlying_symbol: string;
+  updated_at: string;
+}
+
 export interface JustLendMarketsResponse {
   chain: string;
-  markets: string[];
+  markets: JustLendMarketItem[];
+}
+
+export interface JustLendMarketStateResponse {
+  chain: string;
+  protocol: string;
+  market: string;
+  market_type: string;
+  symbol: string;
+  underlying_address: string;
+  underlying_symbol: string;
+  underlying_decimals: number;
+  jtoken_decimals: number;
+  comptroller_address: string;
+  oracle_address: string;
+  is_listed: boolean;
+  is_entered_supported: boolean;
+  collateral_factor: string;
+  reserve_factor: string;
+  borrow_cap: string;
+  supply_cap: string;
+  exchange_rate: string;
+  cash: string;
+  total_borrows: string;
+  total_reserves: string;
+  total_supply: string;
+  utilization: string;
+  borrow_rate: string;
+  supply_rate: string;
+  underlying_price_in_trx: string;
+  price_usd: string;
+  timestamp: string;
+  block_timestamp: string;
+  block_number: number;
+  extra: Record<string, unknown>;
 }
 
 const justLendPositionCache = new Map<
@@ -90,6 +132,11 @@ let justLendStatusCache: { fetchedAt: number; data: JustLendStatusResponse } | n
 let justLendStatusInflight: Promise<JustLendStatusResponse> | null = null;
 let justLendMarketsCache: { fetchedAt: number; data: JustLendMarketsResponse } | null = null;
 let justLendMarketsInflight: Promise<JustLendMarketsResponse> | null = null;
+const justLendMarketStateCache = new Map<
+  string,
+  { fetchedAt: number; data: JustLendMarketStateResponse }
+>();
+const justLendMarketStateInflight = new Map<string, Promise<JustLendMarketStateResponse>>();
 const justLendReplayCache = new Map<
   string,
   { fetchedAt: number; data: JustLendPositionReplayResponse }
@@ -230,6 +277,60 @@ export async function fetchJustLendMarketsWithMeta(): Promise<
     });
 
   justLendMarketsInflight = request;
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export async function fetchJustLendMarketStateWithMeta(
+  market: string,
+  date?: string,
+): Promise<DataWithMeta<JustLendMarketStateResponse>> {
+  const key = `${market.toLowerCase()}:${date ?? 'latest'}`;
+  const cached = justLendMarketStateCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < JUSTLEND_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = justLendMarketStateInflight.get(key);
+  if (inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({ market });
+  if (date) {
+    params.set('date', date);
+  }
+
+  const request = apiFetch<JustLendMarketStateResponse>(
+    `/justlend/market/state?${params.toString()}`,
+  )
+    .then((data) => {
+      justLendMarketStateCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      justLendMarketStateInflight.delete(key);
+    });
+
+  justLendMarketStateInflight.set(key, request);
   const data = await request;
   return {
     data,

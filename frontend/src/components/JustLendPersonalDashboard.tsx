@@ -22,6 +22,7 @@ import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMet
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { JustLendPositionReplayChart } from './JustLendPositionReplayChart';
 import { AutoFitText } from '../shared/components/AutoFitText';
+import { justLendChartTheme } from './justlendTheme';
 
 interface JustLendPersonalDashboardProps {
   address: string;
@@ -47,8 +48,8 @@ interface RiskState {
   description: string;
 }
 
-const collateralColors = ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#eab308'];
-const borrowColors = ['#f87171', '#fb7185', '#f97316', '#fbbf24', '#ef4444', '#f43f5e'];
+const collateralColors = justLendChartTheme.palettes.collateral;
+const borrowColors = justLendChartTheme.palettes.borrow;
 
 const explainItems: ExplainItem[] = [
   {
@@ -804,7 +805,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">抵押资产构成</span>
-            <span className="badge" style={{ background: '#052e16', color: '#86efac' }}>
+            <span className="badge" style={justLendChartTheme.badge.success}>
               Collateral
             </span>
           </div>
@@ -821,7 +822,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                         innerRadius={58}
                         outerRadius={92}
                         paddingAngle={0.8}
-                        stroke="#151c2c"
+                        stroke={justLendChartTheme.stroke.asset}
                         strokeWidth={1}
                       >
                         {collateralData.map((entry, index) => (
@@ -832,7 +833,11 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                         ))}
                       </Pie>
                       <Tooltip
-                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                        contentStyle={{
+                          backgroundColor: justLendChartTheme.tooltip.background,
+                          borderColor: justLendChartTheme.tooltip.border,
+                          color: justLendChartTheme.tooltip.text,
+                        }}
                         formatter={(value: unknown, name: unknown) => [
                           `${Number(value ?? 0).toFixed(2)}%`,
                           `${String(name)} 占比`,
@@ -871,7 +876,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">债务资产分布</span>
-            <span className="badge" style={{ background: '#3f0d0d', color: '#fca5a5' }}>
+            <span className="badge" style={justLendChartTheme.badge.danger}>
               Borrow
             </span>
           </div>
@@ -884,12 +889,25 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                   barCategoryGap="58%"
                   margin={{ left: 12, right: 16, top: 6, bottom: 6 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis type="number" stroke="#64748b" tickFormatter={(value) => `${value}%`} />
-                  <YAxis type="category" dataKey="name" stroke="#94a3b8" width={64} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={justLendChartTheme.grid} />
+                  <XAxis
+                    type="number"
+                    stroke={justLendChartTheme.axis.primary}
+                    tickFormatter={(value) => `${value}%`}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    stroke={justLendChartTheme.axis.secondary}
+                    width={64}
+                  />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
-                    itemStyle={{ color: '#22c55e' }}
+                    contentStyle={{
+                      backgroundColor: justLendChartTheme.tooltip.background,
+                      borderColor: justLendChartTheme.tooltip.border,
+                      color: justLendChartTheme.tooltip.text,
+                    }}
+                    itemStyle={{ color: justLendChartTheme.tooltip.accent }}
                     cursor={{ fill: 'transparent' }}
                     formatter={(value: unknown, name: unknown) => [
                       `${Number(value ?? 0).toFixed(2)}%`,
@@ -919,7 +937,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <span className="card-title">资产双侧对照</span>
-          <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
+          <span className="badge" style={justLendChartTheme.badge.neutral}>
             Bilateral
           </span>
         </div>
@@ -933,44 +951,60 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 barCategoryGap="40%"
                 margin={{ top: 10, right: 20, left: 8, bottom: 4 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <ReferenceLine x={0} stroke="#475569" strokeOpacity={0.85} />
+                <CartesianGrid strokeDasharray="3 3" stroke={justLendChartTheme.grid} />
+                <ReferenceLine
+                  x={0}
+                  stroke={justLendChartTheme.axis.reference}
+                  strokeOpacity={0.85}
+                />
                 <XAxis
                   type="number"
-                  stroke="#64748b"
+                  stroke={justLendChartTheme.axis.primary}
                   domain={[-bilateralDomainMax, bilateralDomainMax]}
                   tickFormatter={(value) => formatUsdAxis(Number(value))}
                 />
-                <YAxis type="category" dataKey="asset" stroke="#64748b" width={72} />
+                <YAxis
+                  type="category"
+                  dataKey="asset"
+                  stroke={justLendChartTheme.axis.primary}
+                  width={72}
+                />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                  contentStyle={{
+                    backgroundColor: justLendChartTheme.tooltip.background,
+                    borderColor: justLendChartTheme.tooltip.border,
+                    color: justLendChartTheme.tooltip.text,
+                  }}
                   cursor={{ fill: 'transparent' }}
                   formatter={(value: unknown, name: unknown) => [
                     formatUsd(Math.abs(Number(value ?? 0))),
                     String(name),
                   ]}
                 />
-                <Legend />
+                <Legend wrapperStyle={{ color: justLendChartTheme.legend.text }} />
                 <Bar
                   dataKey="borrow"
                   name="借款价值"
-                  fill="#ef4444"
+                  fill={justLendChartTheme.series.borrow}
                   stackId="bilateral"
                   barSize={18}
                 >
                   {bilateralData.map((entry) => (
-                    <Cell key={`borrow-${entry.asset}`} fill="#ef4444" />
+                    <Cell key={`borrow-${entry.asset}`} fill={justLendChartTheme.series.borrow} />
                   ))}
                 </Bar>
                 <Bar
                   dataKey="collateral"
                   name="抵押价值"
-                  fill="#22c55e"
+                  fill={justLendChartTheme.series.collateral}
                   stackId="bilateral"
                   barSize={18}
                 >
                   {bilateralData.map((entry) => (
-                    <Cell key={`collateral-${entry.asset}`} fill="#22c55e" />
+                    <Cell
+                      key={`collateral-${entry.asset}`}
+                      fill={justLendChartTheme.series.collateral}
+                    />
                   ))}
                 </Bar>
               </BarChart>
@@ -984,7 +1018,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <span className="card-title">逐资产仓位明细</span>
-          <span className="badge" style={{ background: '#0f172a', color: '#cbd5e1' }}>
+          <span className="badge" style={justLendChartTheme.badge.neutral}>
             {data.assets.length} 项
           </span>
         </div>

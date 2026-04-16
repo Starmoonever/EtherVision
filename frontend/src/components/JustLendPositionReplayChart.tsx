@@ -23,6 +23,7 @@ import {
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { ChartFallback } from '../shared/components/ChartFallback';
+import { justLendChartTheme } from './justlendTheme';
 
 interface JustLendPositionReplayChartProps {
   address: string;
@@ -105,28 +106,29 @@ const explainItems: ExplainItem[] = [
   },
 ];
 
-const assetColors = ['#22c55e', '#38bdf8', '#f59e0b', '#8b5cf6', '#14b8a6', '#ef4444'];
+const assetColors = justLendChartTheme.palettes.asset;
 
 const chartTheme = {
-  grid: '#1e293b',
+  grid: justLendChartTheme.grid,
   axis: {
-    stroke: '#64748b',
+    stroke: justLendChartTheme.axis.primary,
+    secondaryStroke: justLendChartTheme.axis.secondary,
   },
-  tooltipBg: '#0f172a',
-  tooltipBorder: '#1e293b',
+  tooltipBg: justLendChartTheme.tooltip.background,
+  tooltipBorder: justLendChartTheme.tooltip.border,
   bufferTrend: {
-    primary: '#38bdf8',
-    secondary: '#ef4444',
-    tertiary: '#f59e0b',
-    hoverLine: '#38bdf8',
-    reference: '#ef4444',
+    primary: justLendChartTheme.series.bufferDiscountedCollateral,
+    secondary: justLendChartTheme.series.bufferDebt,
+    tertiary: justLendChartTheme.series.bufferLiquidation,
+    hoverLine: justLendChartTheme.series.bufferHoverLine,
+    reference: justLendChartTheme.series.bufferReference,
   },
   riskTrend: {
-    healthFactor: '#38bdf8',
-    ltv: '#ef4444',
-    liquidationThreshold: '#f59e0b',
-    hoverLine: '#38bdf8',
-    reference: '#ef4444',
+    healthFactor: justLendChartTheme.series.riskHealthFactor,
+    ltv: justLendChartTheme.series.riskLtv,
+    liquidationThreshold: justLendChartTheme.series.riskLiquidationThreshold,
+    hoverLine: justLendChartTheme.series.riskHoverLine,
+    reference: justLendChartTheme.series.bufferReference,
   },
 } as const;
 
