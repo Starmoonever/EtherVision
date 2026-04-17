@@ -14,21 +14,46 @@ from crawler_shared.price_history import bucket_timestamp, get_historical_prices
 
 
 class _FakePool:
-    def __init__(self, symbol_row=None, price_row=None, cache_rows=None):
+    def __init__(
+        self,
+        symbol_row=None,
+        price_row=None,
+        cache_rows=None,
+        justlend_current_row=None,
+        justlend_snapshot_row=None,
+        tron_cache_row=None,
+        tron_cache_rows=None,
+        justlend_snapshot_bucket_rows=None,
+    ):
         self._symbol_row = symbol_row
         self._price_row = price_row
         self._cache_rows = cache_rows or []
+        self._justlend_current_row = justlend_current_row
+        self._justlend_snapshot_row = justlend_snapshot_row
+        self._tron_cache_row = tron_cache_row
+        self._tron_cache_rows = tron_cache_rows or []
+        self._justlend_snapshot_bucket_rows = justlend_snapshot_bucket_rows or []
 
     async def fetchrow(self, sql, *_args):
         if "CONCAT('0x', encode(reserve, 'hex'))" in sql:
             return self._symbol_row
         if "decode(replace(lower($1), '0x', ''), 'hex')" in sql:
             return self._price_row
+        if "FROM loan.justlend_markets_current" in sql:
+            return self._justlend_current_row
+        if "FROM loan.justlend_market_snapshots" in sql:
+            return self._justlend_snapshot_row
+        if "FROM loan.tron_price_timestamp" in sql:
+            return self._tron_cache_row
         return None
 
     async def fetch(self, sql, *_args):
         if "FROM loan.eth_price_timestamp" in sql:
             return self._cache_rows
+        if "FROM loan.tron_price_timestamp" in sql:
+            return self._tron_cache_rows
+        if "FROM loan.justlend_market_snapshots" in sql and "snapshot_bucket" in sql:
+            return self._justlend_snapshot_bucket_rows
         return []
 
 
@@ -131,7 +156,7 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
 
     with (
         patch(
-            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+            "crawler_shared.price_history.upsert_ethereum_price_cache", new=AsyncMock()
         ),
         patch(
             "aiohttp.ClientSession",
@@ -183,7 +208,7 @@ async def test_get_historical_prices_usd_supports_multiple_assets() -> None:
 
     with (
         patch(
-            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+            "crawler_shared.price_history.upsert_ethereum_price_cache", new=AsyncMock()
         ) as upsert_cache,
         patch(
             "aiohttp.ClientSession",
@@ -440,7 +465,7 @@ async def test_get_price_period_supports_registered_symbol() -> None:
 
     with (
         patch(
-            "crawler_shared.price_history.upsert_eth_price_timestamp", new=AsyncMock()
+            "crawler_shared.price_history.upsert_ethereum_price_cache", new=AsyncMock()
         ),
         patch(
             "aiohttp.ClientSession",
@@ -460,6 +485,162 @@ async def test_get_price_period_supports_registered_symbol() -> None:
     assert resp.asset == "ETH"
     assert resp.token_address == token_address
     assert [item.price_usd for item in resp.prices] == ["1.23", "1.45"]
+
+
+@pytest.mark.asyncio
+async def test_get_price_supports_tron_symbol_from_current_snapshot() -> None:
+    token_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    pool = _FakePool(
+        justlend_current_row={
+            "price_usd": "1.00",
+            "snapshot_at": datetime(2026, 4, 17, 12, 0, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    with (
+        patch(
+            "crawler_shared.api.service.ensure_tron_price_cache_table",
+            new=AsyncMock(),
+        ),
+        patch(
+            "crawler_shared.api.service.upsert_tron_price_cache",
+            new=AsyncMock(),
+        ) as upsert_cache,
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol="USDT",
+            address=None,
+            chain="tron",
+            pool=cast(asyncpg.Pool, pool),
+        )
+
+    assert resp.asset == "USDT"
+    assert resp.token_address == token_address
+    assert resp.price_usd == "1.00"
+    assert resp.source == "justlend-current"
+    upsert_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_price_tron_historical_falls_back_to_snapshot_when_cache_misses() -> (
+    None
+):
+    token_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    requested_ts = int(datetime(2026, 4, 16, 2, 13, 0, tzinfo=timezone.utc).timestamp())
+    pool = _FakePool(
+        justlend_snapshot_row={
+            "price_usd": "1.01",
+            "snapshot_at": datetime(2026, 4, 16, 0, 0, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    with (
+        patch(
+            "crawler_shared.api.service.ensure_tron_price_cache_table",
+            new=AsyncMock(),
+        ),
+        patch(
+            "crawler_shared.api.service.upsert_tron_price_cache",
+            new=AsyncMock(),
+        ) as upsert_cache,
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol="USDT",
+            address=None,
+            chain="tron",
+            pool=cast(asyncpg.Pool, pool),
+            timestamp=requested_ts,
+        )
+
+    assert resp.asset == "USDT"
+    assert resp.token_address == token_address
+    assert resp.price_usd == "1.01"
+    assert resp.source == "justlend-snapshot"
+    upsert_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_supports_tron_cache_and_snapshot_mix() -> None:
+    token_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    bucket0 = int(datetime(2026, 4, 16, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket1 = int(datetime(2026, 4, 16, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    pool = _FakePool(
+        tron_cache_rows=[{"timestamp_bucket": bucket0, "price_usd": "1.00"}],
+        justlend_snapshot_bucket_rows=[
+            {"timestamp_bucket": bucket1, "price_usd": "1.02"},
+        ],
+    )
+
+    with patch(
+        "crawler_shared.api.service.ensure_tron_price_cache_table",
+        new=AsyncMock(),
+    ):
+        resp = await service.get_price_period_service(
+            MagicMock(),
+            cast(asyncpg.Pool, pool),
+            symbol="USDT",
+            address=None,
+            chain="tron",
+            start=bucket0,
+            end=bucket1,
+            interval=60,
+        )
+
+    assert resp.asset == "USDT"
+    assert resp.token_address == token_address
+    assert resp.source == "justlend-mixed"
+    assert [item.price_usd for item in resp.prices] == ["1.00", "1.02"]
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_tron_snapshot_fallback_does_not_forward_fill_buckets() -> (
+    None
+):
+    bucket0 = int(datetime(2026, 4, 16, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket1 = int(datetime(2026, 4, 16, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket2 = int(datetime(2026, 4, 16, 2, 0, 0, tzinfo=timezone.utc).timestamp())
+    pool = _FakePool(
+        justlend_snapshot_bucket_rows=[
+            {"timestamp_bucket": bucket1, "price_usd": "1.02"},
+        ],
+    )
+
+    with patch(
+        "crawler_shared.api.service.ensure_tron_price_cache_table",
+        new=AsyncMock(),
+    ):
+        resp = await service.get_price_period_service(
+            MagicMock(),
+            cast(asyncpg.Pool, pool),
+            symbol="USDT",
+            address=None,
+            chain="tron",
+            start=bucket0,
+            end=bucket2,
+            interval=60,
+        )
+
+    assert [item.timestamp for item in resp.prices] == [
+        "2026-04-16T01:00:00Z",
+    ]
+    assert [item.price_usd for item in resp.prices] == ["1.02"]
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_rejects_interval_under_15_minutes() -> None:
+    with pytest.raises(Exception) as exc_info:
+        await service.get_price_period_service(
+            MagicMock(),
+            None,
+            symbol="eth",
+            address=None,
+            start=1,
+            end=2,
+            interval=14,
+        )
+    assert ">= 15" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -483,7 +664,7 @@ async def test_get_price_rejects_invalid_address() -> None:
             address="not-an-address",
             pool=None,
         )
-    assert "有效的 EVM 地址" in str(exc_info.value)
+    assert "EVM 或 TRON" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

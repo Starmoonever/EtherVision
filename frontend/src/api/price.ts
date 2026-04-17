@@ -20,6 +20,10 @@ interface PricePeriodResponse {
   prices: PricePeriodItem[];
 }
 
+export interface PriceQueryOptions {
+  chain?: 'ethereum' | 'tron';
+}
+
 const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const priceCache = new Map<string, { fetchedAt: number; value: number }>();
@@ -31,12 +35,20 @@ function isEvmAddress(value: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
 }
 
-function buildPriceQueryParam(value: string): string {
+function isTronAddress(value: string): boolean {
+  return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(value.trim());
+}
+
+function buildPriceQueryParam(value: string, options?: PriceQueryOptions): string {
   const normalized = value.trim();
+  const chainParam = options?.chain ? `&chain=${encodeURIComponent(options.chain)}` : '';
   if (isEvmAddress(normalized)) {
-    return `address=${encodeURIComponent(normalized)}`;
+    return `address=${encodeURIComponent(normalized)}${chainParam}`;
   }
-  return `symbol=${encodeURIComponent(normalized)}`;
+  if (isTronAddress(normalized)) {
+    return `address=${encodeURIComponent(normalized)}${chainParam || '&chain=tron'}`;
+  }
+  return `symbol=${encodeURIComponent(normalized)}${chainParam}`;
 }
 
 // ---------- API 函数 ----------
@@ -44,14 +56,17 @@ function buildPriceQueryParam(value: string): string {
 /**
  * 获取任意资产当前价格（USD）。
  */
-export async function fetchAssetPrice(asset: string): Promise<number> {
-  const result = await fetchAssetPriceWithMeta(asset);
+export async function fetchAssetPrice(asset: string, options?: PriceQueryOptions): Promise<number> {
+  const result = await fetchAssetPriceWithMeta(asset, options);
   return result.data;
 }
 
-export async function fetchAssetPriceWithMeta(asset: string): Promise<DataWithMeta<number>> {
+export async function fetchAssetPriceWithMeta(
+  asset: string,
+  options?: PriceQueryOptions,
+): Promise<DataWithMeta<number>> {
   const normalizedAsset = asset.trim();
-  const key = `now:${normalizedAsset.toLowerCase()}`;
+  const key = `now:${options?.chain || 'default'}:${normalizedAsset.toLowerCase()}`;
   const cached = priceCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
     return {
@@ -75,7 +90,7 @@ export async function fetchAssetPriceWithMeta(asset: string): Promise<DataWithMe
   }
 
   const request = apiFetch<PriceResponse>(
-    `/price?${buildPriceQueryParam(normalizedAsset)}&time=now`,
+    `/price?${buildPriceQueryParam(normalizedAsset, options)}&time=now`,
   )
     .then((data) => {
       const price = parseFloat(data.price_usd);
@@ -106,8 +121,9 @@ export async function fetchAssetPricePeriod(
   start: string,
   end: string,
   interval: number,
+  options?: PriceQueryOptions,
 ): Promise<PricePeriodItem[]> {
-  const result = await fetchAssetPricePeriodWithMeta(asset, start, end, interval);
+  const result = await fetchAssetPricePeriodWithMeta(asset, start, end, interval, options);
   return result.data;
 }
 
@@ -116,9 +132,10 @@ export async function fetchAssetPricePeriodWithMeta(
   start: string,
   end: string,
   interval: number,
+  options?: PriceQueryOptions,
 ): Promise<DataWithMeta<PricePeriodItem[]>> {
   const normalizedAsset = asset.trim();
-  const key = `${normalizedAsset.toLowerCase()}|${start}|${end}|${interval}`;
+  const key = `${options?.chain || 'default'}|${normalizedAsset.toLowerCase()}|${start}|${end}|${interval}`;
   const cached = pricePeriodCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
     return {
@@ -142,7 +159,7 @@ export async function fetchAssetPricePeriodWithMeta(
   }
 
   const request = apiFetch<PricePeriodResponse>(
-    `/price/period?${buildPriceQueryParam(normalizedAsset)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${interval}`,
+    `/price/period?${buildPriceQueryParam(normalizedAsset, options)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${interval}`,
   )
     .then((data) => {
       if (!data.prices || !Array.isArray(data.prices)) {

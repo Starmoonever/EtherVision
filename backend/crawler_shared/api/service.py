@@ -7,6 +7,7 @@ import logging
 import time as _time
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import asyncpg
 from web3 import AsyncWeb3
@@ -25,6 +26,17 @@ from crawler_shared.price_history import (
     get_historical_bucket_prices_usd,
     get_historical_price_usd,
 )
+from justlend_crawler.api.service import (
+    _fetch_justlend_market_catalog,
+    _normalize_tron_address,
+)
+from justlend_crawler.constants import JUSTLEND_CHAIN
+from justlend_crawler.db import (
+    ensure_tron_price_cache_table,
+    get_cached_tron_bucket_prices_usd,
+    get_cached_tron_price_usd,
+    upsert_tron_price_cache,
+)
 from .constants import (
     ETHEREUM_PRICE_ASSET_BY_ADDRESS,
     ETHEREUM_PRICE_ASSETS,
@@ -42,6 +54,7 @@ from .schemas import (
 logger = logging.getLogger(__name__)
 
 _cache: dict = {}
+_TRON_PRICE_CACHE_TTL_SECONDS = 60
 
 _SQL_COMPOUND_V3_RESERVE_BY_SYMBOL = """
 SELECT
@@ -52,6 +65,46 @@ WHERE symbol IS NOT NULL
   AND UPPER(symbol) = $1
 ORDER BY "timestamp" DESC
 LIMIT 1
+"""
+
+_SQL_JUSTLEND_LATEST_CURRENT_PRICE = """
+SELECT
+    price_usd,
+    snapshot_at
+FROM loan.justlend_markets_current
+WHERE underlying_address = $1
+  AND price_usd IS NOT NULL
+ORDER BY snapshot_at DESC
+LIMIT 1
+"""
+
+_SQL_JUSTLEND_LATEST_SNAPSHOT_PRICE = """
+SELECT
+    price_usd,
+    snapshot_at
+FROM loan.justlend_market_snapshots
+WHERE underlying_address = $1
+  AND snapshot_at <= to_timestamp($2)
+  AND price_usd IS NOT NULL
+ORDER BY snapshot_at DESC
+LIMIT 1
+"""
+
+_SQL_JUSTLEND_SNAPSHOT_BUCKET_PRICES = """
+SELECT DISTINCT ON (snapshot_bucket)
+    snapshot_bucket AS timestamp_bucket,
+    price_usd
+FROM (
+    SELECT
+        ((EXTRACT(EPOCH FROM snapshot_at)::bigint / 900) * 900) AS snapshot_bucket,
+        snapshot_at,
+        price_usd
+    FROM loan.justlend_market_snapshots
+    WHERE underlying_address = $1
+      AND price_usd IS NOT NULL
+      AND ((EXTRACT(EPOCH FROM snapshot_at)::bigint / 900) * 900) = ANY($2::bigint[])
+) AS bucketed
+ORDER BY snapshot_bucket ASC, snapshot_at DESC
 """
 
 _SQL_COMPOUND_V3_LATEST_RESERVE_PRICE = """
@@ -126,18 +179,31 @@ def _is_evm_token_address(asset: str) -> bool:
 def _normalize_token_address(asset: str) -> str | None:
     if not _is_evm_token_address(asset):
         return None
-    try:
-        return AsyncWeb3.to_checksum_address(asset.strip())
-    except ValueError:
-        return None
+    return asset.strip()
+
+
+def _normalize_chain(chain: str | None) -> str:
+    if chain is None:
+        return "ethereum"
+    normalized = chain.strip().lower()
+    if normalized in {"eth", "ethereum"}:
+        return "ethereum"
+    if normalized in {"tron", "trx"}:
+        return JUSTLEND_CHAIN
+    from fastapi import HTTPException
+
+    raise HTTPException(status_code=400, detail=f"不支持的 chain: {chain}")
 
 
 async def _resolve_price_asset(
     *,
     symbol: str | None,
     address: str | None,
-) -> tuple[str, str, bool]:
+    chain: str | None = None,
+) -> tuple[str, str, str]:
     from fastapi import HTTPException
+
+    normalized_chain = _normalize_chain(chain)
 
     if (symbol is None) == (address is None):
         raise HTTPException(
@@ -147,25 +213,54 @@ async def _resolve_price_asset(
 
     if address is not None:
         normalized_address = _normalize_token_address(address)
-        if normalized_address is None:
-            raise HTTPException(status_code=400, detail="address 不是有效的 EVM 地址")
-        registered = ETHEREUM_PRICE_ASSET_BY_ADDRESS.get(normalized_address.lower())
-        if registered is not None:
-            registered_asset, token_address, _ = registered
-            return registered_asset, token_address, False
-        return normalized_address, normalized_address, False
+        if normalized_address is not None:
+            if normalized_chain != "ethereum":
+                raise HTTPException(
+                    status_code=400,
+                    detail="address 与 chain 不匹配：EVM 地址必须使用 ethereum",
+                )
+            registered = ETHEREUM_PRICE_ASSET_BY_ADDRESS.get(normalized_address.lower())
+            if registered is not None:
+                registered_asset, token_address, asset_chain = registered
+                return registered_asset, token_address, asset_chain
+            return normalized_address, normalized_address, "ethereum"
+
+        normalized_tron_address = _normalize_tron_address(address)
+        if normalized_tron_address is not None:
+            if normalized_chain != JUSTLEND_CHAIN:
+                raise HTTPException(
+                    status_code=400,
+                    detail="address 与 chain 不匹配：TRON 地址必须使用 tron",
+                )
+            for asset, token_address, asset_chain in SUPPORTED_PRICE_ASSETS:
+                if (
+                    asset_chain == JUSTLEND_CHAIN
+                    and token_address == normalized_tron_address
+                ):
+                    return asset, token_address, asset_chain
+            return normalized_tron_address, normalized_tron_address, JUSTLEND_CHAIN
+
+        raise HTTPException(
+            status_code=400,
+            detail="address 不是有效的 EVM 或 TRON Base58 地址",
+        )
 
     assert symbol is not None
     normalized_asset = _normalize_price_asset(symbol)
     target = PRICE_ASSET_ALIASES.get(normalized_asset.upper(), normalized_asset.upper())
-    registered = ETHEREUM_PRICE_ASSETS.get(target.upper())
-    if registered is not None:
-        registered_asset, token_address, _ = registered
-        return registered_asset, token_address, False
+    if normalized_chain == "ethereum":
+        registered = ETHEREUM_PRICE_ASSETS.get(target.upper())
+        if registered is not None:
+            registered_asset, token_address, asset_chain = registered
+            return registered_asset, token_address, asset_chain
+    else:
+        for asset, token_address, asset_chain in SUPPORTED_PRICE_ASSETS:
+            if asset_chain == JUSTLEND_CHAIN and asset.upper() == target.upper():
+                return asset, token_address, asset_chain
 
     raise HTTPException(
         status_code=404,
-        detail=f"未找到 symbol '{symbol}' 对应的受支持资产",
+        detail=f"未找到 symbol '{symbol}' 在 chain '{normalized_chain}' 对应的受支持资产",
     )
 
 
@@ -272,6 +367,136 @@ async def _get_latest_compound_v3_reserve_price(
     return Decimal(str(row["price_usd"])), int(row["timestamp"].timestamp())
 
 
+async def _get_latest_justlend_current_price(
+    pool: asyncpg.Pool,
+    token_address: str,
+) -> tuple[Decimal, int] | None:
+    row = await pool.fetchrow(_SQL_JUSTLEND_LATEST_CURRENT_PRICE, token_address)
+    if row is None or row["price_usd"] is None or row["snapshot_at"] is None:
+        return None
+    return Decimal(str(row["price_usd"])), int(row["snapshot_at"].timestamp())
+
+
+async def _get_latest_justlend_snapshot_price(
+    pool: asyncpg.Pool,
+    token_address: str,
+    timestamp: int,
+) -> tuple[Decimal, int] | None:
+    row = await pool.fetchrow(
+        _SQL_JUSTLEND_LATEST_SNAPSHOT_PRICE, token_address, timestamp
+    )
+    if row is None or row["price_usd"] is None or row["snapshot_at"] is None:
+        return None
+    return Decimal(str(row["price_usd"])), int(row["snapshot_at"].timestamp())
+
+
+async def _get_justlend_snapshot_bucket_prices(
+    pool: asyncpg.Pool,
+    *,
+    token_address: str,
+    buckets: list[int],
+) -> dict[int, Decimal]:
+    if not buckets:
+        return {}
+    rows = await pool.fetch(
+        _SQL_JUSTLEND_SNAPSHOT_BUCKET_PRICES,
+        token_address,
+        sorted(set(buckets)),
+    )
+    result: dict[int, Decimal] = {}
+    for row in rows:
+        if row["price_usd"] is None:
+            continue
+        result[int(row["timestamp_bucket"])] = Decimal(str(row["price_usd"]))
+    return result
+
+
+async def _get_tron_market_prices_from_api(
+    cfg: Any,
+    tron_rpc: Any,
+) -> tuple[dict[str, tuple[str, Decimal]], int]:
+    now_ts = int(_time.time())
+    cache_key = "tron_market_prices"
+    cached = _cache.get(cache_key)
+    if (
+        isinstance(cached, tuple)
+        and len(cached) == 2
+        and now_ts - int(cached[1]) < _TRON_PRICE_CACHE_TTL_SECONDS
+    ):
+        return cached  # type: ignore[return-value]
+
+    catalog = await _fetch_justlend_market_catalog(
+        cfg,
+        tron_rpc=tron_rpc,
+        market_addresses=[],
+    )
+    prices: dict[str, tuple[str, Decimal]] = {}
+    for entry in catalog.values():
+        if not isinstance(entry, dict):
+            continue
+        asset_address = _normalize_tron_address(entry.get("underlying_address"))
+        symbol = str(entry.get("underlying_symbol") or "").strip().upper()
+        price_usd = entry.get("price_usd")
+        if not asset_address or not symbol or price_usd is None:
+            continue
+        prices[asset_address] = (symbol, Decimal(str(price_usd)))
+    value = (prices, now_ts)
+    _cache[cache_key] = value
+    return value
+
+
+async def _lazy_fill_current_tron_bucket(
+    *,
+    pool: asyncpg.Pool,
+    cfg: Any,
+    tron_rpc: Any,
+) -> tuple[dict[str, tuple[str, Decimal]], int]:
+    await ensure_tron_price_cache_table(pool)
+    prices, fetched_ts = await _get_tron_market_prices_from_api(cfg, tron_rpc)
+    await asyncio.gather(
+        *[
+            upsert_tron_price_cache(
+                pool,
+                fetched_ts,
+                asset_address,
+                symbol,
+                price_usd,
+                source="justlend-api",
+            )
+            for asset_address, (symbol, price_usd) in prices.items()
+        ]
+    )
+    return prices, fetched_ts
+
+
+async def _cache_tron_price(
+    *,
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+    asset_symbol: str,
+    price_usd: Decimal,
+    source: str,
+) -> None:
+    try:
+        await upsert_tron_price_cache(
+            pool,
+            unix_ts,
+            asset_address,
+            asset_symbol,
+            price_usd,
+            source=source,
+        )
+    except Exception as exc:
+        logger.warning(
+            "failed to cache tron price asset=%s bucket=%s source=%s: %s",
+            asset_address,
+            unix_ts,
+            source,
+            exc,
+        )
+
+
 def _ts_to_utc_str(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -291,14 +516,117 @@ async def get_price(
     symbol: str | None,
     address: str | None,
     pool: asyncpg.Pool | None,
+    chain: str | None = None,
+    justlend_cfg: Any | None = None,
+    tron_rpc: Any | None = None,
     timestamp: int | None = None,
 ) -> PriceResponse:
     from fastapi import HTTPException
 
-    resolved_asset, token_address, _ = await _resolve_price_asset(
+    resolved_asset, token_address, asset_chain = await _resolve_price_asset(
         symbol=symbol,
         address=address,
+        chain=chain,
     )
+
+    if asset_chain == JUSTLEND_CHAIN:
+        if pool is None:
+            raise HTTPException(
+                status_code=503, detail="数据库连接尚未就绪，请稍后重试"
+            )
+
+        if timestamp is None:
+            current_price = await _get_latest_justlend_current_price(
+                pool, token_address
+            )
+            if current_price is not None:
+                price, snapshot_ts = current_price
+                await ensure_tron_price_cache_table(pool)
+                await _cache_tron_price(
+                    pool=pool,
+                    unix_ts=snapshot_ts,
+                    asset_address=token_address,
+                    asset_symbol=resolved_asset,
+                    price_usd=price,
+                    source="justlend-current",
+                )
+                return PriceResponse(
+                    asset=resolved_asset,
+                    price_usd=_fmt(price, 2),
+                    token_address=token_address,
+                    timestamp=_ts_to_utc_str(snapshot_ts),
+                    source="justlend-current",
+                )
+
+            if justlend_cfg is not None:
+                prices, fetched_ts = await _lazy_fill_current_tron_bucket(
+                    pool=pool,
+                    cfg=justlend_cfg,
+                    tron_rpc=tron_rpc,
+                )
+                current = prices.get(token_address)
+                if current is not None:
+                    _, price = current
+                    return PriceResponse(
+                        asset=resolved_asset,
+                        price_usd=_fmt(price, 2),
+                        token_address=token_address,
+                        timestamp=_ts_to_utc_str(fetched_ts),
+                        source="justlend-api",
+                    )
+
+            raise HTTPException(
+                status_code=502,
+                detail=f"无法获取资产 '{symbol or address}' 的 TRON 实时价格",
+            )
+
+        await ensure_tron_price_cache_table(pool)
+        cached = await get_cached_tron_price_usd(pool, timestamp, token_address)
+        if cached is not None:
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(cached, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str((timestamp // 900) * 900),
+                source="justlend-cache",
+            )
+
+        now_bucket = (int(_time.time()) // 900) * 900
+        requested_bucket = (timestamp // 900) * 900
+        if requested_bucket == now_bucket and justlend_cfg is not None:
+            prices, fetched_ts = await _lazy_fill_current_tron_bucket(
+                pool=pool,
+                cfg=justlend_cfg,
+                tron_rpc=tron_rpc,
+            )
+            current = prices.get(token_address)
+            if current is not None:
+                _, price = current
+                return PriceResponse(
+                    asset=resolved_asset,
+                    price_usd=_fmt(price, 2),
+                    token_address=token_address,
+                    timestamp=_ts_to_utc_str((fetched_ts // 900) * 900),
+                    source="justlend-api",
+                )
+
+        snapshot = await _get_latest_justlend_snapshot_price(
+            pool, token_address, timestamp
+        )
+        if snapshot is not None:
+            price, snapshot_ts = snapshot
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(snapshot_ts),
+                source="justlend-snapshot",
+            )
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"未找到资产 '{symbol or address}' 的 TRON 历史价格",
+        )
 
     if timestamp is None:
         oracle_exc: Exception | None = None
@@ -389,20 +717,84 @@ async def get_price_period_service(
     start: int,
     end: int,
     interval: int,
+    chain: str | None = None,
+    justlend_cfg: Any | None = None,
+    tron_rpc: Any | None = None,
 ) -> PricePeriodResponse:
     from fastapi import HTTPException
 
     if end < start:
         raise HTTPException(status_code=400, detail="end 必须晚于或等于 start")
-    if interval < 1:
-        raise HTTPException(status_code=400, detail="interval 必须 >= 1 分钟")
+    if interval < 15:
+        raise HTTPException(status_code=400, detail="interval 必须 >= 15 分钟")
 
-    resolved_asset, token_address, _ = await _resolve_price_asset(
+    resolved_asset, token_address, asset_chain = await _resolve_price_asset(
         symbol=symbol,
         address=address,
+        chain=chain,
     )
     step = interval * 60
     expected_buckets = bucket_timestamps(start, end, step)
+
+    if asset_chain == JUSTLEND_CHAIN:
+        if pool is None:
+            raise HTTPException(
+                status_code=503, detail="数据库连接尚未就绪，请稍后重试"
+            )
+        await ensure_tron_price_cache_table(pool)
+        price_map = await get_cached_tron_bucket_prices_usd(
+            pool,
+            asset_address=token_address,
+            buckets=expected_buckets,
+        )
+        now_bucket = (int(_time.time()) // 900) * 900
+        if (
+            now_bucket in expected_buckets
+            and now_bucket not in price_map
+            and justlend_cfg is not None
+        ):
+            prices, _ = await _lazy_fill_current_tron_bucket(
+                pool=pool,
+                cfg=justlend_cfg,
+                tron_rpc=tron_rpc,
+            )
+            current = prices.get(token_address)
+            if current is not None:
+                _, price = current
+                price_map[now_bucket] = price
+
+        missing = [bucket for bucket in expected_buckets if bucket not in price_map]
+        used_snapshot_fallback = False
+        if missing:
+            used_snapshot_fallback = True
+            snapshot_prices = await _get_justlend_snapshot_bucket_prices(
+                pool,
+                token_address=token_address,
+                buckets=missing,
+            )
+            price_map.update(snapshot_prices)
+
+        items = [
+            PricePeriodItem(
+                price_usd=_fmt(price_map[bucket], 2),
+                timestamp=_ts_to_utc_str(bucket),
+            )
+            for bucket in expected_buckets
+            if bucket in price_map
+        ]
+        if not items:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 '{symbol or address}' 在指定区间的 TRON 价格数据",
+            )
+        source = "justlend-mixed" if used_snapshot_fallback else "justlend-cache"
+        return PricePeriodResponse(
+            asset=resolved_asset,
+            token_address=token_address,
+            source=source,
+            prices=items,
+        )
+
     price_map = await get_historical_bucket_prices_usd(
         pool,
         token_address=token_address,

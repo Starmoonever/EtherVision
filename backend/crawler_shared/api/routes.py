@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -11,6 +12,15 @@ from .schemas import PriceAssetsResponse, PricePeriodResponse, PriceResponse
 from .service import get_price, get_price_period_service, get_supported_price_assets
 
 router = APIRouter(prefix="/api")
+
+_PRICE_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    400: {
+        "description": "请求参数无效，例如时间格式错误、chain 非法或 interval 小于最小粒度"
+    },
+    404: {"description": "未找到对应资产或指定区间内无价格数据"},
+    502: {"description": "上游价格源不可用或返回异常"},
+    503: {"description": "RPC 或数据库连接尚未就绪"},
+}
 
 
 def _w3(request: Request):
@@ -71,38 +81,61 @@ async def price_assets() -> PriceAssetsResponse:
 
 
 @router.get(
-    "/price", response_model=PriceResponse, summary="查询资产价格（当前或历史）"
+    "/price",
+    response_model=PriceResponse,
+    summary="查询资产价格（当前或历史）",
+    responses=_PRICE_ERROR_RESPONSES,
 )
 async def asset_price(
     request: Request,
     pool: AsyncpgPool,
     symbol: str | None = Query(None, description="代币符号，如 ETH、WBTC、USDC"),
-    address: str | None = Query(None, description="EVM 代币地址，如 0x..."),
+    address: str | None = Query(None, description="代币地址，如 0x... 或 T..."),
+    chain: str | None = Query(
+        None, description="链标识，如 ethereum 或 tron；默认 ethereum"
+    ),
     time: str = Query("now", description="now 或 UTC 时间字符串"),
 ) -> PriceResponse:
     symbol, address = _require_symbol_or_address(symbol=symbol, address=address)
     if time == "now":
-        return await get_price(_w3(request), symbol=symbol, address=address, pool=pool)
+        return await get_price(
+            _w3(request),
+            symbol=symbol,
+            address=address,
+            chain=chain,
+            pool=pool,
+            justlend_cfg=getattr(request.app.state, "justlend_cfg", None),
+            tron_rpc=getattr(request.app.state, "tron_rpc", None),
+        )
     return await get_price(
         _w3(request),
         symbol=symbol,
         address=address,
+        chain=chain,
         pool=pool,
+        justlend_cfg=getattr(request.app.state, "justlend_cfg", None),
+        tron_rpc=getattr(request.app.state, "tron_rpc", None),
         timestamp=_parse_utc_time(time),
     )
 
 
 @router.get(
-    "/price/period", response_model=PricePeriodResponse, summary="查询资产历史价格时序"
+    "/price/period",
+    response_model=PricePeriodResponse,
+    summary="查询资产历史价格时序",
+    responses=_PRICE_ERROR_RESPONSES,
 )
 async def asset_price_period(
     request: Request,
     pool: AsyncpgPool,
     symbol: str | None = Query(None, description="代币符号，如 ETH、WBTC、USDC"),
-    address: str | None = Query(None, description="EVM 代币地址，如 0x..."),
+    address: str | None = Query(None, description="代币地址，如 0x... 或 T..."),
+    chain: str | None = Query(
+        None, description="链标识，如 ethereum 或 tron；默认 ethereum"
+    ),
     start: str = Query(..., description="起始时间（UTC）"),
     end: str = Query(..., description="结束时间（UTC）"),
-    interval: int = Query(60, ge=1, description="采样间隔（分钟），最小 1"),
+    interval: int = Query(60, ge=15, description="采样间隔（分钟），最小 15"),
 ) -> PricePeriodResponse:
     symbol, address = _require_symbol_or_address(symbol=symbol, address=address)
     start_ts = _parse_utc_time(start)
@@ -114,7 +147,10 @@ async def asset_price_period(
         pool,
         symbol=symbol,
         address=address,
+        chain=chain,
         start=start_ts,
         end=end_ts,
         interval=interval,
+        justlend_cfg=getattr(request.app.state, "justlend_cfg", None),
+        tron_rpc=getattr(request.app.state, "tron_rpc", None),
     )

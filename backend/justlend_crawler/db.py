@@ -438,6 +438,56 @@ CREATE INDEX IF NOT EXISTS idx_justlend_market_snapshots_underlying_ts
     ON loan.justlend_market_snapshots (underlying_address, snapshot_at DESC);
 """
 
+_DDL_TRON_PRICE_TIMESTAMP = """
+CREATE TABLE IF NOT EXISTS loan.tron_price_timestamp (
+    id               BIGSERIAL       PRIMARY KEY,
+    timestamp_bucket BIGINT          NOT NULL,
+    asset_address    TEXT            NOT NULL,
+    asset_symbol     TEXT            NOT NULL DEFAULT '',
+    price_usd        NUMERIC(30, 8)  NOT NULL,
+    source           TEXT            NOT NULL DEFAULT 'justlend-api',
+    fetched_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    UNIQUE (timestamp_bucket, asset_address)
+);
+"""
+
+_DDL_TRON_PRICE_TIMESTAMP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_tron_price_ts_bucket_addr
+    ON loan.tron_price_timestamp (timestamp_bucket, asset_address);
+"""
+
+_DDL_TRON_PRICE_TIMESTAMP_STORAGE = """
+ALTER TABLE loan.tron_price_timestamp
+    ALTER COLUMN asset_address SET STORAGE PLAIN;
+"""
+
+_SQL_GET_TRON_PRICE_CACHED = """
+SELECT price_usd
+  FROM loan.tron_price_timestamp
+ WHERE timestamp_bucket = $1
+   AND asset_address = $2
+ LIMIT 1
+"""
+
+_SQL_GET_TRON_BUCKET_PRICES_CACHED = """
+SELECT timestamp_bucket, price_usd
+  FROM loan.tron_price_timestamp
+ WHERE asset_address = $1
+   AND timestamp_bucket = ANY($2::bigint[])
+ ORDER BY timestamp_bucket ASC
+"""
+
+_SQL_UPSERT_TRON_PRICE = """
+INSERT INTO loan.tron_price_timestamp
+    (timestamp_bucket, asset_address, asset_symbol, price_usd, source)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (timestamp_bucket, asset_address) DO UPDATE SET
+    price_usd = EXCLUDED.price_usd,
+    asset_symbol = EXCLUDED.asset_symbol,
+    source = EXCLUDED.source,
+    fetched_at = NOW()
+"""
+
 _SQL_UPSERT_MARKET_CURRENT = """
 INSERT INTO loan.justlend_markets_current (
     market_address,
@@ -699,7 +749,75 @@ async def ensure_justlend_tables(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_MARKETS_CURRENT_INDEXES)
             await conn.execute(_DDL_MARKET_SNAPSHOTS)
             await conn.execute(_DDL_MARKET_SNAPSHOTS_INDEXES)
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP)
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_INDEX)
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_STORAGE)
     logger.info("JustLend scaffold tables are ready")
+
+
+def _tron_price_bucket(unix_ts: int) -> int:
+    return (unix_ts // 900) * 900
+
+
+async def ensure_tron_price_cache_table(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.fetchval(_DDL_LOCK_SQL, f"{_DDL_LOCK_NAME}.tron_price_timestamp")
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP)
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_INDEX)
+            await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_STORAGE)
+
+
+async def get_cached_tron_price_usd(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+) -> Decimal | None:
+    row = await pool.fetchrow(
+        _SQL_GET_TRON_PRICE_CACHED,
+        _tron_price_bucket(unix_ts),
+        asset_address,
+    )
+    if row is None:
+        return None
+    return Decimal(str(row["price_usd"]))
+
+
+async def get_cached_tron_bucket_prices_usd(
+    pool: asyncpg.Pool,
+    *,
+    asset_address: str,
+    buckets: list[int],
+) -> dict[int, Decimal]:
+    if not buckets:
+        return {}
+    rows = await pool.fetch(
+        _SQL_GET_TRON_BUCKET_PRICES_CACHED,
+        asset_address,
+        sorted(set(buckets)),
+    )
+    return {
+        int(row["timestamp_bucket"]): Decimal(str(row["price_usd"])) for row in rows
+    }
+
+
+async def upsert_tron_price_cache(
+    pool: asyncpg.Pool,
+    unix_ts: int,
+    asset_address: str,
+    asset_symbol: str,
+    price_usd: Decimal,
+    source: str = "justlend-api",
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _SQL_UPSERT_TRON_PRICE,
+            _tron_price_bucket(unix_ts),
+            asset_address,
+            asset_symbol,
+            price_usd,
+            source,
+        )
 
 
 async def fetch_justlend_user_tx_history(

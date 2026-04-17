@@ -101,6 +101,13 @@ uv sync
 - `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
 - 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
 
+TRON 价格查询的现状与约定：
+
+- `/api/price` 与 `/api/price/period` 已支持通过 `chain=tron` 或 TRON Base58 地址查询波场资产
+- TRON 小粒度价格缓存表为 `loan.tron_price_timestamp`，地址统一存储为规范化 Base58 `T...` 文本，并使用列级 `STORAGE PLAIN`
+- `loan.tron_price_timestamp` 采用“懒更新”模式：查询命中缓存则直接返回；查询未命中时，仅在当前 15 分钟桶触发一次 JustLend 市场接口抓取并回填该桶
+- 对于未命中的历史 TRON bucket，当前仍回退到 `loan.justlend_market_snapshots` 中最近的市场快照；如果该表只有日级快照，则返回结果粒度也会受限于现有快照密度
+
 ## 常用命令
 
 ### 启动 API

@@ -387,6 +387,17 @@ class TestPrice:
         assert kwargs["symbol"] is None
         assert kwargs["address"] == "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 
+    def test_tron_symbol_chain_forwarded(self, client: TestClient):
+        with patch(
+            f"{_COMMON_ROUTES}.get_price",
+            new_callable=AsyncMock,
+            return_value=MOCK_PRICE_ONCHAIN,
+        ) as mock_svc:
+            resp = client.get("/api/price", params={"symbol": "usdt", "chain": "tron"})
+        assert resp.status_code == 200
+        _, kwargs = mock_svc.call_args
+        assert kwargs["chain"] == "tron"
+
     def test_symbol_and_address_together_returns_400(self, client: TestClient):
         resp = client.get(
             "/api/price",
@@ -936,7 +947,7 @@ class TestPricePeriod:
         _, kwargs = mock_svc.call_args
         assert kwargs["interval"] == 60
 
-    @pytest.mark.parametrize("interval", [1, 15, 30, 60, 1440])
+    @pytest.mark.parametrize("interval", [15, 30, 60, 1440])
     def test_various_intervals_accepted(self, client: TestClient, interval: int):
         with patch(
             f"{_COMMON_ROUTES}.get_price_period_service",
@@ -954,15 +965,16 @@ class TestPricePeriod:
             )
         assert resp.status_code == 200
 
-    def test_interval_zero_returns_422(self, client: TestClient):
-        """interval < 1 应返回 422 Unprocessable Entity。"""
+    @pytest.mark.parametrize("interval", [0, 1, 14])
+    def test_interval_under_15_returns_422(self, client: TestClient, interval: int):
+        """interval < 15 应返回 422 Unprocessable Entity。"""
         resp = client.get(
             "/api/price/period",
             params={
                 "symbol": "eth",
                 "start": "2024-06-01",
                 "end": "2024-06-30",
-                "interval": 0,
+                "interval": interval,
             },
         )
         assert resp.status_code == 422
