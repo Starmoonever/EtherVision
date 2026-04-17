@@ -10,7 +10,6 @@ from crawler_shared.logging import setup_cli_logging
 from .config import load_config
 from .crawler import run_crawler
 from .db import create_pool, ensure_morpho_tables
-from .watcher import run_watcher
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -65,35 +64,6 @@ def cmd_crawl(config: str | None, protocol: str, verbose: bool) -> None:
         pool = await create_pool(cfg.postgres)
         try:
             await run_crawler(cfg, pool)
-        finally:
-            await pool.close()
-
-    asyncio.run(_run())
-
-
-@cli.command("watch")
-@click.option("--config", "-c", default=None, help="config.yaml path")
-@click.option(
-    "--protocol",
-    "-p",
-    default="blue",
-    type=click.Choice(["blue"]),
-    show_default=True,
-    help="Morpho protocol selector",
-)
-@click.option(
-    "--verbose", "-v", is_flag=True, default=False, help="Enable DEBUG logging"
-)
-def cmd_watch(config: str | None, protocol: str, verbose: bool) -> None:
-    """Reserved command for future Morpho watcher."""
-    _setup_logging(verbose)
-    cfg = load_config(config)
-    cfg.protocol = protocol
-
-    async def _run() -> None:
-        pool = await create_pool(cfg.postgres)
-        try:
-            await run_watcher(cfg, pool)
         finally:
             await pool.close()
 

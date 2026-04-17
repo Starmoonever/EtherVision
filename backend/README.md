@@ -149,6 +149,8 @@ uv run aave-crawler check 0xAddress
 - `uv run morpho-crawler`
 - `uv run justlend-crawler`
 
+当前仅 `aave-crawler` 保留可运行的 `watch` 命令；Compound / Morpho / JustLend 的 watcher 占位 CLI 已移除，避免在本仓库内误执行无实际补全逻辑的任务。
+
 如果需要新增协议级命令，优先检查各自 `cli.py` 与 `crawler_shared.server` 的集成方式。
 
 ## 数据库访问模式
