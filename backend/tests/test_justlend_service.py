@@ -170,6 +170,65 @@ async def test_fetch_position_from_justlend_api_recomputes_summary_from_assets()
 
 
 @pytest.mark.asyncio
+async def test_fetch_position_from_justlend_api_marks_non_entered_supply_as_supply() -> (
+    None
+):
+    market_payload = {
+        "code": 0,
+        "data": {
+            "tokenList": [
+                {
+                    "address": "TUSDTMarket11111111111111111111111111",
+                    "underlyingAddress": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+                    "underlyingSymbol": "USDT",
+                    "underlyingDecimal": 6,
+                    "underlyingPriceInTrx": "0.35714285714285715",
+                    "collateralFactor": "0.8",
+                },
+            ]
+        },
+    }
+    account_payload = {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "address": "TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ",
+                    "totalCollateralValueInTrx": "0",
+                    "totalBorrowValueInTrx": "0",
+                    "tokens": [
+                        {
+                            "address": "TUSDTMarket11111111111111111111111111",
+                            "underlyingSymbol": "USDT",
+                            "supplyBalanceUnderlying": "100",
+                            "borrowBalanceUnderlying": "0",
+                            "entered": False,
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+
+    with patch.object(
+        service,
+        "_fetch_json",
+        new=AsyncMock(side_effect=[market_payload, account_payload]),
+    ):
+        result = await service.fetch_position_from_justlend_api(
+            "TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ",
+            api_base_url="https://api.justlend.invalid",
+            timeout=3.0,
+        )
+
+    assert result["total_collateral_usd"] == Decimal("0")
+    assert result["available_borrow_usd"] == Decimal("0")
+    assert result["liquidation_threshold"] == Decimal("0")
+    assert len(result["assets"]) == 1
+    assert result["assets"][0]["side"] == "supply"
+
+
+@pytest.mark.asyncio
 async def test_get_positions_rejects_asset_sort_with_side_all() -> None:
     pool = cast(asyncpg.Pool, object())
     with pytest.raises(service.HTTPException) as exc_info:
@@ -280,6 +339,62 @@ def test_build_justlend_user_predicate_supports_legacy_base58_bytea_storage() ->
     candidates = cast(list[bytes], bind_values[0])
     assert user_address in candidates
     assert b"TUjx6w55Nx9G4GjjRNEB4e7w5BUH3WmJTZ" in candidates
+
+
+@pytest.mark.asyncio
+async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> None:
+    pool = cast(asyncpg.Pool, object())
+    user_address = bytes.fromhex("41d148e2b66c5d5979fe1f7f4b2a791ef6ab733e8a")
+    asset = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    asset_address = service._tron_address_to_bytes(asset)
+    rows = [
+        {
+            "user_address": user_address,
+            "chain": "tron",
+            "protocol": "trx",
+            "snapshot_at": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "block_timestamp": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "total_collateral_usd": Decimal("100"),
+            "total_debt_usd": Decimal("20"),
+            "available_borrow_usd": Decimal("55"),
+            "health_factor": Decimal("5"),
+            "ltv": Decimal("0.2"),
+            "liquidation_threshold": Decimal("0.75"),
+            "matched_asset_value_usd": Decimal("0"),
+            "total_count": 1,
+        }
+    ]
+
+    with (
+        patch.object(
+            service,
+            "fetch_current_user_positions_page",
+            new=AsyncMock(return_value=rows),
+        ) as mocked_page,
+        patch.object(
+            service,
+            "fetch_current_user_position_assets_by_users",
+            new=AsyncMock(return_value=[]),
+        ) as mocked_assets,
+    ):
+        result = await service.get_positions(
+            pool,
+            page=1,
+            page_size=10,
+            sort_by="total_supply_usd",
+            order="desc",
+            side="all",
+            asset=asset,
+            detail=True,
+        )
+
+    assert result.asset == asset
+    mocked_page.assert_awaited_once()
+    assert mocked_page.await_args is not None
+    assert mocked_page.await_args.kwargs["asset_address"] == asset_address
+    mocked_assets.assert_awaited_once()
+    assert mocked_assets.await_args is not None
+    assert mocked_assets.await_args.kwargs["asset_address"] == asset_address
 
 
 @pytest.mark.asyncio

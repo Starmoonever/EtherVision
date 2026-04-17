@@ -496,6 +496,15 @@ def _fmt_health(value: Decimal) -> str:
     return format(value.quantize(Decimal("0.000000000000000001")), "f")
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "t", "yes", "y"}
+
+
 def _double_sha256(data: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
@@ -1671,10 +1680,11 @@ async def fetch_position_from_justlend_api(
         supply_amount = _decimal(item.get("supplyBalanceUnderlying", "0"))
         if supply_amount > 0:
             value_usd = supply_amount * price_usd
+            is_collateral = _as_bool(item.get("entered"))
             assets.append(
                 {
                     "asset_address": _tron_address_to_bytes(underlying_address),
-                    "side": "collateral",
+                    "side": "collateral" if is_collateral else "supply",
                     "symbol": symbol or None,
                     "decimals": int(decimals) if decimals is not None else None,
                     "amount": supply_amount,
@@ -1687,7 +1697,8 @@ async def fetch_position_from_justlend_api(
                     },
                 }
             )
-            discounted_collateral_usd += value_usd * collateral_factor
+            if is_collateral:
+                discounted_collateral_usd += value_usd * collateral_factor
 
         borrow_amount = _decimal(item.get("borrowBalanceUnderlying", "0"))
         if borrow_amount > 0:
@@ -1838,6 +1849,7 @@ async def get_positions(
             pool,
             user_addresses=user_addresses,
             side=normalized_side,
+            asset_address=normalized_asset_bytes,
         )
         for asset_row in asset_rows:
             user_key = bytes(_row_get(asset_row, "user_address"))

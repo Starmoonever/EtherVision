@@ -1212,6 +1212,21 @@ async def fetch_current_user_positions_page(
             )
         )
 
+    if side != "all" or asset_address is not None:
+        exists_clauses = ["a.user_address = p.user_address"]
+        if side != "all":
+            params.append(side)
+            exists_clauses.append(f"a.side = ${len(params)}")
+        if asset_address is not None:
+            params.append(asset_address)
+            exists_clauses.append(f"a.asset_address = ${len(params)}::bytea")
+        where_clauses.append(
+            "EXISTS ("
+            "SELECT 1 FROM loan.justlend_current_user_position_assets a "
+            f"WHERE {' AND '.join(exists_clauses)}"
+            ")"
+        )
+
     params.extend([page_size, offset])
     where_sql = ""
     if where_clauses:
@@ -1256,14 +1271,21 @@ async def fetch_current_user_position_assets_by_users(
     *,
     user_addresses: list[bytes],
     side: str = "all",
+    asset_address: bytes | None = None,
 ) -> list[asyncpg.Record]:
     if not user_addresses:
         return []
     params: list[Any] = [user_addresses]
-    side_sql = ""
+    extra_conditions: list[str] = []
     if side != "all":
         params.append(side)
-        side_sql = f"AND side = ${len(params)}"
+        extra_conditions.append(f"side = ${len(params)}")
+    if asset_address is not None:
+        params.append(asset_address)
+        extra_conditions.append(f"asset_address = ${len(params)}::bytea")
+    extra_sql = ""
+    if extra_conditions:
+        extra_sql = "AND " + " AND ".join(extra_conditions)
     sql = f"""
         SELECT
             user_address,
@@ -1281,7 +1303,7 @@ async def fetch_current_user_position_assets_by_users(
             updated_at
         FROM loan.justlend_current_user_position_assets
         WHERE user_address = ANY($1::bytea[])
-          {side_sql}
+          {extra_sql}
         ORDER BY user_address, value_usd DESC, asset_address, side
     """
     async with pool.acquire() as conn:

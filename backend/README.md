@@ -280,6 +280,8 @@ JustLend 模块负责：
 - 支持 `health_factor`、`total_supply_usd`、`total_collateral_usd`、`total_borrow_usd` 排序
 - 支持按指定 `side + asset` 的 `asset_value_usd` 排序
 - `side` 当前支持 `all`、`collateral`、`supply`、`borrow`
+- `side` 与 `asset` 现在同时作为仓位过滤条件，而不只是明细或排序参数
+- `collateral` / `supply` / `borrow` 当前按资产明细侧别区分：`collateral` 表示已进入抵押集合，`supply` 表示仅供给未抵押
 - `detail=true` 时返回当前页地址对应的资产明细
 
 当前可用的 JustLend 市场回填脚本：
