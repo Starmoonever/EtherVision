@@ -38,6 +38,7 @@ from ..rpc import (
     fetch_user_market_replay_events,
 )
 from .schemas import (
+    MorphoExposureSumResponse,
     MorphoPositionAssetResponse,
     MorphoPositionReplayPointResponse,
     MorphoPositionReplayResponse,
@@ -981,4 +982,47 @@ async def get_position_replay(
         total_tx_count=len(grouped),
         cache_hit_rate=format(Decimal(cached_count) / Decimal(len(grouped)), ".2f"),
         points=points,
+    )
+
+
+# morpho exposure sum相关
+async def get_exposure_sum(
+    *,
+    pool: AsyncpgPool,
+    position_type: str,
+    asset: str,
+) -> MorphoExposureSumResponse:
+    normalized_type = position_type.strip().lower()
+    normalized_asset = asset.strip()
+    if normalized_type not in {"borrow", "collateral", "supply"}:
+        raise HTTPException(
+            status_code=400,
+            detail="position_type 仅支持 borrow / collateral / supply",
+        )
+    if not normalized_asset:
+        raise HTTPException(status_code=400, detail="asset 不能为空")
+
+    async with pool.acquire() as conn:
+        if normalized_type == "borrow":
+            # 统一走 extra_jsonb，避免不同库表结构列名差异导致 500。
+            value_expr = "NULLIF(extra_jsonb->>'borrow_assets', '')::numeric"
+            symbol_expr = "extra_jsonb->'loan_token'->>'symbol'"
+        elif normalized_type == "collateral":
+            value_expr = "NULLIF(extra_jsonb->>'collateral_assets', '')::numeric"
+            symbol_expr = "extra_jsonb->'collateral_token'->>'symbol'"
+        else:
+            value_expr = "NULLIF(extra_jsonb->>'supply_assets', '')::numeric"
+            symbol_expr = "extra_jsonb->'loan_token'->>'symbol'"
+
+        sql = f"""
+            SELECT COALESCE(SUM({value_expr}), 0)
+            FROM loan.morpho_blue_current_user_positions
+            WHERE lower({symbol_expr}) = lower($1)
+        """
+        total = await conn.fetchval(sql, normalized_asset)
+
+    return MorphoExposureSumResponse(
+        position_type=normalized_type,
+        asset=normalized_asset.upper(),
+        total=str(total or "0"),
     )
