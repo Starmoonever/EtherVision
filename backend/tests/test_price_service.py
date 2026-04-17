@@ -523,6 +523,43 @@ async def test_get_price_supports_tron_symbol_from_current_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_price_tron_address_query_writes_symbol_in_cache() -> None:
+    token_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    pool = _FakePool(
+        justlend_current_row={
+            "price_usd": "1.00",
+            "snapshot_at": datetime(2026, 4, 17, 12, 0, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    with (
+        patch(
+            "crawler_shared.api.service.ensure_tron_price_cache_table",
+            new=AsyncMock(),
+        ),
+        patch(
+            "crawler_shared.api.service.upsert_tron_price_cache",
+            new=AsyncMock(),
+        ) as upsert_cache,
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol=None,
+            address=token_address,
+            chain="tron",
+            pool=cast(asyncpg.Pool, pool),
+        )
+
+    assert resp.asset == "USDT"
+    assert resp.token_address == token_address
+    assert resp.price_usd == "1.00"
+    assert resp.source == "justlend-current"
+    upsert_cache.assert_awaited_once()
+    assert upsert_cache.await_args is not None
+    assert upsert_cache.await_args.args[3] == "USDT"
+
+
+@pytest.mark.asyncio
 async def test_get_price_tron_historical_falls_back_to_snapshot_when_cache_misses() -> (
     None
 ):

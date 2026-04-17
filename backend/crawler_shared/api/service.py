@@ -195,6 +195,20 @@ def _normalize_chain(chain: str | None) -> str:
     raise HTTPException(status_code=400, detail=f"不支持的 chain: {chain}")
 
 
+def _resolve_cache_asset_symbol(
+    *,
+    resolved_asset: str,
+    token_address: str,
+    asset_chain: str,
+) -> str:
+    if asset_chain != JUSTLEND_CHAIN:
+        return resolved_asset
+    for asset, registered_token, chain in SUPPORTED_PRICE_ASSETS:
+        if chain == JUSTLEND_CHAIN and registered_token == token_address:
+            return asset
+    return resolved_asset
+
+
 async def _resolve_price_asset(
     *,
     symbol: str | None,
@@ -528,6 +542,11 @@ async def get_price(
         address=address,
         chain=chain,
     )
+    cache_asset_symbol = _resolve_cache_asset_symbol(
+        resolved_asset=resolved_asset,
+        token_address=token_address,
+        asset_chain=asset_chain,
+    )
 
     if asset_chain == JUSTLEND_CHAIN:
         if pool is None:
@@ -546,7 +565,7 @@ async def get_price(
                     pool=pool,
                     unix_ts=snapshot_ts,
                     asset_address=token_address,
-                    asset_symbol=resolved_asset,
+                    asset_symbol=cache_asset_symbol,
                     price_usd=price,
                     source="justlend-current",
                 )
