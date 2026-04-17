@@ -95,8 +95,58 @@ class MorphoPositionReplayResponse(BaseModel):
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
 
 
-# morpho exposure sum相关
-class MorphoExposureSumResponse(BaseModel):
-    position_type: str = Field(description="仓位类型：borrow / collateral / supply。")
-    asset: str = Field(description="资产符号，如 USDC、WETH。")
-    total: str = Field(description="指定条件下的总和，字符串表示以避免精度丢失。")
+class MorphoMarketListItem(BaseModel):
+    market_id: str = Field(description="市场 id。")
+    pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
+
+
+class MorphoMarketListResponse(BaseModel):
+    market_count: int = Field(description="返回的市场数量。")
+    markets: list[MorphoMarketListItem] = Field(
+        description="代表性市场列表（market_id + 借出-抵押组合）。"
+    )
+
+
+class MorphoMarketTokenInfo(BaseModel):
+    address: str = Field(description="代币地址。")
+    symbol: str | None = Field(description="代币符号。")
+    decimals: int | None = Field(description="代币 decimals。")
+
+
+class MorphoMarketRatioField(BaseModel):
+    formula: str = Field(description="指标计算公式。")
+    value: str = Field(description="指标值。")
+
+
+class MorphoMarketSimpleMetricField(BaseModel):
+    formula: str = Field(description="指标计算公式。")
+    value: str = Field(description="指标值。")
+    note: str | None = Field(default=None, description="指标备注。")
+
+
+class MorphoMarketStateResponse(BaseModel):
+    marketId: str = Field(description="Morpho market id。")
+    loanToken: MorphoMarketTokenInfo = Field(description="借出资产信息。")
+    collateralToken: MorphoMarketTokenInfo = Field(description="抵押资产信息。")
+    oracle: str = Field(description="Oracle 地址。")
+    irm: str = Field(description="IRM 地址。")
+    lltv: dict[str, str] = Field(description="LLTV 原始值与比例。")
+    totalSupplyAssets: str = Field(description="市场总供应资产（raw）。")
+    totalSupplyShares: str = Field(description="市场总供应份额（raw）。")
+    totalBorrowAssets: str = Field(description="市场总借款资产（raw）。")
+    totalBorrowShares: str = Field(description="市场总借款份额（raw）。")
+    lastUpdate: int = Field(description="市场最后更新时间戳。")
+    fee: str = Field(description="市场 fee（raw）。")
+    utilization: MorphoMarketRatioField = Field(description="利用率指标。")
+    availableLiquidity: MorphoMarketSimpleMetricField = Field(
+        description="可用流动性指标。"
+    )
+    borrowCapacityUsageRough: MorphoMarketSimpleMetricField = Field(
+        description="借款上限占用粗估。"
+    )
+    marketScaleTvlLike: MorphoMarketSimpleMetricField = Field(
+        description="市场规模（TVL-like）。"
+    )
+    debtScaleDebtLike: MorphoMarketSimpleMetricField = Field(
+        description="借款规模（Debt-like）。"
+    )

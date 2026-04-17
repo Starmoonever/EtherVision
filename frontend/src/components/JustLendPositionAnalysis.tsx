@@ -46,21 +46,15 @@ interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
 const PAGE_SIZE = 50;
 const REFRESH_INTERVAL_SECONDS = 5 * 60;
 const riskPalette = justLendChartTheme.palettes.asset;
-const contributionColors = {
-  supply: '#22d3ee',
-  borrow: '#f59e0b',
-  default: '#38bdf8',
-};
 const sortMetricOptions: Array<{
   sortBy: PositionSortBy;
   label: string;
-  side: PositionSide;
 }> = [
-  { sortBy: 'total_supply_usd', label: '总存款', side: 'supply' },
-  { sortBy: 'total_borrow_usd', label: '总借款', side: 'borrow' },
-  { sortBy: 'health_factor', label: '健康因子', side: 'all' },
-  { sortBy: 'asset_value_usd', label: '该资产抵押额', side: 'collateral' },
+  { sortBy: 'total_supply_usd', label: '总存款' },
+  { sortBy: 'total_borrow_usd', label: '总借款' },
+  { sortBy: 'health_factor', label: '健康因子' },
 ];
+const sideOptions: PositionSide[] = ['all', 'supply', 'borrow', 'collateral'];
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -223,19 +217,6 @@ function groupAllAssetsBySymbol(assets: JustLendPositionAnalysisAsset[]): AssetP
     .sort((a, b) => b.value - a.value);
 }
 
-function getSortSide(sortBy: PositionSortBy): PositionSide {
-  if (sortBy === 'total_supply_usd') return 'supply';
-  if (sortBy === 'total_borrow_usd') return 'borrow';
-  if (sortBy === 'asset_value_usd') return 'collateral';
-  return 'all';
-}
-
-function getContributionColor(side: PositionSide): string {
-  if (side === 'borrow') return contributionColors.borrow;
-  if (side === 'supply') return contributionColors.supply;
-  return contributionColors.default;
-}
-
 function getHealthFactorTone(value: number, display: string) {
   if (display === '∞' || value > 2) {
     return { color: '#22c55e', className: '', fontWeight: 800 };
@@ -316,14 +297,13 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
     pageSize: PAGE_SIZE,
     sortBy: 'total_supply_usd',
     order: 'desc',
-    side: 'supply',
+    side: 'all',
     asset: '',
   });
   const [items, setItems] = useState<PositionAnalysisViewItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
   const [meta, setMeta] = useState<AggregatedRequestMeta>({
     lastUpdatedAt: null,
     cacheStatus: 'none',
@@ -333,27 +313,23 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const [drawerData, setDrawerData] = useState<PositionAnalysisViewItem | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState('');
-  const [riskOnly, setRiskOnly] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [refreshCountdown, setRefreshCountdown] = useState(REFRESH_INTERVAL_SECONDS);
 
   const assetOptions = useMemo(() => buildAssetOptions(markets), [markets]);
   const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
-  const hasAssetFilter = Boolean(query.asset);
   const currentPageSupplyTotal = useMemo(
     () => items.reduce((sum, item) => sum + toNum(item.total_supply_usd), 0),
     [items],
   );
-  const isRiskMode = riskOnly;
   const activeSortLabel =
     sortMetricOptions.find((option) => option.sortBy === query.sortBy)?.label ?? '总存款';
   const orderLabel = query.order === 'desc' ? '降序' : '升序';
   const displayTitle = useMemo(() => {
-    if (isRiskMode) return '风险头寸监控 (Risk Exposure Monitor)';
     if (query.sortBy === 'total_supply_usd') return '顶级供给头寸 (Top Supply Positions)';
     if (query.sortBy === 'total_borrow_usd') return '主要借款头寸 (Main Borrowing Positions)';
     return '核心头寸透视 (Core Positions Insight)';
-  }, [isRiskMode, query.sortBy]);
+  }, [query.sortBy]);
 
   useEffect(() => {
     let cancelled = false;
@@ -367,7 +343,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           pageSize: query.pageSize,
           sortBy: query.sortBy,
           order: query.order,
-          side: getSortSide(query.sortBy),
+          side: query.side,
           asset: query.asset || null,
           detail: false,
           forceRefresh: refreshNonce > 0,
@@ -457,49 +433,26 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
     }));
   };
 
-  const applyWhalePreset = () => {
-    setRiskOnly(false);
-    setNotice('');
-    updateQuery({ sortBy: 'total_supply_usd', order: 'desc', side: 'supply', page: 1 });
-  };
-
-  const applyRiskPreset = () => {
-    setRiskOnly(true);
-    setNotice('');
-    updateQuery({ sortBy: 'health_factor', order: 'asc', side: 'all', page: 1 });
-  };
-
   const handleSortMetricChange = (sortBy: PositionSortBy) => {
-    if (sortBy === 'asset_value_usd' && !query.asset) {
-      setNotice(
-        '该资产抵押额排序需要先选择一个 Asset。后端会使用 sort_by=asset_value_usd，表格中展示为“该资产持有额”。',
-      );
-      return;
-    }
-    setRiskOnly(false);
     setError('');
-    setNotice('');
-    updateQuery({ sortBy, side: getSortSide(sortBy), page: 1 });
+    updateQuery({ sortBy, page: 1 });
   };
 
   const handleAssetChange = (asset: string) => {
     setError('');
-    setNotice('');
-    if (!asset && query.sortBy === 'asset_value_usd') {
-      updateQuery({ asset, sortBy: 'total_supply_usd', side: 'supply', page: 1 });
-      return;
-    }
     updateQuery({ asset, page: 1 });
   };
 
+  const handleSideChange = (side: PositionSide) => {
+    setError('');
+    updateQuery({ side, page: 1 });
+  };
+
   const handleSortOrderChange = (order: SortOrder) => {
-    setRiskOnly(false);
-    setNotice('');
     updateQuery({ order, page: 1 });
   };
 
   const handlePageSizeChange = (pageSize: number) => {
-    setNotice('');
     updateQuery({ pageSize, page: 1 });
   };
 
@@ -535,7 +488,38 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
               实时追踪 JustLend 协议中高净值账户的资产分布、健康系数及潜在风险。
             </div>
           </div>
-          <ChartDataStatus meta={meta} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <ChartDataStatus meta={meta} />
+            <span
+              className="badge"
+              style={{
+                ...justLendChartTheme.badge.neutral,
+                padding: '0.22rem 0.6rem',
+                fontSize: '0.72rem',
+                lineHeight: 1.2,
+              }}
+            >
+              {formatCountdown(refreshCountdown)} 自动刷新
+            </span>
+            <button
+              type="button"
+              className="switch-btn active"
+              onClick={handleManualRefresh}
+              disabled={loading}
+              title="立即同步"
+              style={{ padding: '0.22rem 0.6rem', fontSize: '0.72rem', lineHeight: 1.2 }}
+            >
+              立即同步
+            </button>
+          </div>
         </div>
 
         <div
@@ -579,13 +563,25 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                   type="button"
                   className={`switch-btn ${query.sortBy === option.sortBy ? 'active' : ''}`}
                   onClick={() => handleSortMetricChange(option.sortBy)}
-                  title={
-                    option.sortBy === 'asset_value_usd'
-                      ? '需要先选择具体 Asset；接口参数仍为 sort_by=asset_value_usd'
-                      : option.label
-                  }
+                  title={option.label}
                 >
                   {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gap: '0.35rem' }}>
+            <span className="metric-label">Side</span>
+            <div className="switch-group" aria-label="JustLend position side">
+              {sideOptions.map((side) => (
+                <button
+                  key={side}
+                  type="button"
+                  className={`switch-btn ${query.side === side ? 'active' : ''}`}
+                  onClick={() => handleSideChange(side)}
+                >
+                  {side}
                 </button>
               ))}
             </div>
@@ -607,51 +603,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 onClick={() => handleSortOrderChange('asc')}
               >
                 ↑ 从低到高
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gap: '0.35rem' }}>
-            <span className="metric-label">Quick View</span>
-            <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className={`switch-btn justlend-quick-view-btn ${riskOnly ? '' : 'active'}`}
-                onClick={applyWhalePreset}
-              >
-                持仓排行榜
-              </button>
-              <button
-                type="button"
-                className={`switch-btn justlend-quick-view-btn ${
-                  riskOnly ? 'active justlend-risk-button-active' : ''
-                }`}
-                onClick={applyRiskPreset}
-              >
-                风险预警
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gap: '0.35rem', justifyItems: 'end' }}>
-            <span className="metric-label">最后刷新</span>
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}
-            >
-              <span className="mono" style={{ color: '#94a3b8' }}>
-                {meta.lastUpdatedAt ? new Date(meta.lastUpdatedAt).toLocaleTimeString() : '--'}
-              </span>
-              <span className="badge" style={justLendChartTheme.badge.neutral}>
-                {formatCountdown(refreshCountdown)} 自动刷新
-              </span>
-              <button
-                type="button"
-                className="switch-btn active"
-                onClick={handleManualRefresh}
-                disabled={loading}
-                title="立即同步"
-              >
-                立即同步
               </button>
             </div>
           </div>
@@ -684,7 +635,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           <div className="metric-box">
             <span className="metric-label">当前视图</span>
             <span className="metric-value justlend-current-view-value">
-              {riskOnly ? '风险预警' : `${activeSortLabel}${orderLabel}排位`}
+              {`${activeSortLabel}${orderLabel}排位`}
             </span>
           </div>
         </div>
@@ -693,13 +644,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           <div className="justlend-banner justlend-banner-warn" style={{ marginTop: '1rem' }}>
             <div className="justlend-banner-title">无法读取仓位列表</div>
             <div className="justlend-banner-copy">{error}</div>
-          </div>
-        ) : null}
-
-        {notice ? (
-          <div className="justlend-banner justlend-banner-soft" style={{ marginTop: '1rem' }}>
-            <div className="justlend-banner-title">需要选择资产</div>
-            <div className="justlend-banner-copy">{notice}</div>
           </div>
         ) : null}
 
@@ -712,17 +656,12 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 <th className="right">总存款</th>
                 <th className="right">总借款</th>
                 <th className="right">健康因子</th>
-                {hasAssetFilter ? <th className="right">该资产持有额</th> : null}
-                {hasAssetFilter ? <th className="right">该资产占比</th> : null}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td
-                    colSpan={hasAssetFilter ? 7 : 5}
-                    style={{ textAlign: 'center', padding: '2rem' }}
-                  >
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
                     <div className="spinner"></div>
                   </td>
                 </tr>
@@ -731,11 +670,8 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                   const supply = toNum(item.total_supply_usd);
                   const borrow = toNum(item.total_borrow_usd);
                   const hf = item.healthFactorValue;
-                  const matched = toNum(item.matched_asset_value_usd);
-                  const contribution = hasAssetFilter && supply > 0 ? (matched / supply) * 100 : 0;
                   const risky = Number.isFinite(hf) && hf <= 1.1;
                   const hfTone = getHealthFactorTone(hf, item.healthFactorDisplay);
-                  const contributionColor = getContributionColor(getSortSide(query.sortBy));
                   return (
                     <tr
                       key={`${item.address}:${query.page}:${index}`}
@@ -776,56 +712,12 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                       >
                         {item.healthFactorDisplay}
                       </td>
-                      {hasAssetFilter ? (
-                        <td className="right mono" title={formatFullCurrency(matched)}>
-                          {formatFullCurrency(matched)}
-                        </td>
-                      ) : null}
-                      {hasAssetFilter ? (
-                        <td
-                          className="right"
-                          title={`该资产占其总持仓的 ${formatPercent(contribution)}`}
-                        >
-                          <div
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: '1fr auto',
-                              gap: '0.55rem',
-                              alignItems: 'center',
-                              minWidth: 160,
-                            }}
-                          >
-                            <div
-                              style={{
-                                height: 8,
-                                background: '#0f172a',
-                                borderRadius: 999,
-                                overflow: 'hidden',
-                                border: '1px solid #1e293b',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: `${Math.max(0, Math.min(100, contribution))}%`,
-                                  height: '100%',
-                                  background: contributionColor,
-                                  boxShadow: `0 0 14px ${contributionColor}55`,
-                                }}
-                              />
-                            </div>
-                            <span className="mono">{formatPercent(contribution)}</span>
-                          </div>
-                        </td>
-                      ) : null}
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td
-                    colSpan={hasAssetFilter ? 7 : 5}
-                    style={{ textAlign: 'center', padding: '2rem' }}
-                  >
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
                     暂无匹配仓位
                   </td>
                 </tr>
