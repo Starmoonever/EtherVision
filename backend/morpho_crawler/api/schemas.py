@@ -93,3 +93,10 @@ class MorphoPositionReplayResponse(BaseModel):
     total_tx_count: int = Field(description="命中的交易数。")
     cache_hit_rate: str = Field(description="缓存命中率。")
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
+
+
+# morpho exposure sum相关
+class MorphoExposureSumResponse(BaseModel):
+    position_type: str = Field(description="仓位类型：borrow / collateral / supply。")
+    asset: str = Field(description="资产符号，如 USDC、WETH。")
+    total: str = Field(description="指定条件下的总和，字符串表示以避免精度丢失。")
