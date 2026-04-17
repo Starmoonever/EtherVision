@@ -76,6 +76,7 @@ _MAX_DB_RATIO = Decimal("9999.999999")
 _POSITION_LIST_SORT_FIELDS = {
     "health_factor",
     "total_supply_usd",
+    "total_collateral_usd",
     "total_borrow_usd",
     "asset_value_usd",
 }

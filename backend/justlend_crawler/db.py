@@ -1179,6 +1179,7 @@ async def fetch_current_user_positions_page(
     sort_expr_map = {
         "health_factor": "p.health_factor",
         "total_supply_usd": "p.total_collateral_usd",
+        "total_collateral_usd": "p.total_collateral_usd",
         "total_borrow_usd": "p.total_debt_usd",
         "asset_value_usd": "COALESCE(ma.matched_asset_value_usd, 0)",
     }
@@ -1202,8 +1203,14 @@ async def fetch_current_user_positions_page(
         )"""
 
     if user_address is not None:
-        params.append(user_address)
-        where_clauses.append(f"p.user_address = ${len(params)}")
+        where_clauses.append(
+            _build_justlend_user_predicate(
+                "p.user_address",
+                "bytea",
+                bind_values=params,
+                user_address=user_address,
+            )
+        )
 
     params.extend([page_size, offset])
     where_sql = ""

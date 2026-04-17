@@ -12,6 +12,7 @@ import asyncpg
 import pytest
 
 from justlend_crawler.api import service
+from justlend_crawler import db as justlend_db
 from justlend_crawler import rpc as justlend_rpc
 
 
@@ -261,6 +262,24 @@ async def test_get_positions_formats_page_and_detail_assets() -> None:
     )
     mocked_page.assert_awaited_once()
     mocked_assets.assert_awaited_once()
+
+
+def test_build_justlend_user_predicate_supports_legacy_base58_bytea_storage() -> None:
+    bind_values: list[object] = []
+    user_address = service._tron_address_to_bytes("TUjx6w55Nx9G4GjjRNEB4e7w5BUH3WmJTZ")
+
+    predicate = justlend_db._build_justlend_user_predicate(
+        "p.user_address",
+        "bytea",
+        bind_values=bind_values,
+        user_address=user_address,
+    )
+
+    assert predicate == "p.user_address = ANY($1::bytea[])"
+    assert len(bind_values) == 1
+    candidates = cast(list[bytes], bind_values[0])
+    assert user_address in candidates
+    assert b"TUjx6w55Nx9G4GjjRNEB4e7w5BUH3WmJTZ" in candidates
 
 
 @pytest.mark.asyncio

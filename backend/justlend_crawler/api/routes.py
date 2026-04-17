@@ -140,6 +140,7 @@ async def positions(
     sort_by: Literal[
         "health_factor",
         "total_supply_usd",
+        "total_collateral_usd",
         "total_borrow_usd",
         "asset_value_usd",
     ] = Query("health_factor", description="排序字段"),
