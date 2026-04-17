@@ -341,6 +341,12 @@ def test_build_justlend_user_predicate_supports_legacy_base58_bytea_storage() ->
     assert b"TUjx6w55Nx9G4GjjRNEB4e7w5BUH3WmJTZ" in candidates
 
 
+def test_fmt_health_supports_large_finite_values_below_cap() -> None:
+    value = Decimal("999999999999.123456789123456789")
+
+    assert service._fmt_health(value) == "999999999999.123456789123456789"
+
+
 @pytest.mark.asyncio
 async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> None:
     pool = cast(asyncpg.Pool, object())
@@ -1203,9 +1209,9 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
         if function_selector == "getUnderlyingPrice(address)":
             parameter = kwargs["parameter"]
             if parameter.endswith(market_a):
-                return 250000000000000000
+                return 250000000000000
             if parameter.endswith(market_b):
-                return 500000000000000000000000000000
+                return 500000000000000000000000000
         if function_selector == "decimals()":
             if contract_address == underlying_a_b58:
                 return 18
@@ -1258,6 +1264,28 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     assert rpc_result["liquidation_threshold"] == api_result["liquidation_threshold"]
     assert len(rpc_result["assets"]) == len(api_result["assets"])
     assert rpc_result["extra_jsonb"]["source"] == "justlend_rpc"
+
+
+def test_price_in_trx_uses_justlend_oracle_scale() -> None:
+    assert justlend_rpc._price_in_trx(10**27, 6) == Decimal("1")
+    assert justlend_rpc._price_in_trx(10**15, 18) == Decimal("1")
+
+
+def test_infer_trx_price_usd_from_positions_prefers_usdt() -> None:
+    raw_positions = [
+        {
+            "underlying_symbol": "USDD",
+            "price_in_trx": Decimal("1.9"),
+        },
+        {
+            "underlying_symbol": "USDT",
+            "price_in_trx": Decimal("3.07"),
+        },
+    ]
+
+    result = justlend_rpc._infer_trx_price_usd_from_positions(raw_positions)
+
+    assert result == Decimal("1") / Decimal("3.07")
 
 
 @pytest.mark.asyncio

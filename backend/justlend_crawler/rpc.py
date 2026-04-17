@@ -21,6 +21,7 @@ _JTOKEN_DECIMALS = 8
 _SCALE_18 = Decimal("1e18")
 _MAX_HF = Decimal("1e18")
 _STABLE_SYMBOLS = {"USDT", "USDD", "USDJ", "TUSD", "USDC"}
+_STABLE_SYMBOL_PRIORITY = ("USDT", "USDC", "USDD", "USDJ", "TUSD")
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +300,26 @@ def _decimalize(raw: int, decimals: int) -> Decimal:
 
 
 def _price_in_trx(raw_price: int, underlying_decimals: int) -> Decimal:
-    return Decimal(raw_price) / (Decimal(10) ** (36 - underlying_decimals))
+    return Decimal(raw_price) / (Decimal(10) ** (33 - underlying_decimals))
+
+
+def _infer_trx_price_usd_from_positions(
+    raw_positions: list[dict[str, Any]],
+) -> Decimal | None:
+    for stable_symbol in _STABLE_SYMBOL_PRIORITY:
+        for item in raw_positions:
+            if (
+                str(item.get("underlying_symbol") or "").upper() == stable_symbol
+                and item["price_in_trx"] > 0
+            ):
+                return Decimal("1") / item["price_in_trx"]
+    for item in raw_positions:
+        if (
+            str(item.get("underlying_symbol") or "").upper() in _STABLE_SYMBOLS
+            and item["price_in_trx"] > 0
+        ):
+            return Decimal("1") / item["price_in_trx"]
+    return None
 
 
 async def _get_now_block(
@@ -833,14 +853,7 @@ async def fetch_justlend_position_via_rpc(
     if not raw_positions:
         raise HTTPException(status_code=404, detail="JustLend position not found")
 
-    trx_price_usd: Decimal | None = None
-    for item in raw_positions:
-        if (
-            item["underlying_symbol"].upper() in _STABLE_SYMBOLS
-            and item["price_in_trx"] > 0
-        ):
-            trx_price_usd = Decimal("1") / item["price_in_trx"]
-            break
+    trx_price_usd = _infer_trx_price_usd_from_positions(raw_positions)
     if trx_price_usd is None:
         raise HTTPException(
             status_code=502,

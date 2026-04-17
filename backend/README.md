@@ -153,6 +153,17 @@ uv run aave-crawler check 0xAddress
 
 如果需要新增协议级命令，优先检查各自 `cli.py` 与 `crawler_shared.server` 的集成方式。
 
+JustLend 当前补数脚本补充：
+
+- `uv run python scripts/justlend/market_state_backfill.py`
+  - 刷新 `loan.justlend_markets_current` 与可选的市场快照
+- `uv run python scripts/justlend/tx_position_replay.py --start 2026-04-01 --end 2026-04-10`
+  - 根据 `justlend.justlend_history` 回放交易级仓位快照
+- `uv run python scripts/justlend/backfill_current_positions_from_history.py`
+  - 从 `justlend.justlend_history`、当前 current 表，或两者并集筛出用户，调用 TRON RPC 获取链上实时仓位，并全量覆盖 `loan.justlend_current_user_positions`
+- `uv run python scripts/justlend/repair_current_prices.py`
+  - 先重刷 `loan.justlend_markets_current`，再按修正后的链上价格整体重算 JustLend current position 价格
+
 ## 数据库访问模式
 
 本项目采用双数据库访问模式。

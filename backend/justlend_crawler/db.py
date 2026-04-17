@@ -1180,6 +1180,20 @@ async def fetch_current_user_position(
     return position, assets
 
 
+async def fetch_all_current_user_addresses(pool: asyncpg.Pool) -> list[bytes]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_address
+            FROM loan.justlend_current_user_positions
+            ORDER BY snapshot_at DESC, user_address
+            """
+        )
+    return [
+        bytes(row["user_address"]) for row in rows if row["user_address"] is not None
+    ]
+
+
 async def fetch_current_user_positions_page(
     pool: asyncpg.Pool,
     *,
@@ -1467,6 +1481,21 @@ async def upsert_current_user_position(
                         for asset in assets
                     ],
                 )
+
+
+async def delete_current_user_position(
+    pool: asyncpg.Pool,
+    *,
+    user_address: bytes,
+) -> str:
+    async with pool.acquire() as conn:
+        return await conn.execute(
+            """
+            DELETE FROM loan.justlend_current_user_positions
+            WHERE user_address = $1
+            """,
+            user_address,
+        )
 
 
 async def append_user_position_snapshot(

@@ -491,9 +491,15 @@ def _fmt_ratio(value: Decimal) -> str:
 
 
 def _fmt_health(value: Decimal) -> str:
+    if not value.is_finite():
+        raise InvalidOperation("non-finite decimal")
     if value >= _MAX_HF:
         return format(value, "f")
-    return format(value.quantize(Decimal("0.000000000000000001")), "f")
+    quant = Decimal("0.000000000000000001")
+    digits = len(value.as_tuple().digits)
+    with localcontext() as ctx:
+        ctx.prec = max(28, digits + 18 + 4)
+        return format(value.quantize(quant), "f")
 
 
 def _as_bool(value: Any) -> bool:
