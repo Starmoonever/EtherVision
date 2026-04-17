@@ -123,6 +123,46 @@ export interface JustLendMarketStateResponse {
   extra: Record<string, unknown>;
 }
 
+export interface JustLendMarketStatePeriodResponse {
+  points: JustLendMarketStateResponse[];
+}
+
+export interface JustLendPositionAnalysisAsset {
+  asset_address: string;
+  symbol: string;
+  side: string;
+  amount: string;
+  price_usd: string;
+  value_usd: string;
+}
+
+export interface JustLendPositionAnalysisItem {
+  protocol: string;
+  chain: string;
+  address: string;
+  snapshot_at: string;
+  block_timestamp: string;
+  total_supply_usd: string;
+  total_collateral_usd?: string;
+  total_borrow_usd: string;
+  health_factor: string;
+  ltv: string;
+  liquidation_threshold: string;
+  matched_asset_value_usd: string;
+  assets: JustLendPositionAnalysisAsset[];
+}
+
+export interface JustLendPositionAnalysisResponse {
+  items: JustLendPositionAnalysisItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  sort_by: string;
+  order: string;
+  side: string;
+  asset: string | null;
+}
+
 const justLendPositionCache = new Map<
   string,
   { fetchedAt: number; data: JustLendPositionResponse }
@@ -137,6 +177,22 @@ const justLendMarketStateCache = new Map<
   { fetchedAt: number; data: JustLendMarketStateResponse }
 >();
 const justLendMarketStateInflight = new Map<string, Promise<JustLendMarketStateResponse>>();
+const justLendMarketStatePeriodCache = new Map<
+  string,
+  { fetchedAt: number; data: JustLendMarketStatePeriodResponse }
+>();
+const justLendMarketStatePeriodInflight = new Map<
+  string,
+  Promise<JustLendMarketStatePeriodResponse>
+>();
+const justLendPositionAnalysisCache = new Map<
+  string,
+  { fetchedAt: number; data: JustLendPositionAnalysisResponse }
+>();
+const justLendPositionAnalysisInflight = new Map<
+  string,
+  Promise<JustLendPositionAnalysisResponse>
+>();
 const justLendReplayCache = new Map<
   string,
   { fetchedAt: number; data: JustLendPositionReplayResponse }
@@ -331,6 +387,151 @@ export async function fetchJustLendMarketStateWithMeta(
     });
 
   justLendMarketStateInflight.set(key, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+interface JustLendMarketStatePeriodParams {
+  market: string;
+  start: string;
+  end: string;
+}
+
+export async function fetchJustLendMarketStatePeriodWithMeta({
+  market,
+  start,
+  end,
+}: JustLendMarketStatePeriodParams): Promise<DataWithMeta<JustLendMarketStatePeriodResponse>> {
+  const key = `${market.toLowerCase()}:${start}:${end}`;
+  const cached = justLendMarketStatePeriodCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < JUSTLEND_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = justLendMarketStatePeriodInflight.get(key);
+  if (inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({ market, start, end });
+  const request = apiFetch<JustLendMarketStatePeriodResponse>(
+    `/justlend/market/state/period?${params.toString()}`,
+  )
+    .then((data) => {
+      justLendMarketStatePeriodCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      justLendMarketStatePeriodInflight.delete(key);
+    });
+
+  justLendMarketStatePeriodInflight.set(key, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export interface JustLendPositionAnalysisParams {
+  page?: number;
+  pageSize?: number;
+  sortBy?:
+    | 'health_factor'
+    | 'total_supply_usd'
+    | 'total_collateral_usd'
+    | 'total_borrow_usd'
+    | 'asset_value_usd';
+  order?: 'asc' | 'desc';
+  side?: 'all' | 'collateral' | 'supply' | 'borrow';
+  asset?: string | null;
+  detail?: boolean;
+  address?: string | null;
+  forceRefresh?: boolean;
+}
+
+export async function fetchJustLendPositionAnalysisWithMeta({
+  page = 1,
+  pageSize = 50,
+  sortBy = 'health_factor',
+  order = 'desc',
+  side = 'all',
+  asset = null,
+  detail = false,
+  address = null,
+  forceRefresh = false,
+}: JustLendPositionAnalysisParams): Promise<DataWithMeta<JustLendPositionAnalysisResponse>> {
+  const key = JSON.stringify({ page, pageSize, sortBy, order, side, asset, detail, address });
+  const cached = justLendPositionAnalysisCache.get(key);
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < JUSTLEND_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = justLendPositionAnalysisInflight.get(key);
+  if (!forceRefresh && inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+    sort_by: sortBy,
+    order,
+    side,
+    detail: String(detail),
+  });
+  if (asset) {
+    params.set('asset', asset);
+  }
+  if (address) {
+    params.set('address', address);
+  }
+
+  const request = apiFetch<JustLendPositionAnalysisResponse>(
+    `/justlend/positions?${params.toString()}`,
+  )
+    .then((data) => {
+      justLendPositionAnalysisCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      justLendPositionAnalysisInflight.delete(key);
+    });
+
+  justLendPositionAnalysisInflight.set(key, request);
   const data = await request;
   return {
     data,

@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Legend,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import {
+  fetchJustLendMarketStatePeriodWithMeta,
   fetchJustLendMarketStateWithMeta,
   type JustLendMarketItem,
   type JustLendMarketStateResponse,
@@ -20,6 +25,25 @@ import { justLendChartTheme } from './justlendTheme';
 
 const marketPalette = justLendChartTheme.palettes.market;
 const USD_CALCULATION_SCALE = 10;
+const JUSTLEND_MARKET_HISTORY_START = '2020-12-01T00:00:00Z';
+
+type MarketHistoryRange = '1D' | '7D' | '1M' | 'ALL';
+
+interface JustLendMarketHistoryPointView {
+  timestamp: string;
+  timeLabel: string;
+  cash: number;
+  totalBorrows: number;
+  totalReserves: number;
+  totalSupply: number;
+  cashUsd: number;
+  borrowUsd: number;
+  reserveUsd: number;
+  supplyUsd: number;
+  utilizationPct: number;
+  borrowRatePct: number;
+  supplyRatePct: number;
+}
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -89,8 +113,63 @@ function formatDateTime(value: string): string {
   return new Date(parsed).toLocaleString();
 }
 
+function formatHistoryTimeLabel(value: string): string {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return value;
+  const date = new Date(parsed);
+  const pad = (num: number) => String(num).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function marketLabel(item: JustLendMarketItem): string {
   return item.underlying_symbol || item.symbol || item.market.slice(0, 6);
+}
+
+function formatUtcSecond(value: Date): string {
+  return value.toISOString().slice(0, 19) + 'Z';
+}
+
+function getHistoryRangeBounds(range: MarketHistoryRange): { start: string; end: string } {
+  const end = new Date();
+  const start = new Date(end);
+
+  if (range === 'ALL') {
+    return {
+      start: JUSTLEND_MARKET_HISTORY_START,
+      end: formatUtcSecond(end),
+    };
+  }
+
+  if (range === '1D') {
+    start.setUTCDate(start.getUTCDate() - 1);
+  } else if (range === '7D') {
+    start.setUTCDate(start.getUTCDate() - 7);
+  } else {
+    start.setUTCMonth(start.getUTCMonth() - 1);
+  }
+
+  return {
+    start: formatUtcSecond(start),
+    end: formatUtcSecond(end),
+  };
+}
+
+function buildHistoryPoint(point: JustLendMarketStateResponse): JustLendMarketHistoryPointView {
+  return {
+    timestamp: point.timestamp,
+    timeLabel: formatHistoryTimeLabel(point.timestamp),
+    cash: toNum(point.cash),
+    totalBorrows: toNum(point.total_borrows),
+    totalReserves: toNum(point.total_reserves),
+    totalSupply: toNum(point.total_supply),
+    cashUsd: multiplyDecimalStrings(point.cash, point.price_usd),
+    borrowUsd: multiplyDecimalStrings(point.total_borrows, point.price_usd),
+    reserveUsd: multiplyDecimalStrings(point.total_reserves, point.price_usd),
+    supplyUsd: multiplyDecimalStrings(point.total_supply, point.price_usd),
+    utilizationPct: ratioToPercent(point.utilization),
+    borrowRatePct: ratioToPercent(point.borrow_rate),
+    supplyRatePct: ratioToPercent(point.supply_rate),
+  };
 }
 
 const marketChartTick = { fill: justLendChartTheme.axis.secondary, fontSize: 12 };
@@ -105,6 +184,284 @@ const marketTooltipLabelStyle = {
 const marketTooltipItemStyle = {
   color: justLendChartTheme.tooltip.text,
 };
+const marketHistoryTheme = justLendChartTheme.marketHistory;
+
+function HistoryChartState({
+  loading,
+  error,
+  empty,
+}: {
+  loading: boolean;
+  error: string;
+  empty: boolean;
+}) {
+  if (!loading && !error && !empty) return null;
+
+  return (
+    <div
+      className="card"
+      style={{
+        minHeight: 280,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: error ? '#fca5a5' : '#94a3b8',
+      }}
+    >
+      {loading ? <div className="spinner"></div> : error || '当前时间范围内暂无历史市场状态数据'}
+    </div>
+  );
+}
+
+function JustLendRateHistoryChart({ data }: { data: JustLendMarketHistoryPointView[] }) {
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card-header">
+        <span className="card-title">历史利率趋势</span>
+        <span className="badge" style={justLendChartTheme.badge.info}>
+          Rate
+        </span>
+      </div>
+      <div style={{ height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 16, right: 18, left: 4, bottom: 8 }}>
+            <CartesianGrid
+              stroke={marketHistoryTheme.grid}
+              strokeDasharray="4 8"
+              vertical={false}
+            />
+            <XAxis
+              dataKey="timeLabel"
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={{ stroke: marketHistoryTheme.axisLine }}
+              tickLine={false}
+              minTickGap={28}
+            />
+            <YAxis
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(value) => formatPercent(Number(value))}
+            />
+            <Tooltip
+              cursor={false}
+              contentStyle={marketTooltipContentStyle}
+              labelStyle={marketTooltipLabelStyle}
+              itemStyle={marketTooltipItemStyle}
+              formatter={(value: unknown, name: string | number | undefined) => [
+                formatPercent(Number(value ?? 0)),
+                String(name ?? ''),
+              ]}
+            />
+            <Legend
+              iconType="circle"
+              wrapperStyle={{ color: justLendChartTheme.legend.text, fontSize: 12, paddingTop: 8 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="supplyRatePct"
+              name="Supply Rate"
+              stroke={marketHistoryTheme.supplyRate}
+              strokeWidth={2.2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="borrowRatePct"
+              name="Borrow Rate"
+              stroke={marketHistoryTheme.borrowRate}
+              strokeWidth={2.2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function JustLendMarketScaleHistoryChart({ data }: { data: JustLendMarketHistoryPointView[] }) {
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card-header">
+        <span className="card-title">市场规模历史</span>
+        <span className="badge" style={justLendChartTheme.badge.neutral}>
+          USD Area
+        </span>
+      </div>
+      <div style={{ height: 340 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 16, right: 18, left: 4, bottom: 8 }}>
+            <defs>
+              <linearGradient id="justlend-history-cash" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={marketHistoryTheme.cash} stopOpacity={0.42} />
+                <stop offset="100%" stopColor={marketHistoryTheme.cash} stopOpacity={0.08} />
+              </linearGradient>
+              <linearGradient id="justlend-history-borrows" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={marketHistoryTheme.borrows} stopOpacity={0.42} />
+                <stop offset="100%" stopColor={marketHistoryTheme.borrows} stopOpacity={0.08} />
+              </linearGradient>
+              <linearGradient id="justlend-history-reserves" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={marketHistoryTheme.reserves} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={marketHistoryTheme.reserves} stopOpacity={0.06} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid
+              stroke={marketHistoryTheme.grid}
+              strokeDasharray="4 8"
+              vertical={false}
+            />
+            <XAxis
+              dataKey="timeLabel"
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={{ stroke: marketHistoryTheme.axisLine }}
+              tickLine={false}
+              minTickGap={28}
+            />
+            <YAxis
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(value) => formatUsdCompact(Number(value))}
+            />
+            <Tooltip
+              cursor={false}
+              contentStyle={marketTooltipContentStyle}
+              labelStyle={marketTooltipLabelStyle}
+              itemStyle={marketTooltipItemStyle}
+              formatter={(value: unknown, name: string | number | undefined) => [
+                formatUsd(Number(value ?? 0)),
+                String(name ?? ''),
+              ]}
+            />
+            <Legend
+              iconType="circle"
+              wrapperStyle={{ color: justLendChartTheme.legend.text, fontSize: 12, paddingTop: 8 }}
+            />
+            <Area
+              type="monotone"
+              dataKey="cashUsd"
+              name="Cash"
+              stackId="marketSize"
+              stroke={marketHistoryTheme.cash}
+              fill="url(#justlend-history-cash)"
+              strokeWidth={1.8}
+            />
+            <Area
+              type="monotone"
+              dataKey="borrowUsd"
+              name="Borrows"
+              stackId="marketSize"
+              stroke={marketHistoryTheme.borrows}
+              fill="url(#justlend-history-borrows)"
+              strokeWidth={1.8}
+            />
+            <Area
+              type="monotone"
+              dataKey="reserveUsd"
+              name="Reserves"
+              stackId="marketSize"
+              stroke={marketHistoryTheme.reserves}
+              fill="url(#justlend-history-reserves)"
+              strokeWidth={1.5}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: '0.65rem' }}>
+        注：JustLend 市场快照中 total_supply 通常接近 cash + total_borrows - total_reserves，本图将
+        reserves 单独展示，避免误读资金构成。
+      </div>
+    </div>
+  );
+}
+
+function JustLendUtilizationBorrowChart({ data }: { data: JustLendMarketHistoryPointView[] }) {
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card-header">
+        <span className="card-title">利用率与借款利率</span>
+        <span className="badge" style={justLendChartTheme.badge.success}>
+          Compare
+        </span>
+      </div>
+      <div style={{ height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 16, right: 18, left: 4, bottom: 8 }}>
+            <defs>
+              <linearGradient id="justlend-history-utilization" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={marketHistoryTheme.utilization} stopOpacity={0.34} />
+                <stop offset="100%" stopColor={marketHistoryTheme.utilization} stopOpacity={0.04} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid
+              stroke={marketHistoryTheme.grid}
+              strokeDasharray="4 8"
+              vertical={false}
+            />
+            <XAxis
+              dataKey="timeLabel"
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={{ stroke: marketHistoryTheme.axisLine }}
+              tickLine={false}
+              minTickGap={28}
+            />
+            <YAxis
+              yAxisId="utilization"
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+            />
+            <YAxis
+              yAxisId="rate"
+              orientation="right"
+              tick={{ fill: marketHistoryTheme.axis, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(value) => formatPercent(Number(value))}
+            />
+            <Tooltip
+              cursor={false}
+              contentStyle={marketTooltipContentStyle}
+              labelStyle={marketTooltipLabelStyle}
+              itemStyle={marketTooltipItemStyle}
+              formatter={(value: unknown, name: string | number | undefined) => [
+                formatPercent(Number(value ?? 0)),
+                String(name ?? ''),
+              ]}
+            />
+            <Legend
+              iconType="circle"
+              wrapperStyle={{ color: justLendChartTheme.legend.text, fontSize: 12, paddingTop: 8 }}
+            />
+            <Area
+              yAxisId="utilization"
+              type="monotone"
+              dataKey="utilizationPct"
+              name="Utilization"
+              stroke={marketHistoryTheme.utilization}
+              fill={marketHistoryTheme.utilizationFill}
+              strokeWidth={1.8}
+            />
+            <Line
+              yAxisId="rate"
+              type="monotone"
+              dataKey="borrowRatePct"
+              name="Borrow Rate"
+              stroke={marketHistoryTheme.borrowRateCompare}
+              strokeWidth={2.4}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 
 interface JustLendMarketDashboardProps {
   markets: JustLendMarketItem[];
@@ -123,6 +480,14 @@ export function JustLendMarketDashboard({
   const [loadingState, setLoadingState] = useState(false);
   const [error, setError] = useState('');
   const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
+  const [historyRange, setHistoryRange] = useState<MarketHistoryRange>('1M');
+  const [historyData, setHistoryData] = useState<JustLendMarketHistoryPointView[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historyMeta, setHistoryMeta] = useState<AggregatedRequestMeta>({
     lastUpdatedAt: null,
     cacheStatus: 'none',
   });
@@ -158,6 +523,47 @@ export function JustLendMarketDashboard({
       cancelled = true;
     };
   }, [selectedMarket]);
+
+  useEffect(() => {
+    if (!selectedMarket) {
+      setHistoryData([]);
+      return;
+    }
+
+    let cancelled = false;
+    const { start, end } = getHistoryRangeBounds(historyRange);
+
+    const loadHistory = async () => {
+      setHistoryLoading(true);
+      setHistoryError('');
+      try {
+        const result = await fetchJustLendMarketStatePeriodWithMeta({
+          market: selectedMarket,
+          start,
+          end,
+        });
+        if (cancelled) return;
+
+        const points = (result.data.points ?? [])
+          .map(buildHistoryPoint)
+          .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+
+        setHistoryData(points);
+        setHistoryMeta(mergeRequestMetas([result.meta]));
+      } catch (loadError) {
+        if (cancelled) return;
+        setHistoryData([]);
+        setHistoryError(loadError instanceof Error ? loadError.message : '无法加载历史市场状态');
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    };
+
+    void loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyRange, selectedMarket]);
 
   const selectedMarketItem = useMemo(
     () => markets.find((item) => item.market === selectedMarket) ?? null,
@@ -669,14 +1075,6 @@ export function JustLendMarketDashboard({
                   </span>
                 </div>
                 <div className="metric-box">
-                  <span className="metric-label">Borrow Cap</span>
-                  <span className="metric-value">{marketMetrics.borrowCap.toLocaleString()}</span>
-                </div>
-                <div className="metric-box">
-                  <span className="metric-label">Supply Cap</span>
-                  <span className="metric-value">{marketMetrics.supplyCap.toLocaleString()}</span>
-                </div>
-                <div className="metric-box">
                   <span className="metric-label">Exchange Rate</span>
                   <span
                     className="metric-value blue"
@@ -702,6 +1100,64 @@ export function JustLendMarketDashboard({
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div
+              className="card-header"
+              style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <span className="card-title">历史市场状态</span>
+                <span className="badge" style={justLendChartTheme.badge.info}>
+                  Period
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <ChartDataStatus meta={historyMeta} />
+                <div className="switch-group" aria-label="JustLend market history range">
+                  {(['1D', '7D', '1M', 'ALL'] as const).map((range) => {
+                    const active = historyRange === range;
+                    return (
+                      <button
+                        key={range}
+                        type="button"
+                        onClick={() => setHistoryRange(range)}
+                        className={`switch-btn ${active ? 'active' : ''}`}
+                      >
+                        {range}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="justlend-market-copy" style={{ marginBottom: '1rem' }}>
+              基于当前所选市场的历史快照，观察利率、资金规模与利用率变化。
+            </div>
+
+            <HistoryChartState
+              loading={historyLoading}
+              error={historyError}
+              empty={historyData.length === 0}
+            />
+
+            {!historyLoading && !historyError && historyData.length > 0 ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  gap: '1rem',
+                  alignItems: 'stretch',
+                }}
+              >
+                <JustLendRateHistoryChart data={historyData} />
+                <JustLendUtilizationBorrowChart data={historyData} />
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <JustLendMarketScaleHistoryChart data={historyData} />
+                </div>
+              </div>
+            ) : null}
           </div>
         </>
       ) : null}
