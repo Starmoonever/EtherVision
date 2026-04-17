@@ -107,6 +107,56 @@ def test_justlend_position_replay_route_rejects_invalid_time() -> None:
     assert resp.status_code == 400
 
 
+def test_justlend_positions_route_ok() -> None:
+    payload = {
+        "items": [
+            {
+                "protocol": "trx",
+                "chain": "tron",
+                "address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+                "snapshot_at": "2026-04-03T00:00:00Z",
+                "block_timestamp": "2026-04-03T00:00:00Z",
+                "total_supply_usd": "100.00000000",
+                "total_borrow_usd": "20.00000000",
+                "health_factor": "5.000000000000000000",
+                "ltv": "0.750000",
+                "liquidation_threshold": "0.750000",
+                "matched_asset_value_usd": "80.00000000",
+                "assets": [],
+            }
+        ],
+        "page": 2,
+        "page_size": 20,
+        "total": 123,
+        "sort_by": "asset_value_usd",
+        "order": "desc",
+        "side": "supply",
+        "asset": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    }
+
+    with patch(
+        "justlend_crawler.api.routes.get_positions",
+        new=AsyncMock(return_value=payload),
+    ) as mocked_service:
+        with _build_client() as client:
+            resp = client.get(
+                "/api/justlend/positions",
+                params={
+                    "page": 2,
+                    "page_size": 20,
+                    "sort_by": "asset_value_usd",
+                    "order": "desc",
+                    "side": "supply",
+                    "asset": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+                    "detail": "true",
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json() == payload
+    mocked_service.assert_awaited_once()
+
+
 def test_justlend_tx_ops_route_ok() -> None:
     payload = [
         "deposit",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -13,6 +14,7 @@ from .schemas import (
     JustLendMarketStatePeriodResponse,
     JustLendMarketStateResponse,
     JustLendPositionResponse,
+    JustLendPositionsResponse,
     JustLendPositionReplayResponse,
     JustLendScaffoldStatusResponse,
 )
@@ -20,6 +22,7 @@ from .service import (
     get_market_state,
     get_market_state_period,
     get_markets,
+    get_positions,
     get_position_replay,
     get_scaffold_status,
     get_supported_tx_operation_types,
@@ -123,6 +126,46 @@ async def position(
 ) -> JustLendPositionResponse:
     cfg = getattr(request.app.state, "justlend_cfg", None) or load_config()
     return await get_user_position(pool, cfg, address, protocol)
+
+
+@router.get(
+    "/positions",
+    response_model=JustLendPositionsResponse,
+    summary="Query current JustLend positions overview",
+)
+async def positions(
+    pool: AsyncpgPool,
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(50, ge=1, le=200, description="分页大小，最大 200"),
+    sort_by: Literal[
+        "health_factor",
+        "total_supply_usd",
+        "total_borrow_usd",
+        "asset_value_usd",
+    ] = Query("health_factor", description="排序字段"),
+    order: Literal["asc", "desc"] = Query("desc", description="排序方向"),
+    side: Literal["all", "collateral", "supply", "borrow"] = Query(
+        "all",
+        description="资产侧别；按资产排序时必须指定具体 side",
+    ),
+    asset: str | None = Query(
+        None,
+        description="TRON 资产地址；sort_by=asset_value_usd 时必填",
+    ),
+    detail: bool = Query(False, description="是否返回当前页仓位的资产明细"),
+    address: str | None = Query(None, description="TRON 用户地址；按单地址过滤"),
+) -> JustLendPositionsResponse:
+    return await get_positions(
+        pool,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        order=order,
+        side=side,
+        asset=asset,
+        detail=detail,
+        address=address,
+    )
 
 
 @router.get(

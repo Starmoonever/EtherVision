@@ -71,7 +71,7 @@ class JustLendMarketStatePeriodResponse(BaseModel):
 class JustLendPositionAssetResponse(BaseModel):
     asset_address: str = Field(description="TRON 资产地址。")
     symbol: str | None = Field(description="资产符号。")
-    side: str = Field(description="仓位方向，collateral 或 borrow。")
+    side: str = Field(description="仓位方向，collateral、supply 或 borrow。")
     amount: str = Field(description="资产数量。")
     price_usd: str = Field(description="资产当前 USD 价格。")
     value_usd: str = Field(description="该仓位方向对应的 USD 价值。")
@@ -91,6 +91,43 @@ class JustLendPositionResponse(BaseModel):
     liquidation_threshold: str = Field(description="估算清算阈值。")
     data_source: str = Field(description="数据来源：database 或 api。")
     assets: list[JustLendPositionAssetResponse] = Field(description="逐资产仓位明细。")
+
+
+class JustLendPositionListItemResponse(BaseModel):
+    protocol: str = Field(description="协议标识。")
+    chain: str = Field(description="链标识。")
+    address: str = Field(description="TRON 用户地址。")
+    snapshot_at: str = Field(description="本次仓位快照时间。")
+    block_timestamp: str = Field(description="底层数据时间戳。")
+    total_supply_usd: str = Field(description="总 supply USD 价值。")
+    total_borrow_usd: str = Field(description="总 borrow USD 价值。")
+    health_factor: str = Field(description="健康因子。")
+    ltv: str = Field(description="估算加权抵押率。")
+    liquidation_threshold: str = Field(description="估算清算阈值。")
+    matched_asset_value_usd: str | None = Field(
+        default=None,
+        description="按指定 side + asset 排序时命中的资产 USD 价值。",
+    )
+    assets: list[JustLendPositionAssetResponse] = Field(
+        default_factory=list,
+        description="逐资产仓位明细；detail=false 时为空。",
+    )
+
+
+class JustLendPositionsResponse(BaseModel):
+    items: list[JustLendPositionListItemResponse] = Field(
+        description="当前仓位概览列表。"
+    )
+    page: int = Field(description="当前页码，从 1 开始。")
+    page_size: int = Field(description="分页大小。")
+    total: int = Field(description="命中的总仓位数。")
+    sort_by: str = Field(description="排序字段。")
+    order: str = Field(description="排序方向。")
+    side: str = Field(description="仓位侧别过滤。")
+    asset: str | None = Field(
+        default=None,
+        description="按资产排序时使用的 TRON 资产地址。",
+    )
 
 
 class JustLendPositionReplayPoint(BaseModel):

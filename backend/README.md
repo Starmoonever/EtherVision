@@ -268,6 +268,17 @@ JustLend 模块负责：
 - `GET /api/justlend/markets`
 - `GET /api/justlend/market/state`
 - `GET /api/justlend/market/state/period`
+- `GET /api/justlend/positions`
+
+`GET /api/justlend/positions` 当前用于返回 JustLend 全量当前仓位概览：
+
+- 概览主表：`loan.justlend_current_user_positions`
+- 资产明细表：`loan.justlend_current_user_position_assets`
+- 支持 `page` / `page_size` 分页
+- 支持 `health_factor`、`total_supply_usd`、`total_borrow_usd` 排序
+- 支持按指定 `side + asset` 的 `asset_value_usd` 排序
+- `side` 当前支持 `all`、`collateral`、`supply`、`borrow`
+- `detail=true` 时返回当前页地址对应的资产明细
 
 当前可用的 JustLend 市场回填脚本：
 

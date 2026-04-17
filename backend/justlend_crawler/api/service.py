@@ -37,6 +37,8 @@ from ..db import (
     fetch_justlend_market_state_period,
     fetch_justlend_markets_current,
     fetch_current_user_position,
+    fetch_current_user_position_assets_by_users,
+    fetch_current_user_positions_page,
     JustLendEventPositionSnapshotRow,
     JustLendMarketStateRow,
     fetch_justlend_tx_effects,
@@ -53,7 +55,9 @@ from .schemas import (
     JustLendMarketStatePeriodResponse,
     JustLendMarketStateResponse,
     JustLendPositionAssetResponse,
+    JustLendPositionListItemResponse,
     JustLendPositionResponse,
+    JustLendPositionsResponse,
     JustLendPositionReplayPoint,
     JustLendPositionReplayResponse,
     JustLendScaffoldStatusResponse,
@@ -69,6 +73,13 @@ _SUMMARY_TOLERANCE_USD = Decimal("0.01")
 _JUSTLEND_API_MAX_RETRIES = 3
 _JUSTLEND_API_RETRY_BACKOFF_SECONDS = 0.5
 _MAX_DB_RATIO = Decimal("9999.999999")
+_POSITION_LIST_SORT_FIELDS = {
+    "health_factor",
+    "total_supply_usd",
+    "total_borrow_usd",
+    "asset_value_usd",
+}
+_POSITION_LIST_SIDES = {"all", "collateral", "supply", "borrow"}
 
 
 def get_scaffold_status() -> JustLendScaffoldStatusResponse:
@@ -1429,6 +1440,35 @@ def _format_assets(assets: list[Any]) -> list[JustLendPositionAssetResponse]:
     ]
 
 
+def _format_position_list_item(
+    position: Any,
+    assets: list[Any],
+    *,
+    include_matched_asset_value: bool,
+) -> JustLendPositionListItemResponse:
+    matched_asset_value_usd: str | None = None
+    if include_matched_asset_value:
+        matched_asset_value_usd = _fmt_decimal(
+            Decimal(str(_row_get(position, "matched_asset_value_usd") or "0"))
+        )
+    return JustLendPositionListItemResponse(
+        protocol=str(position["protocol"]),
+        chain=str(position["chain"]),
+        address=_tron_bytes_to_base58(bytes(position["user_address"])),
+        snapshot_at=_record_ts(position["snapshot_at"]),
+        block_timestamp=_record_ts(position["block_timestamp"]),
+        total_supply_usd=_fmt_decimal(Decimal(str(position["total_collateral_usd"]))),
+        total_borrow_usd=_fmt_decimal(Decimal(str(position["total_debt_usd"]))),
+        health_factor=_fmt_health(Decimal(str(position["health_factor"]))),
+        ltv=_fmt_ratio(Decimal(str(position["ltv"]))),
+        liquidation_threshold=_fmt_ratio(
+            Decimal(str(position["liquidation_threshold"]))
+        ),
+        matched_asset_value_usd=matched_asset_value_usd,
+        assets=_format_assets(assets),
+    )
+
+
 def _map_position_asset(asset: Any) -> JustLendPositionAssetResponse:
     asset_address = asset.get("asset_address")
     asset_address_str = _normalize_tron_address(asset_address) or str(
@@ -1728,6 +1768,99 @@ async def fetch_position_from_justlend_api(
         },
         "assets": assets,
     }
+
+
+async def get_positions(
+    pool: asyncpg.Pool,
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str,
+    order: str,
+    side: str,
+    asset: str | None = None,
+    detail: bool = False,
+    address: str | None = None,
+) -> JustLendPositionsResponse:
+    normalized_sort_by = sort_by.lower()
+    if normalized_sort_by not in _POSITION_LIST_SORT_FIELDS:
+        raise HTTPException(status_code=400, detail="invalid sort_by")
+
+    normalized_side = side.lower()
+    if normalized_side not in _POSITION_LIST_SIDES:
+        raise HTTPException(status_code=400, detail="invalid side")
+
+    normalized_order = order.lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="invalid order")
+
+    normalized_address: bytes | None = None
+    if address is not None:
+        normalized_address = _tron_address_to_bytes(address)
+
+    normalized_asset: str | None = None
+    normalized_asset_bytes: bytes | None = None
+    if asset is not None:
+        normalized_asset = _normalize_tron_address(asset)
+        if normalized_asset is None:
+            raise HTTPException(status_code=400, detail="invalid TRON asset address")
+        normalized_asset_bytes = _tron_address_to_bytes(normalized_asset)
+
+    if normalized_sort_by == "asset_value_usd":
+        if normalized_side == "all":
+            raise HTTPException(
+                status_code=400,
+                detail="sort_by=asset_value_usd 时 side 不能为 all",
+            )
+        if normalized_asset_bytes is None:
+            raise HTTPException(
+                status_code=400,
+                detail="sort_by=asset_value_usd 时必须提供 asset",
+            )
+
+    offset = (page - 1) * page_size
+    rows = await fetch_current_user_positions_page(
+        pool,
+        page_size=page_size,
+        offset=offset,
+        sort_by=normalized_sort_by,
+        order=normalized_order,
+        user_address=normalized_address,
+        side=normalized_side,
+        asset_address=normalized_asset_bytes,
+    )
+
+    assets_by_user: dict[bytes, list[Any]] = {}
+    if detail and rows:
+        user_addresses = [bytes(_row_get(row, "user_address")) for row in rows]
+        asset_rows = await fetch_current_user_position_assets_by_users(
+            pool,
+            user_addresses=user_addresses,
+            side=normalized_side,
+        )
+        for asset_row in asset_rows:
+            user_key = bytes(_row_get(asset_row, "user_address"))
+            assets_by_user.setdefault(user_key, []).append(asset_row)
+
+    items = [
+        _format_position_list_item(
+            row,
+            assets_by_user.get(bytes(_row_get(row, "user_address")), []),
+            include_matched_asset_value=normalized_sort_by == "asset_value_usd",
+        )
+        for row in rows
+    ]
+    total = int(_row_get(rows[0], "total_count", 0)) if rows else 0
+    return JustLendPositionsResponse(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        sort_by=normalized_sort_by,
+        order=normalized_order,
+        side=normalized_side,
+        asset=normalized_asset,
+    )
 
 
 async def get_user_position(

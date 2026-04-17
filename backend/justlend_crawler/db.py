@@ -1165,6 +1165,122 @@ async def fetch_current_user_position(
     return position, assets
 
 
+async def fetch_current_user_positions_page(
+    pool: asyncpg.Pool,
+    *,
+    page_size: int,
+    offset: int,
+    sort_by: str,
+    order: str,
+    user_address: bytes | None = None,
+    side: str = "all",
+    asset_address: bytes | None = None,
+) -> list[asyncpg.Record]:
+    sort_expr_map = {
+        "health_factor": "p.health_factor",
+        "total_supply_usd": "p.total_collateral_usd",
+        "total_borrow_usd": "p.total_debt_usd",
+        "asset_value_usd": "COALESCE(ma.matched_asset_value_usd, 0)",
+    }
+    sort_expr = sort_expr_map.get(sort_by, "p.health_factor")
+    order_sql = "ASC" if order.lower() == "asc" else "DESC"
+
+    params: list[Any] = []
+    where_clauses: list[str] = []
+    matched_asset_cte = "matched_asset AS (SELECT NULL::bytea AS user_address, NULL::numeric AS matched_asset_value_usd WHERE FALSE)"
+    if sort_by == "asset_value_usd":
+        params.extend([asset_address, side])
+        matched_asset_cte = f"""
+        matched_asset AS (
+            SELECT
+                user_address,
+                SUM(value_usd) AS matched_asset_value_usd
+            FROM loan.justlend_current_user_position_assets
+            WHERE asset_address = ${len(params) - 1}
+              AND side = ${len(params)}
+            GROUP BY user_address
+        )"""
+
+    if user_address is not None:
+        params.append(user_address)
+        where_clauses.append(f"p.user_address = ${len(params)}")
+
+    params.extend([page_size, offset])
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    sql = f"""
+        WITH
+        {matched_asset_cte}
+        SELECT
+            p.user_address,
+            p.chain,
+            p.protocol,
+            p.snapshot_at,
+            p.block_timestamp,
+            p.block_number,
+            p.source_cursor,
+            p.total_collateral_usd,
+            p.total_debt_usd,
+            p.available_borrow_usd,
+            p.health_factor,
+            p.ltv,
+            p.liquidation_threshold,
+            p.extra_jsonb,
+            p.created_at,
+            p.updated_at,
+            COALESCE(ma.matched_asset_value_usd, 0) AS matched_asset_value_usd,
+            COUNT(*) OVER() AS total_count
+        FROM loan.justlend_current_user_positions p
+        LEFT JOIN matched_asset ma
+          ON ma.user_address = p.user_address
+        {where_sql}
+        ORDER BY {sort_expr} {order_sql}, p.user_address ASC
+        LIMIT ${len(params) - 1}
+        OFFSET ${len(params)}
+    """
+    async with pool.acquire() as conn:
+        return await conn.fetch(*([sql] + params))
+
+
+async def fetch_current_user_position_assets_by_users(
+    pool: asyncpg.Pool,
+    *,
+    user_addresses: list[bytes],
+    side: str = "all",
+) -> list[asyncpg.Record]:
+    if not user_addresses:
+        return []
+    params: list[Any] = [user_addresses]
+    side_sql = ""
+    if side != "all":
+        params.append(side)
+        side_sql = f"AND side = ${len(params)}"
+    sql = f"""
+        SELECT
+            user_address,
+            asset_address,
+            snapshot_at,
+            block_timestamp,
+            side,
+            symbol,
+            decimals,
+            amount,
+            price_usd,
+            value_usd,
+            extra_jsonb,
+            created_at,
+            updated_at
+        FROM loan.justlend_current_user_position_assets
+        WHERE user_address = ANY($1::bytea[])
+          {side_sql}
+        ORDER BY user_address, value_usd DESC, asset_address, side
+    """
+    async with pool.acquire() as conn:
+        return await conn.fetch(*([sql] + params))
+
+
 async def upsert_current_user_position(
     pool: asyncpg.Pool,
     *,

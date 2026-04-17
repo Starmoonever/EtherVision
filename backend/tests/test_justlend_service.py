@@ -169,6 +169,101 @@ async def test_fetch_position_from_justlend_api_recomputes_summary_from_assets()
 
 
 @pytest.mark.asyncio
+async def test_get_positions_rejects_asset_sort_with_side_all() -> None:
+    pool = cast(asyncpg.Pool, object())
+    with pytest.raises(service.HTTPException) as exc_info:
+        await service.get_positions(
+            pool,
+            page=1,
+            page_size=20,
+            sort_by="asset_value_usd",
+            order="desc",
+            side="all",
+            asset="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            detail=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "sort_by=asset_value_usd 时 side 不能为 all"
+
+
+@pytest.mark.asyncio
+async def test_get_positions_formats_page_and_detail_assets() -> None:
+    pool = cast(asyncpg.Pool, object())
+    user_address = bytes.fromhex("41d148e2b66c5d5979fe1f7f4b2a791ef6ab733e8a")
+    asset_address = service._tron_address_to_bytes("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+    rows = [
+        {
+            "user_address": user_address,
+            "chain": "tron",
+            "protocol": "trx",
+            "snapshot_at": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "block_timestamp": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "total_collateral_usd": Decimal("100"),
+            "total_debt_usd": Decimal("20"),
+            "available_borrow_usd": Decimal("55"),
+            "health_factor": Decimal("5"),
+            "ltv": Decimal("0.2"),
+            "liquidation_threshold": Decimal("0.75"),
+            "matched_asset_value_usd": Decimal("80"),
+            "total_count": 1,
+        }
+    ]
+    asset_rows = [
+        {
+            "user_address": user_address,
+            "asset_address": asset_address,
+            "snapshot_at": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "block_timestamp": datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+            "side": "supply",
+            "symbol": "USDT",
+            "amount": Decimal("80"),
+            "price_usd": Decimal("1"),
+            "value_usd": Decimal("80"),
+        }
+    ]
+
+    with (
+        patch.object(
+            service,
+            "fetch_current_user_positions_page",
+            new=AsyncMock(return_value=rows),
+        ) as mocked_page,
+        patch.object(
+            service,
+            "fetch_current_user_position_assets_by_users",
+            new=AsyncMock(return_value=asset_rows),
+        ) as mocked_assets,
+    ):
+        result = await service.get_positions(
+            pool,
+            page=2,
+            page_size=10,
+            sort_by="asset_value_usd",
+            order="desc",
+            side="supply",
+            asset="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            detail=True,
+        )
+
+    assert result.page == 2
+    assert result.page_size == 10
+    assert result.total == 1
+    assert result.sort_by == "asset_value_usd"
+    assert result.side == "supply"
+    assert result.asset == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    assert len(result.items) == 1
+    assert result.items[0].address == service._tron_bytes_to_base58(user_address)
+    assert result.items[0].matched_asset_value_usd == "80.00000000"
+    assert result.items[0].assets[0].side == "supply"
+    assert (
+        result.items[0].assets[0].asset_address == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    )
+    mocked_page.assert_awaited_once()
+    mocked_assets.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_user_position_refreshes_invalid_cached_summary() -> None:
     user_address = bytes.fromhex("41d148e2b66c5d5979fe1f7f4b2a791ef6ab733e8a")
     cached_position = {
