@@ -5,8 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
-from .schemas import MorphoPositionReplayResponse, MorphoPositionResponse
-from .service import get_position_replay, get_user_position
+from .schemas import (
+    MorphoExposureSumResponse,
+    MorphoPositionReplayResponse,
+    MorphoPositionResponse,
+)
+from .service import get_exposure_sum, get_position_replay, get_user_position
 
 router = APIRouter(prefix="/api/morpho")
 
@@ -76,4 +80,22 @@ async def position_replay(
         to_ts=to_ts,
         use_cache=use_cache,
         detail=detail,
+    )
+
+
+# morpho exposure sum相关
+@router.get(
+    "/exposure/sum",
+    response_model=MorphoExposureSumResponse,
+    summary="Get Morpho exposure sum by position type and asset",
+)
+async def exposure_sum(
+    pool: AsyncpgPool,
+    position_type: str = Query(..., description="borrow / collateral / supply"),
+    asset: str = Query(..., description="资产符号，如 USDC、WETH"),
+) -> MorphoExposureSumResponse:
+    return await get_exposure_sum(
+        pool=pool,
+        position_type=position_type,
+        asset=asset,
     )
