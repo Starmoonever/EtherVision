@@ -709,6 +709,25 @@ def _tron_bytes_to_base58_bytes(address: bytes) -> bytes | None:
     return (("1" * pad) + encoded).encode("utf-8")
 
 
+def _build_justlend_address_predicate(
+    column_name: str,
+    data_type: str,
+    *,
+    bind_values: list[Any],
+    address: bytes,
+) -> str:
+    if data_type != "bytea":
+        bind_values.append(address.hex())
+        return f"lower({column_name}::text) = lower(${len(bind_values)}::text)"
+
+    candidates: list[bytes] = [address]
+    base58_bytes = _tron_bytes_to_base58_bytes(address)
+    if base58_bytes is not None and base58_bytes not in candidates:
+        candidates.append(base58_bytes)
+    bind_values.append(candidates)
+    return f"{column_name} = ANY(${len(bind_values)}::bytea[])"
+
+
 def _build_justlend_user_predicate(
     column_name: str,
     data_type: str,
@@ -716,16 +735,12 @@ def _build_justlend_user_predicate(
     bind_values: list[Any],
     user_address: bytes,
 ) -> str:
-    if data_type != "bytea":
-        bind_values.append(user_address.hex())
-        return f"lower({column_name}::text) = lower(${len(bind_values)}::text)"
-
-    candidates: list[bytes] = [user_address]
-    base58_bytes = _tron_bytes_to_base58_bytes(user_address)
-    if base58_bytes is not None and base58_bytes not in candidates:
-        candidates.append(base58_bytes)
-    bind_values.append(candidates)
-    return f"{column_name} = ANY(${len(bind_values)}::bytea[])"
+    return _build_justlend_address_predicate(
+        column_name,
+        data_type,
+        bind_values=bind_values,
+        address=user_address,
+    )
 
 
 async def ensure_justlend_tables(pool: asyncpg.Pool) -> None:
@@ -1190,14 +1205,22 @@ async def fetch_current_user_positions_page(
     where_clauses: list[str] = []
     matched_asset_cte = "matched_asset AS (SELECT NULL::bytea AS user_address, NULL::numeric AS matched_asset_value_usd WHERE FALSE)"
     if sort_by == "asset_value_usd":
-        params.extend([asset_address, side])
+        if asset_address is None:
+            raise ValueError("asset_address is required for asset_value_usd sort")
+        asset_predicate = _build_justlend_address_predicate(
+            "asset_address",
+            "bytea",
+            bind_values=params,
+            address=asset_address,
+        )
+        params.append(side)
         matched_asset_cte = f"""
         matched_asset AS (
             SELECT
                 user_address,
                 SUM(value_usd) AS matched_asset_value_usd
             FROM loan.justlend_current_user_position_assets
-            WHERE asset_address = ${len(params) - 1}
+            WHERE {asset_predicate}
               AND side = ${len(params)}
             GROUP BY user_address
         )"""
@@ -1218,8 +1241,14 @@ async def fetch_current_user_positions_page(
             params.append(side)
             exists_clauses.append(f"a.side = ${len(params)}")
         if asset_address is not None:
-            params.append(asset_address)
-            exists_clauses.append(f"a.asset_address = ${len(params)}::bytea")
+            exists_clauses.append(
+                _build_justlend_address_predicate(
+                    "a.asset_address",
+                    "bytea",
+                    bind_values=params,
+                    address=asset_address,
+                )
+            )
         where_clauses.append(
             "EXISTS ("
             "SELECT 1 FROM loan.justlend_current_user_position_assets a "
@@ -1281,8 +1310,14 @@ async def fetch_current_user_position_assets_by_users(
         params.append(side)
         extra_conditions.append(f"side = ${len(params)}")
     if asset_address is not None:
-        params.append(asset_address)
-        extra_conditions.append(f"asset_address = ${len(params)}::bytea")
+        extra_conditions.append(
+            _build_justlend_address_predicate(
+                "asset_address",
+                "bytea",
+                bind_values=params,
+                address=asset_address,
+            )
+        )
     extra_sql = ""
     if extra_conditions:
         extra_sql = "AND " + " AND ".join(extra_conditions)
