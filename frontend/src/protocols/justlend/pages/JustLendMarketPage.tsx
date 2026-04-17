@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchJustLendMarketsWithMeta, type JustLendMarketItem } from '../../../api/justlend';
 import { JustLendMarketDashboard } from '../../../components/JustLendMarketDashboard';
+import { JustLendPositionAnalysis } from '../../../components/JustLendPositionAnalysis';
 import { PageHero } from '../../../shared/components/PageHero';
 import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 
 const FEATURED_MARKETS = ['BTC', 'BTCB', 'ETH', 'ETHB', 'WBTC'];
+type JustLendMarketViewMode = 'market' | 'position';
 
 function normalizeSymbol(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? '';
@@ -33,6 +35,22 @@ export function JustLendMarketPage() {
   const [showMore, setShowMore] = useState(false);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [marketLoadError, setMarketLoadError] = useState('');
+  const [viewMode, setViewMode] = useState<JustLendMarketViewMode>(() => {
+    if (typeof window === 'undefined') return 'market';
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    return tab === 'position' ? 'position' : 'market';
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (viewMode === 'position') {
+      url.searchParams.set('tab', 'position');
+    } else {
+      url.searchParams.delete('tab');
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,39 +122,67 @@ export function JustLendMarketPage() {
         title="JustLend 宏观市场评估"
         subtitle="JustLend 市场规模、流动性、利率参数与风险状态综合分析"
         controls={
-          <>
-            {selectorMarkets.length ? (
-              <SegmentedControl
-                ariaLabel="JustLend market selector"
-                value={selectedMarket}
-                onChange={setSelectedMarket}
-                options={selectorMarkets.map((item) => ({
-                  value: item.market,
-                  label: marketButtonLabel(item, markets),
-                  title: item.symbol || item.market,
-                }))}
-              />
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '0.85rem',
+            }}
+          >
+            <SegmentedControl
+              ariaLabel="JustLend market view mode"
+              value={viewMode}
+              onChange={setViewMode}
+              options={[
+                {
+                  value: 'market',
+                  label: '市场宏观',
+                },
+                {
+                  value: 'position',
+                  label: '大户/风险仓位',
+                  activeClassName: 'active-purple',
+                },
+              ]}
+            />
+
+            {viewMode === 'market' ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {selectorMarkets.length ? (
+                  <SegmentedControl
+                    ariaLabel="JustLend market selector"
+                    value={selectedMarket}
+                    onChange={setSelectedMarket}
+                    options={selectorMarkets.map((item) => ({
+                      value: item.market,
+                      label: marketButtonLabel(item, markets),
+                      title: item.symbol || item.market,
+                    }))}
+                  />
+                ) : null}
+                {moreMarkets.length ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowMore((value) => !value)}
+                    className="switch-btn"
+                    style={{
+                      marginLeft: selectorMarkets.length ? '1rem' : 0,
+                      border: '1px solid var(--border-strong)',
+                      background: showMore ? 'var(--accent-primary)' : 'var(--surface-muted)',
+                      color: showMore ? 'var(--text-strong)' : 'var(--text-muted)',
+                    }}
+                  >
+                    More
+                  </button>
+                ) : null}
+              </div>
             ) : null}
-            {moreMarkets.length ? (
-              <button
-                type="button"
-                onClick={() => setShowMore((value) => !value)}
-                className="switch-btn"
-                style={{
-                  marginLeft: selectorMarkets.length ? '1rem' : 0,
-                  border: '1px solid var(--border-strong)',
-                  background: showMore ? 'var(--accent-primary)' : 'var(--surface-muted)',
-                  color: showMore ? 'var(--text-strong)' : 'var(--text-muted)',
-                }}
-              >
-                More
-              </button>
-            ) : null}
-          </>
+          </div>
         }
       />
 
-      {showMore && moreMarkets.length ? (
+      {viewMode === 'market' && showMore && moreMarkets.length ? (
         <div
           className="hero-switch"
           style={{
@@ -163,12 +209,16 @@ export function JustLendMarketPage() {
         </div>
       ) : null}
 
-      <JustLendMarketDashboard
-        markets={markets}
-        selectedMarket={selectedMarket}
-        marketsLoading={loadingMarkets}
-        marketLoadError={marketLoadError}
-      />
+      {viewMode === 'market' ? (
+        <JustLendMarketDashboard
+          markets={markets}
+          selectedMarket={selectedMarket}
+          marketsLoading={loadingMarkets}
+          marketLoadError={marketLoadError}
+        />
+      ) : (
+        <JustLendPositionAnalysis markets={markets} />
+      )}
     </>
   );
 }

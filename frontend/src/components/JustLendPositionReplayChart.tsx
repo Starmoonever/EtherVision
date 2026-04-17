@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -130,6 +132,7 @@ const chartTheme = {
     hoverLine: justLendChartTheme.series.riskHoverLine,
     reference: justLendChartTheme.series.bufferReference,
   },
+  positionTrend: justLendChartTheme.positionTrend,
 } as const;
 
 function toNum(value: string | number | null | undefined): number {
@@ -375,7 +378,103 @@ function renderOperationMarker(
     return null;
   }
 
-  return <circle cx={cx} cy={cy} r={4.5} fill={color} stroke="#f8fafc" strokeWidth={1.4} />;
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={4.5}
+      fill={color}
+      stroke={chartTheme.positionTrend.markerStroke}
+      strokeWidth={1.4}
+    />
+  );
+}
+
+function PositionTrendDefs() {
+  return (
+    <defs>
+      <linearGradient id="justlend-position-trend-collateral-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop
+          offset="0%"
+          stopColor={chartTheme.positionTrend.collateral}
+          stopOpacity={chartTheme.positionTrend.areaOpacityStart}
+        />
+        <stop
+          offset="100%"
+          stopColor={chartTheme.positionTrend.collateral}
+          stopOpacity={chartTheme.positionTrend.areaOpacityEnd}
+        />
+      </linearGradient>
+      <linearGradient id="justlend-position-trend-debt-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop
+          offset="0%"
+          stopColor={chartTheme.positionTrend.debt}
+          stopOpacity={chartTheme.positionTrend.areaOpacityStart}
+        />
+        <stop
+          offset="100%"
+          stopColor={chartTheme.positionTrend.debt}
+          stopOpacity={chartTheme.positionTrend.areaOpacityEnd}
+        />
+      </linearGradient>
+    </defs>
+  );
+}
+
+interface PositionTrendSeriesProps {
+  dataKey: 'totalCollateralUsd' | 'totalDebtUsd';
+  name: string;
+  color: string;
+  fillId: string;
+  selectedOperationType: string;
+}
+
+function PositionTrendSeries({
+  dataKey,
+  name,
+  color,
+  fillId,
+  selectedOperationType,
+}: PositionTrendSeriesProps) {
+  return (
+    <>
+      <Area
+        type="monotone"
+        dataKey={dataKey}
+        name={name}
+        fill={`url(#${fillId})`}
+        stroke="none"
+        isAnimationActive={false}
+        legendType="none"
+      />
+      <Line
+        type="monotone"
+        dataKey={dataKey}
+        name={name}
+        stroke={color}
+        strokeWidth={chartTheme.positionTrend.glowWidth}
+        strokeOpacity={chartTheme.positionTrend.glowOpacity}
+        dot={false}
+        activeDot={false}
+        legendType="none"
+        isAnimationActive={false}
+      />
+      <Line
+        type="monotone"
+        dataKey={dataKey}
+        name={name}
+        stroke={color}
+        strokeWidth={chartTheme.positionTrend.lineWidth}
+        dot={
+          selectedOperationType === 'ALL'
+            ? false
+            : (props) => renderOperationMarker(props, selectedOperationType, color)
+        }
+        activeDot={false}
+        isAnimationActive={false}
+      />
+    </>
+  );
 }
 
 export function JustLendPositionReplayChart({
@@ -854,7 +953,7 @@ export function JustLendPositionReplayChart({
             </div>
             <div style={{ height: 320 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart
+                <ComposedChart
                   data={data}
                   onClick={(state) =>
                     setSelectedTimestamp(state?.activeLabel ? String(state.activeLabel) : null)
@@ -863,60 +962,60 @@ export function JustLendPositionReplayChart({
                     setHoveredTimestamp(state?.activeLabel ? String(state.activeLabel) : null)
                   }
                   onMouseLeave={() => setHoveredTimestamp(null)}
+                  margin={{ top: 12, right: 18, left: 4, bottom: 2 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                  <PositionTrendDefs />
+                  <CartesianGrid
+                    stroke={chartTheme.positionTrend.grid}
+                    strokeDasharray="4 8"
+                    vertical={false}
+                  />
                   <XAxis
                     dataKey="timestamp"
-                    stroke={chartTheme.axis.stroke}
+                    tick={{ fill: chartTheme.positionTrend.axis, fontSize: 11 }}
+                    axisLine={{ stroke: chartTheme.positionTrend.axisLine }}
+                    tickLine={false}
                     tickFormatter={(value) => String(value).slice(0, 10)}
-                    minTickGap={32}
+                    minTickGap={24}
                   />
                   <YAxis
-                    stroke={chartTheme.axis.stroke}
+                    tick={{ fill: chartTheme.positionTrend.axis, fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
                     tickFormatter={(value) => formatUsdCompact(Number(value))}
                   />
                   {hoveredTimestamp || selectedPoint ? (
                     <ReferenceLine
                       x={hoveredTimestamp ?? selectedPoint?.timestamp}
-                      stroke={chartTheme.bufferTrend.hoverLine}
+                      stroke={chartTheme.positionTrend.hoverLine}
                       strokeWidth={1.5}
                       strokeDasharray="4 4"
                     />
                   ) : null}
                   <Tooltip content={<PositionTrendTooltip />} cursor={false} />
-                  <Legend />
-                  <Line
-                    type="monotone"
+                  <Legend
+                    iconType="circle"
+                    wrapperStyle={{
+                      color: chartTheme.positionTrend.legendText,
+                      fontSize: 12,
+                      paddingTop: 10,
+                    }}
+                  />
+                  <PositionTrendSeries
                     dataKey="totalCollateralUsd"
                     name="总抵押价值"
-                    stroke="#22c55e"
-                    strokeWidth={2.2}
-                    dot={
-                      selectedOperationType === 'ALL'
-                        ? false
-                        : (props) => renderOperationMarker(props, selectedOperationType, '#22c55e')
-                    }
-                    activeDot={false}
+                    color={chartTheme.positionTrend.collateral}
+                    fillId="justlend-position-trend-collateral-fill"
+                    selectedOperationType={selectedOperationType}
                   />
-                  <Line
-                    type="monotone"
+                  <PositionTrendSeries
                     dataKey="totalDebtUsd"
                     name="总债务价值"
-                    stroke={chartTheme.bufferTrend.secondary}
-                    strokeWidth={2.2}
-                    dot={
-                      selectedOperationType === 'ALL'
-                        ? false
-                        : (props) =>
-                            renderOperationMarker(
-                              props,
-                              selectedOperationType,
-                              chartTheme.bufferTrend.secondary,
-                            )
-                    }
-                    activeDot={false}
+                    color={chartTheme.positionTrend.debt}
+                    fillId="justlend-position-trend-debt-fill"
+                    selectedOperationType={selectedOperationType}
                   />
-                </LineChart>
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           </div>
