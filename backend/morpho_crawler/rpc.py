@@ -327,6 +327,11 @@ def _format_scaled(amount: int, decimals: int) -> str:
     return format(Decimal(amount) / (Decimal(10) ** decimals), "f")
 
 
+def _format_decimal_fixed(value: Decimal, places: int) -> str:
+    quant = Decimal(10) ** (-places)
+    return format(value.quantize(quant), "f")
+
+
 async def _fetch_token_metadata(w3: AsyncWeb3, token_address: str) -> TokenMetadata:
     token_address_checksum = _to_checksum(token_address)
     token = w3.eth.contract(address=token_address_checksum, abi=ERC20_ABI)
@@ -343,6 +348,116 @@ async def _fetch_token_metadata(w3: AsyncWeb3, token_address: str) -> TokenMetad
     return TokenMetadata(
         address=token_address_checksum, symbol=symbol, decimals=int(decimals)
     )
+
+
+async def fetch_market_state(
+    w3: AsyncWeb3,
+    *,
+    market_id: str,
+    block_identifier: BlockIdentifier = cast(BlockIdentifier, "latest"),
+) -> dict[str, Any]:
+    morpho_address = _to_checksum(MORPHO_BLUE_ADDRESS)
+    morpho = w3.eth.contract(address=morpho_address, abi=MORPHO_ABI)
+    market_id_bytes = _normalize_market_id(market_id)
+    market_id_hex = f"0x{market_id_bytes.hex()}"
+
+    try:
+        market_params, market_data = await asyncio.gather(
+            morpho.functions.idToMarketParams(market_id_bytes).call(
+                block_identifier=block_identifier
+            ),
+            morpho.functions.market(market_id_bytes).call(
+                block_identifier=block_identifier
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="failed to fetch Morpho market state",
+        ) from exc
+
+    loan_token_address = _to_checksum(market_params[0])
+    collateral_token_address = _to_checksum(market_params[1])
+    oracle_address = _to_checksum(market_params[2])
+    irm_address = _to_checksum(market_params[3])
+    lltv_raw = int(market_params[4])
+    if loan_token_address == ZERO_ADDRESS or collateral_token_address == ZERO_ADDRESS:
+        raise HTTPException(status_code=404, detail="morpho market not found")
+
+    loan_token, collateral_token = await asyncio.gather(
+        _fetch_token_metadata(w3, loan_token_address),
+        _fetch_token_metadata(w3, collateral_token_address),
+    )
+
+    total_supply_assets = int(market_data[0])
+    total_supply_shares = int(market_data[1])
+    total_borrow_assets = int(market_data[2])
+    total_borrow_shares = int(market_data[3])
+    last_update = int(market_data[4])
+    fee = int(market_data[5])
+
+    supply_dec = Decimal(total_supply_assets)
+    borrow_dec = Decimal(total_borrow_assets)
+    lltv_ratio = Decimal(lltv_raw) / Decimal(WAD)
+
+    utilization = Decimal("0")
+    if total_supply_assets > 0:
+        utilization = borrow_dec / supply_dec
+    available_liquidity = total_supply_assets - total_borrow_assets
+
+    borrow_capacity_usage_rough = Decimal("0")
+    if total_supply_assets > 0 and lltv_ratio > 0:
+        borrow_capacity_usage_rough = borrow_dec / (supply_dec * lltv_ratio)
+
+    return {
+        "marketId": market_id_hex,
+        "loanToken": {
+            "address": loan_token.address,
+            "symbol": loan_token.symbol,
+            "decimals": loan_token.decimals,
+        },
+        "collateralToken": {
+            "address": collateral_token.address,
+            "symbol": collateral_token.symbol,
+            "decimals": collateral_token.decimals,
+        },
+        "oracle": oracle_address,
+        "irm": irm_address,
+        "lltv": {
+            "raw": str(lltv_raw),
+            "ratio": _format_decimal_fixed(lltv_ratio, 6),
+        },
+        "totalSupplyAssets": str(total_supply_assets),
+        "totalSupplyShares": str(total_supply_shares),
+        "totalBorrowAssets": str(total_borrow_assets),
+        "totalBorrowShares": str(total_borrow_shares),
+        "lastUpdate": last_update,
+        "fee": str(fee),
+        "utilization": {
+            "formula": "totalBorrowAssets / totalSupplyAssets",
+            "value": _format_decimal_fixed(utilization, 8),
+        },
+        "availableLiquidity": {
+            "formula": "totalSupplyAssets - totalBorrowAssets",
+            "value": str(available_liquidity),
+            "note": None,
+        },
+        "borrowCapacityUsageRough": {
+            "formula": "totalBorrowAssets / (totalSupplyAssets * lltv)",
+            "value": _format_decimal_fixed(borrow_capacity_usage_rough, 8),
+            "note": "市场层粗略估算，严格口径需用户仓位级数据",
+        },
+        "marketScaleTvlLike": {
+            "formula": "totalSupplyAssets",
+            "value": str(total_supply_assets),
+            "note": None,
+        },
+        "debtScaleDebtLike": {
+            "formula": "totalBorrowAssets",
+            "value": str(total_borrow_assets),
+            "note": None,
+        },
+    }
 
 
 async def fetch_realtime_position(
