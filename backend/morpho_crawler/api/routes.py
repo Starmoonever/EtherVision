@@ -6,11 +6,17 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from .schemas import (
-    MorphoExposureSumResponse,
+    MorphoMarketStateResponse,
+    MorphoMarketListResponse,
     MorphoPositionReplayResponse,
     MorphoPositionResponse,
 )
-from .service import get_exposure_sum, get_position_replay, get_user_position
+from .service import (
+    get_market_state,
+    get_position_replay,
+    get_representative_markets,
+    get_user_position,
+)
 
 router = APIRouter(prefix="/api/morpho")
 
@@ -83,19 +89,29 @@ async def position_replay(
     )
 
 
-# morpho exposure sum相关
 @router.get(
-    "/exposure/sum",
-    response_model=MorphoExposureSumResponse,
-    summary="Get Morpho exposure sum by position type and asset",
+    "/market",
+    response_model=MorphoMarketListResponse,
+    summary="Get representative Morpho market ids",
 )
-async def exposure_sum(
-    pool: AsyncpgPool,
-    position_type: str = Query(..., description="borrow / collateral / supply"),
-    asset: str = Query(..., description="资产符号，如 USDC、WETH"),
-) -> MorphoExposureSumResponse:
-    return await get_exposure_sum(
-        pool=pool,
-        position_type=position_type,
-        asset=asset,
+async def market_list() -> MorphoMarketListResponse:
+    return get_representative_markets()
+
+
+@router.get(
+    "/market/state",
+    response_model=MorphoMarketStateResponse,
+    summary="Get Morpho market state",
+)
+async def market_state(
+    request: Request,
+    market_id: str = Query(..., description="Morpho market id (bytes32 hex)"),
+    date: str | None = Query(
+        None, description="预留历史参数；当前仅支持实时 latest 数据"
+    ),
+) -> MorphoMarketStateResponse:
+    return await get_market_state(
+        _w3(request),
+        market_id=market_id,
+        date=date,
     )

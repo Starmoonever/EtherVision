@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
+import re
 from typing import Any
 
 from crawler_shared.api.service import get_price
@@ -33,12 +34,15 @@ from ..db import (
 from ..rpc import (
     MorphoReplayEvent,
     MorphoRealtimePosition,
+    fetch_market_state,
     fetch_position_at_block,
     fetch_realtime_position,
     fetch_user_market_replay_events,
 )
 from .schemas import (
-    MorphoExposureSumResponse,
+    MorphoMarketListItem,
+    MorphoMarketStateResponse,
+    MorphoMarketListResponse,
     MorphoPositionAssetResponse,
     MorphoPositionReplayPointResponse,
     MorphoPositionReplayResponse,
@@ -56,6 +60,34 @@ BRIEF_LABELS = {
     "liquidation": "被清算",
 }
 
+MORPHO_REPRESENTATIVE_MARKETS: list[tuple[str, str]] = [
+    (
+        "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
+        "USDC-wstETH",
+    ),
+    (
+        "0x3a85e619751152991742810df6ec69ce473daef99e28a64ab2340d7b7ccfee49",
+        "USDC-WBTC",
+    ),
+    (
+        "0x94b823e6bd8ea533b4e33fbc307faea0b307301bc48763acc4d4aa4def7636cd",
+        "USDC-WETH",
+    ),
+    (
+        "0x6a57d77b9a173c5ed10d432e7009dd1ee9a97fac62a7bc970b4bd715e2fff5c8",
+        "USDT-wstETH",
+    ),
+    (
+        "0xfb7c3a3af1ab477a2224b1387d0fd233ee9fb80e8208011996e4fd5aacd50c36",
+        "USDT-WBTC",
+    ),
+    (
+        "0x3758a9e2abbd67b5621f23ec482608f2f98b3c792874661ce49df7843aadcfd2",
+        "USDT-WETH",
+    ),
+]
+UTC_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def get_scaffold_status() -> MorphoScaffoldStatusResponse:
     return MorphoScaffoldStatusResponse(
@@ -68,6 +100,39 @@ def get_scaffold_status() -> MorphoScaffoldStatusResponse:
             "Replay snapshots are populated lazily on API requests."
         ),
     )
+
+
+def get_representative_markets() -> MorphoMarketListResponse:
+    return MorphoMarketListResponse(
+        market_count=len(MORPHO_REPRESENTATIVE_MARKETS),
+        markets=[
+            MorphoMarketListItem(market_id=market_id, pair=pair)
+            for market_id, pair in MORPHO_REPRESENTATIVE_MARKETS
+        ],
+    )
+
+
+async def get_market_state(
+    w3: AsyncWeb3,
+    *,
+    market_id: str,
+    date: str | None = None,
+) -> MorphoMarketStateResponse:
+    if date:
+        if not UTC_DAY_RE.match(date):
+            raise HTTPException(
+                status_code=400,
+                detail="date 格式错误，需为 UTC 天级格式：YYYY-MM-DD（例如 2026-04-05）",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="date 参数已预留（UTC 天级），当前 MVP 暂不支持历史查询",
+        )
+    payload = await fetch_market_state(
+        w3,
+        market_id=market_id,
+    )
+    return MorphoMarketStateResponse(**payload)
 
 
 def parse_utc_time(value: str) -> int:
@@ -982,47 +1047,4 @@ async def get_position_replay(
         total_tx_count=len(grouped),
         cache_hit_rate=format(Decimal(cached_count) / Decimal(len(grouped)), ".2f"),
         points=points,
-    )
-
-
-# morpho exposure sum相关
-async def get_exposure_sum(
-    *,
-    pool: AsyncpgPool,
-    position_type: str,
-    asset: str,
-) -> MorphoExposureSumResponse:
-    normalized_type = position_type.strip().lower()
-    normalized_asset = asset.strip()
-    if normalized_type not in {"borrow", "collateral", "supply"}:
-        raise HTTPException(
-            status_code=400,
-            detail="position_type 仅支持 borrow / collateral / supply",
-        )
-    if not normalized_asset:
-        raise HTTPException(status_code=400, detail="asset 不能为空")
-
-    async with pool.acquire() as conn:
-        if normalized_type == "borrow":
-            # 统一走 extra_jsonb，避免不同库表结构列名差异导致 500。
-            value_expr = "NULLIF(extra_jsonb->>'borrow_assets', '')::numeric"
-            symbol_expr = "extra_jsonb->'loan_token'->>'symbol'"
-        elif normalized_type == "collateral":
-            value_expr = "NULLIF(extra_jsonb->>'collateral_assets', '')::numeric"
-            symbol_expr = "extra_jsonb->'collateral_token'->>'symbol'"
-        else:
-            value_expr = "NULLIF(extra_jsonb->>'supply_assets', '')::numeric"
-            symbol_expr = "extra_jsonb->'loan_token'->>'symbol'"
-
-        sql = f"""
-            SELECT COALESCE(SUM({value_expr}), 0)
-            FROM loan.morpho_blue_current_user_positions
-            WHERE lower({symbol_expr}) = lower($1)
-        """
-        total = await conn.fetchval(sql, normalized_asset)
-
-    return MorphoExposureSumResponse(
-        position_type=normalized_type,
-        asset=normalized_asset.upper(),
-        total=str(total or "0"),
     )
