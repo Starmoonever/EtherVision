@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import {
   fetchJustLendPositionAnalysisWithMeta,
   type JustLendMarketItem,
-  type JustLendPositionAnalysisAsset,
   type JustLendPositionAnalysisItem,
 } from '../api/justlend';
 import type { AggregatedRequestMeta } from '../api/requestMeta';
 import { ChartDataStatus } from './ChartAssist';
 import { justLendChartTheme } from './justlendTheme';
 import { copyToClipboard } from '../shared/utils/copyToClipboard';
+import { JustLendPersonalDashboard } from './JustLendPersonalDashboard';
 
 type PositionSide = 'all' | 'collateral' | 'supply' | 'borrow';
 type PositionSortBy =
@@ -33,11 +32,6 @@ interface PositionQuery {
   asset: string;
 }
 
-interface AssetPieSlice {
-  name: string;
-  value: number;
-}
-
 interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
   healthFactorDisplay: string;
   healthFactorValue: number;
@@ -45,7 +39,6 @@ interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
 
 const PAGE_SIZE = 50;
 const REFRESH_INTERVAL_SECONDS = 5 * 60;
-const riskPalette = justLendChartTheme.palettes.asset;
 const sortMetricOptions: Array<{
   sortBy: PositionSortBy;
   label: string;
@@ -62,22 +55,6 @@ function toNum(value: string | number | null | undefined): number {
   if (raw === 'inf' || raw === 'infinity') return Infinity;
   const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function parseFiniteFloat(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function getAssetTotalValueUsd(asset: JustLendPositionAnalysisAsset): number {
-  const amount = parseFiniteFloat(asset.amount);
-  const price = parseFiniteFloat(asset.price_usd);
-  const calculatedValue = amount !== null && price !== null ? amount * price : null;
-  if (calculatedValue !== null && Number.isFinite(calculatedValue)) {
-    return calculatedValue;
-  }
-  return toNum(asset.value_usd);
 }
 
 function formatFullCurrency(value: number): string {
@@ -102,18 +79,6 @@ function compactNumber(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
-}
-
-function formatAmount(value: number): string {
-  if (!Number.isFinite(value)) return '--';
-  return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
-}
-
-function autoScaleFontSize(value: string): string {
-  const visibleLength = value.replace(/[,$.]/g, '').length;
-  if (visibleLength > 14) return '1.35rem';
-  if (visibleLength > 10) return '1.55rem';
-  return '1.9rem';
 }
 
 function formatHealthFactor(
@@ -176,11 +141,6 @@ function sortPositionItems(
   );
 }
 
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return '--';
-  return `${value.toFixed(2)}%`;
-}
-
 function formatCountdown(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const restSeconds = seconds % 60;
@@ -205,18 +165,6 @@ function buildAssetOptions(markets: JustLendMarketItem[]) {
     .sort((a, b) => a.underlying_symbol.localeCompare(b.underlying_symbol));
 }
 
-function groupAllAssetsBySymbol(assets: JustLendPositionAnalysisAsset[]): AssetPieSlice[] {
-  const grouped = new Map<string, number>();
-  for (const asset of assets) {
-    const key = asset.symbol || asset.asset_address;
-    grouped.set(key, (grouped.get(key) ?? 0) + getAssetTotalValueUsd(asset));
-  }
-  return Array.from(grouped.entries())
-    .map(([name, value]) => ({ name, value }))
-    .filter((item) => item.value > 0)
-    .sort((a, b) => b.value - a.value);
-}
-
 function getHealthFactorTone(value: number, display: string) {
   if (display === '∞' || value > 2) {
     return { color: '#22c55e', className: '', fontWeight: 800 };
@@ -228,67 +176,6 @@ function getHealthFactorTone(value: number, display: string) {
     return { color: '#f59e0b', className: '', fontWeight: 800 };
   }
   return { color: '#e2e8f0', className: '', fontWeight: 700 };
-}
-
-function AssetPie({ title, data }: { title: string; data: AssetPieSlice[] }) {
-  const [hoveredSlice, setHoveredSlice] = useState<AssetPieSlice | null>(null);
-  const total = data.reduce((sum, item) => sum + item.value, 0);
-  const centerLabel = hoveredSlice ? hoveredSlice.name : 'Total Assets';
-  const centerValue =
-    hoveredSlice && total > 0
-      ? formatPercent((hoveredSlice.value / total) * 100)
-      : formatFullCurrency(total);
-
-  return (
-    <div className="justlend-portrait-card justlend-donut-card">
-      <div className="card-title justlend-donut-title">{title}</div>
-      {data.length ? (
-        <div className="justlend-donut-shell">
-          <ResponsiveContainer width="100%" height={240}>
-            <PieChart>
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: justLendChartTheme.tooltip.background,
-                  borderColor: justLendChartTheme.tooltip.border,
-                  color: justLendChartTheme.tooltip.text,
-                }}
-                formatter={(value: unknown, name: string | number | undefined) => [
-                  formatFullCurrency(Number(value ?? 0)),
-                  String(name ?? ''),
-                ]}
-              />
-              <Pie
-                data={data}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={62}
-                outerRadius={96}
-                cornerRadius={8}
-                paddingAngle={2}
-                onMouseLeave={() => setHoveredSlice(null)}
-              >
-                {data.map((item, index) => (
-                  <Cell
-                    key={item.name}
-                    fill={riskPalette[index % riskPalette.length]}
-                    onMouseEnter={() => setHoveredSlice(item)}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="justlend-donut-center">
-            <span>{centerLabel}</span>
-            <strong>{centerValue}</strong>
-          </div>
-        </div>
-      ) : (
-        <div className="justlend-empty-state" style={{ minHeight: 200 }}>
-          暂无{title}数据
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisProps) {
@@ -310,9 +197,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   });
   const [copiedAddress, setCopiedAddress] = useState('');
   const [drawerAddress, setDrawerAddress] = useState('');
-  const [drawerData, setDrawerData] = useState<PositionAnalysisViewItem | null>(null);
-  const [drawerLoading, setDrawerLoading] = useState(false);
-  const [drawerError, setDrawerError] = useState('');
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [refreshCountdown, setRefreshCountdown] = useState(REFRESH_INTERVAL_SECONDS);
 
@@ -390,41 +274,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!drawerAddress) return;
-    let cancelled = false;
-
-    const loadDetail = async () => {
-      setDrawerLoading(true);
-      setDrawerError('');
-      try {
-        const result = await fetchJustLendPositionAnalysisWithMeta({
-          page: 1,
-          pageSize: 1,
-          sortBy: 'total_supply_usd',
-          order: 'desc',
-          side: 'all',
-          detail: true,
-          address: drawerAddress,
-        });
-        if (cancelled) return;
-        setDrawerData(result.data.items?.[0] ? normalizePositionItem(result.data.items[0]) : null);
-      } catch (loadError) {
-        if (!cancelled) {
-          setDrawerData(null);
-          setDrawerError(loadError instanceof Error ? loadError.message : '无法加载用户画像');
-        }
-      } finally {
-        if (!cancelled) setDrawerLoading(false);
-      }
-    };
-
-    void loadDetail();
-    return () => {
-      cancelled = true;
-    };
-  }, [drawerAddress]);
-
   const updateQuery = (patch: Partial<PositionQuery>) => {
     setQuery((current) => ({
       ...current,
@@ -469,14 +318,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
       setCopiedAddress((current) => (current === address ? '' : current));
     }, 1400);
   };
-
-  const detail = drawerData;
-  const detailSupply = detail ? toNum(detail.total_supply_usd) : 0;
-  const detailBorrow = detail ? toNum(detail.total_borrow_usd) : 0;
-  const netWorth = detailSupply - detailBorrow;
-  const netWorthDisplay = formatFullCurrency(netWorth);
-  const ltv = detailSupply > 0 ? (detailBorrow / detailSupply) * 100 : 0;
-  const combinedPie = detail ? groupAllAssetsBySymbol(detail.assets ?? []) : [];
 
   return (
     <div className="justlend-market-board">
@@ -773,13 +614,15 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           }}
           onClick={() => {
             setDrawerAddress('');
-            setDrawerData(null);
           }}
         >
-          <div className="justlend-portrait-drawer" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="justlend-personal-analysis-drawer"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="card-header justlend-portrait-header">
               <div>
-                <span className="card-title">用户详细画像</span>
+                <span className="card-title">JustLend 个人账户分析</span>
                 <div className="mono justlend-portrait-address">{drawerAddress}</div>
               </div>
               <button
@@ -792,93 +635,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
               </button>
             </div>
 
-            {drawerLoading ? (
-              <div className="justlend-empty-state" style={{ minHeight: 360 }}>
-                <div className="spinner"></div>
-              </div>
-            ) : drawerError ? (
-              <div className="justlend-banner justlend-banner-warn">
-                <div className="justlend-banner-title">无法读取用户画像</div>
-                <div className="justlend-banner-copy">{drawerError}</div>
-              </div>
-            ) : detail ? (
-              <div className="justlend-portrait-content">
-                <div className="justlend-portrait-stats">
-                  <div className="metric-box justlend-portrait-stat-card">
-                    <span className="metric-label">Net Worth</span>
-                    <span
-                      className="metric-value green mono"
-                      style={{ fontSize: autoScaleFontSize(netWorthDisplay) }}
-                    >
-                      {netWorthDisplay}
-                    </span>
-                  </div>
-                  <div className="metric-box justlend-portrait-stat-card">
-                    <span className="metric-label">Loan-to-Value</span>
-                    <span className="metric-value blue">{formatPercent(ltv)}</span>
-                  </div>
-                  <div className="metric-box justlend-portrait-stat-card">
-                    <span className="metric-label">Health Factor</span>
-                    <span className="metric-value red">{detail.healthFactorDisplay}</span>
-                  </div>
-                </div>
-
-                <div className="justlend-portrait-main-grid">
-                  <AssetPie title="持仓币种比例" data={combinedPie} />
-                  <div className="justlend-portrait-card justlend-assets-card">
-                    <div className="card-header justlend-assets-card-header">
-                      <span className="card-title justlend-assets-title">资产明细</span>
-                      <span className="badge" style={justLendChartTheme.badge.neutral}>
-                        {detail.assets?.length ?? 0} Assets
-                      </span>
-                    </div>
-                    <div className="justlend-position-asset-list">
-                      {(detail.assets ?? []).length ? (
-                        (detail.assets ?? []).map((asset) => {
-                          const value = getAssetTotalValueUsd(asset);
-                          const price = toNum(asset.price_usd);
-                          return (
-                            <div
-                              key={`${asset.asset_address}:${asset.side}`}
-                              className="justlend-position-asset-row"
-                            >
-                              <div className="justlend-asset-identity">
-                                <div className="justlend-asset-icon">
-                                  {(asset.symbol || '?').slice(0, 1).toUpperCase()}
-                                </div>
-                                <div>
-                                  <div className="justlend-asset-symbol">
-                                    {asset.symbol || asset.asset_address}
-                                  </div>
-                                  <div className="justlend-asset-side">{asset.side}</div>
-                                </div>
-                              </div>
-                              <div className="justlend-asset-amount">
-                                <div className="mono justlend-asset-amount-value">
-                                  {formatAmount(toNum(asset.amount))}
-                                </div>
-                                <div className="mono justlend-asset-price">
-                                  @ {formatFullCurrency(price)}
-                                </div>
-                              </div>
-                              <div className="mono justlend-asset-usd-value">
-                                {formatFullCurrency(value)}
-                              </div>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="justlend-empty-state" style={{ minHeight: 180 }}>
-                          暂无资产明细
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="justlend-empty-state">未找到该地址的详细仓位</div>
-            )}
+            <JustLendPersonalDashboard address={drawerAddress} />
           </div>
         </div>
       ) : null}

@@ -9,7 +9,7 @@ import { JustLendPositionAnalysis } from '../../../components/JustLendPositionAn
 import { PageHero } from '../../../shared/components/PageHero';
 import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 
-const FEATURED_MARKETS = ['TRX', 'STRX', 'USDT'];
+const FEATURED_MARKETS = ['USDT', 'TRX', 'STRX'];
 type JustLendMarketViewMode = 'market' | 'position';
 
 function normalizeSymbol(value: string | null | undefined): string {
@@ -39,13 +39,13 @@ function toNum(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function estimateMarketTvlUsd(totalSupply: string, priceUsd: string): number {
-  return toNum(totalSupply) * toNum(priceUsd);
+function estimateMarketBorrowUsd(totalBorrows: string, priceUsd: string): number {
+  return toNum(totalBorrows) * toNum(priceUsd);
 }
 
-function formatTvlTitle(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return 'TVL unavailable';
-  return `TVL ${Intl.NumberFormat(undefined, {
+function formatBorrowTitle(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return 'Borrow unavailable';
+  return `Borrow ${Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: 'USD',
     notation: 'compact',
@@ -59,7 +59,7 @@ export function JustLendMarketPage() {
   const [showMore, setShowMore] = useState(false);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [marketLoadError, setMarketLoadError] = useState('');
-  const [marketTvls, setMarketTvls] = useState<Record<string, number>>({});
+  const [marketBorrowUsd, setMarketBorrowUsd] = useState<Record<string, number>>({});
   const [viewMode, setViewMode] = useState<JustLendMarketViewMode>(() => {
     if (typeof window === 'undefined') return 'market';
     const tab = new URLSearchParams(window.location.search).get('tab');
@@ -117,20 +117,20 @@ export function JustLendMarketPage() {
 
   useEffect(() => {
     if (!markets.length) {
-      setMarketTvls({});
+      setMarketBorrowUsd({});
       return;
     }
 
     let cancelled = false;
 
-    const loadTvls = async () => {
+    const loadBorrowUsd = async () => {
       const entries = await Promise.all(
         markets.map(async (market) => {
           try {
             const result = await fetchJustLendMarketStateWithMeta(market.market);
             return [
               market.market,
-              estimateMarketTvlUsd(result.data.total_supply, result.data.price_usd),
+              estimateMarketBorrowUsd(result.data.total_borrows, result.data.price_usd),
             ] as const;
           } catch {
             return [market.market, 0] as const;
@@ -139,11 +139,11 @@ export function JustLendMarketPage() {
       );
 
       if (!cancelled) {
-        setMarketTvls(Object.fromEntries(entries));
+        setMarketBorrowUsd(Object.fromEntries(entries));
       }
     };
 
-    void loadTvls();
+    void loadBorrowUsd();
     return () => {
       cancelled = true;
     };
@@ -164,13 +164,13 @@ export function JustLendMarketPage() {
     return markets
       .filter((item) => !featuredSet.has(item.market))
       .sort((a, b) => {
-        const tvlDiff = (marketTvls[b.market] ?? 0) - (marketTvls[a.market] ?? 0);
-        if (Math.abs(tvlDiff) > 0.000001) return tvlDiff;
+        const borrowDiff = (marketBorrowUsd[b.market] ?? 0) - (marketBorrowUsd[a.market] ?? 0);
+        if (Math.abs(borrowDiff) > 0.000001) return borrowDiff;
         return (a.underlying_symbol || a.symbol || a.market).localeCompare(
           b.underlying_symbol || b.symbol || b.market,
         );
       });
-  }, [featuredMarkets, marketTvls, markets]);
+  }, [featuredMarkets, marketBorrowUsd, markets]);
 
   return (
     <>
@@ -213,7 +213,7 @@ export function JustLendMarketPage() {
                     options={selectorMarkets.map((item) => ({
                       value: item.market,
                       label: marketButtonLabel(item, markets),
-                      title: `${item.symbol || item.market} · ${formatTvlTitle(marketTvls[item.market] ?? 0)}`,
+                      title: `${item.symbol || item.market} · ${formatBorrowTitle(marketBorrowUsd[item.market] ?? 0)}`,
                     }))}
                   />
                 ) : null}
@@ -259,7 +259,7 @@ export function JustLendMarketPage() {
             options={moreMarkets.map((item) => ({
               value: item.market,
               label: marketButtonLabel(item, markets),
-              title: `${item.symbol || item.market} · ${formatTvlTitle(marketTvls[item.market] ?? 0)}`,
+              title: `${item.symbol || item.market} · ${formatBorrowTitle(marketBorrowUsd[item.market] ?? 0)}`,
             }))}
           />
         </div>

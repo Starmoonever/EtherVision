@@ -122,6 +122,39 @@ function formatUsd(value: string | number): string {
   })}`;
 }
 
+function formatVaultNumber(value: string | number, options: { currency?: boolean } = {}): string {
+  const num = toNum(value);
+  if (!Number.isFinite(num)) return options.currency ? '$--' : '--';
+
+  const sign = num < 0 ? '-' : '';
+  const absolute = Math.abs(num);
+  const prefix = options.currency ? '$' : '';
+
+  if (absolute > 1_000_000_000_000_000) {
+    return `${sign}${prefix}${absolute.toExponential(2)}`;
+  }
+
+  if (absolute < 1_000_000_000) {
+    return `${sign}${prefix}${absolute.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  const suffixes = [
+    { threshold: 1_000_000_000_000_000, suffix: 'Q' },
+    { threshold: 1_000_000_000_000, suffix: 'T' },
+    { threshold: 1_000_000_000, suffix: 'B' },
+  ];
+
+  const matched = suffixes.find((item) => absolute >= item.threshold);
+  if (matched) {
+    return `${sign}${prefix}${(absolute / matched.threshold).toFixed(1)}${matched.suffix}`;
+  }
+
+  return `${sign}${prefix}${absolute.toExponential(1)}`;
+}
+
 function formatUsdAxis(value: number): string {
   const absolute = Math.abs(value);
   return `$${Intl.NumberFormat(undefined, {
@@ -433,9 +466,21 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
   const bulletMarkersTooClose = Math.abs(thresholdPercent - ltvPercent) < 10;
 
   const summaryItems = [
-    { label: '总抵押价值', value: formatUsd(data.total_collateral_usd), tone: 'green' as const },
-    { label: '总债务价值', value: formatUsd(data.total_debt_usd), tone: 'red' as const },
-    { label: '剩余可借额度', value: formatUsd(data.available_borrow_usd), tone: 'blue' as const },
+    {
+      label: '总抵押价值',
+      value: formatVaultNumber(data.total_collateral_usd, { currency: true }),
+      tone: 'green' as const,
+    },
+    {
+      label: '总债务价值',
+      value: formatVaultNumber(data.total_debt_usd, { currency: true }),
+      tone: 'red' as const,
+    },
+    {
+      label: '剩余可借额度',
+      value: formatVaultNumber(data.available_borrow_usd, { currency: true }),
+      tone: 'blue' as const,
+    },
     { label: '健康因子', value: formatHealthFactor(data.health_factor), tone: 'blue' as const },
     { label: 'LTV', value: formatPercentRatio(data.ltv), tone: 'blue' as const },
     {
@@ -630,12 +675,12 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               <div className="justlend-capacity-item">
                 <span className="justlend-risk-dot" style={{ background: '#f87171' }} />
                 <span>已使用额度</span>
-                <strong>{formatUsd(totalDebtUsd)}</strong>
+                <strong>{formatVaultNumber(totalDebtUsd, { currency: true })}</strong>
               </div>
               <div className="justlend-capacity-item">
                 <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
                 <span>剩余可借额度</span>
-                <strong>{formatUsd(availableBorrowUsd)}</strong>
+                <strong>{formatVaultNumber(availableBorrowUsd, { currency: true })}</strong>
               </div>
               <div className="justlend-capacity-item">
                 <span className="justlend-risk-dot" style={{ background: '#94a3b8' }} />
@@ -705,9 +750,10 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               />
             </div>
             <div className="justlend-risk-health-copy">
-              账户当前总抵押为 <strong>{formatUsd(totalCollateralUsd)}</strong>，总债务为{' '}
-              <strong>{formatUsd(totalDebtUsd)}</strong>。如果借款使用率继续向清算阈值靠近，
-              仓位的抗波动空间会迅速压缩。
+              账户当前总抵押为{' '}
+              <strong>{formatVaultNumber(totalCollateralUsd, { currency: true })}</strong>，总债务为{' '}
+              <strong>{formatVaultNumber(totalDebtUsd, { currency: true })}</strong>
+              。如果借款使用率继续向清算阈值靠近， 仓位的抗波动空间会迅速压缩。
             </div>
           </div>
 
@@ -773,9 +819,10 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
           <div className="justlend-banner justlend-banner-soft">
             <div className="justlend-banner-title">风险解读</div>
             <div className="justlend-banner-copy">
-              当前可借空间为 <strong>{formatUsd(availableBorrowUsd)}</strong>。抵押侧最集中的资产是{' '}
-              <strong>{topCollateral?.name ?? '暂无'}</strong>，债务侧最集中的资产是{' '}
-              <strong>{topBorrow?.name ?? '暂无'}</strong>
+              当前可借空间为{' '}
+              <strong>{formatVaultNumber(availableBorrowUsd, { currency: true })}</strong>
+              。抵押侧最集中的资产是 <strong>{topCollateral?.name ?? '暂无'}</strong>
+              ，债务侧最集中的资产是 <strong>{topBorrow?.name ?? '暂无'}</strong>
               。这两个集中点会决定账户对局部价格波动的敏感度。
             </div>
           </div>
@@ -858,10 +905,10 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                         <span className="justlend-allocation-share">{item.value.toFixed(2)}%</span>
                       </div>
                       <div className="justlend-allocation-meta">
+                        <span className="mono">数量 {formatVaultNumber(item.amount)}</span>
                         <span className="mono">
-                          数量 {item.amount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                          {formatVaultNumber(item.valueUsd, { currency: true })}
                         </span>
-                        <span className="mono">{formatUsd(item.valueUsd)}</span>
                       </div>
                     </div>
                   ))}
