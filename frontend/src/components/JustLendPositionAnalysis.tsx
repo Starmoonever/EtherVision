@@ -46,6 +46,7 @@ const sortMetricOptions: Array<{
   { sortBy: 'total_supply_usd', label: '总存款' },
   { sortBy: 'total_borrow_usd', label: '总借款' },
   { sortBy: 'health_factor', label: '健康因子' },
+  { sortBy: 'asset_value_usd', label: '资产价值' },
 ];
 const sideOptions: PositionSide[] = ['all', 'supply', 'borrow', 'collateral'];
 
@@ -191,6 +192,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [meta, setMeta] = useState<AggregatedRequestMeta>({
     lastUpdatedAt: null,
     cacheStatus: 'none',
@@ -283,17 +285,35 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   };
 
   const handleSortMetricChange = (sortBy: PositionSortBy) => {
+    if (sortBy === 'asset_value_usd' && !query.asset) {
+      setNotice('请先选择一个 Asset，再按资产价值排序。');
+      return;
+    }
     setError('');
+    if (sortBy === 'asset_value_usd' && query.side === 'all') {
+      setNotice(
+        '资产价值排序需要指定具体 Side，已自动切换为 collateral。也可以手动选择 supply 或 borrow。',
+      );
+      updateQuery({ sortBy, side: 'collateral', page: 1 });
+      return;
+    }
+    setNotice('');
     updateQuery({ sortBy, page: 1 });
   };
 
   const handleAssetChange = (asset: string) => {
     setError('');
+    setNotice('');
     updateQuery({ asset, page: 1 });
   };
 
   const handleSideChange = (side: PositionSide) => {
+    if (query.sortBy === 'asset_value_usd' && side === 'all') {
+      setNotice('资产价值排序需要指定具体 Side，请选择 supply、borrow 或 collateral。');
+      return;
+    }
     setError('');
+    setNotice('');
     updateQuery({ side, page: 1 });
   };
 
@@ -404,7 +424,11 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                   type="button"
                   className={`switch-btn ${query.sortBy === option.sortBy ? 'active' : ''}`}
                   onClick={() => handleSortMetricChange(option.sortBy)}
-                  title={option.label}
+                  title={
+                    option.sortBy === 'asset_value_usd'
+                      ? '按当前选择 Asset 的持有价值排序'
+                      : option.label
+                  }
                 >
                   {option.label}
                 </button>
@@ -485,6 +509,13 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           <div className="justlend-banner justlend-banner-warn" style={{ marginTop: '1rem' }}>
             <div className="justlend-banner-title">无法读取仓位列表</div>
             <div className="justlend-banner-copy">{error}</div>
+          </div>
+        ) : null}
+
+        {notice ? (
+          <div className="justlend-banner justlend-banner-soft" style={{ marginTop: '1rem' }}>
+            <div className="justlend-banner-title">需要选择资产</div>
+            <div className="justlend-banner-copy">{notice}</div>
           </div>
         ) : null}
 
