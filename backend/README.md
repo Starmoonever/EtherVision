@@ -303,6 +303,14 @@ uv run python scripts/justlend/market_state_backfill.py --dry-run
 uv run python scripts/justlend/market_state_backfill.py --market <MARKET_ADDRESS>
 ```
 
+当前可用的 JustLend current 仓位修复脚本：
+
+```bash
+cd backend
+uv run python scripts/justlend/repair_current_collateral_sides.py --dry-run
+uv run python scripts/justlend/repair_current_collateral_sides.py --address <TRON_ADDRESS>
+```
+
 说明：
 
 - 第一版先打通数据库与只读查询链路
