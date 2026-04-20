@@ -140,8 +140,14 @@ frontend/
 - 市场风险图表
 - 历史价格
 - 历史回放
+- Morpho 市场静态配置与实时状态
 - Morpho 搜索历史
 - Compound 与 JustLend 的专用接口
+
+其中 Morpho 市场页当前依赖两类接口：
+
+- 市场列表：用于拉取 `market_id`、抵押/借款代币、LLTV、oracle、IRM 等静态配置
+- 市场状态：用于拉取总抵押、总债务、Supply APY、Borrow APY、风险标记与清算参考价等实时字段
 
 维护时建议：
 
