@@ -327,6 +327,7 @@ def _format_scaled(amount: int, decimals: int) -> str:
     return format(Decimal(amount) / (Decimal(10) ** decimals), "f")
 
 
+# api/morpho/market/state相关：供 fetch_market_state 格式化比率类字段
 def _format_decimal_fixed(value: Decimal, places: int) -> str:
     quant = Decimal(10) ** (-places)
     return format(value.quantize(quant), "f")
@@ -350,6 +351,7 @@ async def _fetch_token_metadata(w3: AsyncWeb3, token_address: str) -> TokenMetad
     )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state 链上读取与载荷拼装
 async def fetch_market_state(
     w3: AsyncWeb3,
     *,

@@ -95,11 +95,13 @@ class MorphoPositionReplayResponse(BaseModel):
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
 
 
+# api/morpho/market相关：GET /api/morpho/market
 class MorphoMarketListItem(BaseModel):
     market_id: str = Field(description="市场 id。")
     pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
 
 
+# api/morpho/market相关：GET /api/morpho/market
 class MorphoMarketListResponse(BaseModel):
     market_count: int = Field(description="返回的市场数量。")
     markets: list[MorphoMarketListItem] = Field(
@@ -107,23 +109,27 @@ class MorphoMarketListResponse(BaseModel):
     )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state（嵌套字段）
 class MorphoMarketTokenInfo(BaseModel):
     address: str = Field(description="代币地址。")
     symbol: str | None = Field(description="代币符号。")
     decimals: int | None = Field(description="代币 decimals。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketRatioField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketSimpleMetricField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
     note: str | None = Field(default=None, description="指标备注。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state（根响应模型）
 class MorphoMarketStateResponse(BaseModel):
     marketId: str = Field(description="Morpho market id。")
     loanToken: MorphoMarketTokenInfo = Field(description="借出资产信息。")

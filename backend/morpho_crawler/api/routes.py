@@ -6,15 +6,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from .schemas import (
-    MorphoMarketStateResponse,
-    MorphoMarketListResponse,
+    MorphoMarketStateResponse,  # api/morpho/market/state相关
+    MorphoMarketListResponse,  # api/morpho/market相关
     MorphoPositionReplayResponse,
     MorphoPositionResponse,
 )
 from .service import (
-    get_market_state,
+    get_market_state,  # api/morpho/market/state相关
     get_position_replay,
-    get_representative_markets,
+    get_representative_markets,  # api/morpho/market相关
     get_user_position,
 )
 
@@ -89,6 +89,7 @@ async def position_replay(
     )
 
 
+# api/morpho/market相关：GET /api/morpho/market
 @router.get(
     "/market",
     response_model=MorphoMarketListResponse,
@@ -98,6 +99,7 @@ async def market_list() -> MorphoMarketListResponse:
     return get_representative_markets()
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 @router.get(
     "/market/state",
     response_model=MorphoMarketStateResponse,
