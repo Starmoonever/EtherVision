@@ -211,6 +211,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const activeSortLabel =
     sortMetricOptions.find((option) => option.sortBy === query.sortBy)?.label ?? '总存款';
   const orderLabel = query.order === 'desc' ? '降序' : '升序';
+  const showMatchedAssetValue = query.sortBy === 'asset_value_usd';
   const displayTitle = useMemo(() => {
     if (query.sortBy === 'total_supply_usd') return '顶级供给头寸 (Top Supply Positions)';
     if (query.sortBy === 'total_borrow_usd') return '主要借款头寸 (Main Borrowing Positions)';
@@ -304,6 +305,10 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const handleAssetChange = (asset: string) => {
     setError('');
     setNotice('');
+    if (!asset && query.sortBy === 'asset_value_usd') {
+      updateQuery({ asset, sortBy: 'total_supply_usd', page: 1 });
+      return;
+    }
     updateQuery({ asset, page: 1 });
   };
 
@@ -528,12 +533,16 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 <th className="right">总存款</th>
                 <th className="right">总借款</th>
                 <th className="right">健康因子</th>
+                {showMatchedAssetValue ? <th className="right">当前账户资产</th> : null}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
+                  <td
+                    colSpan={showMatchedAssetValue ? 6 : 5}
+                    style={{ textAlign: 'center', padding: '2rem' }}
+                  >
                     <div className="spinner"></div>
                   </td>
                 </tr>
@@ -541,6 +550,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 items.map((item, index) => {
                   const supply = toNum(item.total_supply_usd);
                   const borrow = toNum(item.total_borrow_usd);
+                  const matchedAssetValue = toNum(item.matched_asset_value_usd);
                   const hf = item.healthFactorValue;
                   const risky = Number.isFinite(hf) && hf <= 1.1;
                   const hfTone = getHealthFactorTone(hf, item.healthFactorDisplay);
@@ -584,12 +594,20 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                       >
                         {item.healthFactorDisplay}
                       </td>
+                      {showMatchedAssetValue ? (
+                        <td className="right mono" title={formatFullCurrency(matchedAssetValue)}>
+                          {formatFullCurrency(matchedAssetValue)}
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
+                  <td
+                    colSpan={showMatchedAssetValue ? 6 : 5}
+                    style={{ textAlign: 'center', padding: '2rem' }}
+                  >
                     暂无匹配仓位
                   </td>
                 </tr>
