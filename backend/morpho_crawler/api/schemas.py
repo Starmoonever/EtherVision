@@ -95,11 +95,13 @@ class MorphoPositionReplayResponse(BaseModel):
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
 
 
+# api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListItem(BaseModel):
     market_id: str = Field(description="市场 id。")
     pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
 
 
+# api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListResponse(BaseModel):
     market_count: int = Field(description="返回的市场数量。")
     markets: list[MorphoMarketListItem] = Field(
@@ -107,23 +109,27 @@ class MorphoMarketListResponse(BaseModel):
     )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state（嵌套字段）
 class MorphoMarketTokenInfo(BaseModel):
     address: str = Field(description="代币地址。")
     symbol: str | None = Field(description="代币符号。")
     decimals: int | None = Field(description="代币 decimals。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketRatioField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketSimpleMetricField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
     note: str | None = Field(default=None, description="指标备注。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state（根响应模型）
 class MorphoMarketStateResponse(BaseModel):
     marketId: str = Field(description="Morpho market id。")
     loanToken: MorphoMarketTokenInfo = Field(description="借出资产信息。")
@@ -143,6 +149,18 @@ class MorphoMarketStateResponse(BaseModel):
     )
     borrowCapacityUsageRough: MorphoMarketSimpleMetricField = Field(
         description="借款上限占用粗估。"
+    )
+    annualBorrowRate: MorphoMarketSimpleMetricField = Field(
+        description="当前借款秒利率线性年化比例。"
+    )
+    annualBorrowInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前利率估算一年利息/本金比例。"
+    )
+    annualSupplyRate: MorphoMarketSimpleMetricField = Field(
+        description="当前出借侧秒利率线性年化比例。"
+    )
+    annualSupplyInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前出借侧利率估算一年利息/本金比例。"
     )
     marketScaleTvlLike: MorphoMarketSimpleMetricField = Field(
         description="市场规模（TVL-like）。"
