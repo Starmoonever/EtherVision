@@ -95,13 +95,13 @@ class MorphoPositionReplayResponse(BaseModel):
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
 
 
-# api/morpho/market相关：GET /api/morpho/market
+# api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListItem(BaseModel):
     market_id: str = Field(description="市场 id。")
     pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
 
 
-# api/morpho/market相关：GET /api/morpho/market
+# api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListResponse(BaseModel):
     market_count: int = Field(description="返回的市场数量。")
     markets: list[MorphoMarketListItem] = Field(

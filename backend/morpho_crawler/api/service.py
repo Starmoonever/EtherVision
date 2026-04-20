@@ -40,9 +40,9 @@ from ..rpc import (
     fetch_user_market_replay_events,
 )
 from .schemas import (
-    MorphoMarketListItem,  # api/morpho/market相关
+    MorphoMarketListItem,  # api/morpho/markets相关
     MorphoMarketStateResponse,  # api/morpho/market/state相关
-    MorphoMarketListResponse,  # api/morpho/market相关
+    MorphoMarketListResponse,  # api/morpho/markets相关
     MorphoPositionAssetResponse,
     MorphoPositionReplayPointResponse,
     MorphoPositionReplayResponse,
@@ -60,7 +60,7 @@ BRIEF_LABELS = {
     "liquidation": "被清算",
 }
 
-# api/morpho/market相关：GET /api/morpho/market 代表性市场 id 列表数据源
+# api/morpho/markets相关：GET /api/morpho/markets 代表性市场 id 列表数据源
 MORPHO_REPRESENTATIVE_MARKETS: list[tuple[str, str]] = [
     (
         "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
@@ -105,7 +105,7 @@ def get_scaffold_status() -> MorphoScaffoldStatusResponse:
     )
 
 
-# api/morpho/market相关：GET /api/morpho/market
+# api/morpho/markets相关：GET /api/morpho/markets
 def get_representative_markets() -> MorphoMarketListResponse:
     return MorphoMarketListResponse(
         market_count=len(MORPHO_REPRESENTATIVE_MARKETS),
