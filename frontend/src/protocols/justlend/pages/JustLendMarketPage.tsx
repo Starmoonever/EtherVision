@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchJustLendMarketsWithMeta, type JustLendMarketItem } from '../../../api/justlend';
+import {
+  fetchJustLendMarketsWithMeta,
+  fetchJustLendMarketStateWithMeta,
+  type JustLendMarketItem,
+} from '../../../api/justlend';
 import { JustLendMarketDashboard } from '../../../components/JustLendMarketDashboard';
 import { JustLendPositionAnalysis } from '../../../components/JustLendPositionAnalysis';
 import { PageHero } from '../../../shared/components/PageHero';
 import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 
-const FEATURED_MARKETS = ['BTC', 'BTCB', 'ETH', 'ETHB', 'WBTC'];
+const FEATURED_MARKETS = ['TRX', 'STRX', 'USDT'];
 type JustLendMarketViewMode = 'market' | 'position';
 
 function normalizeSymbol(value: string | null | undefined): string {
@@ -29,12 +33,33 @@ function marketButtonLabel(item: JustLendMarketItem, markets: JustLendMarketItem
   return base;
 }
 
+function toNum(value: string | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function estimateMarketTvlUsd(totalSupply: string, priceUsd: string): number {
+  return toNum(totalSupply) * toNum(priceUsd);
+}
+
+function formatTvlTitle(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return 'TVL unavailable';
+  return `TVL ${Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 2,
+  }).format(value)}`;
+}
+
 export function JustLendMarketPage() {
   const [markets, setMarkets] = useState<JustLendMarketItem[]>([]);
   const [selectedMarket, setSelectedMarket] = useState('');
   const [showMore, setShowMore] = useState(false);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [marketLoadError, setMarketLoadError] = useState('');
+  const [marketTvls, setMarketTvls] = useState<Record<string, number>>({});
   const [viewMode, setViewMode] = useState<JustLendMarketViewMode>(() => {
     if (typeof window === 'undefined') return 'market';
     const tab = new URLSearchParams(window.location.search).get('tab');
@@ -90,6 +115,40 @@ export function JustLendMarketPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!markets.length) {
+      setMarketTvls({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadTvls = async () => {
+      const entries = await Promise.all(
+        markets.map(async (market) => {
+          try {
+            const result = await fetchJustLendMarketStateWithMeta(market.market);
+            return [
+              market.market,
+              estimateMarketTvlUsd(result.data.total_supply, result.data.price_usd),
+            ] as const;
+          } catch {
+            return [market.market, 0] as const;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setMarketTvls(Object.fromEntries(entries));
+      }
+    };
+
+    void loadTvls();
+    return () => {
+      cancelled = true;
+    };
+  }, [markets]);
+
   const featuredMarkets = useMemo(() => {
     return FEATURED_MARKETS.map((symbol) =>
       markets.find((item) => normalizeSymbol(item.underlying_symbol) === symbol),
@@ -97,24 +156,21 @@ export function JustLendMarketPage() {
   }, [markets]);
 
   const selectorMarkets = useMemo(() => {
-    const base = [...featuredMarkets];
-    const selected = markets.find((item) => item.market === selectedMarket);
-    if (selected && !base.some((item) => item.market === selected.market)) {
-      base.push(selected);
-    }
-    return base;
-  }, [featuredMarkets, markets, selectedMarket]);
+    return featuredMarkets;
+  }, [featuredMarkets]);
 
   const moreMarkets = useMemo(() => {
     const featuredSet = new Set(featuredMarkets.map((item) => item.market));
     return markets
       .filter((item) => !featuredSet.has(item.market))
-      .sort((a, b) =>
-        (a.underlying_symbol || a.symbol || a.market).localeCompare(
+      .sort((a, b) => {
+        const tvlDiff = (marketTvls[b.market] ?? 0) - (marketTvls[a.market] ?? 0);
+        if (Math.abs(tvlDiff) > 0.000001) return tvlDiff;
+        return (a.underlying_symbol || a.symbol || a.market).localeCompare(
           b.underlying_symbol || b.symbol || b.market,
-        ),
-      );
-  }, [featuredMarkets, markets]);
+        );
+      });
+  }, [featuredMarkets, marketTvls, markets]);
 
   return (
     <>
@@ -157,7 +213,7 @@ export function JustLendMarketPage() {
                     options={selectorMarkets.map((item) => ({
                       value: item.market,
                       label: marketButtonLabel(item, markets),
-                      title: item.symbol || item.market,
+                      title: `${item.symbol || item.market} · ${formatTvlTitle(marketTvls[item.market] ?? 0)}`,
                     }))}
                   />
                 ) : null}
@@ -203,7 +259,7 @@ export function JustLendMarketPage() {
             options={moreMarkets.map((item) => ({
               value: item.market,
               label: marketButtonLabel(item, markets),
-              title: item.symbol || item.market,
+              title: `${item.symbol || item.market} · ${formatTvlTitle(marketTvls[item.market] ?? 0)}`,
             }))}
           />
         </div>
