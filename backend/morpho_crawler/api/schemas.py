@@ -150,6 +150,18 @@ class MorphoMarketStateResponse(BaseModel):
     borrowCapacityUsageRough: MorphoMarketSimpleMetricField = Field(
         description="借款上限占用粗估。"
     )
+    annualBorrowRate: MorphoMarketSimpleMetricField = Field(
+        description="当前借款秒利率线性年化比例。"
+    )
+    annualBorrowInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前利率估算一年利息/本金比例。"
+    )
+    annualSupplyRate: MorphoMarketSimpleMetricField = Field(
+        description="当前出借侧秒利率线性年化比例。"
+    )
+    annualSupplyInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前出借侧利率估算一年利息/本金比例。"
+    )
     marketScaleTvlLike: MorphoMarketSimpleMetricField = Field(
         description="市场规模（TVL-like）。"
     )
