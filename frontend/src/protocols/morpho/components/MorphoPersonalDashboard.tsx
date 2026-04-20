@@ -348,6 +348,8 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
+      <MorphoPositionTable data={data} loading={loading} notFound={notFound} protocol={protocol} />
+
       <MorphoPositionHistoryChart
         address={data.address}
         marketId={data.market_id}
@@ -358,8 +360,6 @@ export function MorphoPersonalDashboard({
         collateralAmount={collateralAssets}
         lltv={lltvRatio}
       />
-
-      <MorphoPositionTable data={data} loading={loading} notFound={notFound} protocol={protocol} />
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Brush,
   CartesianGrid,
   Legend,
   Line,
@@ -119,17 +118,7 @@ const OPERATION_ROWS: Array<{ rank: number; label: string; tone: OperationTone }
   { rank: 6, label: '被清算', tone: 'liquidation' },
   { rank: 7, label: '其他', tone: 'neutral' },
 ];
-
-const OPERATION_AMOUNT_DISPLAY_KEY_BY_TONE: Record<OperationTone, keyof MorphoHistoryPoint> = {
-  collateral: 'collateralOperationAmountDisplay',
-  supply: 'supplyOperationAmountDisplay',
-  borrow: 'borrowOperationAmountDisplay',
-  repay: 'repayOperationAmountDisplay',
-  withdrawCollateral: 'withdrawCollateralOperationAmountDisplay',
-  withdrawSupply: 'withdrawSupplyOperationAmountDisplay',
-  liquidation: 'liquidationOperationAmountDisplay',
-  neutral: 'neutralOperationAmountDisplay',
-} as Record<OperationTone, keyof MorphoHistoryPoint>;
+const DEFAULT_OPERATION_TONES = OPERATION_ROWS.map((row) => row.tone);
 
 const explainItems: ExplainItem[] = [
   {
@@ -149,27 +138,6 @@ const explainItems: ExplainItem[] = [
     formula: 'health_factor',
     meaning: '交易后仓位距离清算边界的安全缓冲，越高越安全。',
     riskHint: '健康因子持续下行通常表示仓位在加杠杆；接近 1 时需要重点关注。',
-  },
-];
-
-const operationExplainItems: ExplainItem[] = [
-  {
-    term: '操作金额线',
-    formula: '按相邻两次快照的仓位差值估算',
-    meaning: '每种操作独立成线，同类操作点会连起来，用于观察该操作类型的金额变化趋势。',
-    riskHint: '大额借款、撤回抵押或清算点通常比普通存款更值得复盘。',
-  },
-  {
-    term: '操作总量',
-    formula: 'sum(operationAmount) by operation_type',
-    meaning: '对当前查询时间范围内同一类操作金额求和，显示在图表上方的小条形概览中。',
-    riskHint: '总量最大的操作类型通常代表账户主要行为模式，例如持续加杠杆或持续补抵押。',
-  },
-  {
-    term: '对数轴',
-    formula: 'log(operationAmount)',
-    meaning: '用对数轴减弱极大离群值的压制，让小额操作也能被看见。',
-    riskHint: '对数轴强调相对变化，精确金额请以 tooltip 和总量栏为准。',
   },
 ];
 
@@ -464,156 +432,6 @@ function ChartOperationDot(
   );
 }
 
-function OperationAmountDot(props: unknown, color: string, selected: boolean) {
-  const { cx, cy, payload, value } = props as {
-    cx?: number;
-    cy?: number;
-    value?: number | null;
-    payload?: MorphoHistoryPoint;
-  };
-  if (cx === undefined || cy === undefined || !payload || value === null || value === undefined) {
-    return <g />;
-  }
-  const radius = Math.min(12, Math.max(4.2, Math.log(Math.max(payload.operationAmount, 1)) * 1.25));
-  const outerRadius = radius + 3.6;
-
-  return (
-    <g className={selected ? 'morpho-operation-amount-dot' : 'morpho-operation-amount-dot muted'}>
-      <title>{`${payload.operationLabel}: ${formatCompact(payload.operationAmount, 6)}`}</title>
-      <line
-        className="morpho-operation-stem-line"
-        x1={cx}
-        x2={cx}
-        y1={cy}
-        y2="92%"
-        stroke={color}
-        strokeOpacity={selected ? 0.2 : 0.08}
-        strokeWidth={selected ? 1.1 : 0.8}
-      />
-      <circle cx={cx} cy={cy} r={outerRadius} fill={color} opacity={selected ? 0.16 : 0.06} />
-      <circle cx={cx} cy={cy} r={radius} fill={color} stroke="#0f172a" strokeWidth={1.2} />
-    </g>
-  );
-}
-
-function OperationTimeline({
-  points,
-  selectedTones,
-  onToggleTone,
-  loanTokenSymbol,
-}: {
-  points: MorphoHistoryPoint[];
-  selectedTones: OperationToneSet;
-  onToggleTone: (tone: OperationTone) => void;
-  loanTokenSymbol: string;
-}) {
-  const brushStartIndex = Math.max(0, Math.floor(points.length * 0.7));
-  const brushEndIndex = Math.max(0, points.length - 1);
-  const operationTotals = OPERATION_ROWS.map((row) => ({
-    ...row,
-    total: points.reduce(
-      (sum, point) => sum + (point.operationTone === row.tone ? point.operationAmount : 0),
-      0,
-    ),
-  }));
-
-  return (
-    <div className="morpho-operation-timeline">
-      <div className="morpho-operation-timeline-header">
-        <div>
-          <div className="morpho-operation-title-row">
-            <strong>操作金额图</strong>
-            <ChartInfoButton title="操作金额图说明" items={operationExplainItems} />
-          </div>
-          <span>横轴为日期，纵轴为操作金额；竖线和圆点表示对应操作发生的金额</span>
-        </div>
-      </div>
-
-      <div className="morpho-operation-total-grid morpho-operation-total-grid-compact">
-        {operationTotals.map((item) => {
-          const selected = selectedTones.size === 0 || selectedTones.has(item.tone);
-          return (
-            <button
-              key={item.tone}
-              type="button"
-              className={selected ? 'active' : ''}
-              onClick={() => onToggleTone(item.tone)}
-              aria-pressed={selected}
-            >
-              <span className="morpho-operation-total-head">
-                <i style={{ background: getOperationToneColor(item.tone) }} />
-                {item.label}
-              </span>
-              <strong>
-                {formatCompact(item.total, 2)} {loanTokenSymbol}
-              </strong>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="morpho-operation-chart-shell">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={points} margin={{ top: 10, right: 18, left: 4, bottom: 2 }}>
-            <CartesianGrid stroke="#1f2a3d" strokeDasharray="4 8" vertical={false} />
-            <XAxis
-              dataKey="timeLabel"
-              tick={{ fill: '#94a3b8', fontSize: 11 }}
-              axisLine={{ stroke: '#263449' }}
-              tickLine={false}
-              minTickGap={24}
-            />
-            <YAxis
-              type="number"
-              scale="log"
-              domain={[1, 'dataMax']}
-              allowDataOverflow
-              tick={{ fill: '#94a3b8', fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={(value) => formatCompact(Number(value), 2)}
-            />
-            <Tooltip content={<CustomTooltip loanTokenSymbol={loanTokenSymbol} />} />
-            {OPERATION_ROWS.map((row) => {
-              const selected = selectedTones.size === 0 || selectedTones.has(row.tone);
-              if (!selected) return null;
-              return (
-                <Line
-                  key={row.tone}
-                  type="linear"
-                  dataKey={OPERATION_AMOUNT_DISPLAY_KEY_BY_TONE[row.tone]}
-                  name={row.label}
-                  stroke={getOperationToneColor(row.tone)}
-                  strokeWidth={selected ? 1.8 : 1.1}
-                  strokeOpacity={selected ? 0.42 : 0.1}
-                  connectNulls
-                  dot={(props) =>
-                    OperationAmountDot(props, getOperationToneColor(row.tone), selected)
-                  }
-                  activeDot={{
-                    r: 5,
-                    strokeWidth: 2,
-                    fill: getOperationToneColor(row.tone),
-                  }}
-                />
-              );
-            })}
-            <Brush
-              dataKey="timeLabel"
-              height={22}
-              startIndex={brushStartIndex}
-              endIndex={brushEndIndex}
-              travellerWidth={8}
-              stroke="#4a90e2"
-              fill="rgba(15, 23, 42, 0.88)"
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
 const CustomTooltip = ({ active, payload, label, loanTokenSymbol }: CustomTooltipProps) => {
   if (!active || !payload?.length) return null;
 
@@ -676,7 +494,7 @@ export function MorphoPositionHistoryChart({
   const [appliedRange, setAppliedRange] = useState(range);
   const [points, setPoints] = useState<MorphoHistoryPoint[]>([]);
   const [selectedOperationTones, setSelectedOperationTones] = useState<OperationToneSet>(
-    () => new Set(),
+    () => new Set(DEFAULT_OPERATION_TONES),
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -780,6 +598,15 @@ export function MorphoPositionHistoryChart({
     (debtAmount ?? 0) > 0 &&
     (collateralAmount ?? 0) > 0 &&
     (lltv ?? 0) > 0;
+  const operationLegendItems = useMemo(
+    () =>
+      OPERATION_ROWS.map((row) => ({
+        ...row,
+        count: points.filter((point) => point.operationTone === row.tone).length,
+      })).filter((row) => row.count > 0),
+    [points],
+  );
+
   const handleSubmit = () => {
     setAppliedRange(range);
   };
@@ -880,6 +707,28 @@ export function MorphoPositionHistoryChart({
           </div>
         </div>
 
+        {operationLegendItems.length > 0 && (
+          <div className="morpho-history-operation-legend" aria-label="历史仓位图操作点图例">
+            <span>操作点</span>
+            {operationLegendItems.map((item) => {
+              const active = selectedOperationTones.has(item.tone);
+              return (
+                <button
+                  key={item.tone}
+                  type="button"
+                  className={active ? 'active' : ''}
+                  onClick={() => toggleOperationTone(item.tone)}
+                  aria-pressed={active}
+                >
+                  <i style={{ background: getOperationToneColor(item.tone) }} />
+                  {item.label}
+                  <strong>{item.count}</strong>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="morpho-history-chart-shell">
           {loading ? (
             <div className="morpho-history-state">
@@ -959,29 +808,6 @@ export function MorphoPositionHistoryChart({
           debtSymbol={symbol}
         />
       )}
-
-      <section className="card morpho-history-card morpho-operation-card">
-        {loading ? (
-          <div className="morpho-history-state morpho-operation-state">
-            <div className="spinner"></div>
-          </div>
-        ) : error ? (
-          <div className="morpho-history-state morpho-history-error morpho-operation-state">
-            {error}
-          </div>
-        ) : points.length === 0 ? (
-          <div className="morpho-history-state morpho-operation-state">
-            当前时间范围内没有可展示的用户操作。
-          </div>
-        ) : (
-          <OperationTimeline
-            points={points}
-            selectedTones={selectedOperationTones}
-            onToggleTone={toggleOperationTone}
-            loanTokenSymbol={symbol}
-          />
-        )}
-      </section>
     </div>
   );
 }
