@@ -1035,6 +1035,13 @@
   line-height: 1.35;
 }
 
+.morpho-full-address {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
 .justlend-overview-card,
 .justlend-market-hero,
 .protocol-overview-card,
@@ -2870,7 +2877,7 @@
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   flex-wrap: wrap;
 }
@@ -2894,7 +2901,7 @@
 
 .morpho-market-toolbar-actions {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.9rem;
   flex-wrap: wrap;
@@ -2907,9 +2914,21 @@
   gap: 0.45rem;
 }
 
+.morpho-market-search-inline {
+  min-width: min(100%, 360px);
+}
+
 .morpho-market-search span {
   color: #94a3b8;
   font-size: 0.82rem;
+}
+
+.morpho-market-table-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  flex-wrap: wrap;
 }
 
 .morpho-market-loading-card {
@@ -2985,18 +3004,40 @@
   gap: 0.22rem;
 }
 
+.morpho-rate-stack-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
 .morpho-rate-line {
   line-height: 1.2;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
+.morpho-rate-divider {
+  color: #64748b;
+  font-weight: 600;
+}
+
 .morpho-rate-line-supply {
   color: #86efac;
 }
 
+.morpho-rate-line-supply-sub {
+  color: #bbf7d0;
+  opacity: 0.9;
+}
+
 .morpho-rate-line-borrow {
   color: #fca5a5;
+}
+
+.morpho-rate-line-borrow-sub {
+  color: #fecaca;
+  opacity: 0.9;
 }
 
 .morpho-compact-metric {
@@ -3054,6 +3095,32 @@
   background: rgba(239, 68, 68, 0.12);
   color: #fda4af;
   border: 1px solid rgba(248, 113, 113, 0.22);
+}
+
+.morpho-market-focus-extra {
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  background: rgba(8, 15, 29, 0.58);
+  border-radius: 12px;
+  padding: 0.9rem;
+}
+
+.morpho-market-focus-extra-title {
+  color: #7dd3fc;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 0.65rem;
+}
+
+.morpho-market-focus-table th {
+  width: 18%;
+  color: #94a3b8;
+}
+
+.morpho-market-focus-table td {
+  width: 32%;
+  font-variant-numeric: tabular-nums;
 }
 
 .justlend-caption {
