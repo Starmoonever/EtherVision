@@ -117,6 +117,7 @@ def test_justlend_positions_route_ok() -> None:
                 "snapshot_at": "2026-04-03T00:00:00Z",
                 "block_timestamp": "2026-04-03T00:00:00Z",
                 "total_supply_usd": "100.00000000",
+                "total_collateral_usd": "100.00000000",
                 "total_borrow_usd": "20.00000000",
                 "health_factor": "5.000000000000000000",
                 "ltv": "0.750000",

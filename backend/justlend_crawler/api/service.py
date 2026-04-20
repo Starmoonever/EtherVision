@@ -1474,6 +1474,9 @@ def _format_position_list_item(
         snapshot_at=_record_ts(position["snapshot_at"]),
         block_timestamp=_record_ts(position["block_timestamp"]),
         total_supply_usd=_fmt_decimal(Decimal(str(position["total_collateral_usd"]))),
+        total_collateral_usd=_fmt_decimal(
+            Decimal(str(position["total_collateral_usd"]))
+        ),
         total_borrow_usd=_fmt_decimal(Decimal(str(position["total_debt_usd"]))),
         health_factor=_fmt_health(Decimal(str(position["health_factor"]))),
         ltv=_fmt_ratio(Decimal(str(position["ltv"]))),

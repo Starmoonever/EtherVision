@@ -314,6 +314,7 @@ async def test_get_positions_formats_page_and_detail_assets() -> None:
     assert result.asset == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
     assert len(result.items) == 1
     assert result.items[0].address == service._tron_bytes_to_base58(user_address)
+    assert result.items[0].total_collateral_usd == "100.00000000"
     assert result.items[0].matched_asset_value_usd == "80.00000000"
     assert result.items[0].assets[0].side == "supply"
     assert (
@@ -1263,7 +1264,102 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     assert rpc_result["ltv"] == api_result["ltv"]
     assert rpc_result["liquidation_threshold"] == api_result["liquidation_threshold"]
     assert len(rpc_result["assets"]) == len(api_result["assets"])
+    assert [asset["side"] for asset in rpc_result["assets"]] == [
+        asset["side"] for asset in api_result["assets"]
+    ]
     assert rpc_result["extra_jsonb"]["source"] == "justlend_rpc"
+
+
+@pytest.mark.asyncio
+async def test_fetch_position_from_tron_rpc_marks_non_entered_supply_as_supply() -> (
+    None
+):
+    market_address = justlend_rpc._hex_to_tron_base58(
+        "412222222222222222222222222222222222222222"
+    )
+    underlying_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    user_address = "TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ"
+
+    async def _mock_call_account_snapshot(*args, **kwargs):
+        assert kwargs["contract_address"] == market_address
+        return (0, 100 * 10**8, 0, 10**18)
+
+    async def _mock_call_address(*args, **kwargs):
+        function_selector = kwargs["function_selector"]
+        contract_address = kwargs["contract_address"]
+        if function_selector == "comptroller()":
+            assert contract_address == market_address
+            return justlend_rpc._hex_to_tron_base58(
+                "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+        if function_selector == "oracle()":
+            return justlend_rpc._hex_to_tron_base58(
+                "41bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            )
+        if function_selector == "underlying()":
+            assert contract_address == market_address
+            return underlying_address
+        raise AssertionError((function_selector, contract_address))
+
+    async def _mock_call_market_config(*args, **kwargs):
+        assert kwargs["market_address"] == market_address
+        return False, Decimal("0.8")
+
+    async def _mock_call_uint256(*args, **kwargs):
+        function_selector = kwargs["function_selector"]
+        if function_selector == "getUnderlyingPrice(address)":
+            return 357142857142857142857142857
+        if function_selector == "decimals()":
+            return 6
+        raise AssertionError(function_selector)
+
+    async def _mock_call_string(*args, **kwargs):
+        contract_address = kwargs["contract_address"]
+        if contract_address == market_address:
+            return "jUSDT"
+        if contract_address == underlying_address:
+            return "USDT"
+        raise AssertionError(contract_address)
+
+    with (
+        patch.object(
+            justlend_rpc,
+            "_call_account_snapshot",
+            new=AsyncMock(side_effect=_mock_call_account_snapshot),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_call_address",
+            new=AsyncMock(side_effect=_mock_call_address),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_call_market_config",
+            new=AsyncMock(side_effect=_mock_call_market_config),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_call_uint256",
+            new=AsyncMock(side_effect=_mock_call_uint256),
+        ),
+        patch.object(
+            justlend_rpc,
+            "_call_string",
+            new=AsyncMock(side_effect=_mock_call_string),
+        ),
+    ):
+        result = await justlend_rpc.fetch_justlend_position_via_rpc(
+            tron_rpc=object(),  # type: ignore[arg-type]
+            address=user_address,
+            protocol="trx",
+            market_addresses=[market_address],
+        )
+
+    assert result["total_collateral_usd"] == Decimal("0")
+    assert result["available_borrow_usd"] == Decimal("0")
+    assert result["liquidation_threshold"] == Decimal("0")
+    assert len(result["assets"]) == 1
+    assert result["assets"][0]["side"] == "supply"
 
 
 def test_price_in_trx_uses_justlend_oracle_scale() -> None:

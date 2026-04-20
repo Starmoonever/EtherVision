@@ -868,15 +868,16 @@ async def fetch_justlend_position_via_rpc(
         price_usd = item["price_in_trx"] * trx_price_usd
         if item["supply_amount"] > 0:
             value_usd = item["supply_amount"] * price_usd
-            total_collateral_usd += value_usd
-            if item["entered"]:
+            is_collateral = bool(item["entered"])
+            if is_collateral:
+                total_collateral_usd += value_usd
                 discounted_collateral_usd += value_usd * item["collateral_factor"]
             assets.append(
                 {
                     "asset_address": bytes.fromhex(
                         _tron_address_to_hex(str(item["underlying_address"]))
                     ),
-                    "side": "collateral",
+                    "side": "collateral" if is_collateral else "supply",
                     "symbol": item["underlying_symbol"],
                     "decimals": item["underlying_decimals"],
                     "amount": item["supply_amount"],

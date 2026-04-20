@@ -100,6 +100,7 @@ class JustLendPositionListItemResponse(BaseModel):
     snapshot_at: str = Field(description="本次仓位快照时间。")
     block_timestamp: str = Field(description="底层数据时间戳。")
     total_supply_usd: str = Field(description="总 supply USD 价值。")
+    total_collateral_usd: str = Field(description="总抵押 USD 价值。")
     total_borrow_usd: str = Field(description="总 borrow USD 价值。")
     health_factor: str = Field(description="健康因子。")
     ltv: str = Field(description="估算加权抵押率。")
