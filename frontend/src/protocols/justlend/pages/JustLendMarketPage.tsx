@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  fetchJustLendMarketsWithMeta,
-  fetchJustLendMarketStateWithMeta,
-  type JustLendMarketItem,
-} from '../../../api/justlend';
+import { fetchJustLendMarketsWithMeta, type JustLendMarketItem } from '../../../api/justlend';
 import { JustLendMarketDashboard } from '../../../components/JustLendMarketDashboard';
 import { JustLendPositionAnalysis } from '../../../components/JustLendPositionAnalysis';
 import { PageHero } from '../../../shared/components/PageHero';
@@ -33,24 +29,8 @@ function marketButtonLabel(item: JustLendMarketItem, markets: JustLendMarketItem
   return base;
 }
 
-function toNum(value: string | number | null | undefined): number {
-  if (value === null || value === undefined) return 0;
-  const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function estimateMarketBorrowUsd(totalBorrows: string, priceUsd: string): number {
-  return toNum(totalBorrows) * toNum(priceUsd);
-}
-
-function formatBorrowTitle(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return 'Borrow unavailable';
-  return `Borrow ${Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    notation: 'compact',
-    maximumFractionDigits: 2,
-  }).format(value)}`;
+function buildMarketHint(item: JustLendMarketItem): string {
+  return item.symbol || item.market;
 }
 
 export function JustLendMarketPage() {
@@ -59,7 +39,6 @@ export function JustLendMarketPage() {
   const [showMore, setShowMore] = useState(false);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [marketLoadError, setMarketLoadError] = useState('');
-  const [marketBorrowUsd, setMarketBorrowUsd] = useState<Record<string, number>>({});
   const [viewMode, setViewMode] = useState<JustLendMarketViewMode>(() => {
     if (typeof window === 'undefined') return 'market';
     const tab = new URLSearchParams(window.location.search).get('tab');
@@ -115,40 +94,6 @@ export function JustLendMarketPage() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!markets.length) {
-      setMarketBorrowUsd({});
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadBorrowUsd = async () => {
-      const entries = await Promise.all(
-        markets.map(async (market) => {
-          try {
-            const result = await fetchJustLendMarketStateWithMeta(market.market);
-            return [
-              market.market,
-              estimateMarketBorrowUsd(result.data.total_borrows, result.data.price_usd),
-            ] as const;
-          } catch {
-            return [market.market, 0] as const;
-          }
-        }),
-      );
-
-      if (!cancelled) {
-        setMarketBorrowUsd(Object.fromEntries(entries));
-      }
-    };
-
-    void loadBorrowUsd();
-    return () => {
-      cancelled = true;
-    };
-  }, [markets]);
-
   const featuredMarkets = useMemo(() => {
     return FEATURED_MARKETS.map((symbol) =>
       markets.find((item) => normalizeSymbol(item.underlying_symbol) === symbol),
@@ -163,14 +108,12 @@ export function JustLendMarketPage() {
     const featuredSet = new Set(featuredMarkets.map((item) => item.market));
     return markets
       .filter((item) => !featuredSet.has(item.market))
-      .sort((a, b) => {
-        const borrowDiff = (marketBorrowUsd[b.market] ?? 0) - (marketBorrowUsd[a.market] ?? 0);
-        if (Math.abs(borrowDiff) > 0.000001) return borrowDiff;
-        return (a.underlying_symbol || a.symbol || a.market).localeCompare(
+      .sort((a, b) =>
+        (a.underlying_symbol || a.symbol || a.market).localeCompare(
           b.underlying_symbol || b.symbol || b.market,
-        );
-      });
-  }, [featuredMarkets, marketBorrowUsd, markets]);
+        ),
+      );
+  }, [featuredMarkets, markets]);
 
   return (
     <>
@@ -213,7 +156,7 @@ export function JustLendMarketPage() {
                     options={selectorMarkets.map((item) => ({
                       value: item.market,
                       label: marketButtonLabel(item, markets),
-                      title: `${item.symbol || item.market} · ${formatBorrowTitle(marketBorrowUsd[item.market] ?? 0)}`,
+                      title: buildMarketHint(item),
                     }))}
                   />
                 ) : null}
@@ -259,7 +202,7 @@ export function JustLendMarketPage() {
             options={moreMarkets.map((item) => ({
               value: item.market,
               label: marketButtonLabel(item, markets),
-              title: `${item.symbol || item.market} · ${formatBorrowTitle(marketBorrowUsd[item.market] ?? 0)}`,
+              title: buildMarketHint(item),
             }))}
           />
         </div>
