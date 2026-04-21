@@ -1,7 +1,7 @@
 """add tron price timestamp cache
 
 Revision ID: 6f7a8b9c0d1e
-Revises: 4d5e6f7a8b9c
+Revises: 7a8b9c0d1e2f
 Create Date: 2026-04-17 17:30:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "6f7a8b9c0d1e"
-down_revision: Union[str, Sequence[str], None] = "4d5e6f7a8b9c"
+down_revision: Union[str, Sequence[str], None] = "7a8b9c0d1e2f"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
