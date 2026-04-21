@@ -1,12 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { fetchAssetPrice } from '../../../api/price';
 import { ErrorNotice } from '../../../shared/components/ErrorNotice';
 import { PageHero } from '../../../shared/components/PageHero';
-import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 import { useMorphoData, type MorphoMarketView } from '../../../hooks/useMorphoData';
 import { MorphoMarketTable } from '../components/MorphoMarketTable';
 
-type MorphoRiskFilter = 'all' | 'liquidatable';
-type MorphoSortMode = 'collateral' | 'debt' | 'borrowApy';
+type MorphoSortMode = 'supplyScale' | 'borrowScale' | 'supplyApy' | 'borrowApy';
 
 function parseMetric(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -14,16 +13,17 @@ function parseMetric(value: string | null | undefined): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function formatUsd(value: string | null | undefined): string {
-  const numeric = parseMetric(value);
-  if (numeric === null) return 'N/A';
-  return `$${numeric.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 function formatPercent(value: string | null | undefined): string {
   const numeric = parseMetric(value);
   if (numeric === null) return 'N/A';
   const normalized = Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+  return `${normalized.toFixed(2)}%`;
+}
+
+function formatCapacityUsagePercent(value: string | null | undefined): string {
+  const numeric = parseMetric(value);
+  if (numeric === null) return 'N/A';
+  const normalized = numeric * 100;
   return `${normalized.toFixed(2)}%`;
 }
 
@@ -34,27 +34,88 @@ function formatLltv(value: string | null | undefined): string {
   return `${normalized.toFixed(2)}%`;
 }
 
-function shortAddress(value: string | null | undefined): string {
-  if (!value) return 'N/A';
-  if (value.length <= 14) return value;
-  return `${value.slice(0, 8)}...${value.slice(-6)}`;
+function normalizeTokenAmount(
+  value: string | null | undefined,
+  decimals: number | null | undefined,
+  isRaw: boolean,
+): number | null {
+  if (!value) return null;
+  if (!isRaw) return parseMetric(value);
+
+  const safeDecimals = Number.isInteger(decimals) ? Number(decimals) : 0;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const negative = trimmed.startsWith('-');
+  const digits = negative ? trimmed.slice(1) : trimmed;
+  if (!/^\d+$/.test(digits)) return parseMetric(value);
+
+  const paddedDigits = digits.padStart(safeDecimals + 1, '0');
+  const integerPart =
+    safeDecimals === 0 ? paddedDigits : paddedDigits.slice(0, paddedDigits.length - safeDecimals);
+  const fractionalPart =
+    safeDecimals === 0 ? '' : paddedDigits.slice(-safeDecimals).replace(/0+$/, '');
+  const normalizedText = `${negative ? '-' : ''}${integerPart}${fractionalPart ? `.${fractionalPart}` : ''}`;
+  const numeric = Number(normalizedText);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-function sortMarkets(markets: MorphoMarketView[], sortMode: MorphoSortMode): MorphoMarketView[] {
+function formatAmount(value: number | null, symbol?: string | null): string {
+  if (value === null) return 'N/A';
+  const amount = value.toLocaleString('en-US', {
+    minimumFractionDigits: value >= 1 ? 2 : 4,
+    maximumFractionDigits: 6,
+  });
+  return symbol ? `${amount} ${symbol}` : amount;
+}
+
+function formatUsdFromNumber(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'N/A';
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function sortMarkets(
+  markets: MorphoMarketView[],
+  sortMode: MorphoSortMode,
+  loanTokenPricesUsd: Record<string, number | null>,
+): MorphoMarketView[] {
+  const resolveUsdScale = (market: MorphoMarketView, kind: 'supply' | 'borrow'): number => {
+    const loanSymbol = market.loan_symbol?.trim().toUpperCase() ?? '';
+    const price = loanSymbol ? (loanTokenPricesUsd[loanSymbol] ?? null) : null;
+    if (price === null) return -1;
+    const amount =
+      kind === 'supply'
+        ? normalizeTokenAmount(
+            market.total_supply_assets,
+            market.loan_decimals,
+            market.total_supply_assets_is_raw,
+          )
+        : normalizeTokenAmount(
+            market.total_borrow_assets,
+            market.loan_decimals,
+            market.total_borrow_assets_is_raw,
+          );
+    if (amount === null) return -1;
+    return amount * price;
+  };
+
   const sorted = [...markets];
   sorted.sort((left, right) => {
     const leftValue =
-      sortMode === 'collateral'
-        ? (parseMetric(left.total_collateral_usd) ?? -1)
-        : sortMode === 'debt'
-          ? (parseMetric(left.total_debt_usd) ?? -1)
-          : (parseMetric(left.borrow_apy) ?? -1);
+      sortMode === 'supplyScale'
+        ? resolveUsdScale(left, 'supply')
+        : sortMode === 'borrowScale'
+          ? resolveUsdScale(left, 'borrow')
+          : sortMode === 'supplyApy'
+            ? (parseMetric(left.supply_apy) ?? -1)
+            : (parseMetric(left.borrow_apy) ?? -1);
     const rightValue =
-      sortMode === 'collateral'
-        ? (parseMetric(right.total_collateral_usd) ?? -1)
-        : sortMode === 'debt'
-          ? (parseMetric(right.total_debt_usd) ?? -1)
-          : (parseMetric(right.borrow_apy) ?? -1);
+      sortMode === 'supplyScale'
+        ? resolveUsdScale(right, 'supply')
+        : sortMode === 'borrowScale'
+          ? resolveUsdScale(right, 'borrow')
+          : sortMode === 'supplyApy'
+            ? (parseMetric(right.supply_apy) ?? -1)
+            : (parseMetric(right.borrow_apy) ?? -1);
 
     return rightValue - leftValue;
   });
@@ -64,20 +125,16 @@ function sortMarkets(markets: MorphoMarketView[], sortMode: MorphoSortMode): Mor
 
 export function MorphoMarketPage() {
   const { markets, loading, error, fetchedAt, fromCache, reload } = useMorphoData();
-  const [riskFilter, setRiskFilter] = useState<MorphoRiskFilter>('all');
-  const [sortMode, setSortMode] = useState<MorphoSortMode>('collateral');
+  const [sortMode, setSortMode] = useState<MorphoSortMode>('supplyScale');
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [selectedMarketId, setSelectedMarketId] = useState('');
+  const [loanTokenPricesUsd, setLoanTokenPricesUsd] = useState<Record<string, number | null>>({});
 
-  const visibleMarkets = useMemo(() => {
+  const filteredMarkets = useMemo(() => {
     const keyword = deferredSearch.trim().toLowerCase();
 
     const filtered = markets.filter((market) => {
-      if (riskFilter === 'liquidatable' && market.is_liquidatable !== true) {
-        return false;
-      }
-
       if (!keyword) return true;
 
       return [
@@ -92,8 +149,13 @@ export function MorphoMarketPage() {
         .some((value) => value?.toLowerCase().includes(keyword));
     });
 
-    return sortMarkets(filtered, sortMode);
-  }, [deferredSearch, markets, riskFilter, sortMode]);
+    return filtered;
+  }, [deferredSearch, markets]);
+
+  const visibleMarkets = useMemo(
+    () => sortMarkets(filteredMarkets, sortMode, loanTokenPricesUsd),
+    [filteredMarkets, loanTokenPricesUsd, sortMode],
+  );
 
   useEffect(() => {
     if (!visibleMarkets.length) {
@@ -108,6 +170,41 @@ export function MorphoMarketPage() {
     );
   }, [visibleMarkets]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loanSymbols = Array.from(
+      new Set(
+        filteredMarkets
+          .map((item) => item.loan_symbol?.trim().toUpperCase() ?? '')
+          .filter((symbol) => Boolean(symbol)),
+      ),
+    );
+
+    if (!loanSymbols.length) {
+      setLoanTokenPricesUsd({});
+      return;
+    }
+
+    const loadPrices = async () => {
+      const settled = await Promise.allSettled(
+        loanSymbols.map((symbol) => fetchAssetPrice(symbol)),
+      );
+      if (cancelled) return;
+
+      const next: Record<string, number | null> = {};
+      loanSymbols.forEach((symbol, index) => {
+        const result = settled[index];
+        next[symbol] = result.status === 'fulfilled' ? result.value : null;
+      });
+      setLoanTokenPricesUsd(next);
+    };
+
+    void loadPrices();
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredMarkets]);
+
   const selectedMarket = useMemo(
     () =>
       visibleMarkets.find((item) => item.market_id === selectedMarketId) ??
@@ -115,6 +212,42 @@ export function MorphoMarketPage() {
       null,
     [selectedMarketId, visibleMarkets],
   );
+
+  const selectedMarketMetrics = useMemo(() => {
+    if (!selectedMarket) return null;
+    const loanSymbol = selectedMarket.loan_symbol?.trim().toUpperCase() ?? '';
+    const loanPriceUsd = loanSymbol ? (loanTokenPricesUsd[loanSymbol] ?? null) : null;
+    const supplyAmount = normalizeTokenAmount(
+      selectedMarket.total_supply_assets,
+      selectedMarket.loan_decimals,
+      selectedMarket.total_supply_assets_is_raw,
+    );
+    const borrowAmount = normalizeTokenAmount(
+      selectedMarket.total_borrow_assets,
+      selectedMarket.loan_decimals,
+      selectedMarket.total_borrow_assets_is_raw,
+    );
+    const availableLiquidityAmount = normalizeTokenAmount(
+      selectedMarket.available_liquidity,
+      selectedMarket.loan_decimals,
+      selectedMarket.available_liquidity_is_raw,
+    );
+
+    return {
+      loanPriceUsd,
+      supplyAmount,
+      borrowAmount,
+      availableLiquidityAmount,
+      supplyUsd:
+        supplyAmount !== null && loanPriceUsd !== null ? supplyAmount * loanPriceUsd : null,
+      borrowUsd:
+        borrowAmount !== null && loanPriceUsd !== null ? borrowAmount * loanPriceUsd : null,
+      liquidityUsd:
+        availableLiquidityAmount !== null && loanPriceUsd !== null
+          ? availableLiquidityAmount * loanPriceUsd
+          : null,
+    };
+  }, [loanTokenPricesUsd, selectedMarket]);
 
   const refreshedAtText = fetchedAt
     ? new Date(fetchedAt).toLocaleString('zh-CN', {
@@ -126,23 +259,7 @@ export function MorphoMarketPage() {
     <>
       <PageHero
         title="Morpho 市场页面"
-        subtitle="聚合 Morpho 隔离市场静态配置与实时状态，快速查看规模、利率与风险标记。"
-        controls={
-          <div className="morpho-market-hero-controls">
-            <SegmentedControl
-              ariaLabel="Morpho market risk filter"
-              value={riskFilter}
-              onChange={setRiskFilter}
-              options={[
-                { value: 'all', label: '全部市场' },
-                { value: 'liquidatable', label: '仅风险市场', activeClassName: 'active-purple' },
-              ]}
-            />
-            <button type="button" className="switch-btn" onClick={() => void reload()}>
-              刷新数据
-            </button>
-          </div>
-        }
+        subtitle="聚合 Morpho 隔离市场静态配置与实时状态，快速查看总量、利率与风险标记。"
       />
 
       <div className="card morpho-detail-card morpho-market-toolbar">
@@ -153,26 +270,9 @@ export function MorphoMarketPage() {
           </span>
         </div>
         <div className="morpho-market-toolbar-actions">
-          <label className="morpho-market-search">
-            <span>搜索市场</span>
-            <input
-              className="address-input"
-              type="text"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="market id / token / oracle / irm"
-            />
-          </label>
-          <SegmentedControl
-            ariaLabel="Morpho market sort mode"
-            value={sortMode}
-            onChange={setSortMode}
-            options={[
-              { value: 'collateral', label: '按抵押规模' },
-              { value: 'debt', label: '按债务规模' },
-              { value: 'borrowApy', label: '按借款利率' },
-            ]}
-          />
+          <button type="button" className="switch-btn" onClick={() => void reload()}>
+            刷新数据
+          </button>
         </div>
       </div>
 
@@ -188,6 +288,11 @@ export function MorphoMarketPage() {
             markets={visibleMarkets}
             selectedMarketId={selectedMarketId}
             onSelectMarket={setSelectedMarketId}
+            loanTokenPricesUsd={loanTokenPricesUsd}
+            search={search}
+            onSearchChange={setSearch}
+            sortMode={sortMode}
+            onSortModeChange={setSortMode}
           />
 
           {selectedMarket ? (
@@ -214,19 +319,33 @@ export function MorphoMarketPage() {
 
                 <div className="morpho-summary-layout">
                   <div className="morpho-summary-group">
-                    <span className="morpho-summary-group-title">规模</span>
+                    <span className="morpho-summary-group-title">总量</span>
                     <div className="morpho-summary-group-grid">
                       <div className="metric-box">
-                        <span className="metric-label">总抵押</span>
+                        <span className="metric-label">存款总量 (USD)</span>
                         <strong className="morpho-metric-strong">
-                          {formatUsd(selectedMarket.total_collateral_usd)}
+                          {formatUsdFromNumber(selectedMarketMetrics?.supplyUsd ?? null)}
                         </strong>
+                        <span className="justlend-caption">
+                          {formatAmount(
+                            selectedMarketMetrics?.supplyAmount ?? null,
+                            selectedMarket.loan_symbol,
+                          )}{' '}
+                          × {formatUsdFromNumber(selectedMarketMetrics?.loanPriceUsd ?? null)}
+                        </span>
                       </div>
                       <div className="metric-box">
-                        <span className="metric-label">总债务</span>
+                        <span className="metric-label">借款总量 (USD)</span>
                         <strong className="morpho-metric-strong">
-                          {formatUsd(selectedMarket.total_debt_usd)}
+                          {formatUsdFromNumber(selectedMarketMetrics?.borrowUsd ?? null)}
                         </strong>
+                        <span className="justlend-caption">
+                          {formatAmount(
+                            selectedMarketMetrics?.borrowAmount ?? null,
+                            selectedMarket.loan_symbol,
+                          )}{' '}
+                          × {formatUsdFromNumber(selectedMarketMetrics?.loanPriceUsd ?? null)}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -259,12 +378,44 @@ export function MorphoMarketPage() {
                         </strong>
                       </div>
                       <div className="metric-box">
-                        <span className="metric-label">ETH 下跌清算价</span>
+                        <span className="metric-label">可用流动性 (USD)</span>
                         <strong className="morpho-metric-strong">
-                          {formatUsd(selectedMarket.eth_down_liq_price_usd)}
+                          {formatUsdFromNumber(selectedMarketMetrics?.liquidityUsd ?? null)}
                         </strong>
+                        <span className="justlend-caption">
+                          {formatAmount(
+                            selectedMarketMetrics?.availableLiquidityAmount ?? null,
+                            selectedMarket.loan_symbol,
+                          )}
+                        </span>
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                <div className="morpho-market-focus-extra">
+                  <div className="morpho-market-focus-extra-title">市场关键指标</div>
+                  <div className="table-wrap">
+                    <table className="pos-table morpho-table morpho-market-focus-table">
+                      <tbody>
+                        <tr>
+                          <th>利用率</th>
+                          <td className="right">{formatPercent(selectedMarket.utilization)}</td>
+                          <th>容量负载空间</th>
+                          <td className="right">
+                            {formatCapacityUsagePercent(selectedMarket.borrow_capacity_usage_rough)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>loan token 单价</th>
+                          <td className="right">
+                            {formatUsdFromNumber(selectedMarketMetrics?.loanPriceUsd ?? null)}
+                          </td>
+                          <th></th>
+                          <td className="right"></td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
@@ -275,14 +426,17 @@ export function MorphoMarketPage() {
                   </div>
                   <div className="morpho-keyline-item">
                     <span>Oracle</span>
-                    <strong className="mono" title={selectedMarket.oracle || ''}>
-                      {shortAddress(selectedMarket.oracle)}
+                    <strong
+                      className="mono morpho-full-address"
+                      title={selectedMarket.oracle || ''}
+                    >
+                      {selectedMarket.oracle || 'N/A'}
                     </strong>
                   </div>
                   <div className="morpho-keyline-item">
                     <span>IRM</span>
-                    <strong className="mono" title={selectedMarket.irm || ''}>
-                      {shortAddress(selectedMarket.irm)}
+                    <strong className="mono morpho-full-address" title={selectedMarket.irm || ''}>
+                      {selectedMarket.irm || 'N/A'}
                     </strong>
                   </div>
                 </div>

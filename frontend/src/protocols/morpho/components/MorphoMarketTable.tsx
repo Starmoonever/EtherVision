@@ -1,9 +1,17 @@
 import type { MorphoMarketView } from '../../../hooks/useMorphoData';
+import { SegmentedControl } from '../../../shared/components/SegmentedControl';
+
+type MorphoSortMode = 'supplyScale' | 'borrowScale' | 'supplyApy' | 'borrowApy';
 
 interface MorphoMarketTableProps {
   markets: MorphoMarketView[];
   selectedMarketId: string;
   onSelectMarket: (marketId: string) => void;
+  loanTokenPricesUsd: Record<string, number | null>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  sortMode: MorphoSortMode;
+  onSortModeChange: (value: MorphoSortMode) => void;
 }
 
 const percentFormatter = new Intl.NumberFormat('en-US', {
@@ -88,10 +96,25 @@ function formatCompactTokenAmount(
   return symbol ? `${amount} ${symbol}` : amount;
 }
 
+function formatUsdCompact(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'N/A';
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000_000_000) {
+    return `$${(value / 1_000_000_000).toFixed(2).replace(/\.?0+$/, '')}B`;
+  }
+  if (absolute >= 1_000_000) {
+    return `$${(value / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+  }
+  if (absolute >= 1_000) {
+    return `$${(value / 1_000).toFixed(2).replace(/\.?0+$/, '')}K`;
+  }
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 function formatPercentNumber(value: string | null | undefined): number | null {
   const numeric = parseMetric(value);
   if (numeric === null) return null;
-  return Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+  return numeric * 100;
 }
 
 function clampPercent(value: number | null): number {
@@ -103,6 +126,11 @@ export function MorphoMarketTable({
   markets,
   selectedMarketId,
   onSelectMarket,
+  loanTokenPricesUsd,
+  search,
+  onSearchChange,
+  sortMode,
+  onSortModeChange,
 }: MorphoMarketTableProps) {
   if (!markets.length) {
     return (
@@ -121,7 +149,29 @@ export function MorphoMarketTable({
             紧凑视图展示利率、流动性与容量占用，点击行可查看详情。
           </p>
         </div>
-        <span className="badge badge-brand-soft">{markets.length} Markets</span>
+        <div className="morpho-market-table-controls">
+          <label className="morpho-market-search morpho-market-search-inline">
+            <input
+              className="address-input"
+              type="text"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="搜索 market id / token / oracle / irm"
+            />
+          </label>
+          <SegmentedControl
+            ariaLabel="Morpho market sort mode"
+            value={sortMode}
+            onChange={(value) => onSortModeChange(value as MorphoSortMode)}
+            options={[
+              { value: 'supplyScale', label: '存款总量' },
+              { value: 'borrowScale', label: '借款总量' },
+              { value: 'supplyApy', label: '存款APY' },
+              { value: 'borrowApy', label: '借款APY' },
+            ]}
+          />
+          <span className="badge badge-brand-soft">{markets.length} Markets</span>
+        </div>
       </div>
 
       <div className="table-wrap">
@@ -146,6 +196,26 @@ export function MorphoMarketTable({
               );
               const isOverBorrowCapacity =
                 borrowCapacityUsagePercent !== null && borrowCapacityUsagePercent > 100;
+              const normalizedSupplyAmount = normalizeTokenAmount(
+                market.total_supply_assets,
+                market.loan_decimals,
+                market.total_supply_assets_is_raw,
+              );
+              const normalizedBorrowAmount = normalizeTokenAmount(
+                market.total_borrow_assets,
+                market.loan_decimals,
+                market.total_borrow_assets_is_raw,
+              );
+              const loanSymbol = market.loan_symbol?.trim().toUpperCase() ?? '';
+              const loanPriceUsd = loanSymbol ? (loanTokenPricesUsd[loanSymbol] ?? null) : null;
+              const totalSupplyUsd =
+                normalizedSupplyAmount !== null && loanPriceUsd !== null
+                  ? normalizedSupplyAmount * loanPriceUsd
+                  : null;
+              const totalBorrowUsd =
+                normalizedBorrowAmount !== null && loanPriceUsd !== null
+                  ? normalizedBorrowAmount * loanPriceUsd
+                  : null;
 
               return (
                 <tr
@@ -169,34 +239,24 @@ export function MorphoMarketTable({
                     <span className="morpho-compact-metric">{formatLltv(market.lltv)}</span>
                   </td>
                   <td className="right">
-                    <div className="morpho-rate-stack">
+                    <div className="morpho-rate-stack morpho-rate-stack-inline">
                       <span className="morpho-rate-line morpho-rate-line-supply">
-                        存款{' '}
-                        {formatCompactTokenAmount(
-                          market.total_supply_assets,
-                          market.loan_decimals,
-                          market.total_supply_assets_is_raw,
-                          market.loan_symbol,
-                        )}
+                        {formatUsdCompact(totalSupplyUsd)}
                       </span>
+                      <span className="morpho-rate-divider">/</span>
                       <span className="morpho-rate-line morpho-rate-line-borrow">
-                        借款{' '}
-                        {formatCompactTokenAmount(
-                          market.total_borrow_assets,
-                          market.loan_decimals,
-                          market.total_borrow_assets_is_raw,
-                          market.loan_symbol,
-                        )}
+                        {formatUsdCompact(totalBorrowUsd)}
                       </span>
                     </div>
                   </td>
                   <td className="right">
-                    <div className="morpho-rate-stack">
+                    <div className="morpho-rate-stack morpho-rate-stack-inline">
                       <span className="morpho-rate-line morpho-rate-line-supply">
-                        存款 {formatPercent(market.supply_apy)}
+                        {formatPercent(market.supply_apy)}
                       </span>
+                      <span className="morpho-rate-divider">/</span>
                       <span className="morpho-rate-line morpho-rate-line-borrow">
-                        借款 {formatPercent(market.borrow_apy)}
+                        {formatPercent(market.borrow_apy)}
                       </span>
                     </div>
                   </td>

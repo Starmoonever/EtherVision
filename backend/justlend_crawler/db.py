@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS loan.justlend_current_user_positions (
     block_timestamp TIMESTAMPTZ NOT NULL,
     block_number BIGINT,
     source_cursor TEXT,
+    total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_collateral_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_debt_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     available_borrow_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
@@ -110,6 +111,7 @@ CREATE TABLE IF NOT EXISTS loan.justlend_user_position_snapshots (
     block_timestamp TIMESTAMPTZ NOT NULL,
     block_number BIGINT,
     source_cursor TEXT,
+    total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_collateral_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_debt_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     available_borrow_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS loan.justlend_position_snapshots (
     operation_type TEXT,
     has_open_position BOOLEAN NOT NULL DEFAULT TRUE,
     is_liquidatable BOOLEAN NOT NULL DEFAULT FALSE,
+    total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_collateral_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     total_debt_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
     available_borrow_usd NUMERIC(30, 8) NOT NULL DEFAULT 0,
@@ -226,6 +229,7 @@ INSERT INTO loan.justlend_position_snapshots (
     operation_type,
     has_open_position,
     is_liquidatable,
+    total_deposit_usd,
     total_collateral_usd,
     total_debt_usd,
     available_borrow_usd,
@@ -241,7 +245,7 @@ INSERT INTO loan.justlend_position_snapshots (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-    $21, $22, $23, NOW()
+    $21, $22, $23, $24, NOW()
 )
 ON CONFLICT (
     user_address,
@@ -258,6 +262,7 @@ ON CONFLICT (
     operation_type = EXCLUDED.operation_type,
     has_open_position = EXCLUDED.has_open_position,
     is_liquidatable = EXCLUDED.is_liquidatable,
+    total_deposit_usd = EXCLUDED.total_deposit_usd,
     total_collateral_usd = EXCLUDED.total_collateral_usd,
     total_debt_usd = EXCLUDED.total_debt_usd,
     available_borrow_usd = EXCLUDED.available_borrow_usd,
@@ -287,6 +292,7 @@ SELECT
     operation_type,
     has_open_position,
     is_liquidatable,
+    total_deposit_usd,
     total_collateral_usd,
     total_debt_usd,
     available_borrow_usd,
@@ -323,6 +329,7 @@ class JustLendEventPositionSnapshotRow:
     operation_type: str | None
     has_open_position: bool
     is_liquidatable: bool
+    total_deposit_usd: Decimal
     total_collateral_usd: Decimal
     total_debt_usd: Decimal
     available_borrow_usd: Decimal
@@ -767,6 +774,24 @@ async def ensure_justlend_tables(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_TRON_PRICE_TIMESTAMP)
             await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_INDEX)
             await conn.execute(_DDL_TRON_PRICE_TIMESTAMP_STORAGE)
+            await conn.execute(
+                """
+                ALTER TABLE loan.justlend_current_user_positions
+                ADD COLUMN IF NOT EXISTS total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0
+                """
+            )
+            await conn.execute(
+                """
+                ALTER TABLE loan.justlend_user_position_snapshots
+                ADD COLUMN IF NOT EXISTS total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0
+                """
+            )
+            await conn.execute(
+                """
+                ALTER TABLE loan.justlend_position_snapshots
+                ADD COLUMN IF NOT EXISTS total_deposit_usd NUMERIC(30, 8) NOT NULL DEFAULT 0
+                """
+            )
     logger.info("JustLend scaffold tables are ready")
 
 
@@ -1139,6 +1164,15 @@ async def fetch_current_user_position(
                 block_timestamp,
                 block_number,
                 source_cursor,
+                COALESCE(
+                    NULLIF(total_deposit_usd, 0),
+                    (
+                        SELECT COALESCE(SUM(a.value_usd), 0)
+                        FROM loan.justlend_current_user_position_assets a
+                        WHERE a.user_address = loan.justlend_current_user_positions.user_address
+                          AND a.side IN ('collateral', 'supply')
+                    )
+                ) AS total_deposit_usd,
                 total_collateral_usd,
                 total_debt_usd,
                 available_borrow_usd,
@@ -1202,12 +1236,24 @@ async def fetch_current_user_positions_page(
     sort_by: str,
     order: str,
     user_address: bytes | None = None,
-    side: str = "all",
+    position_type: str = "all",
+    is_collateral: bool | None = None,
     asset_address: bytes | None = None,
 ) -> list[asyncpg.Record]:
+    deposit_expr = """
+        COALESCE(
+            NULLIF(p.total_deposit_usd, 0),
+            (
+                SELECT COALESCE(SUM(a2.value_usd), 0)
+                FROM loan.justlend_current_user_position_assets a2
+                WHERE a2.user_address = p.user_address
+                  AND a2.side IN ('collateral', 'supply')
+            )
+        )
+    """
     sort_expr_map = {
         "health_factor": "p.health_factor",
-        "total_supply_usd": "p.total_collateral_usd",
+        "total_supply_usd": deposit_expr,
         "total_collateral_usd": "p.total_collateral_usd",
         "total_borrow_usd": "p.total_debt_usd",
         "asset_value_usd": "COALESCE(ma.matched_asset_value_usd, 0)",
@@ -1218,6 +1264,21 @@ async def fetch_current_user_positions_page(
     params: list[Any] = []
     where_clauses: list[str] = []
     matched_asset_cte = "matched_asset AS (SELECT NULL::bytea AS user_address, NULL::numeric AS matched_asset_value_usd WHERE FALSE)"
+    matched_side_clauses: list[str] = []
+    exists_side_clauses: list[str] = []
+    if position_type == "borrow":
+        matched_side_clauses.append("side = 'borrow'")
+        exists_side_clauses.append("a.side = 'borrow'")
+    elif position_type == "supply":
+        if is_collateral is True:
+            matched_side_clauses.append("side = 'collateral'")
+            exists_side_clauses.append("a.side = 'collateral'")
+        elif is_collateral is False:
+            matched_side_clauses.append("side = 'supply'")
+            exists_side_clauses.append("a.side = 'supply'")
+        else:
+            matched_side_clauses.append("side IN ('collateral', 'supply')")
+            exists_side_clauses.append("a.side IN ('collateral', 'supply')")
     if sort_by == "asset_value_usd":
         if asset_address is None:
             raise ValueError("asset_address is required for asset_value_usd sort")
@@ -1227,15 +1288,14 @@ async def fetch_current_user_positions_page(
             bind_values=params,
             address=asset_address,
         )
-        params.append(side)
+        matched_where = [asset_predicate, *matched_side_clauses]
         matched_asset_cte = f"""
         matched_asset AS (
             SELECT
                 user_address,
                 SUM(value_usd) AS matched_asset_value_usd
             FROM loan.justlend_current_user_position_assets
-            WHERE {asset_predicate}
-              AND side = ${len(params)}
+            WHERE {" AND ".join(matched_where)}
             GROUP BY user_address
         )"""
 
@@ -1249,11 +1309,9 @@ async def fetch_current_user_positions_page(
             )
         )
 
-    if side != "all" or asset_address is not None:
+    if position_type != "all" or asset_address is not None:
         exists_clauses = ["a.user_address = p.user_address"]
-        if side != "all":
-            params.append(side)
-            exists_clauses.append(f"a.side = ${len(params)}")
+        exists_clauses.extend(exists_side_clauses)
         if asset_address is not None:
             exists_clauses.append(
                 _build_justlend_address_predicate(
@@ -1286,6 +1344,7 @@ async def fetch_current_user_positions_page(
             p.block_timestamp,
             p.block_number,
             p.source_cursor,
+            {deposit_expr} AS total_deposit_usd,
             p.total_collateral_usd,
             p.total_debt_usd,
             p.available_borrow_usd,
@@ -1313,16 +1372,23 @@ async def fetch_current_user_position_assets_by_users(
     pool: asyncpg.Pool,
     *,
     user_addresses: list[bytes],
-    side: str = "all",
+    position_type: str = "all",
+    is_collateral: bool | None = None,
     asset_address: bytes | None = None,
 ) -> list[asyncpg.Record]:
     if not user_addresses:
         return []
     params: list[Any] = [user_addresses]
     extra_conditions: list[str] = []
-    if side != "all":
-        params.append(side)
-        extra_conditions.append(f"side = ${len(params)}")
+    if position_type == "borrow":
+        extra_conditions.append("side = 'borrow'")
+    elif position_type == "supply":
+        if is_collateral is True:
+            extra_conditions.append("side = 'collateral'")
+        elif is_collateral is False:
+            extra_conditions.append("side = 'supply'")
+        else:
+            extra_conditions.append("side IN ('collateral', 'supply')")
     if asset_address is not None:
         extra_conditions.append(
             _build_justlend_address_predicate(
@@ -1369,6 +1435,7 @@ async def upsert_current_user_position(
     block_timestamp: datetime,
     block_number: int | None,
     source_cursor: str | None,
+    total_deposit_usd: Decimal,
     total_collateral_usd: Decimal,
     total_debt_usd: Decimal,
     available_borrow_usd: Decimal,
@@ -1390,6 +1457,7 @@ async def upsert_current_user_position(
                     block_timestamp,
                     block_number,
                     source_cursor,
+                    total_deposit_usd,
                     total_collateral_usd,
                     total_debt_usd,
                     available_borrow_usd,
@@ -1401,7 +1469,7 @@ async def upsert_current_user_position(
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12, $13, $14, NOW()
+                    $8, $9, $10, $11, $12, $13, $14, $15, NOW()
                 )
                 ON CONFLICT (user_address) DO UPDATE SET
                     chain = EXCLUDED.chain,
@@ -1410,6 +1478,7 @@ async def upsert_current_user_position(
                     block_timestamp = EXCLUDED.block_timestamp,
                     block_number = EXCLUDED.block_number,
                     source_cursor = EXCLUDED.source_cursor,
+                    total_deposit_usd = EXCLUDED.total_deposit_usd,
                     total_collateral_usd = EXCLUDED.total_collateral_usd,
                     total_debt_usd = EXCLUDED.total_debt_usd,
                     available_borrow_usd = EXCLUDED.available_borrow_usd,
@@ -1426,6 +1495,7 @@ async def upsert_current_user_position(
                 block_timestamp,
                 block_number,
                 source_cursor,
+                total_deposit_usd,
                 total_collateral_usd,
                 total_debt_usd,
                 available_borrow_usd,
@@ -1508,6 +1578,7 @@ async def append_user_position_snapshot(
     block_timestamp: datetime,
     block_number: int | None,
     source_cursor: str | None,
+    total_deposit_usd: Decimal,
     total_collateral_usd: Decimal,
     total_debt_usd: Decimal,
     available_borrow_usd: Decimal,
@@ -1529,6 +1600,7 @@ async def append_user_position_snapshot(
                     block_timestamp,
                     block_number,
                     source_cursor,
+                    total_deposit_usd,
                     total_collateral_usd,
                     total_debt_usd,
                     available_borrow_usd,
@@ -1540,7 +1612,7 @@ async def append_user_position_snapshot(
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12, $13, $14, NOW()
+                    $8, $9, $10, $11, $12, $13, $14, $15, NOW()
                 )
                 ON CONFLICT (user_address, snapshot_at) DO UPDATE SET
                     chain = EXCLUDED.chain,
@@ -1548,6 +1620,7 @@ async def append_user_position_snapshot(
                     block_timestamp = EXCLUDED.block_timestamp,
                     block_number = EXCLUDED.block_number,
                     source_cursor = EXCLUDED.source_cursor,
+                    total_deposit_usd = EXCLUDED.total_deposit_usd,
                     total_collateral_usd = EXCLUDED.total_collateral_usd,
                     total_debt_usd = EXCLUDED.total_debt_usd,
                     available_borrow_usd = EXCLUDED.available_borrow_usd,
@@ -1565,6 +1638,7 @@ async def append_user_position_snapshot(
                 block_timestamp,
                 block_number,
                 source_cursor,
+                total_deposit_usd,
                 total_collateral_usd,
                 total_debt_usd,
                 available_borrow_usd,
@@ -1644,6 +1718,7 @@ async def fetch_user_position_replay_snapshots(
                 block_timestamp,
                 block_number,
                 source_cursor,
+                total_deposit_usd,
                 total_collateral_usd,
                 total_debt_usd,
                 available_borrow_usd,
@@ -1712,6 +1787,7 @@ async def upsert_justlend_event_snapshots(
             row.operation_type,
             row.has_open_position,
             row.is_liquidatable,
+            row.total_deposit_usd,
             row.total_collateral_usd,
             row.total_debt_usd,
             row.available_borrow_usd,

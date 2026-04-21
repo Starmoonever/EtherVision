@@ -86,7 +86,7 @@ function niceStep(rawStep: number): number {
   return niceNormalized * magnitude;
 }
 
-export function syncAxis(
+function syncAxis(
   leftValues: number[],
   rightValues: number[],
   splitNumber = 5,
@@ -108,7 +108,7 @@ export function syncAxis(
   };
 }
 
-export function calculateLiquidationPrice(
+function calculateLiquidationPrice(
   debtPrice: number,
   debtAmount: number,
   collateralAmount: number,
@@ -118,7 +118,7 @@ export function calculateLiquidationPrice(
   return debtPrice * (debtAmount / (collateralAmount * lltv));
 }
 
-export function calculateLiquidationDistancePct(
+function calculateLiquidationDistancePct(
   collateralPrice: number,
   liquidationPrice: number,
 ): number {
@@ -126,7 +126,7 @@ export function calculateLiquidationDistancePct(
   return ((collateralPrice - liquidationPrice) / collateralPrice) * 100;
 }
 
-export function calculateDebtLiquidationPrice(
+function calculateDebtLiquidationPrice(
   collateralPrice: number,
   debtAmount: number,
   collateralAmount: number,
@@ -136,7 +136,7 @@ export function calculateDebtLiquidationPrice(
   return collateralPrice * ((collateralAmount * lltv) / debtAmount);
 }
 
-export function buildDynamicLiquidationSeries({
+function buildDynamicLiquidationSeries({
   collateralSeries,
   debtSeries,
   debtAmount,

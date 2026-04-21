@@ -145,9 +145,13 @@ async def positions(
         "asset_value_usd",
     ] = Query("health_factor", description="排序字段"),
     order: Literal["asc", "desc"] = Query("desc", description="排序方向"),
-    side: Literal["all", "collateral", "supply", "borrow"] = Query(
+    position_type: Literal["all", "supply", "borrow"] = Query(
         "all",
-        description="资产侧别；按资产排序时必须指定具体 side",
+        description="仓位类型；按资产排序时必须指定具体 position_type",
+    ),
+    is_collateral: bool | None = Query(
+        None,
+        description="仅对 supply 生效；true 表示已启用抵押，false 表示未启用抵押",
     ),
     asset: str | None = Query(
         None,
@@ -162,7 +166,8 @@ async def positions(
         page_size=page_size,
         sort_by=sort_by,
         order=order,
-        side=side,
+        position_type=position_type,
+        is_collateral=is_collateral,
         asset=asset,
         detail=detail,
         address=address,

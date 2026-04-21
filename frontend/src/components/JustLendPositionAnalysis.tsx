@@ -10,7 +10,8 @@ import { justLendChartTheme } from './justlendTheme';
 import { copyToClipboard } from '../shared/utils/copyToClipboard';
 import { JustLendPersonalDashboard } from './JustLendPersonalDashboard';
 
-type PositionSide = 'all' | 'collateral' | 'supply' | 'borrow';
+type PositionType = 'all' | 'supply' | 'borrow';
+type SupplyCollateralFilter = 'all' | 'collateral' | 'not_collateral';
 type PositionSortBy =
   | 'health_factor'
   | 'total_supply_usd'
@@ -28,13 +29,20 @@ interface PositionQuery {
   pageSize: number;
   sortBy: PositionSortBy;
   order: SortOrder;
-  side: PositionSide;
+  positionType: PositionType;
+  supplyCollateralFilter: SupplyCollateralFilter;
   asset: string;
 }
 
 interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
   healthFactorDisplay: string;
   healthFactorValue: number;
+  ltvPct: number | null;
+  ltvDisplay: string;
+  liquidationThresholdPct: number | null;
+  liquidationThresholdDisplay: string;
+  riskBufferPct: number | null;
+  riskBufferDisplay: string;
 }
 
 const PAGE_SIZE = 50;
@@ -45,9 +53,12 @@ const sortMetricOptions: Array<{
 }> = [
   { sortBy: 'total_supply_usd', label: '总存款' },
   { sortBy: 'total_borrow_usd', label: '总借款' },
+  { sortBy: 'total_collateral_usd', label: '总抵押' },
   { sortBy: 'health_factor', label: '健康因子' },
+  { sortBy: 'asset_value_usd', label: '资产价值' },
 ];
-const sideOptions: PositionSide[] = ['all', 'supply', 'borrow', 'collateral'];
+const positionTypeOptions: PositionType[] = ['all', 'supply', 'borrow'];
+const supplyCollateralOptions: SupplyCollateralFilter[] = ['all', 'collateral', 'not_collateral'];
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -107,11 +118,36 @@ function getHealthFactorValue(
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizePercentValue(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim().toLowerCase();
+  if (!raw || raw === 'inf' || raw === 'infinity') return null;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed <= 1 ? parsed * 100 : parsed;
+}
+
+function formatPercentValue(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '--';
+  return `${value.toFixed(2)}%`;
+}
+
 function normalizePositionItem(item: JustLendPositionAnalysisItem): PositionAnalysisViewItem {
+  const ltvPct = normalizePercentValue(item.ltv);
+  const liquidationThresholdPct = normalizePercentValue(item.liquidation_threshold);
+  const riskBufferPct =
+    ltvPct !== null && liquidationThresholdPct !== null ? liquidationThresholdPct - ltvPct : null;
+
   return {
     ...item,
     healthFactorDisplay: formatHealthFactor(item.health_factor, item.total_borrow_usd),
     healthFactorValue: getHealthFactorValue(item.health_factor, item.total_borrow_usd),
+    ltvPct,
+    ltvDisplay: formatPercentValue(ltvPct),
+    liquidationThresholdPct,
+    liquidationThresholdDisplay: formatPercentValue(liquidationThresholdPct),
+    riskBufferPct,
+    riskBufferDisplay: formatPercentValue(riskBufferPct),
   };
 }
 
@@ -178,19 +214,34 @@ function getHealthFactorTone(value: number, display: string) {
   return { color: '#e2e8f0', className: '', fontWeight: 700 };
 }
 
+function getRiskBufferTone(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return { color: '#e2e8f0', fontWeight: 700 };
+  }
+  if (value <= 0) {
+    return { color: '#f87171', fontWeight: 900 };
+  }
+  if (value <= 5) {
+    return { color: '#FFBB28', fontWeight: 900 };
+  }
+  return { color: '#e2e8f0', fontWeight: 700 };
+}
+
 export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisProps) {
   const [query, setQuery] = useState<PositionQuery>({
     page: 1,
     pageSize: PAGE_SIZE,
     sortBy: 'total_supply_usd',
     order: 'desc',
-    side: 'all',
+    positionType: 'all',
+    supplyCollateralFilter: 'all',
     asset: '',
   });
   const [items, setItems] = useState<PositionAnalysisViewItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [meta, setMeta] = useState<AggregatedRequestMeta>({
     lastUpdatedAt: null,
     cacheStatus: 'none',
@@ -209,7 +260,9 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const activeSortLabel =
     sortMetricOptions.find((option) => option.sortBy === query.sortBy)?.label ?? '总存款';
   const orderLabel = query.order === 'desc' ? '降序' : '升序';
+  const showMatchedAssetValue = query.sortBy === 'asset_value_usd';
   const displayTitle = useMemo(() => {
+    if (query.sortBy === 'total_collateral_usd') return '核心抵押头寸 (Top Collateral Positions)';
     if (query.sortBy === 'total_supply_usd') return '顶级供给头寸 (Top Supply Positions)';
     if (query.sortBy === 'total_borrow_usd') return '主要借款头寸 (Main Borrowing Positions)';
     return '核心头寸透视 (Core Positions Insight)';
@@ -227,7 +280,15 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           pageSize: query.pageSize,
           sortBy: query.sortBy,
           order: query.order,
-          side: query.side,
+          positionType: query.positionType,
+          isCollateral:
+            query.positionType === 'supply'
+              ? query.supplyCollateralFilter === 'collateral'
+                ? true
+                : query.supplyCollateralFilter === 'not_collateral'
+                  ? false
+                  : null
+              : null,
           asset: query.asset || null,
           detail: false,
           forceRefresh: refreshNonce > 0,
@@ -283,18 +344,59 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   };
 
   const handleSortMetricChange = (sortBy: PositionSortBy) => {
+    if (sortBy === 'asset_value_usd' && !query.asset) {
+      setNotice('请先选择一个 Asset，再按资产价值排序。');
+      return;
+    }
     setError('');
+    if (sortBy === 'asset_value_usd' && query.positionType === 'all') {
+      setNotice(
+        '资产价值排序需要指定具体仓位类型，已自动切换为 supply + collateral。也可以手动选择 borrow 或调整 collateral 过滤。',
+      );
+      updateQuery({
+        sortBy,
+        positionType: 'supply',
+        supplyCollateralFilter: 'collateral',
+        page: 1,
+      });
+      return;
+    }
+    setNotice('');
     updateQuery({ sortBy, page: 1 });
   };
 
   const handleAssetChange = (asset: string) => {
     setError('');
+    setNotice('');
+    if (!asset && query.sortBy === 'asset_value_usd') {
+      updateQuery({ asset, sortBy: 'total_supply_usd', page: 1 });
+      return;
+    }
     updateQuery({ asset, page: 1 });
   };
 
-  const handleSideChange = (side: PositionSide) => {
+  const handlePositionTypeChange = (positionType: PositionType) => {
+    if (query.sortBy === 'asset_value_usd' && positionType === 'all') {
+      setNotice('资产价值排序需要指定具体仓位类型，请选择 supply 或 borrow。');
+      return;
+    }
     setError('');
-    updateQuery({ side, page: 1 });
+    setNotice('');
+    updateQuery({
+      positionType,
+      supplyCollateralFilter: positionType === 'supply' ? query.supplyCollateralFilter : 'all',
+      page: 1,
+    });
+  };
+
+  const handleSupplyCollateralFilterChange = (filter: SupplyCollateralFilter) => {
+    setError('');
+    setNotice('');
+    updateQuery({
+      positionType: 'supply',
+      supplyCollateralFilter: filter,
+      page: 1,
+    });
   };
 
   const handleSortOrderChange = (order: SortOrder) => {
@@ -404,7 +506,11 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                   type="button"
                   className={`switch-btn ${query.sortBy === option.sortBy ? 'active' : ''}`}
                   onClick={() => handleSortMetricChange(option.sortBy)}
-                  title={option.label}
+                  title={
+                    option.sortBy === 'asset_value_usd'
+                      ? '按当前选择 Asset 的持有价值排序'
+                      : option.label
+                  }
                 >
                   {option.label}
                 </button>
@@ -414,19 +520,37 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
 
           <div style={{ display: 'grid', gap: '0.35rem' }}>
             <span className="metric-label">Side</span>
-            <div className="switch-group" aria-label="JustLend position side">
-              {sideOptions.map((side) => (
+            <div className="switch-group" aria-label="JustLend position type">
+              {positionTypeOptions.map((positionType) => (
                 <button
-                  key={side}
+                  key={positionType}
                   type="button"
-                  className={`switch-btn ${query.side === side ? 'active' : ''}`}
-                  onClick={() => handleSideChange(side)}
+                  className={`switch-btn ${query.positionType === positionType ? 'active' : ''}`}
+                  onClick={() => handlePositionTypeChange(positionType)}
                 >
-                  {side}
+                  {positionType}
                 </button>
               ))}
             </div>
           </div>
+
+          {query.positionType === 'supply' ? (
+            <div style={{ display: 'grid', gap: '0.35rem' }}>
+              <span className="metric-label">Collateral</span>
+              <div className="switch-group" aria-label="JustLend supply collateral filter">
+                {supplyCollateralOptions.map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={`switch-btn ${query.supplyCollateralFilter === filter ? 'active' : ''}`}
+                    onClick={() => handleSupplyCollateralFilterChange(filter)}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div style={{ display: 'grid', gap: '0.35rem' }}>
             <span className="metric-label">排序方向</span>
@@ -488,6 +612,13 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
           </div>
         ) : null}
 
+        {notice ? (
+          <div className="justlend-banner justlend-banner-soft" style={{ marginTop: '1rem' }}>
+            <div className="justlend-banner-title">需要选择资产</div>
+            <div className="justlend-banner-copy">{notice}</div>
+          </div>
+        ) : null}
+
         <div className="table-wrap justlend-position-table-wrap" style={{ marginTop: '1rem' }}>
           <table className="pos-table">
             <thead>
@@ -496,27 +627,39 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 <th>地址</th>
                 <th className="right">总存款</th>
                 <th className="right">总借款</th>
+                <th className="right">总抵押</th>
                 <th className="right">健康因子</th>
+                <th className="right">LTV</th>
+                <th className="right">风险余量</th>
+                {showMatchedAssetValue ? <th className="right">当前账户资产</th> : null}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
+                  <td
+                    colSpan={showMatchedAssetValue ? 9 : 8}
+                    style={{ textAlign: 'center', padding: '2rem' }}
+                  >
                     <div className="spinner"></div>
                   </td>
                 </tr>
               ) : items.length ? (
                 items.map((item, index) => {
+                  const collateral = toNum(item.total_collateral_usd);
                   const supply = toNum(item.total_supply_usd);
                   const borrow = toNum(item.total_borrow_usd);
+                  const matchedAssetValue = toNum(item.matched_asset_value_usd);
                   const hf = item.healthFactorValue;
-                  const risky = Number.isFinite(hf) && hf <= 1.1;
                   const hfTone = getHealthFactorTone(hf, item.healthFactorDisplay);
+                  const riskBufferTone = getRiskBufferTone(item.riskBufferPct);
+                  const riskBufferTooltip =
+                    item.riskBufferPct === null
+                      ? 'Liquidation Threshold: --\nLTV: --\nRisk Buffer: --'
+                      : `Liquidation Threshold: ${item.liquidationThresholdDisplay}\nLTV: ${item.ltvDisplay}\nRisk Buffer: ${item.riskBufferDisplay}`;
                   return (
                     <tr
                       key={`${item.address}:${query.page}:${index}`}
-                      className={risky ? 'justlend-risk-row' : ''}
                       onClick={() => setDrawerAddress(item.address)}
                       style={{
                         cursor: 'pointer',
@@ -547,18 +690,42 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                       <td className="right mono" title={formatFullCurrency(borrow)}>
                         {formatFullCurrency(borrow)}
                       </td>
+                      <td className="right mono" title={formatFullCurrency(collateral)}>
+                        {formatFullCurrency(collateral)}
+                      </td>
                       <td
                         className={`right mono ${hfTone.className}`}
                         style={{ color: hfTone.color, fontWeight: hfTone.fontWeight }}
                       >
                         {item.healthFactorDisplay}
                       </td>
+                      <td className="right mono" title={item.ltvDisplay}>
+                        {item.ltvDisplay}
+                      </td>
+                      <td
+                        className="right mono"
+                        title={riskBufferTooltip}
+                        style={{
+                          color: riskBufferTone.color,
+                          fontWeight: riskBufferTone.fontWeight,
+                        }}
+                      >
+                        {item.riskBufferDisplay}
+                      </td>
+                      {showMatchedAssetValue ? (
+                        <td className="right mono" title={formatFullCurrency(matchedAssetValue)}>
+                          {formatFullCurrency(matchedAssetValue)}
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
+                  <td
+                    colSpan={showMatchedAssetValue ? 9 : 8}
+                    style={{ textAlign: 'center', padding: '2rem' }}
+                  >
                     暂无匹配仓位
                   </td>
                 </tr>

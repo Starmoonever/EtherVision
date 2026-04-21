@@ -299,6 +299,20 @@ def _decimalize(raw: int, decimals: int) -> Decimal:
     return Decimal(raw) / (Decimal(10) ** decimals)
 
 
+def _jtoken_balance_to_underlying(
+    balance_raw: int,
+    exchange_rate_raw: int,
+    *,
+    underlying_decimals: int,
+) -> Decimal:
+    return (
+        Decimal(balance_raw)
+        * Decimal(exchange_rate_raw)
+        / _SCALE_18
+        / (Decimal(10) ** underlying_decimals)
+    )
+
+
 def _price_in_trx(raw_price: int, underlying_decimals: int) -> Decimal:
     return Decimal(raw_price) / (Decimal(10) ** (33 - underlying_decimals))
 
@@ -319,6 +333,120 @@ def _infer_trx_price_usd_from_positions(
             and item["price_in_trx"] > 0
         ):
             return Decimal("1") / item["price_in_trx"]
+    return None
+
+
+async def _infer_trx_price_usd_from_markets(
+    tron_rpc: TronRpcClient,
+    *,
+    markets: list[str],
+    normalized_address: str,
+    effective_block_number: int,
+    comptroller_cache: dict[str, dict[str, Any]],
+    oracle_price_cache: dict[tuple[str, str], int],
+    token_meta_cache: dict[str, dict[str, Any]],
+) -> Decimal | None:
+    for stable_symbol in _STABLE_SYMBOL_PRIORITY:
+        for market_address in markets:
+            token_meta = token_meta_cache.get(market_address)
+            if token_meta is None:
+                try:
+                    jtoken_symbol = await _call_string(
+                        tron_rpc,
+                        contract_address=market_address,
+                        function_selector="symbol()",
+                        owner_address=normalized_address,
+                        block_number=effective_block_number,
+                    )
+                    try:
+                        underlying_address = await _call_address(
+                            tron_rpc,
+                            contract_address=market_address,
+                            function_selector="underlying()",
+                            owner_address=normalized_address,
+                            block_number=effective_block_number,
+                        )
+                        underlying_symbol = await _call_string(
+                            tron_rpc,
+                            contract_address=underlying_address,
+                            function_selector="symbol()",
+                            owner_address=normalized_address,
+                            block_number=effective_block_number,
+                        )
+                        underlying_decimals = await _call_token_decimals(
+                            tron_rpc,
+                            token_address=underlying_address,
+                            block_number=effective_block_number,
+                        )
+                    except HTTPException:
+                        underlying_address = _hex_to_tron_base58(_TRX_ADDRESS_HEX)
+                        underlying_symbol = (
+                            "TRX" if "TRX" in jtoken_symbol.upper() else jtoken_symbol
+                        )
+                        underlying_decimals = _TRX_DECIMALS
+                    token_meta = {
+                        "jtoken_symbol": jtoken_symbol,
+                        "underlying_address": underlying_address,
+                        "underlying_symbol": underlying_symbol,
+                        "underlying_decimals": underlying_decimals,
+                    }
+                    token_meta_cache[market_address] = token_meta
+                except Exception:
+                    logger.debug(
+                        "failed to inspect JustLend market for TRX/USD fallback: market=%s",
+                        market_address,
+                        exc_info=True,
+                    )
+                    continue
+
+            if str(token_meta.get("underlying_symbol") or "").upper() != stable_symbol:
+                continue
+
+            try:
+                comptroller_address = await _call_address(
+                    tron_rpc,
+                    contract_address=market_address,
+                    function_selector="comptroller()",
+                    owner_address=normalized_address,
+                    block_number=effective_block_number,
+                )
+                controller_state = comptroller_cache.get(comptroller_address)
+                if controller_state is None:
+                    oracle_address = await _call_address(
+                        tron_rpc,
+                        contract_address=comptroller_address,
+                        function_selector="oracle()",
+                        owner_address=normalized_address,
+                        block_number=effective_block_number,
+                    )
+                    controller_state = {"oracle_address": oracle_address}
+                    comptroller_cache[comptroller_address] = controller_state
+
+                price_cache_key = (controller_state["oracle_address"], market_address)
+                raw_price = oracle_price_cache.get(price_cache_key)
+                if raw_price is None:
+                    raw_price = await _call_uint256(
+                        tron_rpc,
+                        contract_address=controller_state["oracle_address"],
+                        function_selector="getUnderlyingPrice(address)",
+                        parameter=_encode_address_word(market_address),
+                        owner_address=normalized_address,
+                        block_number=effective_block_number,
+                    )
+                    oracle_price_cache[price_cache_key] = raw_price
+
+                price_in_trx = _price_in_trx(
+                    raw_price, int(token_meta["underlying_decimals"])
+                )
+                if price_in_trx > 0:
+                    return Decimal("1") / price_in_trx
+            except Exception:
+                logger.debug(
+                    "failed TRX/USD fallback price probe for stable market=%s",
+                    market_address,
+                    exc_info=True,
+                )
+                continue
     return None
 
 
@@ -728,6 +856,9 @@ async def fetch_justlend_position_via_rpc(
         raise NotImplementedError("JustLend RPC fetch requires configured markets")
 
     user_address_hex = _tron_address_to_hex(normalized_address)
+    effective_block_number, effective_block_timestamp = await _get_now_block(tron_rpc)
+    if effective_block_number is None or effective_block_timestamp is None:
+        raise HTTPException(status_code=502, detail="failed to fetch TRON latest block")
     comptroller_cache: dict[str, dict[str, Any]] = {}
     oracle_price_cache: dict[tuple[str, str], int] = {}
     token_meta_cache: dict[str, dict[str, Any]] = {}
@@ -743,6 +874,7 @@ async def fetch_justlend_position_via_rpc(
             tron_rpc,
             contract_address=market_address,
             user_address=normalized_address,
+            block_number=effective_block_number,
         )
         if error_code != 0:
             raise HTTPException(
@@ -757,6 +889,7 @@ async def fetch_justlend_position_via_rpc(
             contract_address=market_address,
             function_selector="comptroller()",
             owner_address=normalized_address,
+            block_number=effective_block_number,
         )
         controller_state = comptroller_cache.get(comptroller_address)
         if controller_state is None:
@@ -765,6 +898,7 @@ async def fetch_justlend_position_via_rpc(
                 contract_address=comptroller_address,
                 function_selector="oracle()",
                 owner_address=normalized_address,
+                block_number=effective_block_number,
             )
             controller_state = {
                 "oracle_address": oracle_address,
@@ -775,6 +909,7 @@ async def fetch_justlend_position_via_rpc(
             tron_rpc,
             comptroller_address=comptroller_address,
             market_address=market_address,
+            block_number=effective_block_number,
         )
         price_cache_key = (controller_state["oracle_address"], market_address)
         raw_price = oracle_price_cache.get(price_cache_key)
@@ -785,33 +920,46 @@ async def fetch_justlend_position_via_rpc(
                 function_selector="getUnderlyingPrice(address)",
                 parameter=_encode_address_word(market_address),
                 owner_address=normalized_address,
+                block_number=effective_block_number,
             )
             oracle_price_cache[price_cache_key] = raw_price
 
         token_meta = token_meta_cache.get(market_address)
         if token_meta is None:
-            jtoken_symbol = await _call_string(
-                tron_rpc,
-                contract_address=market_address,
-                function_selector="symbol()",
-                owner_address=normalized_address,
-            )
+            try:
+                jtoken_symbol = await _call_string(
+                    tron_rpc,
+                    contract_address=market_address,
+                    function_selector="symbol()",
+                    owner_address=normalized_address,
+                    block_number=effective_block_number,
+                )
+            except HTTPException:
+                logger.debug(
+                    "failed to fetch JustLend jToken symbol via RPC: market=%s",
+                    market_address,
+                    exc_info=True,
+                )
+                jtoken_symbol = market_address
             try:
                 underlying_address = await _call_address(
                     tron_rpc,
                     contract_address=market_address,
                     function_selector="underlying()",
                     owner_address=normalized_address,
+                    block_number=effective_block_number,
                 )
                 underlying_symbol = await _call_string(
                     tron_rpc,
                     contract_address=underlying_address,
                     function_selector="symbol()",
                     owner_address=normalized_address,
+                    block_number=effective_block_number,
                 )
                 underlying_decimals = await _call_token_decimals(
                     tron_rpc,
                     token_address=underlying_address,
+                    block_number=effective_block_number,
                 )
             except HTTPException:
                 underlying_address = _hex_to_tron_base58(_TRX_ADDRESS_HEX)
@@ -828,9 +976,11 @@ async def fetch_justlend_position_via_rpc(
             }
             token_meta_cache[market_address] = token_meta
 
-        supply_amount = (
-            Decimal(jtoken_balance_raw) * Decimal(exchange_rate_raw) / _SCALE_18
-        ) / (Decimal(10) ** _JTOKEN_DECIMALS)
+        supply_amount = _jtoken_balance_to_underlying(
+            jtoken_balance_raw,
+            exchange_rate_raw,
+            underlying_decimals=int(token_meta["underlying_decimals"]),
+        )
         borrow_amount = _decimalize(
             borrow_balance_raw, int(token_meta["underlying_decimals"])
         )
@@ -855,12 +1005,23 @@ async def fetch_justlend_position_via_rpc(
 
     trx_price_usd = _infer_trx_price_usd_from_positions(raw_positions)
     if trx_price_usd is None:
+        trx_price_usd = await _infer_trx_price_usd_from_markets(
+            tron_rpc,
+            markets=markets,
+            normalized_address=normalized_address,
+            effective_block_number=effective_block_number,
+            comptroller_cache=comptroller_cache,
+            oracle_price_cache=oracle_price_cache,
+            token_meta_cache=token_meta_cache,
+        )
+    if trx_price_usd is None:
         raise HTTPException(
             status_code=502,
             detail="failed to infer TRX/USD price from JustLend RPC market data",
         )
 
     assets: list[dict[str, Any]] = []
+    total_deposit_usd = Decimal("0")
     total_collateral_usd = Decimal("0")
     total_debt_usd = Decimal("0")
     discounted_collateral_usd = Decimal("0")
@@ -868,15 +1029,19 @@ async def fetch_justlend_position_via_rpc(
         price_usd = item["price_in_trx"] * trx_price_usd
         if item["supply_amount"] > 0:
             value_usd = item["supply_amount"] * price_usd
-            total_collateral_usd += value_usd
-            if item["entered"]:
+            total_deposit_usd += value_usd
+            is_collateral = bool(item["entered"])
+            if is_collateral:
+                total_collateral_usd += value_usd
                 discounted_collateral_usd += value_usd * item["collateral_factor"]
             assets.append(
                 {
                     "asset_address": bytes.fromhex(
                         _tron_address_to_hex(str(item["underlying_address"]))
                     ),
-                    "side": "collateral",
+                    "position_type": "supply",
+                    "is_collateral": is_collateral,
+                    "side": "collateral" if is_collateral else "supply",
                     "symbol": item["underlying_symbol"],
                     "decimals": item["underlying_decimals"],
                     "amount": item["supply_amount"],
@@ -898,6 +1063,8 @@ async def fetch_justlend_position_via_rpc(
                     "asset_address": bytes.fromhex(
                         _tron_address_to_hex(str(item["underlying_address"]))
                     ),
+                    "position_type": "borrow",
+                    "is_collateral": None,
                     "side": "borrow",
                     "symbol": item["underlying_symbol"],
                     "decimals": item["underlying_decimals"],
@@ -928,16 +1095,15 @@ async def fetch_justlend_position_via_rpc(
         if total_debt_usd > 0
         else (_MAX_HF if total_collateral_usd > 0 else Decimal("0"))
     )
-    now = datetime.now(timezone.utc)
-
     return {
         "user_address": bytes.fromhex(user_address_hex),
         "chain": "tron",
         "protocol": "trx",
-        "snapshot_at": now,
-        "block_timestamp": now,
-        "block_number": None,
-        "source_cursor": None,
+        "snapshot_at": effective_block_timestamp,
+        "block_timestamp": effective_block_timestamp,
+        "block_number": effective_block_number,
+        "source_cursor": f"tron_block:{effective_block_number}",
+        "total_deposit_usd": total_deposit_usd,
         "total_collateral_usd": total_collateral_usd,
         "total_debt_usd": total_debt_usd,
         "available_borrow_usd": available_borrow_usd,

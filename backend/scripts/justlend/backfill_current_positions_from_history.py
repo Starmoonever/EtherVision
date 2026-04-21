@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(os.path.abspath(str(ROOT)))
@@ -25,7 +27,7 @@ from justlend_crawler.config import load_config  # noqa: E402
 from justlend_crawler.current_position_backfill import (  # noqa: E402
     backfill_current_positions_from_history,
 )
-from justlend_crawler.db import create_pool  # noqa: E402
+from justlend_crawler.db import create_pool, fetch_justlend_markets_current  # noqa: E402
 
 
 def _parse_utc_time(time_str: str) -> datetime:
@@ -45,7 +47,7 @@ def _parse_utc_time(time_str: str) -> datetime:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="根据 justlend.justlend_history 选出 TRX/USDT 用户，并用链上实时状态全量刷新 current 仓位"
+        description="根据 justlend.justlend_history 选出目标用户，并用链上实时状态全量刷新 current 仓位"
     )
     parser.add_argument("--config", default=None, help="config.yaml path")
     parser.add_argument(
@@ -60,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="symbols",
         default=None,
-        help="target underlying symbol, repeatable; default is TRX and USDT",
+        help="target underlying symbol, repeatable; default is all current JustLend underlyings",
     )
     parser.add_argument(
         "--match-mode",
@@ -114,7 +116,52 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="enable DEBUG logging",
     )
+    parser.add_argument(
+        "--write-failures-jsonl",
+        default=None,
+        help="optional path to write all failed user reasons as JSONL",
+    )
+    parser.add_argument(
+        "--write-deletions-txt",
+        default=None,
+        help="optional path to write all deleted user addresses, one per line",
+    )
     return parser
+
+
+def _write_failures_jsonl(path_str: str, items: list[dict[str, str]]) -> None:
+    path = Path(path_str).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def _write_deletions_txt(path_str: str, items: list[str]) -> None:
+    path = Path(path_str).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            handle.write(f"{item}\n")
+
+
+async def _resolve_target_symbols(args: argparse.Namespace, pool: Any) -> list[str]:
+    if args.symbols:
+        return args.symbols
+    market_rows = await fetch_justlend_markets_current(pool)
+    symbols = sorted(
+        {
+            str(row["underlying_symbol"]).strip().upper()
+            for row in market_rows
+            if row.get("underlying_symbol") and str(row["underlying_symbol"]).strip()
+        }
+    )
+    if not symbols:
+        raise SystemExit(
+            "loan.justlend_markets_current has no underlying_symbol rows; "
+            "please populate market cache or pass --symbol explicitly"
+        )
+    return symbols
 
 
 async def _run() -> None:
@@ -136,11 +183,12 @@ async def _run() -> None:
         raise SystemExit("tron_rpc_url is required")
 
     try:
+        target_symbols = await _resolve_target_symbols(args, pool)
         stats = await backfill_current_positions_from_history(
             pool,
             cfg=cfg,
             tron_rpc=tron_rpc,
-            target_symbols=args.symbols or ["TRX", "USDT"],
+            target_symbols=target_symbols,
             match_mode=args.match_mode,
             start_time=start_time,
             end_time=end_time,
@@ -162,6 +210,27 @@ async def _run() -> None:
             f"dry_run={args.dry_run} "
             f"user_source={args.user_source}"
         )
+        if stats.failed_reason_counts:
+            print("failure reasons:")
+            for reason, count in sorted(
+                stats.failed_reason_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            ):
+                print(f"  {count} x {reason}")
+        if stats.failed_details:
+            print("failure samples:")
+            for item in stats.failed_details[:20]:
+                print(f"  {item['user_address']}: {item['reason']}")
+        if stats.deleted_addresses:
+            print("deleted address samples:")
+            for address in stats.deleted_addresses[:20]:
+                print(f"  {address}")
+        if args.write_failures_jsonl and stats.failed_details:
+            _write_failures_jsonl(args.write_failures_jsonl, stats.failed_details)
+            print(f"failure details written to: {args.write_failures_jsonl}")
+        if args.write_deletions_txt and stats.deleted_addresses:
+            _write_deletions_txt(args.write_deletions_txt, stats.deleted_addresses)
+            print(f"deleted addresses written to: {args.write_deletions_txt}")
         if stats.failed_users:
             raise SystemExit(1)
     finally:

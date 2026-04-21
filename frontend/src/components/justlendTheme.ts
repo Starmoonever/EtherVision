@@ -68,6 +68,7 @@ export const justLendChartTheme = {
     utilization: '#a78bfa',
     utilizationFill: 'rgba(167, 139, 250, 0.24)',
     borrowRateCompare: '#2563eb',
+    hoverLine: '#f8fafc',
     grid: '#1f2a3d',
     axis: '#94a3b8',
     axisLine: '#263449',
