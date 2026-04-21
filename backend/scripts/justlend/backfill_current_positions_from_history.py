@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -114,7 +115,33 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="enable DEBUG logging",
     )
+    parser.add_argument(
+        "--write-failures-jsonl",
+        default=None,
+        help="optional path to write all failed user reasons as JSONL",
+    )
+    parser.add_argument(
+        "--write-deletions-txt",
+        default=None,
+        help="optional path to write all deleted user addresses, one per line",
+    )
     return parser
+
+
+def _write_failures_jsonl(path_str: str, items: list[dict[str, str]]) -> None:
+    path = Path(path_str).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def _write_deletions_txt(path_str: str, items: list[str]) -> None:
+    path = Path(path_str).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            handle.write(f"{item}\n")
 
 
 async def _run() -> None:
@@ -162,6 +189,27 @@ async def _run() -> None:
             f"dry_run={args.dry_run} "
             f"user_source={args.user_source}"
         )
+        if stats.failed_reason_counts:
+            print("failure reasons:")
+            for reason, count in sorted(
+                stats.failed_reason_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            ):
+                print(f"  {count} x {reason}")
+        if stats.failed_details:
+            print("failure samples:")
+            for item in stats.failed_details[:20]:
+                print(f"  {item['user_address']}: {item['reason']}")
+        if stats.deleted_addresses:
+            print("deleted address samples:")
+            for address in stats.deleted_addresses[:20]:
+                print(f"  {address}")
+        if args.write_failures_jsonl and stats.failed_details:
+            _write_failures_jsonl(args.write_failures_jsonl, stats.failed_details)
+            print(f"failure details written to: {args.write_failures_jsonl}")
+        if args.write_deletions_txt and stats.deleted_addresses:
+            _write_deletions_txt(args.write_deletions_txt, stats.deleted_addresses)
+            print(f"deleted addresses written to: {args.write_deletions_txt}")
         if stats.failed_users:
             raise SystemExit(1)
     finally:
