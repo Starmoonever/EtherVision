@@ -104,12 +104,22 @@ async def market_list(
         le=100,
         description="每页市场数量，默认 10",
     ),
+    sort_by: str = Query(
+        "total_market_size_usd",
+        description="排序字段：total_market_size_usd / utilization / loan_symbol / collateral_symbol",
+    ),
+    sort_order: str = Query(
+        "desc",
+        description="排序方向：asc 或 desc，默认 desc",
+    ),
 ) -> MorphoMarketListResponse:
-    # api/morpho/markets相关：允许调用方自定义每页数量，默认 10
+    # api/morpho/markets相关：支持分页与排序参数（从市场缓存表读取）
     return await get_representative_markets_page(
         pool=pool,
         page=page,
         page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
