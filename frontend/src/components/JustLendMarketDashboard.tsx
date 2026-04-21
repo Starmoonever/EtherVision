@@ -185,6 +185,10 @@ const marketTooltipItemStyle = {
   color: justLendChartTheme.tooltip.text,
 };
 const marketHistoryTheme = justLendChartTheme.marketHistory;
+const marketHistoryHoverCursor = {
+  stroke: marketHistoryTheme.hoverLine,
+  strokeWidth: 1.5,
+};
 
 function HistoryChartState({
   loading,
@@ -244,7 +248,7 @@ function JustLendRateHistoryChart({ data }: { data: JustLendMarketHistoryPointVi
               tickFormatter={(value) => formatPercent(Number(value))}
             />
             <Tooltip
-              cursor={false}
+              cursor={marketHistoryHoverCursor}
               contentStyle={marketTooltipContentStyle}
               labelStyle={marketTooltipLabelStyle}
               itemStyle={marketTooltipItemStyle}
@@ -327,7 +331,7 @@ function JustLendMarketScaleHistoryChart({ data }: { data: JustLendMarketHistory
               tickFormatter={(value) => formatUsdCompact(Number(value))}
             />
             <Tooltip
-              cursor={false}
+              cursor={marketHistoryHoverCursor}
               contentStyle={marketTooltipContentStyle}
               labelStyle={marketTooltipLabelStyle}
               itemStyle={marketTooltipItemStyle}
@@ -424,7 +428,7 @@ function JustLendUtilizationBorrowChart({ data }: { data: JustLendMarketHistoryP
               tickFormatter={(value) => formatPercent(Number(value))}
             />
             <Tooltip
-              cursor={false}
+              cursor={marketHistoryHoverCursor}
               contentStyle={marketTooltipContentStyle}
               labelStyle={marketTooltipLabelStyle}
               itemStyle={marketTooltipItemStyle}
