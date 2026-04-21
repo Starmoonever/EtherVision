@@ -1279,9 +1279,7 @@ async def fetch_current_user_positions_page(
         else:
             matched_side_clauses.append("side IN ('collateral', 'supply')")
             exists_side_clauses.append("a.side IN ('collateral', 'supply')")
-    if sort_by == "asset_value_usd":
-        if asset_address is None:
-            raise ValueError("asset_address is required for asset_value_usd sort")
+    if asset_address is not None:
         asset_predicate = _build_justlend_address_predicate(
             "asset_address",
             "bytea",

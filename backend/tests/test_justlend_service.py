@@ -394,7 +394,7 @@ async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> N
             "health_factor": Decimal("5"),
             "ltv": Decimal("0.2"),
             "liquidation_threshold": Decimal("0.75"),
-            "matched_asset_value_usd": Decimal("0"),
+            "matched_asset_value_usd": Decimal("12.34"),
             "total_count": 1,
         }
     ]
@@ -423,6 +423,7 @@ async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> N
         )
 
     assert result.asset == asset
+    assert result.items[0].matched_asset_value_usd == "12.34000000"
     mocked_page.assert_awaited_once()
     assert mocked_page.await_args is not None
     assert mocked_page.await_args.kwargs["asset_address"] == asset_address

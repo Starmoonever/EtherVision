@@ -2168,7 +2168,7 @@ async def get_positions(
         _format_position_list_item(
             row,
             metric_assets_by_user.get(bytes(_row_get(row, "user_address")), []),
-            include_matched_asset_value=normalized_sort_by == "asset_value_usd",
+            include_matched_asset_value=normalized_asset_bytes is not None,
             response_assets=response_assets_by_user.get(
                 bytes(_row_get(row, "user_address")),
                 [],
