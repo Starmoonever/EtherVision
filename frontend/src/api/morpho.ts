@@ -83,6 +83,8 @@ export interface MorphoMarketConfig {
   market_id: string;
   collateral_symbol: string | null;
   loan_symbol: string | null;
+  collateral_token_address?: string | null;
+  loan_token_address?: string | null;
   collateral_decimals?: number | null;
   loan_decimals?: number | null;
   lltv: string | null;
@@ -123,11 +125,24 @@ export interface MorphoMarketState {
 
 export interface MorphoMarketsResponse {
   markets: MorphoMarketConfig[];
+  market_count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 interface MorphoMarketListItemApiPayload {
   market_id?: string;
   marketId?: string;
+  assets?: Array<{
+    asset?: string | null;
+    symbol?: string | null;
+    token_address?: string | null;
+    tokenAddress?: string | null;
+    address?: string | null;
+    role?: string | null;
+    decimals?: number | null;
+  }>;
   collateral_symbol?: string | null;
   loan_symbol?: string | null;
   pair?: string | null;
@@ -209,8 +224,8 @@ const morphoReplayCache = new Map<
   { fetchedAt: number; data: MorphoPositionReplayResponse }
 >();
 const morphoReplayInflight = new Map<string, Promise<MorphoPositionReplayResponse>>();
-let morphoMarketsCache: { fetchedAt: number; data: MorphoMarketsResponse } | null = null;
-let morphoMarketsInflight: Promise<MorphoMarketsResponse> | null = null;
+const morphoMarketsCache = new Map<string, { fetchedAt: number; data: MorphoMarketsResponse }>();
+const morphoMarketsInflight = new Map<string, Promise<MorphoMarketsResponse>>();
 const morphoMarketStateCache = new Map<string, { fetchedAt: number; data: MorphoMarketState }>();
 const morphoMarketStateInflight = new Map<string, Promise<MorphoMarketState>>();
 
@@ -316,18 +331,40 @@ function normalizeMorphoMarketConfig(
 ): MorphoMarketConfig | null {
   const marketId = item.market_id ?? item.marketId;
   if (!marketId) return null;
+  const loanAsset = item.assets?.find((asset) => asset.role === 'loan');
+  const collateralAsset = item.assets?.find((asset) => asset.role === 'collateral');
+  const loanSymbol =
+    item.loan_symbol ?? item.loanToken?.symbol ?? loanAsset?.asset ?? loanAsset?.symbol ?? null;
+  const collateralSymbol =
+    item.collateral_symbol ??
+    item.collateralToken?.symbol ??
+    collateralAsset?.asset ??
+    collateralAsset?.symbol ??
+    null;
 
   return {
     market_id: marketId,
-    collateral_symbol:
-      item.collateral_symbol ?? item.collateralToken?.symbol ?? normalizePairSymbol(item.pair, 1),
-    loan_symbol: item.loan_symbol ?? item.loanToken?.symbol ?? normalizePairSymbol(item.pair, 0),
-    collateral_decimals: item.collateralToken?.decimals ?? null,
-    loan_decimals: item.loanToken?.decimals ?? null,
+    collateral_symbol: collateralSymbol ?? normalizePairSymbol(item.pair, 1),
+    loan_symbol: loanSymbol ?? normalizePairSymbol(item.pair, 0),
+    collateral_token_address:
+      item.collateralToken?.address ??
+      collateralAsset?.token_address ??
+      collateralAsset?.tokenAddress ??
+      collateralAsset?.address ??
+      null,
+    loan_token_address:
+      item.loanToken?.address ??
+      loanAsset?.token_address ??
+      loanAsset?.tokenAddress ??
+      loanAsset?.address ??
+      null,
+    collateral_decimals: item.collateralToken?.decimals ?? collateralAsset?.decimals ?? null,
+    loan_decimals: item.loanToken?.decimals ?? loanAsset?.decimals ?? null,
     lltv: item.lltv_ratio ?? normalizeRatioString(item.lltv),
     oracle: item.oracle ?? null,
     irm: item.irm ?? null,
-    pair: item.pair ?? null,
+    pair:
+      item.pair ?? (loanSymbol && collateralSymbol ? `${loanSymbol}-${collateralSymbol}` : null),
     total_market_size_usd: normalizeDecimalString(
       item.total_market_size_usd ?? item.totalMarketSizeUsd,
     ),
@@ -422,21 +459,6 @@ function appendQueryParams(path: string, params: Record<string, string | number>
   return `${path}${separator}${query.toString()}`;
 }
 
-function normalizeNextPath(next: string | null | undefined): string | null {
-  if (!next) return null;
-  const trimmed = next.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('/')) {
-    return trimmed.replace(/^\/api(?=\/)/, '');
-  }
-  try {
-    const url = new URL(trimmed);
-    return `${url.pathname}${url.search}`.replace(/^\/api(?=\/)/, '');
-  } catch {
-    return null;
-  }
-}
-
 function resolveMorphoMarketTotalPages(payload: MorphoMarketListApiPayload): number | null {
   const explicit = parsePositiveInteger(payload.total_pages ?? payload.totalPages);
   if (explicit !== null) return explicit;
@@ -458,90 +480,55 @@ function resolveMorphoMarketPageSize(payload: MorphoMarketListApiPayload): numbe
   );
 }
 
-function mergeMorphoMarketPayloads(
-  payloads: MorphoMarketListApiPayload[],
-): MorphoMarketListApiPayload {
-  const marketsById = new Map<string, MorphoMarketListItemApiPayload>();
-  payloads.forEach((payload) => {
-    (payload.markets ?? []).forEach((item) => {
-      const marketId = item.market_id ?? item.marketId;
-      if (!marketId) return;
-      marketsById.set(marketId.toLowerCase(), item);
-    });
-  });
+function resolveMorphoMarketTotalCount(
+  payload: MorphoMarketListApiPayload,
+  fallbackCount: number,
+): number {
+  return (
+    parsePositiveInteger(payload.total ?? payload.total_count ?? payload.market_count) ??
+    fallbackCount
+  );
+}
+
+function normalizeMorphoMarketsResponse(
+  payload: MorphoMarketListApiPayload,
+  requestedPage: number,
+  requestedPageSize: number,
+): MorphoMarketsResponse {
+  const markets = (payload.markets ?? [])
+    .map(normalizeMorphoMarketConfig)
+    .filter((item): item is MorphoMarketConfig => Boolean(item));
+  const page = parsePositiveInteger(payload.page) ?? requestedPage;
+  const pageSize = resolveMorphoMarketPageSize(payload) ?? requestedPageSize;
+  const marketCount = resolveMorphoMarketTotalCount(payload, markets.length);
+  const totalPages =
+    resolveMorphoMarketTotalPages(payload) ??
+    Math.max(1, Math.ceil(marketCount / Math.max(1, pageSize)));
 
   return {
-    ...payloads[0],
-    markets: Array.from(marketsById.values()),
-    market_count: marketsById.size,
+    markets,
+    market_count: marketCount,
+    page,
+    page_size: pageSize,
+    total_pages: totalPages,
   };
 }
 
-async function fetchMorphoMarketListPayload(basePath: string): Promise<MorphoMarketListApiPayload> {
-  const firstResponse = await apiFetchRaw(basePath);
-  if (!firstResponse.ok) {
-    throw new Error(await readApiError(firstResponse, basePath));
+async function fetchMorphoMarketListPagePayload(
+  basePath: string,
+  page: number,
+  pageSize: number,
+): Promise<MorphoMarketListApiPayload> {
+  const path = appendQueryParams(basePath, {
+    page,
+    page_size: pageSize,
+  });
+  const response = await apiFetchRaw(path);
+  if (!response.ok) {
+    throw new Error(await readApiError(response, path));
   }
 
-  const firstPayload = (await firstResponse.json()) as MorphoMarketListApiPayload;
-  const payloads = [firstPayload];
-  const pageSize = resolveMorphoMarketPageSize(firstPayload);
-  const totalPages = resolveMorphoMarketTotalPages(firstPayload);
-  const currentPage = parsePositiveInteger(firstPayload.page) ?? 1;
-  const visited = new Set([basePath]);
-
-  if (totalPages !== null && totalPages > currentPage) {
-    for (let page = currentPage + 1; page <= totalPages; page += 1) {
-      const pagePath = appendQueryParams(basePath, {
-        page,
-        ...(pageSize ? { page_size: pageSize } : {}),
-      });
-      visited.add(pagePath);
-      const response = await apiFetchRaw(pagePath);
-      if (!response.ok) {
-        throw new Error(await readApiError(response, pagePath));
-      }
-      payloads.push((await response.json()) as MorphoMarketListApiPayload);
-    }
-    return mergeMorphoMarketPayloads(payloads);
-  }
-
-  let nextPath =
-    normalizeNextPath(firstPayload.next) ??
-    (firstPayload.has_next || firstPayload.hasNext
-      ? appendQueryParams(basePath, {
-          page: currentPage + 1,
-          ...(pageSize ? { page_size: pageSize } : {}),
-        })
-      : null);
-
-  while (nextPath && !visited.has(nextPath) && payloads.length < 100) {
-    visited.add(nextPath);
-    const response = await apiFetchRaw(nextPath);
-    if (!response.ok) {
-      throw new Error(await readApiError(response, nextPath));
-    }
-    const payload = (await response.json()) as MorphoMarketListApiPayload;
-    payloads.push(payload);
-    const nextPage = parsePositiveInteger(payload.next_page ?? payload.nextPage);
-    const payloadPage = parsePositiveInteger(payload.page) ?? payloads.length;
-    const payloadPageSize = resolveMorphoMarketPageSize(payload) ?? pageSize;
-    nextPath =
-      normalizeNextPath(payload.next) ??
-      (nextPage !== null
-        ? appendQueryParams(basePath, {
-            page: nextPage,
-            ...(payloadPageSize ? { page_size: payloadPageSize } : {}),
-          })
-        : payload.has_next || payload.hasNext
-          ? appendQueryParams(basePath, {
-              page: payloadPage + 1,
-              ...(payloadPageSize ? { page_size: payloadPageSize } : {}),
-            })
-          : null);
-  }
-
-  return mergeMorphoMarketPayloads(payloads);
+  return response.json() as Promise<MorphoMarketListApiPayload>;
 }
 
 export async function fetchMorphoPosition(
@@ -715,34 +702,39 @@ export async function fetchMorphoPositionReplayWithMeta(
   };
 }
 
+function buildMorphoMarketsCacheKey(page: number, pageSize: number): string {
+  return `page:${page}:pageSize:${pageSize}`;
+}
+
 export async function fetchMorphoMarkets(
-  options: { force?: boolean } = {},
+  options: { force?: boolean; page?: number; pageSize?: number } = {},
 ): Promise<MorphoMarketsResponse> {
   const result = await fetchMorphoMarketsWithMeta(options);
   return result.data;
 }
 
 export async function fetchMorphoMarketsWithMeta(
-  options: { force?: boolean } = {},
+  options: { force?: boolean; page?: number; pageSize?: number } = {},
 ): Promise<DataWithMeta<MorphoMarketsResponse>> {
   const force = options.force === true;
+  const page = parsePositiveInteger(options.page) ?? 1;
+  const pageSize = parsePositiveInteger(options.pageSize) ?? 10;
+  const cacheKey = buildMorphoMarketsCacheKey(page, pageSize);
+  const cached = morphoMarketsCache.get(cacheKey);
 
-  if (
-    !force &&
-    morphoMarketsCache &&
-    Date.now() - morphoMarketsCache.fetchedAt < MORPHO_CACHE_TTL_MS
-  ) {
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
     return {
-      data: morphoMarketsCache.data,
+      data: cached.data,
       meta: {
-        fetchedAt: morphoMarketsCache.fetchedAt,
+        fetchedAt: cached.fetchedAt,
         fromCache: true,
       },
     };
   }
 
-  if (!force && morphoMarketsInflight) {
-    return morphoMarketsInflight.then((data) => ({
+  const inflight = morphoMarketsInflight.get(cacheKey);
+  if (!force && inflight) {
+    return inflight.then((data) => ({
       data,
       meta: {
         fetchedAt: Date.now(),
@@ -751,22 +743,18 @@ export async function fetchMorphoMarketsWithMeta(
     }));
   }
 
-  const request = fetchMorphoMarketListPayload('/morpho/markets')
-    .catch(() => fetchMorphoMarketListPayload('/morpho/market'))
-    .then((payload) => ({
-      markets: (payload.markets ?? [])
-        .map(normalizeMorphoMarketConfig)
-        .filter((item): item is MorphoMarketConfig => Boolean(item)),
-    }))
+  const request = fetchMorphoMarketListPagePayload('/morpho/markets', page, pageSize)
+    .catch(() => fetchMorphoMarketListPagePayload('/morpho/market', page, pageSize))
+    .then((payload) => normalizeMorphoMarketsResponse(payload, page, pageSize))
     .then((data) => {
-      morphoMarketsCache = { fetchedAt: Date.now(), data };
+      morphoMarketsCache.set(cacheKey, { fetchedAt: Date.now(), data });
       return data;
     })
     .finally(() => {
-      morphoMarketsInflight = null;
+      morphoMarketsInflight.delete(cacheKey);
     });
 
-  morphoMarketsInflight = request;
+  morphoMarketsInflight.set(cacheKey, request);
   const data = await request;
   return {
     data,
