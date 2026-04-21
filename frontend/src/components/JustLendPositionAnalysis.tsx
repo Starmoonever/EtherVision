@@ -47,6 +47,7 @@ interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
 
 const PAGE_SIZE = 50;
 const REFRESH_INTERVAL_SECONDS = 5 * 60;
+const TRX_NATIVE_ASSET_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 const sortMetricOptions: Array<{
   sortBy: PositionSortBy;
   label: string;
@@ -188,12 +189,20 @@ function shortAddress(value: string): string {
   return `${value.slice(0, 7)}...${value.slice(-6)}`;
 }
 
+function resolveUnderlyingAssetAddress(item: JustLendMarketItem): string {
+  if (item.underlying_address) return item.underlying_address;
+  if ((item.underlying_symbol || '').trim().toUpperCase() === 'TRX') {
+    return TRX_NATIVE_ASSET_ADDRESS;
+  }
+  return '';
+}
+
 function buildAssetOptions(markets: JustLendMarketItem[]) {
   const seen = new Set<string>();
   return markets
-    .filter((item) => item.underlying_address && item.underlying_symbol)
+    .filter((item) => item.underlying_symbol && resolveUnderlyingAssetAddress(item))
     .filter((item) => {
-      const key = item.underlying_address;
+      const key = resolveUnderlyingAssetAddress(item);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -490,7 +499,10 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
             >
               <option value="">全部资产</option>
               {assetOptions.map((item) => (
-                <option key={item.underlying_address} value={item.underlying_address}>
+                <option
+                  key={resolveUnderlyingAssetAddress(item)}
+                  value={resolveUnderlyingAssetAddress(item)}
+                >
                   {item.underlying_symbol}
                 </option>
               ))}
