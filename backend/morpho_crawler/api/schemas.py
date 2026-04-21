@@ -98,14 +98,27 @@ class MorphoPositionReplayResponse(BaseModel):
 # api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListItem(BaseModel):
     market_id: str = Field(description="市场 id。")
-    pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
+    pair: str = Field(
+        description="借出 : 抵押，如 USDC : wstETH（避免 symbol 内含 - 时歧义）。"
+    )
+    total_market_size_usd: float | None = Field(
+        default=None,
+        description="Morpho Blue API 的 TVL（state.sizeUsd），美元。",
+    )
+    utilization: float | None = Field(
+        default=None,
+        description="利用率（state.utilization，0~1）。",
+    )
 
 
-# api/morpho/markets相关：GET /api/morpho/markets
+# api/morpho/markets相关：GET /api/morpho/markets（分页）
 class MorphoMarketListResponse(BaseModel):
-    market_count: int = Field(description="返回的市场数量。")
+    page: int = Field(description="当前页码（从 1 开始）。")
+    page_size: int = Field(description="每页条数。")
+    total_count: int = Field(description="硬编码市场总数。")
+    total_pages: int = Field(description="总页数。")
     markets: list[MorphoMarketListItem] = Field(
-        description="代表性市场列表（market_id + 借出-抵押组合）。"
+        description="本页市场列表（含 TVL 与利用率）。"
     )
 
 

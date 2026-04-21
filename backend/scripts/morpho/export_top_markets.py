@@ -139,7 +139,7 @@ def main() -> None:
         raise SystemExit("--top 必须大于 0")
 
     variables = {
-        "first": max(args.top, 100),
+        "first": args.top,
         "chainIds": [args.chain_id],
         "listed": None if args.include_unlisted else True,
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from crawler_shared.price_history import (
     get_historical_price_usd,
     get_historical_prices_usd,
 )
+import httpx
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
@@ -39,6 +41,11 @@ from ..rpc import (
     fetch_realtime_position,
     fetch_user_market_replay_events,
 )
+from .constants import (  # api/morpho/markets相关
+    MORPHO_BLUE_GRAPHQL_URL,
+    MORPHO_MARKETS_BLUE_API_CHAIN_ID,
+    MORPHO_MARKETS_HARDCODED,
+)
 from .schemas import (
     MorphoMarketListItem,  # api/morpho/markets相关
     MorphoMarketStateResponse,  # api/morpho/market/state相关
@@ -60,33 +67,63 @@ BRIEF_LABELS = {
     "liquidation": "被清算",
 }
 
-# api/morpho/markets相关：GET /api/morpho/markets 代表性市场 id 列表数据源
-MORPHO_REPRESENTATIVE_MARKETS: list[tuple[str, str]] = [
-    (
-        "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
-        "USDC-wstETH",
-    ),
-    (
-        "0x3a85e619751152991742810df6ec69ce473daef99e28a64ab2340d7b7ccfee49",
-        "USDC-WBTC",
-    ),
-    (
-        "0x94b823e6bd8ea533b4e33fbc307faea0b307301bc48763acc4d4aa4def7636cd",
-        "USDC-WETH",
-    ),
-    (
-        "0x6a57d77b9a173c5ed10d432e7009dd1ee9a97fac62a7bc970b4bd715e2fff5c8",
-        "USDT-wstETH",
-    ),
-    (
-        "0xfb7c3a3af1ab477a2224b1387d0fd233ee9fb80e8208011996e4fd5aacd50c36",
-        "USDT-WBTC",
-    ),
-    (
-        "0x3758a9e2abbd67b5621f23ec482608f2f98b3c792874661ce49df7843aadcfd2",
-        "USDT-WETH",
-    ),
-]
+# api/morpho/markets相关：GET /api/morpho/markets 从 Morpho Blue GraphQL 拉取单市场 TVL/利用率
+_MARKET_BY_ID_GRAPHQL = """
+query MarketMetrics($marketId: String!, $chainId: Int!) {
+  marketById(marketId: $marketId, chainId: $chainId) {
+    marketId
+    state {
+      sizeUsd
+      utilization
+    }
+  }
+}
+""".strip()
+
+# api/morpho/markets相关：为 True 时对每页市场请求 Blue API 填充 TVL/利用率；False 时跳过请求（字段为 null），保留下方拉取实现以便恢复
+MORPHO_MARKETS_FETCH_BLUE_STATE = False
+
+
+async def _fetch_market_metrics_from_blue_api(
+    client: httpx.AsyncClient,
+    *,
+    market_id: str,
+    chain_id: int,
+) -> tuple[float | None, float | None]:
+    payload = {
+        "query": _MARKET_BY_ID_GRAPHQL,
+        "variables": {"marketId": market_id, "chainId": chain_id},
+    }
+    try:
+        resp = await client.post(MORPHO_BLUE_GRAPHQL_URL, json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho Blue API 请求失败: {exc}",
+        ) from exc
+    if body.get("errors"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho Blue API 返回错误: {body['errors']}",
+        )
+    row = (body.get("data") or {}).get("marketById")
+    if not row:
+        return None, None
+    state = row.get("state") or {}
+    size = state.get("sizeUsd")
+    util = state.get("utilization")
+    try:
+        size_f = float(size) if size is not None else None
+    except (TypeError, ValueError):
+        size_f = None
+    try:
+        util_f = float(util) if util is not None else None
+    except (TypeError, ValueError):
+        util_f = None
+    return size_f, util_f
+
 
 # api/morpho/market/state相关：GET /api/morpho/market/state 预留 date 参数格式校验
 UTC_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -105,14 +142,53 @@ def get_scaffold_status() -> MorphoScaffoldStatusResponse:
     )
 
 
-# api/morpho/markets相关：GET /api/morpho/markets
-def get_representative_markets() -> MorphoMarketListResponse:
+# api/morpho/markets相关：GET /api/morpho/markets（分页 + Blue API 指标）
+async def get_representative_markets_page(
+    *,
+    page: int,
+    page_size: int,
+) -> MorphoMarketListResponse:
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page 必须从 1 开始")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="page_size 必须在 1~100 之间")
+
+    total = len(MORPHO_MARKETS_HARDCODED)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    start = (page - 1) * page_size
+    slice_rows = MORPHO_MARKETS_HARDCODED[start : start + page_size]
+
+    if MORPHO_MARKETS_FETCH_BLUE_STATE:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            tasks = [
+                _fetch_market_metrics_from_blue_api(
+                    client,
+                    market_id=mid,
+                    chain_id=MORPHO_MARKETS_BLUE_API_CHAIN_ID,
+                )
+                for mid, _pair in slice_rows
+            ]
+            metrics_list = await asyncio.gather(*tasks) if tasks else []
+    else:
+        metrics_list = [(None, None)] * len(slice_rows)
+
+    items: list[MorphoMarketListItem] = []
+    for (mid, pair), (size_usd, util) in zip(slice_rows, metrics_list, strict=True):
+        items.append(
+            MorphoMarketListItem(
+                market_id=mid,
+                pair=pair,
+                total_market_size_usd=size_usd,
+                utilization=util,
+            )
+        )
+
     return MorphoMarketListResponse(
-        market_count=len(MORPHO_REPRESENTATIVE_MARKETS),
-        markets=[
-            MorphoMarketListItem(market_id=market_id, pair=pair)
-            for market_id, pair in MORPHO_REPRESENTATIVE_MARKETS
-        ],
+        page=page,
+        page_size=page_size,
+        total_count=total,
+        total_pages=total_pages,
+        markets=items,
     )
 
 
