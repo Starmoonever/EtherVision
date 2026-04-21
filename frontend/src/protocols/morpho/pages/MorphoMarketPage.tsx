@@ -8,9 +8,7 @@ import {
   useMorphoData,
   type MorphoMarketView,
 } from '../../../hooks/useMorphoData';
-import { MorphoMarketTable } from '../components/MorphoMarketTable';
-
-type MorphoSortMode = 'default' | 'totalMarketSize' | 'utilization';
+import { MorphoMarketTable, type MorphoSortMode } from '../components/MorphoMarketTable';
 
 const MORPHO_MARKETS_PAGE_SIZE = 10;
 
@@ -100,28 +98,43 @@ function sortMarkets(markets: MorphoMarketView[], sortMode: MorphoSortMode): Mor
 
   const sorted = [...markets];
   sorted.sort((left, right) => {
-    const leftValue =
-      sortMode === 'totalMarketSize'
-        ? (parseMetric(left.total_market_size_usd) ?? -1)
-        : (parseMetric(left.utilization) ?? -1);
-    const rightValue =
-      sortMode === 'totalMarketSize'
-        ? (parseMetric(right.total_market_size_usd) ?? -1)
-        : (parseMetric(right.utilization) ?? -1);
+    const isMarketSizeSort = sortMode.startsWith('totalMarketSize');
+    const leftMetric = isMarketSizeSort
+      ? parseMetric(left.total_market_size_usd)
+      : parseMetric(left.utilization);
+    const rightMetric = isMarketSizeSort
+      ? parseMetric(right.total_market_size_usd)
+      : parseMetric(right.utilization);
 
-    return rightValue - leftValue;
+    if (leftMetric === null && rightMetric === null) return 0;
+    if (leftMetric === null) return 1;
+    if (rightMetric === null) return -1;
+
+    return sortMode.endsWith('Asc') ? leftMetric - rightMetric : rightMetric - leftMetric;
   });
 
   return sorted;
 }
 
 export function MorphoMarketPage() {
-  const { markets, loading, error, fetchedAt, fromCache, reload } = useMorphoData();
+  const [marketPage, setMarketPage] = useState(1);
+  const {
+    markets,
+    marketCount,
+    loading,
+    error,
+    fetchedAt,
+    fromCache,
+    reload,
+    totalPages: totalMarketPages,
+  } = useMorphoData({
+    page: marketPage,
+    pageSize: MORPHO_MARKETS_PAGE_SIZE,
+  });
   const [sortMode, setSortMode] = useState<MorphoSortMode>('default');
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [expandedMarketId, setExpandedMarketId] = useState('');
-  const [marketPage, setMarketPage] = useState(1);
   const [marketStateById, setMarketStateById] = useState<Record<string, MorphoMarketView>>({});
   const [marketStateLoadingById, setMarketStateLoadingById] = useState<Record<string, boolean>>({});
   const [marketStateErrorById, setMarketStateErrorById] = useState<Record<string, string>>({});
@@ -142,6 +155,8 @@ export function MorphoMarketPage() {
         market.market_id,
         market.loan_symbol,
         market.collateral_symbol,
+        market.loan_token_address,
+        market.collateral_token_address,
         market.oracle,
         market.irm,
       ]
@@ -155,25 +170,18 @@ export function MorphoMarketPage() {
     [filteredMarkets, sortMode],
   );
 
-  const totalMarketPages = Math.max(1, Math.ceil(visibleMarkets.length / MORPHO_MARKETS_PAGE_SIZE));
-
   useEffect(() => {
     setMarketPage((current) => Math.min(Math.max(current, 1), totalMarketPages));
   }, [totalMarketPages]);
 
-  const paginatedMarkets = useMemo(() => {
-    const startIndex = (marketPage - 1) * MORPHO_MARKETS_PAGE_SIZE;
-    return visibleMarkets.slice(startIndex, startIndex + MORPHO_MARKETS_PAGE_SIZE);
-  }, [marketPage, visibleMarkets]);
-
   useEffect(() => {
     if (
       expandedMarketId &&
-      !paginatedMarkets.some((market) => market.market_id === expandedMarketId)
+      !visibleMarkets.some((market) => market.market_id === expandedMarketId)
     ) {
       setExpandedMarketId('');
     }
-  }, [expandedMarketId, paginatedMarkets]);
+  }, [expandedMarketId, visibleMarkets]);
 
   const loadMarketState = useCallback(async (market: MorphoMarketView, force = false) => {
     setMarketStateLoadingById((current) => ({ ...current, [market.market_id]: true }));
@@ -259,7 +267,7 @@ export function MorphoMarketPage() {
         </div>
       ) : (
         <MorphoMarketTable
-          markets={paginatedMarkets}
+          markets={visibleMarkets}
           expandedMarketId={expandedMarketId}
           onToggleMarket={handleToggleMarket}
           marketStateLoadingById={marketStateLoadingById}
@@ -274,7 +282,7 @@ export function MorphoMarketPage() {
             setSortMode(value);
             setMarketPage(1);
           }}
-          totalMarkets={visibleMarkets.length}
+          totalMarkets={marketCount}
           page={marketPage}
           totalPages={totalMarketPages}
           pageSize={MORPHO_MARKETS_PAGE_SIZE}

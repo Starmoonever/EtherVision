@@ -33,11 +33,20 @@ export interface MorphoMarketView extends MorphoMarketConfig {
 
 export interface UseMorphoDataResult {
   markets: MorphoMarketView[];
+  marketCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
   loading: boolean;
   error: string;
   fetchedAt: number | null;
   fromCache: boolean;
   reload: () => Promise<void>;
+}
+
+export interface UseMorphoDataOptions {
+  page?: number;
+  pageSize?: number;
 }
 
 export function mergeMorphoMarketData(
@@ -53,8 +62,9 @@ export function mergeMorphoMarketData(
     irm: state?.irm ?? config.irm,
     collateral_decimals: state?.collateral_decimals ?? config.collateral_decimals ?? null,
     loan_decimals: state?.loan_decimals ?? config.loan_decimals ?? null,
-    loan_token_address: state?.loan_token_address ?? null,
-    collateral_token_address: state?.collateral_token_address ?? null,
+    loan_token_address: state?.loan_token_address ?? config.loan_token_address ?? null,
+    collateral_token_address:
+      state?.collateral_token_address ?? config.collateral_token_address ?? null,
     total_collateral_usd: state?.total_collateral_usd ?? null,
     total_debt_usd: state?.total_debt_usd ?? null,
     total_supply_assets: state?.total_supply_assets ?? null,
@@ -65,7 +75,7 @@ export function mergeMorphoMarketData(
     borrow_apy: state?.borrow_apy ?? null,
     available_liquidity: state?.available_liquidity ?? null,
     available_liquidity_is_raw: state?.available_liquidity_is_raw ?? true,
-    utilization: state?.utilization ?? null,
+    utilization: state?.utilization ?? config.utilization ?? null,
     borrow_capacity_usage_rough: state?.borrow_capacity_usage_rough ?? null,
     is_liquidatable: state?.is_liquidatable ?? null,
     eth_down_liq_price_usd: state?.eth_down_liq_price_usd ?? null,
@@ -79,38 +89,59 @@ export function mergeMorphoMarketData(
   };
 }
 
-export function useMorphoData(): UseMorphoDataResult {
+export function useMorphoData(options: UseMorphoDataOptions = {}): UseMorphoDataResult {
+  const requestedPage = options.page ?? 1;
+  const requestedPageSize = options.pageSize ?? 10;
   const [markets, setMarkets] = useState<MorphoMarketView[]>([]);
+  const [marketCount, setMarketCount] = useState(0);
+  const [page, setPage] = useState(requestedPage);
+  const [pageSize, setPageSize] = useState(requestedPageSize);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [fromCache, setFromCache] = useState(false);
 
-  const load = useCallback(async (force = false) => {
-    setLoading(true);
-    setError('');
+  const load = useCallback(
+    async (force = false) => {
+      setLoading(true);
+      setError('');
 
-    try {
-      const marketsResult = await fetchMorphoMarketsWithMeta({ force });
-      const configs = marketsResult.data.markets;
-      const merged = configs.map((config) => mergeMorphoMarketData(config, null));
+      try {
+        const marketsResult = await fetchMorphoMarketsWithMeta({
+          force,
+          page: requestedPage,
+          pageSize: requestedPageSize,
+        });
+        const configs = marketsResult.data.markets;
+        const merged = configs.map((config) => mergeMorphoMarketData(config, null));
 
-      setMarkets(merged);
-      setFetchedAt(marketsResult.meta.fetchedAt);
-      setFromCache(marketsResult.meta.fromCache);
+        setMarkets(merged);
+        setMarketCount(marketsResult.data.market_count);
+        setPage(marketsResult.data.page);
+        setPageSize(marketsResult.data.page_size);
+        setTotalPages(marketsResult.data.total_pages);
+        setFetchedAt(marketsResult.meta.fetchedAt);
+        setFromCache(marketsResult.meta.fromCache);
 
-      if (!merged.length) {
-        setError('Morpho 市场列表为空');
+        if (!merged.length) {
+          setError('Morpho 市场列表为空');
+        }
+      } catch (loadError) {
+        setMarkets([]);
+        setMarketCount(0);
+        setPage(requestedPage);
+        setPageSize(requestedPageSize);
+        setTotalPages(1);
+        setFetchedAt(null);
+        setFromCache(false);
+        setError(loadError instanceof Error ? loadError.message : '无法加载 Morpho 市场数据');
+      } finally {
+        setLoading(false);
       }
-    } catch (loadError) {
-      setMarkets([]);
-      setFetchedAt(null);
-      setFromCache(false);
-      setError(loadError instanceof Error ? loadError.message : '无法加载 Morpho 市场数据');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [requestedPage, requestedPageSize],
+  );
 
   useEffect(() => {
     void load(false);
@@ -123,12 +154,27 @@ export function useMorphoData(): UseMorphoDataResult {
   return useMemo(
     () => ({
       markets,
+      marketCount,
+      page,
+      pageSize,
+      totalPages,
       loading,
       error,
       fetchedAt,
       fromCache,
       reload,
     }),
-    [error, fetchedAt, fromCache, loading, markets, reload],
+    [
+      error,
+      fetchedAt,
+      fromCache,
+      loading,
+      marketCount,
+      markets,
+      page,
+      pageSize,
+      reload,
+      totalPages,
+    ],
   );
 }

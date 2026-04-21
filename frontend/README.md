@@ -146,7 +146,7 @@ frontend/
 
 其中 Morpho 市场页当前依赖两类接口：
 
-- 市场列表：用于拉取 `market_id`、`pair`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段
+- 市场列表：分页拉取 `market_id`、`pair`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段；页面访问第几页才请求第几页，不在前端一次性拉取所有页
 - 市场状态：仅在用户展开单个 Morpho 市场行后按需请求 `GET /api/morpho/market/state`，用于展示 LLTV、oracle、IRM、Supply APY、Borrow APY、存借款规模等紧凑详情；市场规模、借款规模、可用空间与 availableLiquidity 的美元值由该接口返回的 token 数量乘以 loan token 地址对应的 price API 单价计算
 
 Morpho 市场页不应在列表加载阶段批量请求所有市场状态；行内详情展开后才请求状态与价格。
