@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchMorphoMarketsWithMeta,
-  fetchMorphoMarketStateWithMeta,
   type MorphoMarketConfig,
   type MorphoMarketState,
 } from '../api/morpho';
@@ -21,6 +20,14 @@ export interface MorphoMarketView extends MorphoMarketConfig {
   borrow_capacity_usage_rough: string | null;
   is_liquidatable: boolean | null;
   eth_down_liq_price_usd: string | null;
+  total_market_size_usd: string | null;
+  borrow_market_size_usd: string | null;
+  available_space_usd: string | null;
+  available_liquidity_usd: string | null;
+  loan_token_price_usd: string | null;
+  collateral_token_price_usd: string | null;
+  loan_token_address: string | null;
+  collateral_token_address: string | null;
   state_loaded: boolean;
 }
 
@@ -33,7 +40,7 @@ export interface UseMorphoDataResult {
   reload: () => Promise<void>;
 }
 
-function mergeMarketData(
+export function mergeMorphoMarketData(
   config: MorphoMarketConfig,
   state: MorphoMarketState | null,
 ): MorphoMarketView {
@@ -46,6 +53,8 @@ function mergeMarketData(
     irm: state?.irm ?? config.irm,
     collateral_decimals: state?.collateral_decimals ?? config.collateral_decimals ?? null,
     loan_decimals: state?.loan_decimals ?? config.loan_decimals ?? null,
+    loan_token_address: state?.loan_token_address ?? null,
+    collateral_token_address: state?.collateral_token_address ?? null,
     total_collateral_usd: state?.total_collateral_usd ?? null,
     total_debt_usd: state?.total_debt_usd ?? null,
     total_supply_assets: state?.total_supply_assets ?? null,
@@ -60,6 +69,12 @@ function mergeMarketData(
     borrow_capacity_usage_rough: state?.borrow_capacity_usage_rough ?? null,
     is_liquidatable: state?.is_liquidatable ?? null,
     eth_down_liq_price_usd: state?.eth_down_liq_price_usd ?? null,
+    total_market_size_usd: config.total_market_size_usd ?? null,
+    borrow_market_size_usd: null,
+    available_space_usd: null,
+    available_liquidity_usd: null,
+    loan_token_price_usd: null,
+    collateral_token_price_usd: null,
     state_loaded: Boolean(state),
   };
 }
@@ -78,44 +93,14 @@ export function useMorphoData(): UseMorphoDataResult {
     try {
       const marketsResult = await fetchMorphoMarketsWithMeta({ force });
       const configs = marketsResult.data.markets;
-
-      const settledStates = await Promise.allSettled(
-        configs.map((item) => fetchMorphoMarketStateWithMeta(item.market_id, { force })),
-      );
-
-      const merged = configs.map((config, index) => {
-        const result = settledStates[index];
-        if (result.status === 'fulfilled') {
-          return mergeMarketData(config, result.value.data);
-        }
-        return mergeMarketData(config, null);
-      });
-
-      const fulfilledStateResults = settledStates.filter(
-        (
-          item,
-        ): item is PromiseFulfilledResult<{
-          data: MorphoMarketState;
-          meta: { fetchedAt: number; fromCache: boolean };
-        }> => item.status === 'fulfilled',
-      );
-
-      const nextFetchedAtCandidates = [
-        marketsResult.meta.fetchedAt,
-        ...fulfilledStateResults.map((item) => item.value.meta.fetchedAt),
-      ];
+      const merged = configs.map((config) => mergeMorphoMarketData(config, null));
 
       setMarkets(merged);
-      setFetchedAt(Math.max(...nextFetchedAtCandidates));
-      setFromCache(
-        marketsResult.meta.fromCache &&
-          fulfilledStateResults.every((item) => item.value.meta.fromCache),
-      );
+      setFetchedAt(marketsResult.meta.fetchedAt);
+      setFromCache(marketsResult.meta.fromCache);
 
       if (!merged.length) {
         setError('Morpho 市场列表为空');
-      } else if (fulfilledStateResults.length === 0) {
-        setError('Morpho 市场配置已加载，但实时状态接口暂不可用');
       }
     } catch (loadError) {
       setMarkets([]);
