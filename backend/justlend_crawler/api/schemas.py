@@ -71,7 +71,10 @@ class JustLendMarketStatePeriodResponse(BaseModel):
 class JustLendPositionAssetResponse(BaseModel):
     asset_address: str = Field(description="TRON 资产地址。")
     symbol: str | None = Field(description="资产符号。")
-    side: str = Field(description="仓位方向，collateral、supply 或 borrow。")
+    position_type: str = Field(description="仓位类型，supply 或 borrow。")
+    is_collateral: bool | None = Field(
+        description="仅对 supply 生效；true 表示当前已启用为抵押。"
+    )
     amount: str = Field(description="资产数量。")
     price_usd: str = Field(description="资产当前 USD 价格。")
     value_usd: str = Field(description="该仓位方向对应的 USD 价值。")
@@ -83,6 +86,7 @@ class JustLendPositionResponse(BaseModel):
     address: str = Field(description="TRON 用户地址。")
     snapshot_at: str = Field(description="本次仓位快照时间。")
     block_timestamp: str = Field(description="底层数据时间戳。")
+    total_deposit_usd: str = Field(description="总存入 USD 价值。")
     total_collateral_usd: str = Field(description="总抵押 USD 价值。")
     total_debt_usd: str = Field(description="总债务 USD 价值。")
     available_borrow_usd: str = Field(description="估算剩余可借 USD 价值。")
@@ -100,6 +104,7 @@ class JustLendPositionListItemResponse(BaseModel):
     snapshot_at: str = Field(description="本次仓位快照时间。")
     block_timestamp: str = Field(description="底层数据时间戳。")
     total_supply_usd: str = Field(description="总 supply USD 价值。")
+    total_deposit_usd: str = Field(description="总存入 USD 价值。")
     total_collateral_usd: str = Field(description="总抵押 USD 价值。")
     total_borrow_usd: str = Field(description="总 borrow USD 价值。")
     health_factor: str = Field(description="健康因子。")
@@ -107,7 +112,7 @@ class JustLendPositionListItemResponse(BaseModel):
     liquidation_threshold: str = Field(description="估算清算阈值。")
     matched_asset_value_usd: str | None = Field(
         default=None,
-        description="按指定 side + asset 排序时命中的资产 USD 价值。",
+        description="按指定 position_type/is_collateral + asset 排序时命中的资产 USD 价值。",
     )
     assets: list[JustLendPositionAssetResponse] = Field(
         default_factory=list,
@@ -124,7 +129,11 @@ class JustLendPositionsResponse(BaseModel):
     total: int = Field(description="命中的总仓位数。")
     sort_by: str = Field(description="排序字段。")
     order: str = Field(description="排序方向。")
-    side: str = Field(description="仓位侧别过滤。")
+    position_type: str = Field(description="仓位类型过滤：all、supply 或 borrow。")
+    is_collateral: bool | None = Field(
+        default=None,
+        description="仅对 supply 生效；true 表示只看已启用抵押的 supply，false 表示只看未启用抵押的 supply。",
+    )
     asset: str | None = Field(
         default=None,
         description="按资产排序时使用的 TRON 资产地址。",
@@ -140,6 +149,7 @@ class JustLendPositionReplayPoint(BaseModel):
     market: str | None = Field(description="JustLend 市场地址。")
     symbol: str | None = Field(description="市场或资产符号。")
     operation_type: str | None = Field(description="归一化交易类型。")
+    total_deposit_usd: str = Field(description="总存入 USD 价值。")
     total_collateral_usd: str = Field(description="总抵押 USD 价值。")
     total_debt_usd: str = Field(description="总债务 USD 价值。")
     available_borrow_usd: str = Field(description="估算剩余可借 USD 价值。")

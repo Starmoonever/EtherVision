@@ -16,6 +16,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(os.path.abspath(str(ROOT)))
@@ -26,7 +27,7 @@ from justlend_crawler.config import load_config  # noqa: E402
 from justlend_crawler.current_position_backfill import (  # noqa: E402
     backfill_current_positions_from_history,
 )
-from justlend_crawler.db import create_pool  # noqa: E402
+from justlend_crawler.db import create_pool, fetch_justlend_markets_current  # noqa: E402
 
 
 def _parse_utc_time(time_str: str) -> datetime:
@@ -46,7 +47,7 @@ def _parse_utc_time(time_str: str) -> datetime:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="根据 justlend.justlend_history 选出 TRX/USDT 用户，并用链上实时状态全量刷新 current 仓位"
+        description="根据 justlend.justlend_history 选出目标用户，并用链上实时状态全量刷新 current 仓位"
     )
     parser.add_argument("--config", default=None, help="config.yaml path")
     parser.add_argument(
@@ -61,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="symbols",
         default=None,
-        help="target underlying symbol, repeatable; default is TRX and USDT",
+        help="target underlying symbol, repeatable; default is all current JustLend underlyings",
     )
     parser.add_argument(
         "--match-mode",
@@ -144,6 +145,25 @@ def _write_deletions_txt(path_str: str, items: list[str]) -> None:
             handle.write(f"{item}\n")
 
 
+async def _resolve_target_symbols(args: argparse.Namespace, pool: Any) -> list[str]:
+    if args.symbols:
+        return args.symbols
+    market_rows = await fetch_justlend_markets_current(pool)
+    symbols = sorted(
+        {
+            str(row["underlying_symbol"]).strip().upper()
+            for row in market_rows
+            if row.get("underlying_symbol") and str(row["underlying_symbol"]).strip()
+        }
+    )
+    if not symbols:
+        raise SystemExit(
+            "loan.justlend_markets_current has no underlying_symbol rows; "
+            "please populate market cache or pass --symbol explicitly"
+        )
+    return symbols
+
+
 async def _run() -> None:
     args = _build_parser().parse_args()
     setup_cli_logging(args.verbose)
@@ -163,11 +183,12 @@ async def _run() -> None:
         raise SystemExit("tron_rpc_url is required")
 
     try:
+        target_symbols = await _resolve_target_symbols(args, pool)
         stats = await backfill_current_positions_from_history(
             pool,
             cfg=cfg,
             tron_rpc=tron_rpc,
-            target_symbols=args.symbols or ["TRX", "USDT"],
+            target_symbols=target_symbols,
             match_mode=args.match_mode,
             start_time=start_time,
             end_time=end_time,

@@ -48,7 +48,11 @@ from ..db import (
     upsert_justlend_market_states,
     upsert_current_user_position,
 )
-from ..rpc import fetch_justlend_market_states_via_rpc, fetch_market_exchange_rates
+from ..rpc import (
+    _jtoken_balance_to_underlying,
+    fetch_justlend_market_states_via_rpc,
+    fetch_market_exchange_rates,
+)
 from .schemas import (
     JustLendMarketResponse,
     JustLendMarketListItem,
@@ -80,7 +84,7 @@ _POSITION_LIST_SORT_FIELDS = {
     "total_borrow_usd",
     "asset_value_usd",
 }
-_POSITION_LIST_SIDES = {"all", "collateral", "supply", "borrow"}
+_POSITION_LIST_POSITION_TYPES = {"all", "supply", "borrow"}
 
 
 def get_scaffold_status() -> JustLendScaffoldStatusResponse:
@@ -487,7 +491,14 @@ def _fmt_decimal(value: Decimal, scale: int = 8) -> str:
 
 
 def _fmt_ratio(value: Decimal) -> str:
-    return format(value.quantize(Decimal("0.000001")), "f")
+    abs_value = abs(value)
+    if abs_value == 0:
+        quant = Decimal("0.000001")
+    elif abs_value < Decimal("0.000001"):
+        quant = Decimal("0.000000000000000001")
+    else:
+        quant = Decimal("0.000001")
+    return format(value.quantize(quant), "f")
 
 
 def _fmt_health(value: Decimal) -> str:
@@ -653,19 +664,37 @@ def _extract_market_address_from_contract(value: Any) -> str | None:
 
 
 def _extract_market_address_from_parse_input(value: Any) -> str | None:
+    addresses = _extract_market_addresses_from_parse_input(value)
+    return addresses[0] if addresses else None
+
+
+def _extract_market_addresses_from_parse_input(value: Any) -> list[str]:
     if value is None:
-        return None
+        return []
     text = str(value).strip()
     if not text:
-        return None
+        return []
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        return None
-    asset = payload.get("asset")
-    if asset is None:
-        return None
-    return _normalize_tron_address(asset)
+        return []
+
+    candidates: list[Any] = []
+    for key in ("asset", "market", "assets", "markets", "jtoken", "jtokens"):
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, list):
+            candidates.extend(raw)
+        else:
+            candidates.append(raw)
+
+    normalized: list[str] = []
+    for candidate in candidates:
+        address = _normalize_tron_address(candidate)
+        if address is not None and address not in normalized:
+            normalized.append(address)
+    return normalized
 
 
 def _fallback_replay_brief(method_id: str | None, market: str | None) -> str:
@@ -1055,13 +1084,24 @@ def _normalize_replay_txs(tx_rows: list[Any]) -> list[dict[str, Any]]:
                 "parse_input": str(_row_get(row, "parse_input") or "").strip(),
             }
         )
-        txs[-1]["market"] = _extract_market_address_from_contract(
+        contract_market = _extract_market_address_from_contract(
             _row_get(row, "contract")
-        ) or _extract_market_address_from_parse_input(txs[-1]["parse_input"])
+        )
+        parse_markets = _extract_market_addresses_from_parse_input(
+            txs[-1]["parse_input"]
+        )
+        markets: list[str] = []
+        if contract_market is not None:
+            markets.append(contract_market)
+        for market in parse_markets:
+            if market not in markets:
+                markets.append(market)
+        txs[-1]["market"] = markets[0] if markets else None
+        txs[-1]["markets"] = markets
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
     for tx in txs:
-        key = tx["tx_hash"]
+        key = f"{tx['tx_hash']}:{'|'.join(tx.get('markets') or [])}"
         if key in seen:
             continue
         seen.add(key)
@@ -1141,8 +1181,10 @@ def _parse_tx_delta(
         if exchange_rate is None:
             amount = Decimal("0")
         else:
-            amount = (amount_raw * Decimal(exchange_rate) / Decimal("1e18")) / Decimal(
-                "1e8"
+            amount = _jtoken_balance_to_underlying(
+                int(amount_raw),
+                int(Decimal(exchange_rate)),
+                underlying_decimals=int(meta["underlying_decimals"]),
             )
     else:
         amount = amount_raw / (Decimal(10) ** int(meta["underlying_decimals"]))
@@ -1185,9 +1227,11 @@ def _build_event_snapshot_row(
     user_address: bytes,
     tx: dict[str, Any],
     balances: dict[str, dict[str, Decimal]],
+    entered_markets: set[str],
     market_catalog: dict[str, dict[str, Any]],
 ) -> JustLendEventPositionSnapshotRow:
     assets_jsonb: list[dict[str, Any]] = []
+    total_deposit_usd = Decimal("0")
     total_collateral_usd = Decimal("0")
     total_debt_usd = Decimal("0")
     discounted_collateral_usd = Decimal("0")
@@ -1216,15 +1260,20 @@ def _build_event_snapshot_row(
         borrow_amount = max(position["borrow"], Decimal("0"))
         if supply_amount > 0:
             value_usd = supply_amount * price_usd
-            total_collateral_usd += value_usd
-            discounted_collateral_usd += value_usd * collateral_factor
+            total_deposit_usd += value_usd
+            is_collateral = market_hex in entered_markets
+            if is_collateral:
+                total_collateral_usd += value_usd
+                discounted_collateral_usd += value_usd * collateral_factor
             assets_jsonb.append(
                 {
                     "asset_address": _normalize_tron_address(
                         meta["underlying_address"]
                     ),
                     "symbol": meta["underlying_symbol"],
-                    "side": "collateral",
+                    "position_type": "supply",
+                    "is_collateral": is_collateral,
+                    "side": "collateral" if is_collateral else "supply",
                     "amount": str(supply_amount),
                     "price_usd": str(price_usd),
                     "value_usd": str(value_usd),
@@ -1239,6 +1288,8 @@ def _build_event_snapshot_row(
                         meta["underlying_address"]
                     ),
                     "symbol": meta["underlying_symbol"],
+                    "position_type": "borrow",
+                    "is_collateral": None,
                     "side": "borrow",
                     "amount": str(borrow_amount),
                     "price_usd": str(price_usd),
@@ -1287,6 +1338,7 @@ def _build_event_snapshot_row(
         operation_type=_method_to_operation_type(tx.get("method_id")),
         has_open_position=(total_collateral_usd > 0 or total_debt_usd > 0),
         is_liquidatable=(total_debt_usd > 0 and health_factor < Decimal("1")),
+        total_deposit_usd=total_deposit_usd,
         total_collateral_usd=total_collateral_usd,
         total_debt_usd=total_debt_usd,
         available_borrow_usd=available_borrow_usd,
@@ -1299,6 +1351,7 @@ def _build_event_snapshot_row(
         extra_jsonb={
             "source": "event_replay_approx",
             "market_count": len(balances),
+            "collateral_estimation_mode": "all_supply_as_collateral",
         },
         brief=brief,
     )
@@ -1330,6 +1383,10 @@ async def _collect_and_cache_replay_misses(
     for tx in full_txs:
         tx["_effect"] = tx_effects.get(str(tx["tx_hash"]))
     market_addresses = {str(tx["market"]) for tx in full_txs if tx.get("market")}
+    for tx in full_txs:
+        for market in tx.get("markets") or []:
+            if market:
+                market_addresses.add(str(market))
     for effect in tx_effects.values():
         for key in ("market_address", "underlying_address"):
             raw = effect.get(key)
@@ -1342,6 +1399,7 @@ async def _collect_and_cache_replay_misses(
         market_addresses=sorted(market_addresses),
     )
     balances: dict[str, dict[str, Decimal]] = {}
+    entered_markets: set[str] = set()
     rows: list[JustLendEventPositionSnapshotRow] = []
     previous_row: JustLendEventPositionSnapshotRow | None = None
     for tx in full_txs:
@@ -1360,10 +1418,23 @@ async def _collect_and_cache_replay_misses(
                 position["borrow"] += amount
             elif operation_type in {"repay", "repay_behalf"}:
                 position["borrow"] = max(position["borrow"] - amount, Decimal("0"))
+        tx_markets = set()
+        for market_address in tx.get("markets") or []:
+            try:
+                tx_markets.add(_tron_address_to_bytes(market_address).hex())
+            except HTTPException:
+                continue
+        if market_hex is not None:
+            tx_markets.add(market_hex)
+        if operation_type == "enable_collateral":
+            entered_markets.update(tx_markets)
+        elif operation_type == "disable_collateral":
+            entered_markets.difference_update(tx_markets)
         row = _build_event_snapshot_row(
             user_address=user_address,
             tx=tx,
             balances=balances,
+            entered_markets=entered_markets,
             market_catalog=market_catalog,
         )
         row.brief = _build_snapshot_brief(
@@ -1390,6 +1461,153 @@ def _sum_asset_values(assets: list[Any], side: str) -> Decimal:
     return total
 
 
+def _sum_asset_values_by_sides(assets: list[Any], sides: set[str]) -> Decimal:
+    total = Decimal("0")
+    for asset in assets:
+        if str(asset.get("side") or "") not in sides:
+            continue
+        total += Decimal(str(asset.get("value_usd") or "0"))
+    return total
+
+
+def _resolve_total_deposit_usd(position: Any, assets: list[Any]) -> Decimal:
+    stored = Decimal(str(_row_get(position, "total_deposit_usd", "0") or "0"))
+    if stored > 0:
+        return stored
+    return _sum_asset_values_by_sides(assets, {"collateral", "supply"})
+
+
+def _resolve_total_collateral_usd(position: Any, assets: list[Any]) -> Decimal:
+    stored = Decimal(str(_row_get(position, "total_collateral_usd", "0") or "0"))
+    if stored > 0:
+        return stored
+    return _sum_asset_values_by_sides(assets, {"collateral"})
+
+
+def _resolve_total_debt_usd(position: Any, assets: list[Any]) -> Decimal:
+    stored = Decimal(str(_row_get(position, "total_debt_usd", "0") or "0"))
+    if stored > 0:
+        return stored
+    return _sum_asset_values_by_sides(assets, {"borrow"})
+
+
+def _resolve_ltv(
+    position: Any,
+    assets: list[Any],
+    *,
+    total_collateral_usd: Decimal,
+    total_debt_usd: Decimal,
+) -> Decimal:
+    stored = Decimal(str(_row_get(position, "ltv", "0") or "0"))
+    if stored > 0:
+        return stored
+    if total_collateral_usd <= 0:
+        return Decimal("0")
+    return _clamp_db_ratio(total_debt_usd / total_collateral_usd)
+
+
+def _resolve_liquidation_threshold(
+    position: Any,
+    assets: list[Any],
+    *,
+    total_collateral_usd: Decimal,
+) -> Decimal:
+    stored = Decimal(str(_row_get(position, "liquidation_threshold", "0") or "0"))
+    if stored > 0:
+        return stored
+    if total_collateral_usd <= 0:
+        return Decimal("0")
+    discounted_collateral_usd = Decimal("0")
+    for asset in assets:
+        position_type = _normalize_asset_position_type(asset)
+        if position_type != "supply" or not _asset_is_collateral(asset):
+            continue
+        discounted_collateral_usd += Decimal(
+            str(asset.get("value_usd") or "0")
+        ) * Decimal(
+            str(
+                (
+                    asset.get("extra_jsonb", {})
+                    if isinstance(asset.get("extra_jsonb"), dict)
+                    else {}
+                ).get("collateral_factor")
+                or "0"
+            )
+        )
+    if discounted_collateral_usd <= 0:
+        return Decimal("0")
+    return _clamp_db_ratio(discounted_collateral_usd / total_collateral_usd)
+
+
+def _resolve_health_factor(
+    position: Any,
+    assets: list[Any],
+    *,
+    total_collateral_usd: Decimal,
+    total_debt_usd: Decimal,
+) -> Decimal:
+    stored = Decimal(str(_row_get(position, "health_factor", "0") or "0"))
+    if stored > 0:
+        return stored
+    if total_debt_usd <= 0:
+        return _MAX_HF if total_collateral_usd > 0 else Decimal("0")
+    discounted_collateral_usd = Decimal("0")
+    for asset in assets:
+        position_type = _normalize_asset_position_type(asset)
+        if position_type != "supply" or not _asset_is_collateral(asset):
+            continue
+        discounted_collateral_usd += Decimal(
+            str(asset.get("value_usd") or "0")
+        ) * Decimal(
+            str(
+                (
+                    asset.get("extra_jsonb", {})
+                    if isinstance(asset.get("extra_jsonb"), dict)
+                    else {}
+                ).get("collateral_factor")
+                or "0"
+            )
+        )
+    if discounted_collateral_usd <= 0:
+        return Decimal("0")
+    return discounted_collateral_usd / total_debt_usd
+
+
+def _asset_is_collateral(asset: Any) -> bool:
+    extra = (
+        asset.get("extra_jsonb")
+        if isinstance(asset, dict)
+        else _row_get(asset, "extra_jsonb")
+    )
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except json.JSONDecodeError:
+            extra = {}
+    if isinstance(extra, dict) and extra.get("entered") is not None:
+        return bool(extra.get("entered"))
+    side = str(
+        asset.get("side") if isinstance(asset, dict) else _row_get(asset, "side") or ""
+    )
+    return side == "collateral"
+
+
+def _normalize_asset_position_type(asset: Any) -> str:
+    position_type = (
+        asset.get("position_type")
+        if isinstance(asset, dict)
+        else _row_get(asset, "position_type")
+    )
+    if position_type:
+        return str(position_type)
+    side = str(
+        asset.get("side") if isinstance(asset, dict) else _row_get(asset, "side") or ""
+    )
+    if side in {"collateral", "supply"}:
+        return "supply"
+    return "borrow"
+
+
 def _cached_position_requires_refresh(position: Any, assets: list[Any]) -> bool:
     if position is None or not assets:
         return False
@@ -1409,30 +1627,52 @@ def _format_position(
     *,
     data_source: str,
 ) -> JustLendPositionResponse:
+    total_deposit_usd = _resolve_total_deposit_usd(position, assets)
+    total_collateral_usd = _resolve_total_collateral_usd(position, assets)
+    total_debt_usd = _resolve_total_debt_usd(position, assets)
+    ltv = _resolve_ltv(
+        position,
+        assets,
+        total_collateral_usd=total_collateral_usd,
+        total_debt_usd=total_debt_usd,
+    )
+    liquidation_threshold = _resolve_liquidation_threshold(
+        position,
+        assets,
+        total_collateral_usd=total_collateral_usd,
+    )
+    health_factor = _resolve_health_factor(
+        position,
+        assets,
+        total_collateral_usd=total_collateral_usd,
+        total_debt_usd=total_debt_usd,
+    )
     return JustLendPositionResponse(
         protocol=str(position["protocol"]),
         chain=str(position["chain"]),
         address=_tron_bytes_to_base58(bytes(position["user_address"])),
         snapshot_at=_record_ts(position["snapshot_at"]),
         block_timestamp=_record_ts(position["block_timestamp"]),
-        total_collateral_usd=_fmt_decimal(
-            Decimal(str(position["total_collateral_usd"]))
-        ),
-        total_debt_usd=_fmt_decimal(Decimal(str(position["total_debt_usd"]))),
+        total_deposit_usd=_fmt_decimal(total_deposit_usd),
+        total_collateral_usd=_fmt_decimal(total_collateral_usd),
+        total_debt_usd=_fmt_decimal(total_debt_usd),
         available_borrow_usd=_fmt_decimal(
             Decimal(str(position["available_borrow_usd"]))
         ),
-        health_factor=_fmt_health(Decimal(str(position["health_factor"]))),
-        ltv=_fmt_ratio(Decimal(str(position["ltv"]))),
-        liquidation_threshold=_fmt_ratio(
-            Decimal(str(position["liquidation_threshold"]))
-        ),
+        health_factor=_fmt_health(health_factor),
+        ltv=_fmt_ratio(ltv),
+        liquidation_threshold=_fmt_ratio(liquidation_threshold),
         data_source=data_source,
         assets=[
             JustLendPositionAssetResponse(
                 asset_address=_tron_bytes_to_base58(bytes(asset["asset_address"])),
                 symbol=asset["symbol"],
-                side=str(asset["side"]),
+                position_type=_normalize_asset_position_type(asset),
+                is_collateral=(
+                    _asset_is_collateral(asset)
+                    if _normalize_asset_position_type(asset) == "supply"
+                    else None
+                ),
                 amount=_fmt_health(Decimal(str(asset["amount"]))),
                 price_usd=_fmt_decimal(Decimal(str(asset["price_usd"]))),
                 value_usd=_fmt_decimal(Decimal(str(asset["value_usd"]))),
@@ -1447,7 +1687,12 @@ def _format_assets(assets: list[Any]) -> list[JustLendPositionAssetResponse]:
         JustLendPositionAssetResponse(
             asset_address=_tron_bytes_to_base58(bytes(asset["asset_address"])),
             symbol=asset["symbol"],
-            side=str(asset["side"]),
+            position_type=_normalize_asset_position_type(asset),
+            is_collateral=(
+                _asset_is_collateral(asset)
+                if _normalize_asset_position_type(asset) == "supply"
+                else None
+            ),
             amount=_fmt_health(Decimal(str(asset["amount"]))),
             price_usd=_fmt_decimal(Decimal(str(asset["price_usd"]))),
             value_usd=_fmt_decimal(Decimal(str(asset["value_usd"]))),
@@ -1458,10 +1703,31 @@ def _format_assets(assets: list[Any]) -> list[JustLendPositionAssetResponse]:
 
 def _format_position_list_item(
     position: Any,
-    assets: list[Any],
+    metric_assets: list[Any],
     *,
     include_matched_asset_value: bool,
+    response_assets: list[Any] | None = None,
 ) -> JustLendPositionListItemResponse:
+    total_deposit_usd = _resolve_total_deposit_usd(position, metric_assets)
+    total_collateral_usd = _resolve_total_collateral_usd(position, metric_assets)
+    total_debt_usd = _resolve_total_debt_usd(position, metric_assets)
+    ltv = _resolve_ltv(
+        position,
+        metric_assets,
+        total_collateral_usd=total_collateral_usd,
+        total_debt_usd=total_debt_usd,
+    )
+    liquidation_threshold = _resolve_liquidation_threshold(
+        position,
+        metric_assets,
+        total_collateral_usd=total_collateral_usd,
+    )
+    health_factor = _resolve_health_factor(
+        position,
+        metric_assets,
+        total_collateral_usd=total_collateral_usd,
+        total_debt_usd=total_debt_usd,
+    )
     matched_asset_value_usd: str | None = None
     if include_matched_asset_value:
         matched_asset_value_usd = _fmt_decimal(
@@ -1473,18 +1739,15 @@ def _format_position_list_item(
         address=_tron_bytes_to_base58(bytes(position["user_address"])),
         snapshot_at=_record_ts(position["snapshot_at"]),
         block_timestamp=_record_ts(position["block_timestamp"]),
-        total_supply_usd=_fmt_decimal(Decimal(str(position["total_collateral_usd"]))),
-        total_collateral_usd=_fmt_decimal(
-            Decimal(str(position["total_collateral_usd"]))
-        ),
-        total_borrow_usd=_fmt_decimal(Decimal(str(position["total_debt_usd"]))),
-        health_factor=_fmt_health(Decimal(str(position["health_factor"]))),
-        ltv=_fmt_ratio(Decimal(str(position["ltv"]))),
-        liquidation_threshold=_fmt_ratio(
-            Decimal(str(position["liquidation_threshold"]))
-        ),
+        total_supply_usd=_fmt_decimal(total_deposit_usd),
+        total_deposit_usd=_fmt_decimal(total_deposit_usd),
+        total_collateral_usd=_fmt_decimal(total_collateral_usd),
+        total_borrow_usd=_fmt_decimal(total_debt_usd),
+        health_factor=_fmt_health(health_factor),
+        ltv=_fmt_ratio(ltv),
+        liquidation_threshold=_fmt_ratio(liquidation_threshold),
         matched_asset_value_usd=matched_asset_value_usd,
-        assets=_format_assets(assets),
+        assets=_format_assets(response_assets or []),
     )
 
 
@@ -1496,7 +1759,12 @@ def _map_position_asset(asset: Any) -> JustLendPositionAssetResponse:
     return JustLendPositionAssetResponse(
         asset_address=asset_address_str,
         symbol=asset.get("symbol"),
-        side=str(asset.get("side") or ""),
+        position_type=_normalize_asset_position_type(asset),
+        is_collateral=(
+            _asset_is_collateral(asset)
+            if _normalize_asset_position_type(asset) == "supply"
+            else None
+        ),
         amount=_fmt_health(Decimal(str(asset.get("amount") or "0"))),
         price_usd=_fmt_decimal(Decimal(str(asset.get("price_usd") or "0"))),
         value_usd=_fmt_decimal(Decimal(str(asset.get("value_usd") or "0"))),
@@ -1521,10 +1789,13 @@ def _normalize_asset_items(value: Any) -> list[dict[str, Any]]:
 
 
 def _build_replay_brief(snapshot: Any) -> str:
+    deposit = _fmt_decimal(
+        Decimal(str(_row_get(snapshot, "total_deposit_usd", "0") or "0"))
+    )
     collateral = _fmt_decimal(Decimal(str(snapshot["total_collateral_usd"])))
     debt = _fmt_decimal(Decimal(str(snapshot["total_debt_usd"])))
     health = _fmt_health(Decimal(str(snapshot["health_factor"])))
-    return f"collateral=${collateral}, debt=${debt}, hf={health}"
+    return f"deposit=${deposit}, collateral=${collateral}, debt=${debt}, hf={health}"
 
 
 async def _persist_position_snapshot(
@@ -1540,6 +1811,7 @@ async def _persist_position_snapshot(
         block_timestamp=payload["block_timestamp"],
         block_number=payload["block_number"],
         source_cursor=payload["source_cursor"],
+        total_deposit_usd=payload["total_deposit_usd"],
         total_collateral_usd=payload["total_collateral_usd"],
         total_debt_usd=payload["total_debt_usd"],
         available_borrow_usd=payload["available_borrow_usd"],
@@ -1558,6 +1830,7 @@ async def _persist_position_snapshot(
         block_timestamp=payload["block_timestamp"],
         block_number=payload["block_number"],
         source_cursor=payload["source_cursor"],
+        total_deposit_usd=payload["total_deposit_usd"],
         total_collateral_usd=payload["total_collateral_usd"],
         total_debt_usd=payload["total_debt_usd"],
         available_borrow_usd=payload["available_borrow_usd"],
@@ -1660,6 +1933,7 @@ async def fetch_position_from_justlend_api(
         str(token.get("address")): token for token in token_list if token.get("address")
     }
     trx_price_usd = _infer_trx_price_usd(token_list)
+    total_deposit_usd = Decimal("0")
     total_collateral_usd = (
         _decimal(account.get("totalCollateralValueInTrx", "0")) * trx_price_usd
     )
@@ -1689,10 +1963,13 @@ async def fetch_position_from_justlend_api(
         supply_amount = _decimal(item.get("supplyBalanceUnderlying", "0"))
         if supply_amount > 0:
             value_usd = supply_amount * price_usd
+            total_deposit_usd += value_usd
             is_collateral = _as_bool(item.get("entered"))
             assets.append(
                 {
                     "asset_address": _tron_address_to_bytes(underlying_address),
+                    "position_type": "supply",
+                    "is_collateral": is_collateral,
                     "side": "collateral" if is_collateral else "supply",
                     "symbol": symbol or None,
                     "decimals": int(decimals) if decimals is not None else None,
@@ -1715,6 +1992,8 @@ async def fetch_position_from_justlend_api(
             assets.append(
                 {
                     "asset_address": _tron_address_to_bytes(underlying_address),
+                    "position_type": "borrow",
+                    "is_collateral": None,
                     "side": "borrow",
                     "symbol": symbol or None,
                     "decimals": int(decimals) if decimals is not None else None,
@@ -1770,6 +2049,7 @@ async def fetch_position_from_justlend_api(
         "block_timestamp": now,
         "block_number": None,
         "source_cursor": None,
+        "total_deposit_usd": total_deposit_usd,
         "total_collateral_usd": total_collateral_usd,
         "total_debt_usd": total_debt_usd,
         "available_borrow_usd": available_borrow_usd,
@@ -1798,7 +2078,8 @@ async def get_positions(
     page_size: int,
     sort_by: str,
     order: str,
-    side: str,
+    position_type: str,
+    is_collateral: bool | None = None,
     asset: str | None = None,
     detail: bool = False,
     address: str | None = None,
@@ -1807,9 +2088,14 @@ async def get_positions(
     if normalized_sort_by not in _POSITION_LIST_SORT_FIELDS:
         raise HTTPException(status_code=400, detail="invalid sort_by")
 
-    normalized_side = side.lower()
-    if normalized_side not in _POSITION_LIST_SIDES:
-        raise HTTPException(status_code=400, detail="invalid side")
+    normalized_position_type = position_type.lower()
+    if normalized_position_type not in _POSITION_LIST_POSITION_TYPES:
+        raise HTTPException(status_code=400, detail="invalid position_type")
+    if normalized_position_type != "supply" and is_collateral is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="is_collateral 仅支持与 position_type=supply 一起使用",
+        )
 
     normalized_order = order.lower()
     if normalized_order not in {"asc", "desc"}:
@@ -1828,10 +2114,10 @@ async def get_positions(
         normalized_asset_bytes = _tron_address_to_bytes(normalized_asset)
 
     if normalized_sort_by == "asset_value_usd":
-        if normalized_side == "all":
+        if normalized_position_type == "all":
             raise HTTPException(
                 status_code=400,
-                detail="sort_by=asset_value_usd 时 side 不能为 all",
+                detail="sort_by=asset_value_usd 时 position_type 不能为 all",
             )
         if normalized_asset_bytes is None:
             raise HTTPException(
@@ -1847,28 +2133,46 @@ async def get_positions(
         sort_by=normalized_sort_by,
         order=normalized_order,
         user_address=normalized_address,
-        side=normalized_side,
+        position_type=normalized_position_type,
+        is_collateral=is_collateral,
         asset_address=normalized_asset_bytes,
     )
 
-    assets_by_user: dict[bytes, list[Any]] = {}
-    if detail and rows:
+    metric_assets_by_user: dict[bytes, list[Any]] = {}
+    response_assets_by_user: dict[bytes, list[Any]] = {}
+    if rows:
         user_addresses = [bytes(_row_get(row, "user_address")) for row in rows]
-        asset_rows = await fetch_current_user_position_assets_by_users(
+        metric_asset_rows = await fetch_current_user_position_assets_by_users(
             pool,
             user_addresses=user_addresses,
-            side=normalized_side,
-            asset_address=normalized_asset_bytes,
+            position_type="all",
+            is_collateral=None,
+            asset_address=None,
         )
-        for asset_row in asset_rows:
+        for asset_row in metric_asset_rows:
             user_key = bytes(_row_get(asset_row, "user_address"))
-            assets_by_user.setdefault(user_key, []).append(asset_row)
+            metric_assets_by_user.setdefault(user_key, []).append(asset_row)
+        if detail:
+            response_asset_rows = await fetch_current_user_position_assets_by_users(
+                pool,
+                user_addresses=user_addresses,
+                position_type=normalized_position_type,
+                is_collateral=is_collateral,
+                asset_address=normalized_asset_bytes,
+            )
+            for asset_row in response_asset_rows:
+                user_key = bytes(_row_get(asset_row, "user_address"))
+                response_assets_by_user.setdefault(user_key, []).append(asset_row)
 
     items = [
         _format_position_list_item(
             row,
-            assets_by_user.get(bytes(_row_get(row, "user_address")), []),
+            metric_assets_by_user.get(bytes(_row_get(row, "user_address")), []),
             include_matched_asset_value=normalized_sort_by == "asset_value_usd",
+            response_assets=response_assets_by_user.get(
+                bytes(_row_get(row, "user_address")),
+                [],
+            ),
         )
         for row in rows
     ]
@@ -1880,7 +2184,8 @@ async def get_positions(
         total=total,
         sort_by=normalized_sort_by,
         order=normalized_order,
-        side=normalized_side,
+        position_type=normalized_position_type,
+        is_collateral=is_collateral,
         asset=normalized_asset,
     )
 
@@ -1993,6 +2298,10 @@ async def get_position_replay(
                 _map_position_asset(item)
                 for item in _normalize_asset_items(_row_get(row, "assets_jsonb"))
             ]
+        total_deposit_usd = _resolve_total_deposit_usd(
+            row,
+            _normalize_asset_items(_row_get(row, "assets_jsonb")),
+        )
         points.append(
             JustLendPositionReplayPoint(
                 tx_hash=tx["tx_hash"],
@@ -2009,6 +2318,7 @@ async def get_position_replay(
                     if _row_get(row, "operation_type") is not None
                     else _method_to_operation_type(tx.get("method_id"))
                 ),
+                total_deposit_usd=_fmt_decimal(total_deposit_usd),
                 total_collateral_usd=_fmt_decimal(
                     Decimal(str(_row_get(row, "total_collateral_usd")))
                 ),
@@ -2076,6 +2386,10 @@ async def get_position_replay(
                     _map_position_asset(item)
                     for item in _normalize_asset_items(_row_get(row, "assets_jsonb"))
                 ]
+            total_deposit_usd = _resolve_total_deposit_usd(
+                row,
+                _normalize_asset_items(_row_get(row, "assets_jsonb")),
+            )
             points.append(
                 JustLendPositionReplayPoint(
                     tx_hash=tx["tx_hash"],
@@ -2092,6 +2406,7 @@ async def get_position_replay(
                         if _row_get(row, "operation_type") is not None
                         else _method_to_operation_type(tx.get("method_id"))
                     ),
+                    total_deposit_usd=_fmt_decimal(total_deposit_usd),
                     total_collateral_usd=_fmt_decimal(
                         Decimal(str(_row_get(row, "total_collateral_usd")))
                     ),

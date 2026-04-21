@@ -21,6 +21,7 @@ class UserPosition:
     protocol: str
     chain: str
     user_address: str
+    total_deposit_usd: Decimal = Decimal("0")
     total_collateral_usd: Decimal = Decimal("0")
     total_debt_usd: Decimal = Decimal("0")
     health_factor: Decimal = Decimal("0")

@@ -537,6 +537,7 @@ async def backfill_current_positions_from_history(
             block_timestamp=payload["block_timestamp"],
             block_number=payload["block_number"],
             source_cursor=payload["source_cursor"],
+            total_deposit_usd=payload["total_deposit_usd"],
             total_collateral_usd=payload["total_collateral_usd"],
             total_debt_usd=payload["total_debt_usd"],
             available_borrow_usd=payload["available_borrow_usd"],
