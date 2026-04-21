@@ -19,10 +19,8 @@ import {
   ChartInfoButton,
   type ExplainItem,
 } from '../../../components/ChartAssist';
-import {
-  MorphoDynamicLiquidationChart,
-  type MorphoPricePoint,
-} from './MorphoDynamicLiquidationChart';
+import { MorphoDynamicLiquidationChart } from './MorphoDynamicLiquidationChart';
+import type { MorphoPricePoint } from './morphoDynamicLiquidationUtils';
 
 interface MorphoPositionHistoryChartProps {
   address: string;
