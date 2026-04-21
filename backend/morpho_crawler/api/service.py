@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from crawler_shared.price_history import (
     get_historical_price_usd,
     get_historical_prices_usd,
 )
+import httpx
 from fastapi import HTTPException
 from web3 import AsyncWeb3
 
@@ -34,15 +36,21 @@ from ..db import (
 from ..rpc import (
     MorphoReplayEvent,
     MorphoRealtimePosition,
-    fetch_market_state,
+    fetch_market_state,  # api/morpho/market/state相关
     fetch_position_at_block,
     fetch_realtime_position,
     fetch_user_market_replay_events,
 )
+from .constants import (  # api/morpho/markets相关
+    MORPHO_BLUE_GRAPHQL_URL,
+    MORPHO_MARKETS_BLUE_API_CHAIN_ID,
+    MORPHO_MARKETS_HARDCODED,
+)
 from .schemas import (
-    MorphoMarketListItem,
-    MorphoMarketStateResponse,
-    MorphoMarketListResponse,
+    MorphoMarketAssetItem,  # api/morpho/markets相关
+    MorphoMarketListItem,  # api/morpho/markets相关
+    MorphoMarketStateResponse,  # api/morpho/market/state相关
+    MorphoMarketListResponse,  # api/morpho/markets相关
     MorphoPositionAssetResponse,
     MorphoPositionReplayPointResponse,
     MorphoPositionReplayResponse,
@@ -60,32 +68,175 @@ BRIEF_LABELS = {
     "liquidation": "被清算",
 }
 
-MORPHO_REPRESENTATIVE_MARKETS: list[tuple[str, str]] = [
-    (
-        "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
-        "USDC-wstETH",
-    ),
-    (
-        "0x3a85e619751152991742810df6ec69ce473daef99e28a64ab2340d7b7ccfee49",
-        "USDC-WBTC",
-    ),
-    (
-        "0x94b823e6bd8ea533b4e33fbc307faea0b307301bc48763acc4d4aa4def7636cd",
-        "USDC-WETH",
-    ),
-    (
-        "0x6a57d77b9a173c5ed10d432e7009dd1ee9a97fac62a7bc970b4bd715e2fff5c8",
-        "USDT-wstETH",
-    ),
-    (
-        "0xfb7c3a3af1ab477a2224b1387d0fd233ee9fb80e8208011996e4fd5aacd50c36",
-        "USDT-WBTC",
-    ),
-    (
-        "0x3758a9e2abbd67b5621f23ec482608f2f98b3c792874661ce49df7843aadcfd2",
-        "USDT-WETH",
-    ),
-]
+# api/morpho/markets相关：GET /api/morpho/markets 从 Morpho Blue GraphQL 拉取单市场 TVL/利用率
+_MARKET_BY_ID_GRAPHQL = """
+query MarketMetrics($marketId: String!, $chainId: Int!) {
+  marketById(marketId: $marketId, chainId: $chainId) {
+    marketId
+    loanAsset {
+      symbol
+      address
+    }
+    collateralAsset {
+      symbol
+      address
+    }
+    state {
+      sizeUsd
+      utilization
+    }
+  }
+}
+""".strip()
+
+# api/morpho/markets相关：为 True 时对每页市场请求 Blue API 填充 TVL/利用率；False 时跳过请求（字段为 null），保留下方拉取实现以便恢复
+MORPHO_MARKETS_FETCH_BLUE_STATE = True
+
+
+# api/morpho/markets相关：按 market_id 查询 Morpho Blue API，返回 TVL/利用率与 loan/collateral 资产信息
+async def _fetch_market_metrics_from_blue_api(
+    client: httpx.AsyncClient,
+    *,
+    market_id: str,
+    chain_id: int,
+) -> tuple[float | None, float | None, dict[str, Any], dict[str, Any]]:
+    payload = {
+        "query": _MARKET_BY_ID_GRAPHQL,
+        "variables": {"marketId": market_id, "chainId": chain_id},
+    }
+    try:
+        resp = await client.post(MORPHO_BLUE_GRAPHQL_URL, json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho Blue API 请求失败: {exc}",
+        ) from exc
+    if body.get("errors"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho Blue API 返回错误: {body['errors']}",
+        )
+    row = (body.get("data") or {}).get("marketById")
+    if not row:
+        return None, None, {}, {}
+    state = row.get("state") or {}
+    loan_asset = row.get("loanAsset") or {}
+    collateral_asset = row.get("collateralAsset") or {}
+    size = state.get("sizeUsd")
+    util = state.get("utilization")
+    try:
+        size_f = float(size) if size is not None else None
+    except (TypeError, ValueError):
+        size_f = None
+    try:
+        util_f = float(util) if util is not None else None
+    except (TypeError, ValueError):
+        util_f = None
+    return size_f, util_f, loan_asset, collateral_asset
+
+
+# api/morpho/markets相关：当链上查询失败时，从硬编码 pair 文本回退构造 assets
+def _pair_to_assets(pair: str) -> list[MorphoMarketAssetItem]:
+    loan_symbol, sep, collateral_symbol = pair.partition(" : ")
+    if not sep:
+        loan_symbol, sep, collateral_symbol = pair.partition("-")
+    return [
+        MorphoMarketAssetItem(
+            asset=(loan_symbol or "").strip(),
+            token_address="",
+            role="loan",
+        ),
+        MorphoMarketAssetItem(
+            asset=(collateral_symbol or "").strip(),
+            token_address="",
+            role="collateral",
+        ),
+    ]
+
+
+# api/morpho/markets相关：批量查表获取市场缓存（loan.morpho_blue_current_markets）
+async def _fetch_market_rows_from_table(
+    pool: AsyncpgPool, market_ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    if not market_ids:
+        return {}
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                market_id,
+                loan_symbol,
+                loan_address,
+                collateral_symbol,
+                collateral_address,
+                total_market_size_usd,
+                total_supply_assets,
+                total_borrow_assets
+            FROM loan.morpho_blue_current_markets
+            WHERE market_id = ANY($1::text[])
+            """,
+            market_ids,
+        )
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        out[str(row["market_id"]).lower()] = dict(row)
+    return out
+
+
+# api/morpho/markets相关：将表记录转换为接口输出项（命中缓存时使用）
+def _market_item_from_table_row(
+    *,
+    market_id: str,
+    pair_fallback: str,
+    row: dict[str, Any],
+) -> MorphoMarketListItem:
+    loan_symbol = (row.get("loan_symbol") or "").strip()
+    loan_address = str(row.get("loan_address") or "").strip()
+    collateral_symbol = (row.get("collateral_symbol") or "").strip()
+    collateral_address = str(row.get("collateral_address") or "").strip()
+    if loan_symbol and loan_address and collateral_symbol and collateral_address:
+        assets = [
+            MorphoMarketAssetItem(
+                asset=loan_symbol,
+                token_address=loan_address,
+                role="loan",
+            ),
+            MorphoMarketAssetItem(
+                asset=collateral_symbol,
+                token_address=collateral_address,
+                role="collateral",
+            ),
+        ]
+    else:
+        assets = _pair_to_assets(pair_fallback)
+
+    size_raw = row.get("total_market_size_usd")
+    size_usd = float(size_raw) if size_raw is not None else None
+
+    util: float | None = None
+    supply_raw = row.get("total_supply_assets")
+    borrow_raw = row.get("total_borrow_assets")
+    if supply_raw is not None and borrow_raw is not None:
+        try:
+            supply = Decimal(supply_raw)
+            borrow = Decimal(borrow_raw)
+            if supply > 0:
+                util = float(borrow / supply)
+        except (ArithmeticError, ValueError, TypeError):
+            util = None
+
+    return MorphoMarketListItem(
+        market_id=market_id,
+        dataSource="table",
+        assets=assets,
+        total_market_size_usd=size_usd,
+        utilization=util,
+    )
+
+
+# api/morpho/market/state相关：GET /api/morpho/market/state 预留 date 参数格式校验
 UTC_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -102,16 +253,97 @@ def get_scaffold_status() -> MorphoScaffoldStatusResponse:
     )
 
 
-def get_representative_markets() -> MorphoMarketListResponse:
+# api/morpho/markets相关：GET /api/morpho/markets（分页 + Blue API 指标）
+async def get_representative_markets_page(
+    *,
+    pool: AsyncpgPool,
+    page: int,
+    page_size: int,
+) -> MorphoMarketListResponse:
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page 必须从 1 开始")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="page_size 必须在 1~100 之间")
+
+    total = len(MORPHO_MARKETS_HARDCODED)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    start = (page - 1) * page_size
+    slice_rows = MORPHO_MARKETS_HARDCODED[start : start + page_size]
+    items: list[MorphoMarketListItem] = []
+    market_ids = [mid for mid, _pair in slice_rows]
+    row_map = await _fetch_market_rows_from_table(pool, market_ids)
+
+    misses = [(mid, pair) for mid, pair in slice_rows if mid.lower() not in row_map]
+    miss_metrics: dict[
+        str, tuple[float | None, float | None, dict[str, Any], dict[str, Any]]
+    ] = {}
+    if misses:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            fetched = await asyncio.gather(
+                *[
+                    _fetch_market_metrics_from_blue_api(
+                        client,
+                        market_id=mid,
+                        chain_id=MORPHO_MARKETS_BLUE_API_CHAIN_ID,
+                    )
+                    for mid, _pair in misses
+                ]
+            )
+        miss_metrics = {
+            mid.lower(): metric
+            for (mid, _pair), metric in zip(misses, fetched, strict=True)
+        }
+
+    for mid, pair in slice_rows:
+        table_row = row_map.get(mid.lower())
+        if table_row is not None:
+            items.append(
+                _market_item_from_table_row(
+                    market_id=mid,
+                    pair_fallback=pair,
+                    row=table_row,
+                )
+            )
+            continue
+
+        size_usd, util, loan_asset, collateral_asset = miss_metrics.get(
+            mid.lower(), (None, None, {}, {})
+        )
+        if loan_asset and collateral_asset:
+            assets = [
+                MorphoMarketAssetItem(
+                    asset=(loan_asset.get("symbol") or "").strip(),
+                    token_address=(loan_asset.get("address") or "").strip(),
+                    role="loan",
+                ),
+                MorphoMarketAssetItem(
+                    asset=(collateral_asset.get("symbol") or "").strip(),
+                    token_address=(collateral_asset.get("address") or "").strip(),
+                    role="collateral",
+                ),
+            ]
+        else:
+            assets = _pair_to_assets(pair)
+        items.append(
+            MorphoMarketListItem(
+                market_id=mid,
+                dataSource="chain",
+                assets=assets,
+                total_market_size_usd=size_usd,
+                utilization=util,
+            )
+        )
+
     return MorphoMarketListResponse(
-        market_count=len(MORPHO_REPRESENTATIVE_MARKETS),
-        markets=[
-            MorphoMarketListItem(market_id=market_id, pair=pair)
-            for market_id, pair in MORPHO_REPRESENTATIVE_MARKETS
-        ],
+        page=page,
+        page_size=page_size,
+        total_count=total,
+        total_pages=total_pages,
+        markets=items,
     )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 async def get_market_state(
     w3: AsyncWeb3,
     *,
@@ -132,6 +364,8 @@ async def get_market_state(
         w3,
         market_id=market_id,
     )
+    # api/morpho/market/state相关：当前版本直接链上查询返回
+    payload["dataSource"] = "chain"
     return MorphoMarketStateResponse(**payload)
 
 

@@ -464,7 +464,8 @@ export interface JustLendPositionAnalysisParams {
     | 'total_borrow_usd'
     | 'asset_value_usd';
   order?: 'asc' | 'desc';
-  side?: 'all' | 'collateral' | 'supply' | 'borrow';
+  positionType?: 'all' | 'supply' | 'borrow';
+  isCollateral?: boolean | null;
   asset?: string | null;
   detail?: boolean;
   address?: string | null;
@@ -476,13 +477,24 @@ export async function fetchJustLendPositionAnalysisWithMeta({
   pageSize = 50,
   sortBy = 'health_factor',
   order = 'desc',
-  side = 'all',
+  positionType = 'all',
+  isCollateral = null,
   asset = null,
   detail = false,
   address = null,
   forceRefresh = false,
 }: JustLendPositionAnalysisParams): Promise<DataWithMeta<JustLendPositionAnalysisResponse>> {
-  const key = JSON.stringify({ page, pageSize, sortBy, order, side, asset, detail, address });
+  const key = JSON.stringify({
+    page,
+    pageSize,
+    sortBy,
+    order,
+    positionType,
+    isCollateral,
+    asset,
+    detail,
+    address,
+  });
   const cached = justLendPositionAnalysisCache.get(key);
   if (!forceRefresh && cached && Date.now() - cached.fetchedAt < JUSTLEND_CACHE_TTL_MS) {
     return {
@@ -510,9 +522,12 @@ export async function fetchJustLendPositionAnalysisWithMeta({
     page_size: String(pageSize),
     sort_by: sortBy,
     order,
-    side,
+    position_type: positionType,
     detail: String(detail),
   });
+  if (isCollateral !== null) {
+    params.set('is_collateral', String(isCollateral));
+  }
   if (asset) {
     params.set('asset', asset);
   }

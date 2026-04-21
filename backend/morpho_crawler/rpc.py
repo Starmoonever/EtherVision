@@ -327,6 +327,7 @@ def _format_scaled(amount: int, decimals: int) -> str:
     return format(Decimal(amount) / (Decimal(10) ** decimals), "f")
 
 
+# api/morpho/market/state相关：供 fetch_market_state 格式化比率类字段
 def _format_decimal_fixed(value: Decimal, places: int) -> str:
     quant = Decimal(10) ** (-places)
     return format(value.quantize(quant), "f")
@@ -350,6 +351,7 @@ async def _fetch_token_metadata(w3: AsyncWeb3, token_address: str) -> TokenMetad
     )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state 链上读取与载荷拼装
 async def fetch_market_state(
     w3: AsyncWeb3,
     *,
@@ -409,6 +411,64 @@ async def fetch_market_state(
     if total_supply_assets > 0 and lltv_ratio > 0:
         borrow_capacity_usage_rough = borrow_dec / (supply_dec * lltv_ratio)
 
+    # api/morpho/market/state相关：根据当前借款秒利率计算年化比例与年利息比例
+    seconds_per_year = 365 * 24 * 60 * 60
+    annual_borrow_rate = Decimal("0")
+    annual_interest_ratio = Decimal("0")
+    annual_supply_rate = Decimal("0")
+    annual_supply_interest_ratio = Decimal("0")
+    if irm_address != ZERO_ADDRESS:
+        irm = w3.eth.contract(address=_to_checksum(irm_address), abi=IRM_ABI)
+        market_params_tuple = (
+            loan_token_address,
+            collateral_token_address,
+            oracle_address,
+            irm_address,
+            lltv_raw,
+        )
+        market_tuple = (
+            total_supply_assets,
+            total_supply_shares,
+            total_borrow_assets,
+            total_borrow_shares,
+            last_update,
+            fee,
+        )
+        try:
+            borrow_rate = int(
+                await irm.functions.borrowRateView(
+                    market_params_tuple,
+                    market_tuple,
+                ).call(block_identifier=block_identifier)
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="failed to fetch Morpho borrow rate"
+            ) from exc
+        annual_borrow_rate = (
+            Decimal(borrow_rate) * Decimal(seconds_per_year) / Decimal(WAD)
+        )
+        annual_interest_ratio = Decimal(
+            _w_taylor_compounded(borrow_rate, seconds_per_year)
+        ) / Decimal(WAD)
+        supply_rate = 0
+        if total_supply_assets > 0:
+            utilization_wad = _mul_div_down(
+                total_borrow_assets, WAD, total_supply_assets
+            )
+            net_supply_rate_wad = _mul_div_down(
+                _mul_div_down(borrow_rate, utilization_wad, WAD),
+                WAD - fee,
+                WAD,
+            )
+            supply_rate = max(net_supply_rate_wad, 0)
+        annual_supply_rate = (
+            Decimal(supply_rate) * Decimal(seconds_per_year) / Decimal(WAD)
+        )
+        annual_supply_interest_ratio = Decimal(
+            _w_taylor_compounded(supply_rate, seconds_per_year)
+        ) / Decimal(WAD)
+
     return {
         "marketId": market_id_hex,
         "loanToken": {
@@ -446,6 +506,26 @@ async def fetch_market_state(
             "formula": "totalBorrowAssets / (totalSupplyAssets * lltv)",
             "value": _format_decimal_fixed(borrow_capacity_usage_rough, 8),
             "note": "市场层粗略估算，严格口径需用户仓位级数据",
+        },
+        "annualBorrowRate": {
+            "formula": "borrowRatePerSecond * secondsPerYear",
+            "value": _format_decimal_fixed(annual_borrow_rate, 8),
+            "note": "基于 IRM borrowRateView 的线性年化（单利近似）",
+        },
+        "annualBorrowInterestRatio": {
+            "formula": "wTaylorCompounded(borrowRatePerSecond, secondsPerYear)",
+            "value": _format_decimal_fixed(annual_interest_ratio, 8),
+            "note": "基于当前利率估算的一年利息/本金比例",
+        },
+        "annualSupplyRate": {
+            "formula": "borrowRatePerSecond * utilization * (1 - fee) * secondsPerYear",
+            "value": _format_decimal_fixed(annual_supply_rate, 8),
+            "note": "出借侧线性年化（市场层估算，已扣除协议费）",
+        },
+        "annualSupplyInterestRatio": {
+            "formula": "wTaylorCompounded(borrowRatePerSecond * utilization * (1 - fee), secondsPerYear)",
+            "value": _format_decimal_fixed(annual_supply_interest_ratio, 8),
+            "note": "出借侧复利年化（市场层估算，已扣除协议费）",
         },
         "marketScaleTvlLike": {
             "formula": "totalSupplyAssets",

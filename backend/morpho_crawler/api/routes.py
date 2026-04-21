@@ -6,15 +6,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from .schemas import (
-    MorphoMarketStateResponse,
-    MorphoMarketListResponse,
+    MorphoMarketStateResponse,  # api/morpho/market/state相关
+    MorphoMarketListResponse,  # api/morpho/markets相关
     MorphoPositionReplayResponse,
     MorphoPositionResponse,
 )
 from .service import (
-    get_market_state,
+    get_market_state,  # api/morpho/market/state相关
     get_position_replay,
-    get_representative_markets,
+    get_representative_markets_page,  # api/morpho/markets相关
     get_user_position,
 )
 
@@ -89,15 +89,31 @@ async def position_replay(
     )
 
 
+# api/morpho/markets相关：GET /api/morpho/markets（分页，可自定义每页条数）
 @router.get(
-    "/market",
+    "/markets",
     response_model=MorphoMarketListResponse,
-    summary="Get representative Morpho market ids",
+    summary="List hardcoded Morpho markets with TVL page",
 )
-async def market_list() -> MorphoMarketListResponse:
-    return get_representative_markets()
+async def market_list(
+    pool: AsyncpgPool,
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(
+        10,
+        ge=1,
+        le=100,
+        description="每页市场数量，默认 10",
+    ),
+) -> MorphoMarketListResponse:
+    # api/morpho/markets相关：允许调用方自定义每页数量，默认 10
+    return await get_representative_markets_page(
+        pool=pool,
+        page=page,
+        page_size=page_size,
+    )
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 @router.get(
     "/market/state",
     response_model=MorphoMarketStateResponse,

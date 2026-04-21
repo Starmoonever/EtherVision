@@ -95,37 +95,65 @@ class MorphoPositionReplayResponse(BaseModel):
     points: list[MorphoPositionReplayPointResponse] = Field(description="重放点位。")
 
 
+# api/morpho/markets相关：GET /api/morpho/markets
+class MorphoMarketAssetItem(BaseModel):
+    asset: str = Field(description="资产符号。")
+    token_address: str = Field(description="代币地址。")
+    role: str = Field(description="资产角色：loan 或 collateral。")
+
+
+# api/morpho/markets相关：GET /api/morpho/markets
 class MorphoMarketListItem(BaseModel):
     market_id: str = Field(description="市场 id。")
-    pair: str = Field(description="借出-抵押组合，如 USDC-wstETH。")
-
-
-class MorphoMarketListResponse(BaseModel):
-    market_count: int = Field(description="返回的市场数量。")
-    markets: list[MorphoMarketListItem] = Field(
-        description="代表性市场列表（market_id + 借出-抵押组合）。"
+    dataSource: str = Field(description="市场数据来源：table 或 chain。")
+    assets: list[MorphoMarketAssetItem] = Field(
+        description="市场资产列表，使用 role 区分 loan/collateral。"
+    )
+    total_market_size_usd: float | None = Field(
+        default=None,
+        description="Morpho Blue API 的 TVL（state.sizeUsd），美元。",
+    )
+    utilization: float | None = Field(
+        default=None,
+        description="利用率（state.utilization，0~1）。",
     )
 
 
+# api/morpho/markets相关：GET /api/morpho/markets（分页）
+class MorphoMarketListResponse(BaseModel):
+    page: int = Field(description="当前页码（从 1 开始）。")
+    page_size: int = Field(description="每页条数。")
+    total_count: int = Field(description="硬编码市场总数。")
+    total_pages: int = Field(description="总页数。")
+    markets: list[MorphoMarketListItem] = Field(
+        description="本页市场列表（含 TVL 与利用率）。"
+    )
+
+
+# api/morpho/market/state相关：GET /api/morpho/market/state（嵌套字段）
 class MorphoMarketTokenInfo(BaseModel):
     address: str = Field(description="代币地址。")
     symbol: str | None = Field(description="代币符号。")
     decimals: int | None = Field(description="代币 decimals。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketRatioField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state
 class MorphoMarketSimpleMetricField(BaseModel):
     formula: str = Field(description="指标计算公式。")
     value: str = Field(description="指标值。")
     note: str | None = Field(default=None, description="指标备注。")
 
 
+# api/morpho/market/state相关：GET /api/morpho/market/state（根响应模型）
 class MorphoMarketStateResponse(BaseModel):
     marketId: str = Field(description="Morpho market id。")
+    dataSource: str = Field(description="数据来源：table 或 chain。")
     loanToken: MorphoMarketTokenInfo = Field(description="借出资产信息。")
     collateralToken: MorphoMarketTokenInfo = Field(description="抵押资产信息。")
     oracle: str = Field(description="Oracle 地址。")
@@ -143,6 +171,18 @@ class MorphoMarketStateResponse(BaseModel):
     )
     borrowCapacityUsageRough: MorphoMarketSimpleMetricField = Field(
         description="借款上限占用粗估。"
+    )
+    annualBorrowRate: MorphoMarketSimpleMetricField = Field(
+        description="当前借款秒利率线性年化比例。"
+    )
+    annualBorrowInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前利率估算一年利息/本金比例。"
+    )
+    annualSupplyRate: MorphoMarketSimpleMetricField = Field(
+        description="当前出借侧秒利率线性年化比例。"
+    )
+    annualSupplyInterestRatio: MorphoMarketSimpleMetricField = Field(
+        description="按当前出借侧利率估算一年利息/本金比例。"
     )
     marketScaleTvlLike: MorphoMarketSimpleMetricField = Field(
         description="市场规模（TVL-like）。"

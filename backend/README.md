@@ -158,7 +158,7 @@ JustLend 当前补数脚本补充：
 - `uv run python scripts/justlend/market_state_backfill.py`
   - 刷新 `loan.justlend_markets_current` 与可选的市场快照
 - `uv run python scripts/justlend/tx_position_replay.py --start 2026-04-01 --end 2026-04-10`
-  - 根据 `justlend.justlend_history` 回放交易级仓位快照
+  - 根据 `justlend.justlend_history` 回放交易级仓位快照；当前会单独记录总存入 `total_deposit_usd`，但 event replay 的抵押识别仍是近似口径
 - `uv run python scripts/justlend/backfill_current_positions_from_history.py`
   - 从 `justlend.justlend_history`、当前 current 表，或两者并集筛出用户，调用 TRON RPC 获取链上实时仓位，并全量覆盖 `loan.justlend_current_user_positions`
 - `uv run python scripts/justlend/repair_current_prices.py`
@@ -289,10 +289,12 @@ JustLend 模块负责：
 - 资产明细表：`loan.justlend_current_user_position_assets`
 - 支持 `page` / `page_size` 分页
 - 支持 `health_factor`、`total_supply_usd`、`total_collateral_usd`、`total_borrow_usd` 排序
-- 支持按指定 `side + asset` 的 `asset_value_usd` 排序
-- `side` 当前支持 `all`、`collateral`、`supply`、`borrow`
-- `side` 与 `asset` 现在同时作为仓位过滤条件，而不只是明细或排序参数
-- `collateral` / `supply` / `borrow` 当前按资产明细侧别区分：`collateral` 表示已进入抵押集合，`supply` 表示仅供给未抵押
+- `total_supply_usd` 当前表示总存入 USD 价值，即 `collateral + supply`；`total_collateral_usd` 单独表示已启用抵押的部分
+- 支持按指定 `position_type + is_collateral + asset` 的 `asset_value_usd` 排序
+- `position_type` 当前支持 `all`、`supply`、`borrow`
+- `is_collateral` 仅对 `position_type=supply` 生效：`true` 表示只看已启用抵押的 supply，`false` 表示只看未启用抵押的 supply
+- `position_type` / `is_collateral` 与 `asset` 现在同时作为仓位过滤条件，而不只是明细或排序参数
+- 底层明细表仍保留 `side` 列以兼容旧数据与现有 SQL，但 API 输入语义已统一为 `position_type + is_collateral`
 - `detail=true` 时返回当前页地址对应的资产明细
 
 当前可用的 JustLend 市场回填脚本：

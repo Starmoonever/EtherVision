@@ -24,3 +24,5 @@ temp.json
 derived_users/
 
 Dockerfile.*
+
+tmp/

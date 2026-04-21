@@ -229,7 +229,7 @@ async def test_fetch_position_from_justlend_api_marks_non_entered_supply_as_supp
 
 
 @pytest.mark.asyncio
-async def test_get_positions_rejects_asset_sort_with_side_all() -> None:
+async def test_get_positions_rejects_asset_sort_with_position_type_all() -> None:
     pool = cast(asyncpg.Pool, object())
     with pytest.raises(service.HTTPException) as exc_info:
         await service.get_positions(
@@ -238,13 +238,37 @@ async def test_get_positions_rejects_asset_sort_with_side_all() -> None:
             page_size=20,
             sort_by="asset_value_usd",
             order="desc",
-            side="all",
+            position_type="all",
             asset="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
             detail=False,
         )
 
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "sort_by=asset_value_usd 时 side 不能为 all"
+    assert (
+        exc_info.value.detail == "sort_by=asset_value_usd 时 position_type 不能为 all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_positions_rejects_is_collateral_without_supply() -> None:
+    pool = cast(asyncpg.Pool, object())
+    with pytest.raises(service.HTTPException) as exc_info:
+        await service.get_positions(
+            pool,
+            page=1,
+            page_size=20,
+            sort_by="health_factor",
+            order="desc",
+            position_type="borrow",
+            is_collateral=True,
+            asset=None,
+            detail=False,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        exc_info.value.detail == "is_collateral 仅支持与 position_type=supply 一起使用"
+    )
 
 
 @pytest.mark.asyncio
@@ -301,7 +325,8 @@ async def test_get_positions_formats_page_and_detail_assets() -> None:
             page_size=10,
             sort_by="asset_value_usd",
             order="desc",
-            side="supply",
+            position_type="supply",
+            is_collateral=False,
             asset="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
             detail=True,
         )
@@ -310,13 +335,15 @@ async def test_get_positions_formats_page_and_detail_assets() -> None:
     assert result.page_size == 10
     assert result.total == 1
     assert result.sort_by == "asset_value_usd"
-    assert result.side == "supply"
+    assert result.position_type == "supply"
+    assert result.is_collateral is False
     assert result.asset == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
     assert len(result.items) == 1
     assert result.items[0].address == service._tron_bytes_to_base58(user_address)
     assert result.items[0].total_collateral_usd == "100.00000000"
     assert result.items[0].matched_asset_value_usd == "80.00000000"
-    assert result.items[0].assets[0].side == "supply"
+    assert result.items[0].assets[0].position_type == "supply"
+    assert result.items[0].assets[0].is_collateral is False
     assert (
         result.items[0].assets[0].asset_address == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
     )
@@ -390,7 +417,7 @@ async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> N
             page_size=10,
             sort_by="total_supply_usd",
             order="desc",
-            side="all",
+            position_type="all",
             asset=asset,
             detail=True,
         )
@@ -399,6 +426,8 @@ async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> N
     mocked_page.assert_awaited_once()
     assert mocked_page.await_args is not None
     assert mocked_page.await_args.kwargs["asset_address"] == asset_address
+    assert mocked_page.await_args.kwargs["position_type"] == "all"
+    assert mocked_page.await_args.kwargs["is_collateral"] is None
     mocked_assets.assert_awaited_once()
     assert mocked_assets.await_args is not None
     assert mocked_assets.await_args.kwargs["asset_address"] == asset_address
@@ -722,6 +751,7 @@ def test_build_snapshot_brief_upgrades_deposit_to_new_collateral() -> None:
         operation_type="deposit",
         has_open_position=True,
         is_liquidatable=False,
+        total_deposit_usd=Decimal("100"),
         total_collateral_usd=Decimal("100"),
         total_debt_usd=Decimal("0"),
         available_borrow_usd=Decimal("80"),
@@ -766,6 +796,7 @@ def test_build_snapshot_brief_upgrades_withdraw_to_remove_collateral() -> None:
         operation_type="deposit",
         has_open_position=True,
         is_liquidatable=False,
+        total_deposit_usd=Decimal("100"),
         total_collateral_usd=Decimal("100"),
         total_debt_usd=Decimal("0"),
         available_borrow_usd=Decimal("80"),
@@ -797,6 +828,7 @@ def test_build_snapshot_brief_upgrades_withdraw_to_remove_collateral() -> None:
         operation_type="withdraw",
         has_open_position=True,
         is_liquidatable=False,
+        total_deposit_usd=Decimal("70"),
         total_collateral_usd=Decimal("70"),
         total_debt_usd=Decimal("0"),
         available_borrow_usd=Decimal("56"),
@@ -962,6 +994,7 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
         user_address=user_address,
         tx=tx,
         balances={market_hex: {"supply": Decimal("1.5"), "borrow": Decimal("0")}},
+        entered_markets={market_hex},
         market_catalog={market_hex: catalog_entry},
     )
 
@@ -969,6 +1002,48 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
     assert row.has_open_position is True
     assert row.total_collateral_usd == Decimal("1.5")
     assert row.brief == "供给 1.5 USDT (价值 1.50 usd)"
+
+
+def test_parse_tx_delta_redeem_uses_underlying_decimals_in_exchange_rate_scale() -> (
+    None
+):
+    market_hex = service._tron_address_to_bytes(
+        "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"
+    ).hex()
+    underlying_hex = service._tron_address_to_bytes(
+        "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9"
+    ).hex()
+    catalog_entry = {
+        "market_address": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd",
+        "market_hex": market_hex,
+        "underlying_address": "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9",
+        "underlying_hex": underlying_hex,
+        "underlying_symbol": "JST",
+        "underlying_decimals": 18,
+        "collateral_factor": Decimal("0.5"),
+        "price_usd": Decimal("1"),
+        "exchange_rate": Decimal("1e28"),
+    }
+    tx = {
+        "method_id": "db006a75",
+        "parse_input": json.dumps(
+            {
+                "asset": "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9",
+                "amount": str(100 * 10**8),
+                "redeemUnderlying": False,
+            }
+        ),
+    }
+
+    market_key, amount, operation_type, meta = service._parse_tx_delta(
+        tx,
+        {market_hex: catalog_entry, underlying_hex: catalog_entry},
+    )
+
+    assert market_key == market_hex
+    assert amount == Decimal("100")
+    assert operation_type == "redeem"
+    assert meta is catalog_entry
 
 
 @pytest.mark.asyncio
@@ -1186,9 +1261,9 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     async def _mock_call_account_snapshot(*args, **kwargs):
         contract_address = kwargs["contract_address"]
         if contract_address == market_a_b58:
-            return (0, 100 * 10**8, 0, 10**18)
+            return (0, 100 * 10**8, 0, 10**28)
         if contract_address == market_b_b58:
-            return (0, 0, 20 * 10**6, 10**18)
+            return (0, 0, 20 * 10**6, 10**16)
         raise AssertionError(contract_address)
 
     async def _mock_call_address(*args, **kwargs):
@@ -1267,6 +1342,8 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     assert [asset["side"] for asset in rpc_result["assets"]] == [
         asset["side"] for asset in api_result["assets"]
     ]
+    assert rpc_result["assets"][0]["amount"] == Decimal("100")
+    assert rpc_result["assets"][1]["amount"] == Decimal("20")
     assert rpc_result["extra_jsonb"]["source"] == "justlend_rpc"
 
 
@@ -1282,7 +1359,7 @@ async def test_fetch_position_from_tron_rpc_marks_non_entered_supply_as_supply()
 
     async def _mock_call_account_snapshot(*args, **kwargs):
         assert kwargs["contract_address"] == market_address
-        return (0, 100 * 10**8, 0, 10**18)
+        return (0, 100 * 10**8, 0, 10**16)
 
     async def _mock_call_address(*args, **kwargs):
         function_selector = kwargs["function_selector"]
@@ -1360,6 +1437,7 @@ async def test_fetch_position_from_tron_rpc_marks_non_entered_supply_as_supply()
     assert result["liquidation_threshold"] == Decimal("0")
     assert len(result["assets"]) == 1
     assert result["assets"][0]["side"] == "supply"
+    assert result["assets"][0]["amount"] == Decimal("100")
 
 
 def test_price_in_trx_uses_justlend_oracle_scale() -> None:

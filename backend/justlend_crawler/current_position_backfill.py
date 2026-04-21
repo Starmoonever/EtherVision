@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
+import logging
 
 import asyncpg
 from fastapi import HTTPException
@@ -36,6 +37,9 @@ from .rpc import fetch_justlend_position_via_rpc
 
 _MATCH_MODES = {"any", "all"}
 _USER_SOURCES = {"history", "current", "union"}
+_DETAIL_SAMPLE_LIMIT = 20
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -45,6 +49,27 @@ class CurrentPositionBackfillStats:
     deleted_users: int = 0
     failed_users: int = 0
     skipped_users: int = 0
+    deleted_addresses: list[str] = field(default_factory=list)
+    failed_reason_counts: dict[str, int] = field(default_factory=dict)
+    failed_details: list[dict[str, str]] = field(default_factory=list)
+
+
+def _record_failed_reason(
+    stats: CurrentPositionBackfillStats,
+    *,
+    user_address: str,
+    reason: str,
+) -> None:
+    stats.failed_reason_counts[reason] = stats.failed_reason_counts.get(reason, 0) + 1
+    stats.failed_details.append({"user_address": user_address, "reason": reason})
+
+
+def _record_deleted_address(
+    stats: CurrentPositionBackfillStats,
+    *,
+    user_address: str,
+) -> None:
+    stats.deleted_addresses.append(user_address)
 
 
 def merge_user_addresses(*groups: Iterable[bytes]) -> list[bytes]:
@@ -462,13 +487,35 @@ async def backfill_current_positions_from_history(
                             pool, user_address=user_address
                         )
                     stats.deleted_users += 1
+                    _record_deleted_address(stats, user_address=user_address_b58)
                 else:
                     stats.skipped_users += 1
                 continue
             stats.failed_users += 1
+            reason = f"HTTP {exc.status_code}: {exc.detail}"
+            _record_failed_reason(
+                stats,
+                user_address=user_address_b58,
+                reason=reason,
+            )
+            logger.warning(
+                "JustLend current position backfill failed: user=%s reason=%s",
+                user_address_b58,
+                reason,
+            )
             continue
-        except Exception:
+        except Exception as exc:
             stats.failed_users += 1
+            reason = f"{type(exc).__name__}: {exc}"
+            _record_failed_reason(
+                stats,
+                user_address=user_address_b58,
+                reason=reason,
+            )
+            logger.exception(
+                "JustLend current position backfill failed: user=%s",
+                user_address_b58,
+            )
             continue
 
         if dry_run:
@@ -490,6 +537,7 @@ async def backfill_current_positions_from_history(
             block_timestamp=payload["block_timestamp"],
             block_number=payload["block_number"],
             source_cursor=payload["source_cursor"],
+            total_deposit_usd=payload["total_deposit_usd"],
             total_collateral_usd=payload["total_collateral_usd"],
             total_debt_usd=payload["total_debt_usd"],
             available_borrow_usd=payload["available_borrow_usd"],
