@@ -96,6 +96,7 @@ async def position_replay(
     summary="List hardcoded Morpho markets with TVL page",
 )
 async def market_list(
+    pool: AsyncpgPool,
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
     page_size: int = Query(
         10,
@@ -105,7 +106,11 @@ async def market_list(
     ),
 ) -> MorphoMarketListResponse:
     # api/morpho/markets相关：允许调用方自定义每页数量，默认 10
-    return await get_representative_markets_page(page=page, page_size=page_size)
+    return await get_representative_markets_page(
+        pool=pool,
+        page=page,
+        page_size=page_size,
+    )
 
 
 # api/morpho/market/state相关：GET /api/morpho/market/state
