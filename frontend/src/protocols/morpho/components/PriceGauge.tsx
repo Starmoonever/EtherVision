@@ -78,7 +78,7 @@ function describeArc(cx: number, cy: number, radius: number, startAngle: number,
   return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
 }
 
-export function mapPriceToAngle(
+function mapPriceToAngle(
   price: number,
   minPrice: number,
   maxPrice: number,
@@ -89,7 +89,7 @@ export function mapPriceToAngle(
   return startAngle + progress * (endAngle - startAngle);
 }
 
-export function getBufferPercent(currentPrice: number, liquidationPrice: number | null) {
+function getBufferPercent(currentPrice: number, liquidationPrice: number | null) {
   if (!isFinitePositive(currentPrice) || !isFinitePositive(liquidationPrice)) {
     return null;
   }
@@ -97,7 +97,7 @@ export function getBufferPercent(currentPrice: number, liquidationPrice: number 
   return ((currentPrice - liquidationPrice) / currentPrice) * 100;
 }
 
-export function describeRiskLevel(bufferPercent: number | null) {
+function describeRiskLevel(bufferPercent: number | null) {
   if (bufferPercent === null) return '未知';
   if (bufferPercent <= 0) return '可清算';
   if (bufferPercent < 10) return '高风险';
