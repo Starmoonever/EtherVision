@@ -110,6 +110,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="do not delete current rows when the user no longer has an on-chain JustLend position",
     )
     parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=False,
+        help="skip users that already exist in loan.justlend_current_user_positions",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -197,6 +203,7 @@ async def _run() -> None:
             dry_run=args.dry_run,
             only_success=not args.include_failed_history,
             delete_closed=not args.keep_closed,
+            skip_existing=args.skip_existing,
             market_addresses=args.markets,
             user_source=args.user_source,
         )

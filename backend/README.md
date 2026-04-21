@@ -311,6 +311,7 @@ uv run python scripts/justlend/market_state_backfill.py --market <MARKET_ADDRESS
 cd backend
 uv run python scripts/justlend/repair_current_collateral_sides.py --dry-run
 uv run python scripts/justlend/repair_current_collateral_sides.py --address <TRON_ADDRESS>
+uv run python scripts/justlend/backfill_current_positions_from_history.py --user-source history --skip-existing
 ```
 
 说明：
