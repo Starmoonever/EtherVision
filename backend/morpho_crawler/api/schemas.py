@@ -123,7 +123,7 @@ class MorphoMarketListItem(BaseModel):
 class MorphoMarketListResponse(BaseModel):
     page: int = Field(description="当前页码（从 1 开始）。")
     page_size: int = Field(description="每页条数。")
-    total_count: int = Field(description="硬编码市场总数。")
+    total_count: int = Field(description="市场缓存表中的总市场数。")
     total_pages: int = Field(description="总页数。")
     markets: list[MorphoMarketListItem] = Field(
         description="本页市场列表（含 TVL 与利用率）。"
