@@ -94,7 +94,7 @@ class JustLendPositionResponse(BaseModel):
     ltv: str = Field(description="估算加权抵押率。")
     liquidation_threshold: str = Field(description="估算清算阈值。")
     data_source: str = Field(description="数据来源：database 或 api。")
-    assets: list[JustLendPositionAssetResponse] = Field(description="逐资产仓位明细。")
+    assets: list[JustLendPositionAssetResponse] = Field(description="资产仓位明细。")
 
 
 class JustLendPositionListItemResponse(BaseModel):
@@ -116,7 +116,7 @@ class JustLendPositionListItemResponse(BaseModel):
     )
     assets: list[JustLendPositionAssetResponse] = Field(
         default_factory=list,
-        description="逐资产仓位明细；detail=false 时为空。",
+        description="资产仓位明细；detail=false 时为空。",
     )
 
 
@@ -160,7 +160,7 @@ class JustLendPositionReplayPoint(BaseModel):
     liquidation_threshold: str = Field(description="估算清算阈值。")
     brief: str = Field(description="该数据点的简要说明。")
     assets: list[JustLendPositionAssetResponse] = Field(
-        default_factory=list, description="逐资产仓位明细。"
+        default_factory=list, description="资产仓位明细。"
     )
 
 

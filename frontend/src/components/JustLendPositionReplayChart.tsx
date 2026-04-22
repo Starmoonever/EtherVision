@@ -82,7 +82,7 @@ interface OperationMarkerDotProps {
   payload?: ReplayPointView;
 }
 
-type AssetSide = 'collateral' | 'borrow';
+type ReplayAssetKind = 'collateral' | 'borrow' | 'supply';
 type RiskViewMode = 'ALL' | 'LTV' | '健康因子' | '清算阈值';
 type BufferViewMode = 'ALL' | '总债务价值' | '折算抵押价值' | '清算缓冲';
 const JUSTLEND_HISTORY_START = '2020-12-01';
@@ -247,10 +247,31 @@ function buildReplayPoints(points: JustLendPositionReplayPoint[]): ReplayPointVi
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 }
 
-function summarizeAssets(assets: JustLendPositionReplayAsset[], side: AssetSide): AssetSlice[] {
+function isReplaySupplyAsset(asset: JustLendPositionReplayAsset): boolean {
+  return asset.position_type === 'supply';
+}
+
+function isReplayBorrowAsset(asset: JustLendPositionReplayAsset): boolean {
+  return asset.position_type === 'borrow';
+}
+
+function isReplayCollateralAsset(asset: JustLendPositionReplayAsset): boolean {
+  return isReplaySupplyAsset(asset) && asset.is_collateral;
+}
+
+function summarizeAssets(
+  assets: JustLendPositionReplayAsset[],
+  kind: ReplayAssetKind,
+): AssetSlice[] {
   const grouped = new Map<string, { amount: number; valueUsd: number }>();
   for (const asset of assets) {
-    if (asset.side !== side) continue;
+    const matches =
+      kind === 'collateral'
+        ? isReplayCollateralAsset(asset)
+        : kind === 'borrow'
+          ? isReplayBorrowAsset(asset)
+          : isReplaySupplyAsset(asset);
+    if (!matches) continue;
     const key = asset.symbol || asset.asset_address;
     const current = grouped.get(key) ?? { amount: 0, valueUsd: 0 };
     current.amount += toNum(asset.amount);
@@ -707,7 +728,7 @@ export function JustLendPositionReplayChart({
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="justlend-empty-state">暂无抵押资产</div>
+                <div className="justlend-empty-state">不存在抵押资产</div>
               )}
             </div>
             {renderAssetLegend(collateralAssets)}
@@ -809,12 +830,21 @@ export function JustLendPositionReplayChart({
           <div
             style={{
               display: 'flex',
-              justifyContent: 'flex-end',
+              justifyContent: 'space-between',
               gap: '1rem',
               flexWrap: 'wrap',
               alignItems: 'center',
             }}
           >
+            <div className="justlend-history-range-summary">
+              <span className="justlend-history-range-summary-label">当前查询范围</span>
+              <span className="justlend-history-range-summary-value">
+                {appliedRange.start} 至 {appliedRange.end}，共 {data.length} 个快照点。
+                {selectedPoint
+                  ? ` 当前选中时点：${selectedPoint.timestampLabel}`
+                  : ' 当前区间暂无可选时点。'}
+              </span>
+            </div>
             <div
               style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', alignItems: 'center' }}
             >
@@ -883,16 +913,6 @@ export function JustLendPositionReplayChart({
               >
                 应用时间范围
               </button>
-            </div>
-          </div>
-
-          <div className="justlend-banner justlend-banner-soft">
-            <div className="justlend-banner-title">当前查询范围</div>
-            <div className="justlend-banner-copy">
-              {appliedRange.start} 至 {appliedRange.end}，共 {data.length} 个快照点。
-              {selectedPoint
-                ? ` 当前选中时点：${selectedPoint.timestampLabel}`
-                : ' 当前区间暂无可选时点。'}
             </div>
           </div>
 

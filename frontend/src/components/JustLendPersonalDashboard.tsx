@@ -26,6 +26,7 @@ import { justLendChartTheme } from './justlendTheme';
 
 interface JustLendPersonalDashboardProps {
   address: string;
+  showReplayAnalysis?: boolean;
 }
 
 interface AllocationItem {
@@ -37,7 +38,7 @@ interface AllocationItem {
 
 interface ExposureItem {
   asset: string;
-  collateral: number;
+  supply: number;
   borrow: number;
 }
 
@@ -66,9 +67,10 @@ const explainItems: ExplainItem[] = [
   },
   {
     term: '资产构成',
-    formula: '按 side=collateral 或 borrow 聚合 value_usd',
-    meaning: '帮助你看清仓位集中在哪些抵押资产和债务资产。',
-    riskHint: '单一资产过度集中时，局部波动会显著放大账户风险。',
+    formula: '按 position_type 与 is_collateral 聚合 value_usd',
+    meaning: '帮助你看清仓位集中在哪些抵押资产、存款资产和债务资产。',
+    riskHint:
+      '只有 supply 且 is_collateral=true 的资产会进入抵押资产构成，borrow 才会进入债务资产分布。',
   },
 ];
 
@@ -181,14 +183,40 @@ function formatDateTime(value: string): string {
   return new Date(timestamp).toLocaleString();
 }
 
+function isSupplyAsset(asset: JustLendPositionAsset): boolean {
+  return (
+    String(asset.position_type || '')
+      .trim()
+      .toLowerCase() === 'supply'
+  );
+}
+
+function isBorrowAsset(asset: JustLendPositionAsset): boolean {
+  return (
+    String(asset.position_type || '')
+      .trim()
+      .toLowerCase() === 'borrow'
+  );
+}
+
+function isCollateralAsset(asset: JustLendPositionAsset): boolean {
+  return isSupplyAsset(asset) && Boolean(asset.is_collateral);
+}
+
 function summarizeAssets(
   assets: JustLendPositionAsset[],
-  side: 'collateral' | 'borrow',
+  kind: 'collateral' | 'borrow' | 'supply',
 ): AllocationItem[] {
   const aggregated = new Map<string, { amount: number; valueUsd: number }>();
 
   for (const asset of assets) {
-    if (asset.side !== side) continue;
+    const matches =
+      kind === 'collateral'
+        ? isCollateralAsset(asset)
+        : kind === 'borrow'
+          ? isBorrowAsset(asset)
+          : isSupplyAsset(asset);
+    if (!matches) continue;
     const symbol = asset.symbol || asset.asset_address;
     const current = aggregated.get(symbol) || { amount: 0, valueUsd: 0 };
     current.amount += toNum(asset.amount);
@@ -214,13 +242,13 @@ function buildExposureData(assets: JustLendPositionAsset[]): ExposureItem[] {
     const key = asset.symbol || asset.asset_address;
     const current = aggregated.get(key) || {
       asset: key,
-      collateral: 0,
+      supply: 0,
       borrow: 0,
     };
 
-    if (asset.side === 'collateral') {
-      current.collateral += toNum(asset.value_usd);
-    } else if (asset.side === 'borrow') {
+    if (isSupplyAsset(asset)) {
+      current.supply += toNum(asset.value_usd);
+    } else if (isBorrowAsset(asset)) {
       current.borrow += toNum(asset.value_usd);
     }
 
@@ -228,7 +256,7 @@ function buildExposureData(assets: JustLendPositionAsset[]): ExposureItem[] {
   }
 
   return Array.from(aggregated.values()).sort(
-    (a, b) => b.collateral + b.borrow - (a.collateral + a.borrow),
+    (a, b) => b.supply + b.borrow - (a.supply + a.borrow),
   );
 }
 
@@ -341,7 +369,10 @@ function riskScoreTone(score: number): string {
   return '#ef4444';
 }
 
-export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboardProps) {
+export function JustLendPersonalDashboard({
+  address,
+  showReplayAnalysis = true,
+}: JustLendPersonalDashboardProps) {
   const [data, setData] = useState<JustLendPositionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -432,8 +463,8 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
   const ltvPercent = ratioToPercent(data.ltv);
   const thresholdPercent = ratioToPercent(data.liquidation_threshold);
   const riskGap = Math.max(0, thresholdPercent - ltvPercent);
-  const collateralCount = data.assets.filter((asset) => asset.side === 'collateral').length;
-  const borrowCount = data.assets.filter((asset) => asset.side === 'borrow').length;
+  const collateralCount = data.assets.filter(isCollateralAsset).length;
+  const borrowCount = data.assets.filter(isBorrowAsset).length;
   const riskState = buildRiskState(data, riskGap, totalCollateralUsd, totalDebtUsd);
   const topCollateral = collateralData[0];
   const topBorrow = borrowData[0];
@@ -455,13 +486,13 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
   const capacityRemainingPct = capacityBase > 0 ? (availableBorrowUsd / capacityBase) * 100 : 0;
   const bilateralData = exposureData.slice(0, 8).map((item) => ({
     asset: item.asset,
-    collateral: item.collateral,
+    supply: item.supply,
     borrow: item.borrow * -1,
   }));
   const bilateralDomainMax =
     Math.max(
       1,
-      ...bilateralData.map((item) => Math.max(Math.abs(item.collateral), Math.abs(item.borrow))),
+      ...bilateralData.map((item) => Math.max(Math.abs(item.supply), Math.abs(item.borrow))),
     ) * 1.15;
   const bulletMarkersTooClose = Math.abs(thresholdPercent - ltvPercent) < 10;
 
@@ -678,14 +709,11 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 <strong>{formatVaultNumber(totalDebtUsd, { currency: true })}</strong>
               </div>
               <div className="justlend-capacity-item">
-                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
-                <span>剩余可借额度</span>
-                <strong>{formatVaultNumber(availableBorrowUsd, { currency: true })}</strong>
-              </div>
-              <div className="justlend-capacity-item">
                 <span className="justlend-risk-dot" style={{ background: '#94a3b8' }} />
-                <span>已使用比例</span>
-                <strong>{capacityUsedPct.toFixed(2)}%</strong>
+                <span>剩余可借额度</span>
+                <strong style={{ color: '#cbd5e1' }}>
+                  {formatVaultNumber(availableBorrowUsd, { currency: true })}
+                </strong>
               </div>
             </div>
             <div className="justlend-caption">
@@ -831,7 +859,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
             <div className="justlend-banner justlend-banner-soft">
               <div className="justlend-banner-title">当前无活跃借款</div>
               <div className="justlend-banner-copy">
-                页面仍会展示抵押结构，但没有债务时，健康因子和 LTV
+                页面仍会展示抵押与存款结构，但没有债务时，健康因子和 LTV
                 的风险解释更偏向“仓位快照”而不是“清算压力”。
               </div>
             </div>
@@ -915,7 +943,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                 </div>
               </div>
             ) : (
-              <div className="justlend-empty-state">暂无抵押资产数据</div>
+              <div className="justlend-empty-state">不存在抵押资产</div>
             )}
           </div>
         </div>
@@ -1041,15 +1069,15 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
                   ))}
                 </Bar>
                 <Bar
-                  dataKey="collateral"
-                  name="抵押价值"
+                  dataKey="supply"
+                  name="存款价值"
                   fill={justLendChartTheme.series.collateral}
                   stackId="bilateral"
                   barSize={18}
                 >
                   {bilateralData.map((entry) => (
                     <Cell
-                      key={`collateral-${entry.asset}`}
+                      key={`supply-${entry.asset}`}
                       fill={justLendChartTheme.series.collateral}
                     />
                   ))}
@@ -1064,7 +1092,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
 
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
-          <span className="card-title">逐资产仓位明细</span>
+          <span className="card-title">资产仓位明细</span>
           <span className="badge" style={justLendChartTheme.badge.neutral}>
             {data.assets.length} 项
           </span>
@@ -1083,9 +1111,19 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
             <tbody>
               {data.assets.length ? (
                 data.assets.map((asset) => (
-                  <tr key={`${asset.asset_address}-${asset.side}`}>
+                  <tr
+                    key={`${asset.asset_address}-${asset.position_type}-${asset.is_collateral ? '1' : '0'}`}
+                  >
                     <td className="token-symbol">{asset.symbol || 'Unknown'}</td>
-                    <td>{asset.side}</td>
+                    <td>
+                      {isBorrowAsset(asset)
+                        ? 'borrow'
+                        : isCollateralAsset(asset)
+                          ? 'collateral'
+                          : isSupplyAsset(asset)
+                            ? 'supply'
+                            : asset.position_type}
+                    </td>
                     <td className="right mono">
                       {toNum(asset.amount).toLocaleString(undefined, {
                         maximumFractionDigits: 6,
@@ -1098,7 +1136,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               ) : (
                 <tr>
                   <td colSpan={5} style={{ color: '#64748b' }}>
-                    该账户当前没有可展示的逐资产仓位明细
+                    该账户当前没有可展示的资产仓位明细
                   </td>
                 </tr>
               )}
@@ -1107,7 +1145,9 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         </div>
       </div>
 
-      <JustLendPositionReplayChart address={address} protocol={data.protocol} />
+      {showReplayAnalysis ? (
+        <JustLendPositionReplayChart address={address} protocol={data.protocol} />
+      ) : null}
     </div>
   );
 }
