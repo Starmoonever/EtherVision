@@ -9,6 +9,7 @@ from decimal import Decimal
 import re
 from typing import Any, cast
 
+from crawler_shared.api.constants import ETHEREUM_PRICE_ASSETS, PRICE_ASSET_ALIASES
 from crawler_shared.api.service import get_price
 from crawler_shared.price_history import (
     get_historical_price_usd,
@@ -69,6 +70,20 @@ BRIEF_LABELS = {
     "withdraw_collateral": "移除抵押",
     "liquidation": "被清算",
 }
+
+
+# api/morpho/markets相关：币名按共享字典映射到 ethereum token address
+def _resolve_ethereum_token_address(value: str) -> str | None:
+    key = value.strip()
+    if not key:
+        return None
+    alias_key = key.upper()
+    canonical_asset = PRICE_ASSET_ALIASES.get(alias_key, alias_key)
+    token = ETHEREUM_PRICE_ASSETS.get(canonical_asset.upper())
+    if not token:
+        return None
+    return str(token[1]).strip()
+
 
 # api/morpho/markets相关：GET /api/morpho/markets 从 Morpho Blue GraphQL 拉取单市场 TVL/利用率
 _MARKET_BY_ID_GRAPHQL = """
@@ -263,8 +278,8 @@ async def get_representative_markets_page(
     page_size: int,
     sort_by: str = "total_market_size_usd",
     sort_order: str = "desc",
-    loan_address: str | None = None,
-    collateral_address: str | None = None,
+    loan: str | None = None,
+    collateral: str | None = None,
 ) -> MorphoMarketListResponse:
     if page < 1:
         raise HTTPException(status_code=400, detail="page 必须从 1 开始")
@@ -298,18 +313,36 @@ async def get_representative_markets_page(
     order_column = sort_map[sort_key]
     order_direction = "ASC" if order_key == "asc" else "DESC"
     offset = (page - 1) * page_size
-    loan = loan_address.strip() if loan_address else ""
-    collateral = collateral_address.strip() if collateral_address else ""
+    loan_filter = loan.strip() if loan else ""
+    collateral_filter = collateral.strip() if collateral else ""
 
-    # api/morpho/markets相关：可选地址过滤条件（单传或双传）
+    # api/morpho/markets相关：可选过滤条件（0x 开头按地址，否则走共享映射字典转地址）
     where_parts = ["m.is_active = TRUE"]
     args: list[Any] = []
-    if loan:
-        where_parts.append(f"lower(m.loan_address) = lower(${len(args) + 1})")
-        args.append(loan)
-    if collateral:
-        where_parts.append(f"lower(m.collateral_address) = lower(${len(args) + 1})")
-        args.append(collateral)
+    if loan_filter:
+        if loan_filter.lower().startswith("0x"):
+            where_parts.append(f"lower(m.loan_address) = lower(${len(args) + 1})")
+            args.append(loan_filter)
+        else:
+            mapped = _resolve_ethereum_token_address(loan_filter)
+            if not mapped:
+                where_parts.append("1 = 0")
+            else:
+                where_parts.append(f"lower(m.loan_address) = lower(${len(args) + 1})")
+                args.append(mapped)
+    if collateral_filter:
+        if collateral_filter.lower().startswith("0x"):
+            where_parts.append(f"lower(m.collateral_address) = lower(${len(args) + 1})")
+            args.append(collateral_filter)
+        else:
+            mapped = _resolve_ethereum_token_address(collateral_filter)
+            if not mapped:
+                where_parts.append("1 = 0")
+            else:
+                where_parts.append(
+                    f"lower(m.collateral_address) = lower(${len(args) + 1})"
+                )
+                args.append(mapped)
     where_sql = " AND ".join(where_parts)
 
     async with pool.acquire() as conn:
