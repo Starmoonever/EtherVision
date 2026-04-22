@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -41,11 +40,7 @@ from ..rpc import (
     fetch_realtime_position,
     fetch_user_market_replay_events,
 )
-from .constants import (  # api/morpho/markets相关
-    MORPHO_BLUE_GRAPHQL_URL,
-    MORPHO_MARKETS_BLUE_API_CHAIN_ID,
-    MORPHO_MARKETS_HARDCODED,
-)
+from .constants import MORPHO_BLUE_GRAPHQL_URL  # api/morpho/markets相关
 from .schemas import (
     MorphoMarketAssetItem,  # api/morpho/markets相关
     MorphoMarketListItem,  # api/morpho/markets相关
@@ -259,78 +254,76 @@ async def get_representative_markets_page(
     pool: AsyncpgPool,
     page: int,
     page_size: int,
+    sort_by: str = "total_market_size_usd",
+    sort_order: str = "desc",
 ) -> MorphoMarketListResponse:
     if page < 1:
         raise HTTPException(status_code=400, detail="page 必须从 1 开始")
     if page_size < 1 or page_size > 100:
         raise HTTPException(status_code=400, detail="page_size 必须在 1~100 之间")
-
-    total = len(MORPHO_MARKETS_HARDCODED)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    start = (page - 1) * page_size
-    slice_rows = MORPHO_MARKETS_HARDCODED[start : start + page_size]
-    items: list[MorphoMarketListItem] = []
-    market_ids = [mid for mid, _pair in slice_rows]
-    row_map = await _fetch_market_rows_from_table(pool, market_ids)
-
-    misses = [(mid, pair) for mid, pair in slice_rows if mid.lower() not in row_map]
-    miss_metrics: dict[
-        str, tuple[float | None, float | None, dict[str, Any], dict[str, Any]]
-    ] = {}
-    if misses:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            fetched = await asyncio.gather(
-                *[
-                    _fetch_market_metrics_from_blue_api(
-                        client,
-                        market_id=mid,
-                        chain_id=MORPHO_MARKETS_BLUE_API_CHAIN_ID,
-                    )
-                    for mid, _pair in misses
-                ]
-            )
-        miss_metrics = {
-            mid.lower(): metric
-            for (mid, _pair), metric in zip(misses, fetched, strict=True)
-        }
-
-    for mid, pair in slice_rows:
-        table_row = row_map.get(mid.lower())
-        if table_row is not None:
-            items.append(
-                _market_item_from_table_row(
-                    market_id=mid,
-                    pair_fallback=pair,
-                    row=table_row,
-                )
-            )
-            continue
-
-        size_usd, util, loan_asset, collateral_asset = miss_metrics.get(
-            mid.lower(), (None, None, {}, {})
+    # api/morpho/markets相关：排序字段白名单，防止拼接 SQL 注入
+    sort_key = sort_by.strip().lower()
+    sort_map = {
+        "total_market_size_usd": "total_market_size_usd",
+        "utilization": "utilization",
+        "loan_symbol": "loan_symbol",
+        "collateral_symbol": "collateral_symbol",
+    }
+    order_key = sort_order.strip().lower()
+    if sort_key not in sort_map:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "sort_by 仅支持：total_market_size_usd, utilization, "
+                "loan_symbol, collateral_symbol"
+            ),
         )
-        if loan_asset and collateral_asset:
-            assets = [
-                MorphoMarketAssetItem(
-                    asset=(loan_asset.get("symbol") or "").strip(),
-                    token_address=(loan_asset.get("address") or "").strip(),
-                    role="loan",
-                ),
-                MorphoMarketAssetItem(
-                    asset=(collateral_asset.get("symbol") or "").strip(),
-                    token_address=(collateral_asset.get("address") or "").strip(),
-                    role="collateral",
-                ),
-            ]
-        else:
-            assets = _pair_to_assets(pair)
+    if order_key not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="sort_order 仅支持：asc 或 desc")
+
+    order_column = sort_map[sort_key]
+    order_direction = "ASC" if order_key == "asc" else "DESC"
+    offset = (page - 1) * page_size
+
+    async with pool.acquire() as conn:
+        total = int(
+            await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM loan.morpho_blue_current_markets
+                WHERE is_active = TRUE
+                """
+            )
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                market_id,
+                loan_symbol,
+                loan_address,
+                collateral_symbol,
+                collateral_address,
+                total_market_size_usd,
+                total_supply_assets,
+                total_borrow_assets
+            FROM loan.morpho_blue_current_markets
+            WHERE is_active = TRUE
+            ORDER BY {order_column} {order_direction} NULLS LAST, market_id ASC
+            OFFSET $1
+            LIMIT $2
+            """,
+            offset,
+            page_size,
+        )
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    items: list[MorphoMarketListItem] = []
+    for row in rows:
         items.append(
-            MorphoMarketListItem(
-                market_id=mid,
-                dataSource="chain",
-                assets=assets,
-                total_market_size_usd=size_usd,
-                utilization=util,
+            _market_item_from_table_row(
+                market_id=str(row["market_id"]),
+                pair_fallback="",
+                row=dict(row),
             )
         )
 

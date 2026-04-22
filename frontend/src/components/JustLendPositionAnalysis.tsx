@@ -5,7 +5,7 @@ import {
   type JustLendPositionAnalysisItem,
 } from '../api/justlend';
 import type { AggregatedRequestMeta } from '../api/requestMeta';
-import { ChartDataStatus } from './ChartAssist';
+import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { justLendChartTheme } from './justlendTheme';
 import { copyToClipboard } from '../shared/utils/copyToClipboard';
 import { JustLendPersonalDashboard } from './JustLendPersonalDashboard';
@@ -37,6 +37,8 @@ interface PositionQuery {
 interface PositionAnalysisViewItem extends JustLendPositionAnalysisItem {
   healthFactorDisplay: string;
   healthFactorValue: number;
+  healthFactorBlink: boolean;
+  healthFactorNativeInfinity: boolean;
   ltvPct: number | null;
   ltvDisplay: string;
   liquidationThresholdPct: number | null;
@@ -60,6 +62,23 @@ const sortMetricOptions: Array<{
 ];
 const positionTypeOptions: PositionType[] = ['all', 'supply', 'borrow'];
 const supplyCollateralOptions: SupplyCollateralFilter[] = ['all', 'collateral', 'not_collateral'];
+const healthFactorExplainItems: ExplainItem[] = [
+  {
+    term: '黄色闪烁',
+    meaning: '表示健康因子低于 1.1，仓位已进入高风险区。',
+    riskHint: '表示接近清算边界的账户地址。',
+  },
+  {
+    term: '绿色闪烁无风险',
+    meaning: '表示∞健康因子。',
+    riskHint: '这类账户单独高亮为原生无风险仓位。',
+  },
+  {
+    term: '绿色静态无风险',
+    meaning: '表示健康因子>5 和 <∞的账户。',
+    riskHint: '这类地址作为健康因子大于5小于∞的标识。',
+  },
+];
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -102,10 +121,10 @@ function formatHealthFactor(
     .toLowerCase();
   const borrow = Number(totalBorrow);
   const health = Number(healthFactor);
-  if (borrow === 0 && (raw === '0' || health === 0)) return '∞';
-  if (raw === 'inf' || raw === 'infinity') return '∞';
+  if (borrow === 0 && (raw === '0' || health === 0)) return '无风险';
+  if (raw === 'inf' || raw === 'infinity') return '无风险';
   const num = toNum(healthFactor);
-  if (!Number.isFinite(num) || num >= 1e12) return '∞';
+  if (!Number.isFinite(num) || num > 5) return '无风险';
   return num.toFixed(2);
 }
 
@@ -113,10 +132,57 @@ function getHealthFactorValue(
   healthFactor: string | number | null | undefined,
   totalBorrow: string | number | null | undefined,
 ): number {
-  const formatted = formatHealthFactor(healthFactor, totalBorrow);
-  if (formatted === '∞') return Infinity;
-  const parsed = Number(formatted);
-  return Number.isFinite(parsed) ? parsed : 0;
+  const raw = String(healthFactor ?? '')
+    .trim()
+    .toLowerCase();
+  const borrow = Number(totalBorrow);
+  const numericValue = Number(healthFactor);
+
+  if (raw === 'inf' || raw === 'infinity') return Infinity;
+  if (borrow === 0 && numericValue === 0) return Infinity;
+  if (Number.isFinite(numericValue)) return numericValue;
+
+  const fallback = toNum(healthFactor);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function shouldBlinkHealthFactorInfinity(
+  healthFactor: string | number | null | undefined,
+  totalBorrow: string | number | null | undefined,
+  totalSupply: string | number | null | undefined,
+  totalCollateral: string | number | null | undefined,
+): boolean {
+  if (formatHealthFactor(healthFactor, totalBorrow) !== '无风险') return false;
+
+  const borrow = toNum(totalBorrow);
+  const supply = toNum(totalSupply);
+  const collateral = toNum(totalCollateral);
+  if (borrow === 0 && (supply > 0 || collateral > 0)) return true;
+
+  const parsed = Number(healthFactor);
+  if (Number.isFinite(parsed) && parsed > 5) return false;
+
+  return true;
+}
+
+function isNativeHealthFactorInfinity(
+  healthFactor: string | number | null | undefined,
+  totalBorrow: string | number | null | undefined,
+  totalSupply: string | number | null | undefined,
+  totalCollateral: string | number | null | undefined,
+): boolean {
+  if (formatHealthFactor(healthFactor, totalBorrow) !== '无风险') return false;
+
+  const raw = String(healthFactor ?? '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'inf' || raw === 'infinity') return true;
+
+  const borrow = toNum(totalBorrow);
+  const supply = toNum(totalSupply);
+  const collateral = toNum(totalCollateral);
+  const parsed = Number(healthFactor);
+  return borrow === 0 && parsed === 0 && (supply > 0 || collateral > 0);
 }
 
 function normalizePercentValue(value: string | number | null | undefined): number | null {
@@ -143,6 +209,18 @@ function normalizePositionItem(item: JustLendPositionAnalysisItem): PositionAnal
     ...item,
     healthFactorDisplay: formatHealthFactor(item.health_factor, item.total_borrow_usd),
     healthFactorValue: getHealthFactorValue(item.health_factor, item.total_borrow_usd),
+    healthFactorBlink: shouldBlinkHealthFactorInfinity(
+      item.health_factor,
+      item.total_borrow_usd,
+      item.total_supply_usd,
+      item.total_collateral_usd,
+    ),
+    healthFactorNativeInfinity: isNativeHealthFactorInfinity(
+      item.health_factor,
+      item.total_borrow_usd,
+      item.total_supply_usd,
+      item.total_collateral_usd,
+    ),
     ltvPct,
     ltvDisplay: formatPercentValue(ltvPct),
     liquidationThresholdPct,
@@ -211,7 +289,7 @@ function buildAssetOptions(markets: JustLendMarketItem[]) {
 }
 
 function getHealthFactorTone(value: number, display: string) {
-  if (display === '∞' || value > 2) {
+  if (display === '无风险' || value > 2) {
     return { color: '#22c55e', className: '', fontWeight: 800 };
   }
   if (value <= 1.1) {
@@ -221,19 +299,6 @@ function getHealthFactorTone(value: number, display: string) {
     return { color: '#f59e0b', className: '', fontWeight: 800 };
   }
   return { color: '#e2e8f0', className: '', fontWeight: 700 };
-}
-
-function getRiskBufferTone(value: number | null) {
-  if (value === null || !Number.isFinite(value)) {
-    return { color: '#e2e8f0', fontWeight: 700 };
-  }
-  if (value <= 0) {
-    return { color: '#f87171', fontWeight: 900 };
-  }
-  if (value <= 5) {
-    return { color: '#FFBB28', fontWeight: 900 };
-  }
-  return { color: '#e2e8f0', fontWeight: 700 };
 }
 
 export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisProps) {
@@ -269,7 +334,6 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
   const activeSortLabel =
     sortMetricOptions.find((option) => option.sortBy === query.sortBy)?.label ?? '总存款';
   const orderLabel = query.order === 'desc' ? '降序' : '升序';
-  const showMatchedAssetValue = query.sortBy === 'asset_value_usd';
   const displayTitle = useMemo(() => {
     if (query.sortBy === 'total_collateral_usd') return '核心抵押头寸 (Top Collateral Positions)';
     if (query.sortBy === 'total_supply_usd') return '顶级供给头寸 (Top Supply Positions)';
@@ -639,36 +703,46 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                 <th>地址</th>
                 <th className="right">总存款</th>
                 <th className="right">总借款</th>
-                <th className="right">总抵押</th>
-                <th className="right">健康因子</th>
+                <th className="right">
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: '0.4rem',
+                    }}
+                  >
+                    <span>健康因子</span>
+                    <ChartInfoButton title="健康因子显示说明" items={healthFactorExplainItems} />
+                  </span>
+                </th>
                 <th className="right">LTV</th>
-                <th className="right">风险余量</th>
-                {showMatchedAssetValue ? <th className="right">当前账户资产</th> : null}
+                <th className="right">匹配资产价值</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td
-                    colSpan={showMatchedAssetValue ? 9 : 8}
-                    style={{ textAlign: 'center', padding: '2rem' }}
-                  >
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem' }}>
                     <div className="spinner"></div>
                   </td>
                 </tr>
               ) : items.length ? (
                 items.map((item, index) => {
-                  const collateral = toNum(item.total_collateral_usd);
                   const supply = toNum(item.total_supply_usd);
                   const borrow = toNum(item.total_borrow_usd);
                   const matchedAssetValue = toNum(item.matched_asset_value_usd);
                   const hf = item.healthFactorValue;
                   const hfTone = getHealthFactorTone(hf, item.healthFactorDisplay);
-                  const riskBufferTone = getRiskBufferTone(item.riskBufferPct);
-                  const riskBufferTooltip =
-                    item.riskBufferPct === null
-                      ? 'Liquidation Threshold: --\nLTV: --\nRisk Buffer: --'
-                      : `Liquidation Threshold: ${item.liquidationThresholdDisplay}\nLTV: ${item.ltvDisplay}\nRisk Buffer: ${item.riskBufferDisplay}`;
+                  const healthFactorClassName = [
+                    hfTone.className,
+                    item.healthFactorDisplay === '无风险' && item.healthFactorBlink
+                      ? 'justlend-hf-pulse-safe'
+                      : '',
+                    item.healthFactorNativeInfinity ? 'justlend-hf-native-infinity' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
                   return (
                     <tr
                       key={`${item.address}:${query.page}:${index}`}
@@ -702,11 +776,8 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                       <td className="right mono" title={formatFullCurrency(borrow)}>
                         {formatFullCurrency(borrow)}
                       </td>
-                      <td className="right mono" title={formatFullCurrency(collateral)}>
-                        {formatFullCurrency(collateral)}
-                      </td>
                       <td
-                        className={`right mono ${hfTone.className}`}
+                        className={`right mono ${healthFactorClassName}`}
                         style={{ color: hfTone.color, fontWeight: hfTone.fontWeight }}
                       >
                         {item.healthFactorDisplay}
@@ -714,30 +785,15 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
                       <td className="right mono" title={item.ltvDisplay}>
                         {item.ltvDisplay}
                       </td>
-                      <td
-                        className="right mono"
-                        title={riskBufferTooltip}
-                        style={{
-                          color: riskBufferTone.color,
-                          fontWeight: riskBufferTone.fontWeight,
-                        }}
-                      >
-                        {item.riskBufferDisplay}
+                      <td className="right mono" title={formatFullCurrency(matchedAssetValue)}>
+                        {formatFullCurrency(matchedAssetValue)}
                       </td>
-                      {showMatchedAssetValue ? (
-                        <td className="right mono" title={formatFullCurrency(matchedAssetValue)}>
-                          {formatFullCurrency(matchedAssetValue)}
-                        </td>
-                      ) : null}
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td
-                    colSpan={showMatchedAssetValue ? 9 : 8}
-                    style={{ textAlign: 'center', padding: '2rem' }}
-                  >
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem' }}>
                     暂无匹配仓位
                   </td>
                 </tr>

@@ -356,6 +356,7 @@ async def backfill_current_positions_from_history(
     dry_run: bool = False,
     only_success: bool = True,
     delete_closed: bool = True,
+    skip_existing: bool = False,
     market_addresses: Iterable[str] | None = None,
     user_source: str = "history",
 ) -> CurrentPositionBackfillStats:
@@ -449,6 +450,10 @@ async def backfill_current_positions_from_history(
 
     normalized_users, aliases_by_user = normalize_user_addresses(all_users)
     selected_users = normalized_users[:limit] if limit > 0 else normalized_users
+    existing_users: set[bytes] = set()
+    if skip_existing:
+        existing_rows = await fetch_all_current_user_addresses(pool)
+        existing_users = {normalize_user_address_bytes(row) for row in existing_rows}
     deduped_rpc_markets = list(dict.fromkeys(rpc_market_addresses))
     if not deduped_rpc_markets:
         config_markets = [
@@ -466,6 +471,9 @@ async def backfill_current_positions_from_history(
 
     stats = CurrentPositionBackfillStats(selected_users=len(selected_users))
     for user_address in selected_users:
+        if skip_existing and user_address in existing_users:
+            stats.skipped_users += 1
+            continue
         user_address_b58 = _tron_bytes_to_base58(user_address)
         legacy_aliases = aliases_by_user.get(user_address, [])
         try:
