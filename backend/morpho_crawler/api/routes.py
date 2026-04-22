@@ -112,14 +112,24 @@ async def market_list(
         "desc",
         description="排序方向：asc 或 desc，默认 desc",
     ),
+    loan_address: str | None = Query(
+        None,
+        description="可选过滤：借款侧 token address",
+    ),
+    collateral_address: str | None = Query(
+        None,
+        description="可选过滤：抵押侧 token address",
+    ),
 ) -> MorphoMarketListResponse:
-    # api/morpho/markets相关：支持分页与排序参数（从市场缓存表读取）
+    # api/morpho/markets相关：支持分页、排序与 loan/collateral 地址过滤
     return await get_representative_markets_page(
         pool=pool,
         page=page,
         page_size=page_size,
         sort_by=sort_by,
         sort_order=sort_order,
+        loan_address=loan_address,
+        collateral_address=collateral_address,
     )
 
 

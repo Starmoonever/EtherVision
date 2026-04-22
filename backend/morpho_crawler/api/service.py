@@ -263,6 +263,8 @@ async def get_representative_markets_page(
     page_size: int,
     sort_by: str = "total_market_size_usd",
     sort_order: str = "desc",
+    loan_address: str | None = None,
+    collateral_address: str | None = None,
 ) -> MorphoMarketListResponse:
     if page < 1:
         raise HTTPException(status_code=400, detail="page 必须从 1 开始")
@@ -296,17 +298,27 @@ async def get_representative_markets_page(
     order_column = sort_map[sort_key]
     order_direction = "ASC" if order_key == "asc" else "DESC"
     offset = (page - 1) * page_size
+    loan = loan_address.strip() if loan_address else ""
+    collateral = collateral_address.strip() if collateral_address else ""
+
+    # api/morpho/markets相关：可选地址过滤条件（单传或双传）
+    where_parts = ["m.is_active = TRUE"]
+    args: list[Any] = []
+    if loan:
+        where_parts.append(f"lower(m.loan_address) = lower(${len(args) + 1})")
+        args.append(loan)
+    if collateral:
+        where_parts.append(f"lower(m.collateral_address) = lower(${len(args) + 1})")
+        args.append(collateral)
+    where_sql = " AND ".join(where_parts)
 
     async with pool.acquire() as conn:
-        total = int(
-            await conn.fetchval(
-                """
-                SELECT COUNT(*)
-                FROM loan.morpho_blue_current_markets
-                WHERE is_active = TRUE
-                """
-            )
-        )
+        total_query = f"""
+            SELECT COUNT(*)
+            FROM loan.morpho_blue_current_markets AS m
+            WHERE {where_sql}
+        """
+        total = int(await conn.fetchval(total_query, *args))
         rows = await conn.fetch(
             f"""
             SELECT
@@ -319,11 +331,12 @@ async def get_representative_markets_page(
                 total_supply_assets,
                 total_borrow_assets
             FROM loan.morpho_blue_current_markets AS m
-            WHERE m.is_active = TRUE
+            WHERE {where_sql}
             ORDER BY {order_column} {order_direction} NULLS LAST, market_id ASC
-            OFFSET $1
-            LIMIT $2
+            OFFSET ${len(args) + 1}
+            LIMIT ${len(args) + 2}
             """,
+            *args,
             offset,
             page_size,
         )
