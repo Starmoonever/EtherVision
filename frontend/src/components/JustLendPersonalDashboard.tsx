@@ -26,6 +26,7 @@ import { justLendChartTheme } from './justlendTheme';
 
 interface JustLendPersonalDashboardProps {
   address: string;
+  showReplayAnalysis?: boolean;
 }
 
 interface AllocationItem {
@@ -368,7 +369,10 @@ function riskScoreTone(score: number): string {
   return '#ef4444';
 }
 
-export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboardProps) {
+export function JustLendPersonalDashboard({
+  address,
+  showReplayAnalysis = true,
+}: JustLendPersonalDashboardProps) {
   const [data, setData] = useState<JustLendPositionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1091,7 +1095,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
 
       <div className="card" style={{ marginBottom: 0 }}>
         <div className="card-header">
-          <span className="card-title">逐资产仓位明细</span>
+          <span className="card-title">资产仓位明细</span>
           <span className="badge" style={justLendChartTheme.badge.neutral}>
             {data.assets.length} 项
           </span>
@@ -1135,7 +1139,7 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
               ) : (
                 <tr>
                   <td colSpan={5} style={{ color: '#64748b' }}>
-                    该账户当前没有可展示的逐资产仓位明细
+                    该账户当前没有可展示的资产仓位明细
                   </td>
                 </tr>
               )}
@@ -1144,7 +1148,9 @@ export function JustLendPersonalDashboard({ address }: JustLendPersonalDashboard
         </div>
       </div>
 
-      <JustLendPositionReplayChart address={address} protocol={data.protocol} />
+      {showReplayAnalysis ? (
+        <JustLendPositionReplayChart address={address} protocol={data.protocol} />
+      ) : null}
     </div>
   );
 }

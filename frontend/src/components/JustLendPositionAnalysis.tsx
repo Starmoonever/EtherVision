@@ -870,7 +870,7 @@ export function JustLendPositionAnalysis({ markets }: JustLendPositionAnalysisPr
               </button>
             </div>
 
-            <JustLendPersonalDashboard address={drawerAddress} />
+            <JustLendPersonalDashboard address={drawerAddress} showReplayAnalysis={false} />
           </div>
         </div>
       ) : null}
