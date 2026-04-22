@@ -1,7 +1,11 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { fetchMorphoMarketStateWithMeta } from '../../../api/morpho';
+import {
+  fetchMorphoMarketStateWithMeta,
+  type MorphoMarketConfig,
+  type MorphoMarketSortField,
+  type MorphoMarketSortOrder,
+} from '../../../api/morpho';
 import { fetchAssetPrice } from '../../../api/price';
-import { ErrorNotice } from '../../../shared/components/ErrorNotice';
 import { PageHero } from '../../../shared/components/PageHero';
 import {
   mergeMorphoMarketData,
@@ -11,113 +15,76 @@ import {
 import { MorphoMarketTable, type MorphoSortMode } from '../components/MorphoMarketTable';
 
 const MORPHO_MARKETS_PAGE_SIZE = 10;
+type MorphoMarketViewMode = 'mainstream' | 'query';
 
-function parseMetric(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
+function isMorphoMarketId(value: string): boolean {
+  return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
 }
 
-function normalizeTokenAmount(
-  value: string | null | undefined,
-  decimals: number | null | undefined,
-  isRaw: boolean,
-): number | null {
-  if (!value) return null;
-  if (!isRaw) return parseMetric(value);
-
-  const safeDecimals = Number.isInteger(decimals) ? Number(decimals) : 0;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const negative = trimmed.startsWith('-');
-  const digits = negative ? trimmed.slice(1) : trimmed;
-  if (!/^\d+$/.test(digits)) return parseMetric(value);
-
-  const paddedDigits = digits.padStart(safeDecimals + 1, '0');
-  const integerPart =
-    safeDecimals === 0 ? paddedDigits : paddedDigits.slice(0, paddedDigits.length - safeDecimals);
-  const fractionalPart =
-    safeDecimals === 0 ? '' : paddedDigits.slice(-safeDecimals).replace(/0+$/, '');
-  const normalizedText = `${negative ? '-' : ''}${integerPart}${fractionalPart ? `.${fractionalPart}` : ''}`;
-  const numeric = Number(normalizedText);
-  return Number.isFinite(numeric) ? numeric : null;
+function createMarketConfigFromId(marketId: string): MorphoMarketConfig {
+  return {
+    market_id: marketId,
+    collateral_symbol: null,
+    loan_symbol: null,
+    collateral_token_address: null,
+    loan_token_address: null,
+    collateral_decimals: null,
+    loan_decimals: null,
+    lltv: null,
+    oracle: null,
+    irm: null,
+    pair: null,
+    total_market_size_usd: null,
+    utilization: null,
+  };
 }
 
-async function enrichMarketUsdMetrics(market: MorphoMarketView): Promise<MorphoMarketView> {
+async function enrichMarketTokenPrices(market: MorphoMarketView): Promise<MorphoMarketView> {
   const loanPriceAsset = market.loan_token_address || market.loan_symbol;
   const collateralPriceAsset = market.collateral_token_address || market.collateral_symbol;
-  if (!loanPriceAsset) return market;
 
-  try {
-    const loanTokenPriceUsd = await fetchAssetPrice(loanPriceAsset, { chain: 'ethereum' });
-    const collateralTokenPriceUsd = collateralPriceAsset
-      ? await fetchAssetPrice(collateralPriceAsset, { chain: 'ethereum' }).catch(() => null)
-      : null;
-    const supplyAmount = normalizeTokenAmount(
-      market.total_supply_assets,
-      market.loan_decimals,
-      market.total_supply_assets_is_raw,
-    );
-    const borrowAmount = normalizeTokenAmount(
-      market.total_borrow_assets,
-      market.loan_decimals,
-      market.total_borrow_assets_is_raw,
-    );
-    const availableLiquidityAmount = normalizeTokenAmount(
-      market.available_liquidity,
-      market.loan_decimals,
-      market.available_liquidity_is_raw,
-    );
-    const supplyUsd = supplyAmount === null ? null : supplyAmount * loanTokenPriceUsd;
-    const borrowUsd = borrowAmount === null ? null : borrowAmount * loanTokenPriceUsd;
-    const availableLiquidityUsd =
-      availableLiquidityAmount === null ? null : availableLiquidityAmount * loanTokenPriceUsd;
+  const [loanTokenPriceUsd, collateralTokenPriceUsd] = await Promise.all([
+    loanPriceAsset
+      ? fetchAssetPrice(loanPriceAsset, { chain: 'ethereum' }).catch(() => null)
+      : Promise.resolve(null),
+    collateralPriceAsset
+      ? fetchAssetPrice(collateralPriceAsset, { chain: 'ethereum' }).catch(() => null)
+      : Promise.resolve(null),
+  ]);
 
-    return {
-      ...market,
-      total_market_size_usd: supplyUsd === null ? market.total_market_size_usd : String(supplyUsd),
-      borrow_market_size_usd: borrowUsd === null ? null : String(borrowUsd),
-      available_space_usd:
-        supplyUsd === null || borrowUsd === null
-          ? null
-          : String(Math.max(0, supplyUsd - borrowUsd)),
-      available_liquidity_usd:
-        availableLiquidityUsd === null ? null : String(Math.max(0, availableLiquidityUsd)),
-      loan_token_price_usd: String(loanTokenPriceUsd),
-      collateral_token_price_usd:
-        collateralTokenPriceUsd === null ? null : String(collateralTokenPriceUsd),
-    };
-  } catch {
-    return market;
-  }
+  return {
+    ...market,
+    loan_token_price_usd: loanTokenPriceUsd === null ? null : String(loanTokenPriceUsd),
+    collateral_token_price_usd:
+      collateralTokenPriceUsd === null ? null : String(collateralTokenPriceUsd),
+  };
 }
 
-function sortMarkets(markets: MorphoMarketView[], sortMode: MorphoSortMode): MorphoMarketView[] {
-  if (sortMode === 'default') return [...markets];
-
-  const sorted = [...markets];
-  sorted.sort((left, right) => {
-    const isMarketSizeSort = sortMode.startsWith('totalMarketSize');
-    const leftMetric = isMarketSizeSort
-      ? parseMetric(left.total_market_size_usd)
-      : parseMetric(left.utilization);
-    const rightMetric = isMarketSizeSort
-      ? parseMetric(right.total_market_size_usd)
-      : parseMetric(right.utilization);
-
-    if (leftMetric === null && rightMetric === null) return 0;
-    if (leftMetric === null) return 1;
-    if (rightMetric === null) return -1;
-
-    return sortMode.endsWith('Asc') ? leftMetric - rightMetric : rightMetric - leftMetric;
-  });
-
-  return sorted;
+function resolveMarketSortParams(sortMode: MorphoSortMode): {
+  sortBy?: MorphoMarketSortField;
+  sortOrder?: MorphoMarketSortOrder;
+} {
+  if (sortMode === 'loanSymbolDesc') return { sortBy: 'loan_symbol', sortOrder: 'desc' };
+  if (sortMode === 'collateralSymbolDesc') {
+    return { sortBy: 'collateral_symbol', sortOrder: 'desc' };
+  }
+  if (sortMode === 'totalMarketSizeAsc') {
+    return { sortBy: 'total_market_size_usd', sortOrder: 'asc' };
+  }
+  if (sortMode === 'totalMarketSizeDesc') {
+    return { sortBy: 'total_market_size_usd', sortOrder: 'desc' };
+  }
+  if (sortMode === 'utilizationAsc') return { sortBy: 'utilization', sortOrder: 'asc' };
+  if (sortMode === 'utilizationDesc') return { sortBy: 'utilization', sortOrder: 'desc' };
+  return {};
 }
 
 export function MorphoMarketPage() {
+  const [activeView, setActiveView] = useState<MorphoMarketViewMode>('mainstream');
   const [marketPage, setMarketPage] = useState(1);
+  const [sortMode, setSortMode] = useState<MorphoSortMode>('default');
+  const [marketFilters, setMarketFilters] = useState({ loan: '', collateral: '' });
+  const sortParams = useMemo(() => resolveMarketSortParams(sortMode), [sortMode]);
   const {
     markets,
     marketCount,
@@ -130,84 +97,119 @@ export function MorphoMarketPage() {
   } = useMorphoData({
     page: marketPage,
     pageSize: MORPHO_MARKETS_PAGE_SIZE,
+    sortBy: sortParams.sortBy,
+    sortOrder: sortParams.sortOrder,
+    loan: marketFilters.loan,
+    collateral: marketFilters.collateral,
   });
-  const [sortMode, setSortMode] = useState<MorphoSortMode>('default');
-  const [search, setSearch] = useState('');
-  const deferredSearch = useDeferredValue(search);
+  const [querySearch, setQuerySearch] = useState('');
+  const deferredQuerySearch = useDeferredValue(querySearch);
+  const queriedMarketId = useMemo(() => {
+    const keyword = deferredQuerySearch.trim();
+    return isMorphoMarketId(keyword) ? keyword.toLowerCase() : '';
+  }, [deferredQuerySearch]);
   const [expandedMarketId, setExpandedMarketId] = useState('');
   const [marketStateById, setMarketStateById] = useState<Record<string, MorphoMarketView>>({});
   const [marketStateLoadingById, setMarketStateLoadingById] = useState<Record<string, boolean>>({});
   const [marketStateErrorById, setMarketStateErrorById] = useState<Record<string, string>>({});
 
   const marketsWithLazyState = useMemo(
-    () => markets.map((market) => marketStateById[market.market_id] ?? market),
+    () =>
+      markets.map(
+        (market) =>
+          marketStateById[market.market_id] ??
+          marketStateById[market.market_id.toLowerCase()] ??
+          market,
+      ),
     [marketStateById, markets],
   );
 
-  const filteredMarkets = useMemo(() => {
-    const keyword = deferredSearch.trim().toLowerCase();
+  const queriedMarket = useMemo(() => {
+    if (!queriedMarketId) return null;
+    return (
+      marketStateById[queriedMarketId] ??
+      mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null)
+    );
+  }, [marketStateById, queriedMarketId]);
 
-    return marketsWithLazyState.filter((market) => {
-      if (!keyword) return true;
-
-      return [
-        market.pair,
-        market.market_id,
-        market.loan_symbol,
-        market.collateral_symbol,
-        market.loan_token_address,
-        market.collateral_token_address,
-        market.oracle,
-        market.irm,
-      ]
-        .filter(Boolean)
-        .some((value) => value?.toLowerCase().includes(keyword));
-    });
-  }, [deferredSearch, marketsWithLazyState]);
-
-  const visibleMarkets = useMemo(
-    () => sortMarkets(filteredMarkets, sortMode),
-    [filteredMarkets, sortMode],
-  );
+  const visibleMarkets = marketsWithLazyState;
+  const queryMarkets = useMemo(() => (queriedMarket ? [queriedMarket] : []), [queriedMarket]);
 
   useEffect(() => {
     setMarketPage((current) => Math.min(Math.max(current, 1), totalMarketPages));
   }, [totalMarketPages]);
 
-  useEffect(() => {
-    if (
-      expandedMarketId &&
-      !visibleMarkets.some((market) => market.market_id === expandedMarketId)
-    ) {
-      setExpandedMarketId('');
-    }
-  }, [expandedMarketId, visibleMarkets]);
-
   const loadMarketState = useCallback(async (market: MorphoMarketView, force = false) => {
-    setMarketStateLoadingById((current) => ({ ...current, [market.market_id]: true }));
+    const marketStateKey = market.market_id.toLowerCase();
+
+    setMarketStateLoadingById((current) => ({
+      ...current,
+      [market.market_id]: true,
+      [marketStateKey]: true,
+    }));
     setMarketStateErrorById((current) => {
       const next = { ...current };
       delete next[market.market_id];
+      delete next[marketStateKey];
       return next;
     });
 
     try {
       const result = await fetchMorphoMarketStateWithMeta(market.market_id, { force });
       const merged = mergeMorphoMarketData(market, result.data);
-      const enriched = await enrichMarketUsdMetrics(merged);
+      const enriched = await enrichMarketTokenPrices(merged);
       setMarketStateById((current) => ({
         ...current,
         [market.market_id]: enriched,
+        [marketStateKey]: enriched,
       }));
     } catch (stateError) {
+      const message = stateError instanceof Error ? stateError.message : '无法加载市场详情';
       setMarketStateErrorById((current) => ({
         ...current,
-        [market.market_id]: stateError instanceof Error ? stateError.message : '无法加载市场详情',
+        [market.market_id]: message,
+        [marketStateKey]: message,
       }));
     } finally {
-      setMarketStateLoadingById((current) => ({ ...current, [market.market_id]: false }));
+      setMarketStateLoadingById((current) => ({
+        ...current,
+        [market.market_id]: false,
+        [marketStateKey]: false,
+      }));
     }
   }, []);
+
+  useEffect(() => {
+    if (activeView !== 'query' || !queriedMarketId) return;
+
+    setExpandedMarketId(queriedMarketId);
+    if (
+      marketStateById[queriedMarketId] ||
+      marketStateLoadingById[queriedMarketId] ||
+      marketStateErrorById[queriedMarketId]
+    ) {
+      return;
+    }
+
+    void loadMarketState(mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null));
+  }, [
+    activeView,
+    loadMarketState,
+    marketStateById,
+    marketStateErrorById,
+    marketStateLoadingById,
+    queriedMarketId,
+  ]);
+
+  useEffect(() => {
+    const activeMarkets = activeView === 'query' ? queryMarkets : visibleMarkets;
+    if (
+      expandedMarketId &&
+      !activeMarkets.some((market) => market.market_id === expandedMarketId)
+    ) {
+      setExpandedMarketId('');
+    }
+  }, [activeView, expandedMarketId, queryMarkets, visibleMarkets]);
 
   const handleToggleMarket = useCallback(
     (market: MorphoMarketView) => {
@@ -237,44 +239,61 @@ export function MorphoMarketPage() {
         hour12: false,
       })
     : 'N/A';
+  const querySearchText = querySearch.trim();
+  const queryEmptyText = querySearchText
+    ? isMorphoMarketId(querySearchText)
+      ? '正在等待该市场的 state 详情。'
+      : '请输入完整的 0x 开头 32 字节 market id。'
+    : '输入完整 market id 后，将直接返回该市场详情。';
 
   return (
     <>
       <PageHero
         title="Morpho 市场页面"
-        subtitle="市场列表保持轻量加载，展开单个市场后再读取实时详情。"
+        subtitle="浏览 Morpho 协议的市场数据，支持按分页查看和按 market id 查询两种模式。"
       />
 
-      <div className="card morpho-detail-card morpho-market-toolbar">
-        <div className="morpho-market-toolbar-copy">
-          <strong>数据状态</strong>
-          <span>
-            最近更新 {refreshedAtText} {fromCache ? '· 缓存命中' : '· 实时拉取'}
-          </span>
-        </div>
-        <div className="morpho-market-toolbar-actions">
-          <button type="button" className="switch-btn" onClick={() => void handleReload()}>
-            刷新数据
-          </button>
-        </div>
+      <div
+        className="tabs-container morpho-market-mode-tabs"
+        role="tablist"
+        aria-label="Morpho 市场视图"
+      >
+        <button
+          type="button"
+          className={activeView === 'mainstream' ? 'tab-btn active' : 'tab-btn'}
+          onClick={() => setActiveView('mainstream')}
+          role="tab"
+          aria-selected={activeView === 'mainstream'}
+        >
+          主流市场
+        </button>
+        <button
+          type="button"
+          className={activeView === 'query' ? 'tab-btn active' : 'tab-btn'}
+          onClick={() => setActiveView('query')}
+          role="tab"
+          aria-selected={activeView === 'query'}
+        >
+          市场查询
+        </button>
       </div>
 
-      <ErrorNotice message={error} />
-
-      {loading ? (
+      {activeView === 'mainstream' && loading ? (
         <div className="card morpho-market-loading-card">
           <div className="spinner"></div>
         </div>
-      ) : (
+      ) : activeView === 'mainstream' ? (
         <MorphoMarketTable
           markets={visibleMarkets}
           expandedMarketId={expandedMarketId}
           onToggleMarket={handleToggleMarket}
           marketStateLoadingById={marketStateLoadingById}
           marketStateErrorById={marketStateErrorById}
-          search={search}
-          onSearchChange={(value) => {
-            setSearch(value);
+          title="主流市场列表"
+          subtitle="分页展示市场核心指标，展开单个市场后再加载实时详情。"
+          marketFilters={marketFilters}
+          onMarketFilterCommit={(filters) => {
+            setMarketFilters(filters);
             setMarketPage(1);
           }}
           sortMode={sortMode}
@@ -287,8 +306,48 @@ export function MorphoMarketPage() {
           totalPages={totalMarketPages}
           pageSize={MORPHO_MARKETS_PAGE_SIZE}
           onPageChange={setMarketPage}
+          tableError={error}
+        />
+      ) : (
+        <MorphoMarketTable
+          markets={queryMarkets}
+          expandedMarketId={expandedMarketId}
+          onToggleMarket={handleToggleMarket}
+          marketStateLoadingById={marketStateLoadingById}
+          marketStateErrorById={marketStateErrorById}
+          title="市场查询"
+          subtitle="输入完整 market id 后直接请求 state 接口，并返回这一个市场的详情。"
+          search={querySearch}
+          onSearchChange={setQuerySearch}
+          searchPlaceholder="输入完整 Morpho market id"
+          sortMode={sortMode}
+          onSortModeChange={setSortMode}
+          totalMarkets={queryMarkets.length}
+          page={1}
+          totalPages={1}
+          pageSize={Math.max(queryMarkets.length, 1)}
+          onPageChange={() => undefined}
+          showSorting={false}
+          showPagination={false}
+          emptyText={queryEmptyText}
         />
       )}
+
+      {activeView === 'mainstream' ? (
+        <div className="card morpho-detail-card morpho-market-toolbar">
+          <div className="morpho-market-toolbar-copy">
+            <strong>数据状态</strong>
+            <span>
+              最近更新 {refreshedAtText} {fromCache ? '· 缓存命中' : '· 实时拉取'}
+            </span>
+          </div>
+          <div className="morpho-market-toolbar-actions">
+            <button type="button" className="switch-btn" onClick={() => void handleReload()}>
+              刷新数据
+            </button>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
