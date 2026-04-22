@@ -112,14 +112,24 @@ async def market_list(
         "desc",
         description="排序方向：asc 或 desc，默认 desc",
     ),
+    loan: str | None = Query(
+        None,
+        description="可选过滤：借款侧（0x 开头按地址过滤，否则按币名过滤）",
+    ),
+    collateral: str | None = Query(
+        None,
+        description="可选过滤：抵押侧（0x 开头按地址过滤，否则按币名过滤）",
+    ),
 ) -> MorphoMarketListResponse:
-    # api/morpho/markets相关：支持分页与排序参数（从市场缓存表读取）
+    # api/morpho/markets相关：支持分页、排序与 loan/collateral 地址/币名过滤
     return await get_representative_markets_page(
         pool=pool,
         page=page,
         page_size=page_size,
         sort_by=sort_by,
         sort_order=sort_order,
+        loan=loan,
+        collateral=collateral,
     )
 
 
@@ -131,6 +141,7 @@ async def market_list(
 )
 async def market_state(
     request: Request,
+    pool: AsyncpgPool,
     market_id: str = Query(..., description="Morpho market id (bytes32 hex)"),
     date: str | None = Query(
         None, description="预留历史参数；当前仅支持实时 latest 数据"
@@ -138,6 +149,7 @@ async def market_state(
 ) -> MorphoMarketStateResponse:
     return await get_market_state(
         _w3(request),
+        pool=pool,
         market_id=market_id,
         date=date,
     )
