@@ -6,7 +6,8 @@ const JUSTLEND_CACHE_TTL_MS = 5 * 60 * 1000;
 export interface JustLendPositionAsset {
   asset_address: string;
   symbol: string | null;
-  side: string;
+  position_type: string;
+  is_collateral: boolean;
   amount: string;
   price_usd: string;
   value_usd: string;
@@ -18,6 +19,7 @@ export interface JustLendPositionResponse {
   address: string;
   snapshot_at: string;
   block_timestamp: string;
+  total_deposit_usd: string;
   total_collateral_usd: string;
   total_debt_usd: string;
   available_borrow_usd: string;
@@ -31,7 +33,8 @@ export interface JustLendPositionResponse {
 export interface JustLendPositionReplayAsset {
   asset_address: string;
   symbol: string | null;
-  side: string;
+  position_type: string;
+  is_collateral: boolean;
   amount: string;
   price_usd: string;
   value_usd: string;
