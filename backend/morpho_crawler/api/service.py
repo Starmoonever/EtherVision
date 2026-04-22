@@ -264,10 +264,15 @@ async def get_representative_markets_page(
     # api/morpho/markets相关：排序字段白名单，防止拼接 SQL 注入
     sort_key = sort_by.strip().lower()
     sort_map = {
-        "total_market_size_usd": "total_market_size_usd",
-        "utilization": "utilization",
-        "loan_symbol": "loan_symbol",
-        "collateral_symbol": "collateral_symbol",
+        "total_market_size_usd": "m.total_market_size_usd",
+        "utilization": (
+            "CASE "
+            "WHEN m.total_supply_assets IS NULL OR m.total_supply_assets = 0 THEN NULL "
+            "ELSE (m.total_borrow_assets / m.total_supply_assets) "
+            "END"
+        ),
+        "loan_symbol": "m.loan_symbol",
+        "collateral_symbol": "m.collateral_symbol",
     }
     order_key = sort_order.strip().lower()
     if sort_key not in sort_map:
@@ -306,8 +311,8 @@ async def get_representative_markets_page(
                 total_market_size_usd,
                 total_supply_assets,
                 total_borrow_assets
-            FROM loan.morpho_blue_current_markets
-            WHERE is_active = TRUE
+            FROM loan.morpho_blue_current_markets AS m
+            WHERE m.is_active = TRUE
             ORDER BY {order_column} {order_direction} NULLS LAST, market_id ASC
             OFFSET $1
             LIMIT $2
