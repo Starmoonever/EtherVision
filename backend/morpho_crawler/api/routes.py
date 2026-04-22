@@ -131,6 +131,7 @@ async def market_list(
 )
 async def market_state(
     request: Request,
+    pool: AsyncpgPool,
     market_id: str = Query(..., description="Morpho market id (bytes32 hex)"),
     date: str | None = Query(
         None, description="预留历史参数；当前仅支持实时 latest 数据"
@@ -138,6 +139,7 @@ async def market_state(
 ) -> MorphoMarketStateResponse:
     return await get_market_state(
         _w3(request),
+        pool=pool,
         market_id=market_id,
         date=date,
     )

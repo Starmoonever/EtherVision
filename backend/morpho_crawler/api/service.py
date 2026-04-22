@@ -7,13 +7,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 import re
-from typing import Any
+from typing import Any, cast
 
 from crawler_shared.api.service import get_price
 from crawler_shared.price_history import (
     get_historical_price_usd,
     get_historical_prices_usd,
 )
+from eth_typing import ChecksumAddress
 import httpx
 from fastapi import HTTPException
 from web3 import AsyncWeb3
@@ -33,8 +34,14 @@ from ..db import (
     upsert_position_replay_snapshots,
 )
 from ..rpc import (
+    IRM_ABI,
     MorphoReplayEvent,
     MorphoRealtimePosition,
+    WAD,
+    ZERO_ADDRESS,
+    _format_decimal_fixed,
+    _mul_div_down,
+    _w_taylor_compounded,
     fetch_market_state,  # api/morpho/market/state相关
     fetch_position_at_block,
     fetch_realtime_position,
@@ -342,9 +349,236 @@ async def get_representative_markets_page(
 
 
 # api/morpho/market/state相关：GET /api/morpho/market/state
+async def _fetch_market_state_row_from_table(
+    pool: AsyncpgPool, market_id: str
+) -> dict[str, Any] | None:
+    market_key = _normalize_market_id_text(market_id)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                market_id,
+                loan_symbol,
+                loan_address,
+                loan_decimals,
+                collateral_symbol,
+                collateral_address,
+                collateral_decimals,
+                oracle,
+                irm,
+                lltv_raw,
+                total_supply_assets,
+                total_supply_shares,
+                total_borrow_assets,
+                total_borrow_shares,
+                last_update,
+                fee_raw,
+                total_market_size_usd
+            FROM loan.morpho_blue_current_markets
+            WHERE market_id = $1 AND is_active = TRUE
+            LIMIT 1
+            """,
+            market_key,
+        )
+    return dict(row) if row else None
+
+
+# api/morpho/market/state相关：表命中时由缓存原始字段组装 market/state 响应
+async def _build_market_state_payload_from_table(
+    w3: AsyncWeb3, *, market_id: str, row: dict[str, Any]
+) -> dict[str, Any]:
+    loan_address = _normalize_evm_address(str(row.get("loan_address") or ""))
+    collateral_address = _normalize_evm_address(
+        str(row.get("collateral_address") or "")
+    )
+    oracle_address = _normalize_evm_address(str(row.get("oracle") or ZERO_ADDRESS))
+    irm_address = _normalize_evm_address(str(row.get("irm") or ZERO_ADDRESS))
+    loan_decimals = int(row.get("loan_decimals") or 0)
+    collateral_decimals = int(row.get("collateral_decimals") or 0)
+    lltv_raw = int(row.get("lltv_raw") or 0)
+    total_supply_assets = int(row.get("total_supply_assets") or 0)
+    total_supply_shares = int(row.get("total_supply_shares") or 0)
+    total_borrow_assets = int(row.get("total_borrow_assets") or 0)
+    total_borrow_shares = int(row.get("total_borrow_shares") or 0)
+    last_update = int(row.get("last_update") or 0)
+    fee = int(row.get("fee_raw") or 0)
+    total_market_size_usd_raw = row.get("total_market_size_usd")
+    total_market_size_usd = (
+        float(total_market_size_usd_raw)
+        if total_market_size_usd_raw is not None
+        else None
+    )
+
+    supply_dec = Decimal(total_supply_assets)
+    borrow_dec = Decimal(total_borrow_assets)
+    lltv_ratio = Decimal(lltv_raw) / Decimal(WAD) if lltv_raw else Decimal("0")
+    utilization = Decimal("0")
+    if total_supply_assets > 0:
+        utilization = borrow_dec / supply_dec
+    available_liquidity = total_supply_assets - total_borrow_assets
+
+    borrow_capacity_usage_rough = Decimal("0")
+    if total_supply_assets > 0 and lltv_ratio > 0:
+        borrow_capacity_usage_rough = borrow_dec / (supply_dec * lltv_ratio)
+
+    seconds_per_year = 365 * 24 * 60 * 60
+    annual_borrow_rate = Decimal("0")
+    annual_interest_ratio = Decimal("0")
+    annual_supply_rate = Decimal("0")
+    annual_supply_interest_ratio = Decimal("0")
+    if irm_address != ZERO_ADDRESS:
+        irm = w3.eth.contract(
+            address=cast(ChecksumAddress, irm_address),
+            abi=IRM_ABI,
+        )
+        market_params_tuple = (
+            loan_address,
+            collateral_address,
+            oracle_address,
+            irm_address,
+            lltv_raw,
+        )
+        market_tuple = (
+            total_supply_assets,
+            total_supply_shares,
+            total_borrow_assets,
+            total_borrow_shares,
+            last_update,
+            fee,
+        )
+        borrow_rate = int(
+            await irm.functions.borrowRateView(market_params_tuple, market_tuple).call()
+        )
+        annual_borrow_rate = (
+            Decimal(borrow_rate) * Decimal(seconds_per_year) / Decimal(WAD)
+        )
+        annual_interest_ratio = Decimal(
+            _w_taylor_compounded(borrow_rate, seconds_per_year)
+        ) / Decimal(WAD)
+        supply_rate = 0
+        if total_supply_assets > 0:
+            utilization_wad = _mul_div_down(
+                total_borrow_assets, WAD, total_supply_assets
+            )
+            net_supply_rate_wad = _mul_div_down(
+                _mul_div_down(borrow_rate, utilization_wad, WAD),
+                WAD - fee,
+                WAD,
+            )
+            supply_rate = max(net_supply_rate_wad, 0)
+        annual_supply_rate = (
+            Decimal(supply_rate) * Decimal(seconds_per_year) / Decimal(WAD)
+        )
+        annual_supply_interest_ratio = Decimal(
+            _w_taylor_compounded(supply_rate, seconds_per_year)
+        ) / Decimal(WAD)
+
+    market_id_hex = _normalize_market_id_text(market_id)
+    return {
+        "marketId": market_id_hex,
+        "dataSource": "table",
+        "total_market_size_usd": total_market_size_usd,
+        "loanToken": {
+            "address": loan_address,
+            "symbol": row.get("loan_symbol"),
+            "decimals": loan_decimals,
+        },
+        "collateralToken": {
+            "address": collateral_address,
+            "symbol": row.get("collateral_symbol"),
+            "decimals": collateral_decimals,
+        },
+        "oracle": oracle_address,
+        "irm": irm_address,
+        "lltv": {
+            "raw": str(lltv_raw),
+            "ratio": _format_decimal_fixed(lltv_ratio, 6),
+        },
+        "totalSupplyAssets": str(total_supply_assets),
+        "totalSupplyShares": str(total_supply_shares),
+        "totalBorrowAssets": str(total_borrow_assets),
+        "totalBorrowShares": str(total_borrow_shares),
+        "lastUpdate": last_update,
+        "fee": str(fee),
+        "utilization": {
+            "formula": "totalBorrowAssets / totalSupplyAssets",
+            "value": _format_decimal_fixed(utilization, 8),
+        },
+        "availableLiquidity": {
+            "formula": "totalSupplyAssets - totalBorrowAssets",
+            "value": str(available_liquidity),
+            "note": None,
+        },
+        "borrowCapacityUsageRough": {
+            "formula": "totalBorrowAssets / (totalSupplyAssets * lltv)",
+            "value": _format_decimal_fixed(borrow_capacity_usage_rough, 8),
+            "note": "市场层粗略估算，严格口径需用户仓位级数据",
+        },
+        "annualBorrowRate": {
+            "formula": "borrowRatePerSecond * secondsPerYear",
+            "value": _format_decimal_fixed(annual_borrow_rate, 8),
+            "note": "基于 IRM borrowRateView 的线性年化（单利近似）",
+        },
+        "annualBorrowInterestRatio": {
+            "formula": "wTaylorCompounded(borrowRatePerSecond, secondsPerYear)",
+            "value": _format_decimal_fixed(annual_interest_ratio, 8),
+            "note": "基于当前利率估算的一年利息/本金比例",
+        },
+        "annualSupplyRate": {
+            "formula": "borrowRatePerSecond * utilization * (1 - fee) * secondsPerYear",
+            "value": _format_decimal_fixed(annual_supply_rate, 8),
+            "note": "出借侧线性年化（市场层估算，已扣除协议费）",
+        },
+        "annualSupplyInterestRatio": {
+            "formula": "wTaylorCompounded(borrowRatePerSecond * utilization * (1 - fee), secondsPerYear)",
+            "value": _format_decimal_fixed(annual_supply_interest_ratio, 8),
+            "note": "出借侧复利年化（市场层估算，已扣除协议费）",
+        },
+        "marketScaleTvlLike": {
+            "formula": "totalSupplyAssets",
+            "value": str(total_supply_assets),
+            "note": None,
+        },
+        "debtScaleDebtLike": {
+            "formula": "totalBorrowAssets",
+            "value": str(total_borrow_assets),
+            "note": None,
+        },
+    }
+
+
+# api/morpho/market/state相关：GET /api/morpho/market/state
+async def _estimate_total_market_size_usd_from_price(
+    w3: AsyncWeb3, payload: dict[str, Any]
+) -> float | None:
+    loan_token = payload.get("loanToken") or {}
+    loan_address = str(loan_token.get("address") or "").strip()
+    loan_decimals = int(loan_token.get("decimals") or 0)
+    total_supply_assets_raw = payload.get("totalSupplyAssets")
+    if not loan_address or total_supply_assets_raw is None:
+        return None
+
+    try:
+        price = await get_price(
+            w3,
+            symbol=None,
+            address=loan_address,
+            pool=None,
+            chain=MORPHO_CHAIN,
+            timestamp=None,
+        )
+        price_usd = Decimal(price.price_usd)
+        amount = Decimal(str(total_supply_assets_raw)) / (Decimal(10) ** loan_decimals)
+        return float(amount * price_usd)
+    except Exception:
+        return None
+
+
+# api/morpho/market/state相关：GET /api/morpho/market/state
 async def get_market_state(
     w3: AsyncWeb3,
     *,
+    pool: AsyncpgPool,
     market_id: str,
     date: str | None = None,
 ) -> MorphoMarketStateResponse:
@@ -358,12 +592,21 @@ async def get_market_state(
             status_code=400,
             detail="date 参数已预留（UTC 天级），当前 MVP 暂不支持历史查询",
         )
-    payload = await fetch_market_state(
-        w3,
-        market_id=market_id,
-    )
-    # api/morpho/market/state相关：当前版本直接链上查询返回
+    row = await _fetch_market_state_row_from_table(pool, market_id)
+    if row is not None:
+        payload = await _build_market_state_payload_from_table(
+            w3,
+            market_id=market_id,
+            row=row,
+        )
+        return MorphoMarketStateResponse(**payload)
+
+    payload = await fetch_market_state(w3, market_id=market_id)
+    # api/morpho/market/state相关：查表未命中，链上查询返回
     payload["dataSource"] = "chain"
+    payload["total_market_size_usd"] = await _estimate_total_market_size_usd_from_price(
+        w3, payload
+    )
     return MorphoMarketStateResponse(**payload)
 
 

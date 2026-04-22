@@ -154,6 +154,10 @@ class MorphoMarketSimpleMetricField(BaseModel):
 class MorphoMarketStateResponse(BaseModel):
     marketId: str = Field(description="Morpho market id。")
     dataSource: str = Field(description="数据来源：table 或 chain。")
+    total_market_size_usd: float | None = Field(
+        default=None,
+        description="市场规模（USD，来自缓存表）。",
+    )
     loanToken: MorphoMarketTokenInfo = Field(description="借出资产信息。")
     collateralToken: MorphoMarketTokenInfo = Field(description="抵押资产信息。")
     oracle: str = Field(description="Oracle 地址。")
