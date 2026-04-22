@@ -830,12 +830,21 @@ export function JustLendPositionReplayChart({
           <div
             style={{
               display: 'flex',
-              justifyContent: 'flex-end',
+              justifyContent: 'space-between',
               gap: '1rem',
               flexWrap: 'wrap',
               alignItems: 'center',
             }}
           >
+            <div className="justlend-history-range-summary">
+              <span className="justlend-history-range-summary-label">当前查询范围</span>
+              <span className="justlend-history-range-summary-value">
+                {appliedRange.start} 至 {appliedRange.end}，共 {data.length} 个快照点。
+                {selectedPoint
+                  ? ` 当前选中时点：${selectedPoint.timestampLabel}`
+                  : ' 当前区间暂无可选时点。'}
+              </span>
+            </div>
             <div
               style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', alignItems: 'center' }}
             >
@@ -904,16 +913,6 @@ export function JustLendPositionReplayChart({
               >
                 应用时间范围
               </button>
-            </div>
-          </div>
-
-          <div className="justlend-banner justlend-banner-soft">
-            <div className="justlend-banner-title">当前查询范围</div>
-            <div className="justlend-banner-copy">
-              {appliedRange.start} 至 {appliedRange.end}，共 {data.length} 个快照点。
-              {selectedPoint
-                ? ` 当前选中时点：${selectedPoint.timestampLabel}`
-                : ' 当前区间暂无可选时点。'}
             </div>
           </div>
 

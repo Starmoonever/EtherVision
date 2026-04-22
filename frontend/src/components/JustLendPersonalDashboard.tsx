@@ -709,14 +709,11 @@ export function JustLendPersonalDashboard({
                 <strong>{formatVaultNumber(totalDebtUsd, { currency: true })}</strong>
               </div>
               <div className="justlend-capacity-item">
-                <span className="justlend-risk-dot" style={{ background: '#22c55e' }} />
-                <span>剩余可借额度</span>
-                <strong>{formatVaultNumber(availableBorrowUsd, { currency: true })}</strong>
-              </div>
-              <div className="justlend-capacity-item">
                 <span className="justlend-risk-dot" style={{ background: '#94a3b8' }} />
-                <span>已使用比例</span>
-                <strong>{capacityUsedPct.toFixed(2)}%</strong>
+                <span>剩余可借额度</span>
+                <strong style={{ color: '#cbd5e1' }}>
+                  {formatVaultNumber(availableBorrowUsd, { currency: true })}
+                </strong>
               </div>
             </div>
             <div className="justlend-caption">
