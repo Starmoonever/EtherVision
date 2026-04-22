@@ -110,7 +110,7 @@ function renderRows(
         {asset.role === 'collateral' && (
           <td className="right mono">
             {oracleValue !== undefined
-              ? `${loanTokenSymbol ?? ''}${formatAmount(oracleValue)}`
+              ? `${formatAmount(oracleValue)}${loanTokenSymbol ? ` ${loanTokenSymbol}` : ''}`
               : '-'}
           </td>
         )}

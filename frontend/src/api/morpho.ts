@@ -4,6 +4,12 @@ import type { DataWithMeta } from './requestMeta';
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export type MorphoProtocol = 'blue';
+export type MorphoMarketSortField =
+  | 'total_market_size_usd'
+  | 'utilization'
+  | 'loan_symbol'
+  | 'collateral_symbol';
+export type MorphoMarketSortOrder = 'asc' | 'desc';
 
 export interface MorphoPositionAsset {
   role: 'loan' | 'collateral' | string;
@@ -518,10 +524,18 @@ async function fetchMorphoMarketListPagePayload(
   basePath: string,
   page: number,
   pageSize: number,
+  sortBy?: MorphoMarketSortField,
+  sortOrder?: MorphoMarketSortOrder,
+  loan?: string,
+  collateral?: string,
 ): Promise<MorphoMarketListApiPayload> {
   const path = appendQueryParams(basePath, {
     page,
     page_size: pageSize,
+    ...(sortBy ? { sort_by: sortBy } : {}),
+    ...(sortBy && sortOrder ? { sort_order: sortOrder } : {}),
+    ...(loan ? { loan } : {}),
+    ...(collateral ? { collateral } : {}),
   });
   const response = await apiFetchRaw(path);
   if (!response.ok) {
@@ -702,24 +716,58 @@ export async function fetchMorphoPositionReplayWithMeta(
   };
 }
 
-function buildMorphoMarketsCacheKey(page: number, pageSize: number): string {
-  return `page:${page}:pageSize:${pageSize}`;
+function buildMorphoMarketsCacheKey(
+  page: number,
+  pageSize: number,
+  sortBy?: MorphoMarketSortField,
+  sortOrder?: MorphoMarketSortOrder,
+  loan?: string,
+  collateral?: string,
+): string {
+  return [
+    `page:${page}`,
+    `pageSize:${pageSize}`,
+    `sortBy:${sortBy ?? 'default'}`,
+    `sortOrder:${sortOrder ?? 'default'}`,
+    `loan:${loan ?? 'default'}`,
+    `collateral:${collateral ?? 'default'}`,
+  ].join(':');
 }
 
 export async function fetchMorphoMarkets(
-  options: { force?: boolean; page?: number; pageSize?: number } = {},
+  options: {
+    force?: boolean;
+    page?: number;
+    pageSize?: number;
+    sortBy?: MorphoMarketSortField;
+    sortOrder?: MorphoMarketSortOrder;
+    loan?: string;
+    collateral?: string;
+  } = {},
 ): Promise<MorphoMarketsResponse> {
   const result = await fetchMorphoMarketsWithMeta(options);
   return result.data;
 }
 
 export async function fetchMorphoMarketsWithMeta(
-  options: { force?: boolean; page?: number; pageSize?: number } = {},
+  options: {
+    force?: boolean;
+    page?: number;
+    pageSize?: number;
+    sortBy?: MorphoMarketSortField;
+    sortOrder?: MorphoMarketSortOrder;
+    loan?: string;
+    collateral?: string;
+  } = {},
 ): Promise<DataWithMeta<MorphoMarketsResponse>> {
   const force = options.force === true;
   const page = parsePositiveInteger(options.page) ?? 1;
   const pageSize = parsePositiveInteger(options.pageSize) ?? 10;
-  const cacheKey = buildMorphoMarketsCacheKey(page, pageSize);
+  const sortBy = options.sortBy;
+  const sortOrder = sortBy ? (options.sortOrder ?? 'desc') : undefined;
+  const loan = options.loan?.trim() || undefined;
+  const collateral = options.collateral?.trim() || undefined;
+  const cacheKey = buildMorphoMarketsCacheKey(page, pageSize, sortBy, sortOrder, loan, collateral);
   const cached = morphoMarketsCache.get(cacheKey);
 
   if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
@@ -743,8 +791,26 @@ export async function fetchMorphoMarketsWithMeta(
     }));
   }
 
-  const request = fetchMorphoMarketListPagePayload('/morpho/markets', page, pageSize)
-    .catch(() => fetchMorphoMarketListPagePayload('/morpho/market', page, pageSize))
+  const request = fetchMorphoMarketListPagePayload(
+    '/morpho/markets',
+    page,
+    pageSize,
+    sortBy,
+    sortOrder,
+    loan,
+    collateral,
+  )
+    .catch(() =>
+      fetchMorphoMarketListPagePayload(
+        '/morpho/market',
+        page,
+        pageSize,
+        sortBy,
+        sortOrder,
+        loan,
+        collateral,
+      ),
+    )
     .then((payload) => normalizeMorphoMarketsResponse(payload, page, pageSize))
     .then((data) => {
       morphoMarketsCache.set(cacheKey, { fetchedAt: Date.now(), data });

@@ -1,15 +1,15 @@
-import { Fragment, useEffect, useState, type MouseEvent } from 'react';
+import { Fragment, useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { MorphoMarketView } from '../../../hooks/useMorphoData';
 import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 
 export type MorphoSortMode =
   | 'default'
+  | 'loanSymbolDesc'
+  | 'collateralSymbolDesc'
   | 'totalMarketSizeDesc'
   | 'totalMarketSizeAsc'
   | 'utilizationDesc'
   | 'utilizationAsc';
-
-type MorphoSortableColumn = 'totalMarketSize' | 'utilization';
 
 interface MorphoMarketTableProps {
   markets: MorphoMarketView[];
@@ -17,8 +17,16 @@ interface MorphoMarketTableProps {
   onToggleMarket: (market: MorphoMarketView) => void;
   marketStateLoadingById: Record<string, boolean>;
   marketStateErrorById: Record<string, string>;
-  search: string;
-  onSearchChange: (value: string) => void;
+  title?: string;
+  subtitle?: string;
+  search?: string;
+  onSearchChange?: (value: string) => void;
+  searchPlaceholder?: string;
+  marketFilters?: {
+    loan: string;
+    collateral: string;
+  };
+  onMarketFilterCommit?: (filters: { loan: string; collateral: string }) => void;
   sortMode: MorphoSortMode;
   onSortModeChange: (value: MorphoSortMode) => void;
   totalMarkets: number;
@@ -26,6 +34,10 @@ interface MorphoMarketTableProps {
   totalPages: number;
   pageSize: number;
   onPageChange: (page: number) => void;
+  showSorting?: boolean;
+  showPagination?: boolean;
+  emptyText?: string;
+  tableError?: string;
 }
 
 const percentFormatter = new Intl.NumberFormat('en-US', {
@@ -89,33 +101,17 @@ function resolveMarketSize(market: MorphoMarketView): number | null {
 }
 
 function resolveAvailableSpaceUsd(market: MorphoMarketView): number | null {
-  return parseMetric(market.available_space_usd);
+  const marketSize = resolveMarketSize(market);
+  const borrowSize = resolveBorrowSizeUsd(market);
+  if (marketSize === null || borrowSize === null) return null;
+  return marketSize - borrowSize;
 }
 
 function resolveBorrowSizeUsd(market: MorphoMarketView): number | null {
-  return parseMetric(market.borrow_market_size_usd);
-}
-
-function resolveAvailableSpacePercent(market: MorphoMarketView): number | null {
   const marketSize = resolveMarketSize(market);
-  const availableSpace = resolveAvailableSpaceUsd(market);
-  if (marketSize === null || marketSize <= 0 || availableSpace === null) return null;
-  return Math.max(0, Math.min(100, (availableSpace / marketSize) * 100));
-}
-
-function formatPercentFromNumber(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return 'N/A';
-  return `${percentFormatter.format(value)}%`;
-}
-
-function resolveRatioPercent(value: string | null | undefined): number | null {
-  const ratio = normalizeRatio(value);
-  return ratio === null ? null : ratio * 100;
-}
-
-function clampPercent(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(value, 100));
+  const utilizationRatio = normalizeRatio(market.utilization);
+  if (marketSize === null || utilizationRatio === null) return null;
+  return marketSize * utilizationRatio;
 }
 
 function compactMarketId(marketId: string): string {
@@ -127,71 +123,147 @@ function compactAddress(address: string | null | undefined): string {
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }
 
-function getSortDirection(
-  sortMode: MorphoSortMode,
-  column: MorphoSortableColumn,
-): 'asc' | 'desc' | 'none' {
-  if (column === 'totalMarketSize') {
-    if (sortMode === 'totalMarketSizeAsc') return 'asc';
-    if (sortMode === 'totalMarketSizeDesc') return 'desc';
-  }
-  if (column === 'utilization') {
-    if (sortMode === 'utilizationAsc') return 'asc';
-    if (sortMode === 'utilizationDesc') return 'desc';
-  }
-  return 'none';
-}
-
-function getNextSortMode(sortMode: MorphoSortMode, column: MorphoSortableColumn): MorphoSortMode {
-  const currentDirection = getSortDirection(sortMode, column);
-  if (currentDirection === 'none') {
-    return column === 'totalMarketSize' ? 'totalMarketSizeDesc' : 'utilizationDesc';
-  }
-  if (currentDirection === 'desc') {
-    return column === 'totalMarketSize' ? 'totalMarketSizeAsc' : 'utilizationAsc';
-  }
-  return 'default';
+function resolveUtilizationToneClass(value: string | null | undefined): string {
+  const percent = normalizeRatio(value);
+  if (percent === null) return '';
+  if (percent > 0.95) return 'morpho-market-value-danger';
+  if (percent > 0.8) return 'morpho-market-value-watch';
+  return 'morpho-market-value-safe';
 }
 
 function SortableHeader({
   label,
-  column,
+  upMode,
+  downMode,
+  upLabel,
+  downLabel,
   sortMode,
   onSortModeChange,
 }: {
   label: string;
-  column: MorphoSortableColumn;
+  upMode: MorphoSortMode;
+  downMode: MorphoSortMode;
+  upLabel: string;
+  downLabel: string;
   sortMode: MorphoSortMode;
   onSortModeChange: (value: MorphoSortMode) => void;
 }) {
-  const direction = getSortDirection(sortMode, column);
+  const isUpActive = sortMode === upMode;
+  const isDownActive = sortMode === downMode;
+  const toggleSortMode = (nextMode: MorphoSortMode) => {
+    onSortModeChange(sortMode === nextMode ? 'default' : nextMode);
+  };
 
   return (
-    <button
-      type="button"
-      className="morpho-market-sort-header"
-      onClick={() => onSortModeChange(getNextSortMode(sortMode, column))}
-      aria-sort={direction === 'none' ? 'none' : direction === 'asc' ? 'ascending' : 'descending'}
-      title={`${label}排序`}
-    >
+    <span className="morpho-market-sort-header">
       <span>{label}</span>
-      <span className="morpho-market-sort-arrows" aria-hidden="true">
-        <span
-          className={
-            direction === 'asc'
-              ? 'morpho-market-sort-arrow morpho-market-sort-arrow-up morpho-market-sort-arrow-active'
-              : 'morpho-market-sort-arrow morpho-market-sort-arrow-up'
-          }
-        />
-        <span
-          className={
-            direction === 'desc'
-              ? 'morpho-market-sort-arrow morpho-market-sort-arrow-down morpho-market-sort-arrow-active'
-              : 'morpho-market-sort-arrow morpho-market-sort-arrow-down'
-          }
-        />
+      <span className="morpho-market-sort-arrows">
+        <button
+          type="button"
+          className="morpho-market-sort-arrow-button"
+          onClick={() => toggleSortMode(upMode)}
+          aria-pressed={isUpActive}
+          title={upLabel}
+          aria-label={upLabel}
+        >
+          <span
+            className={
+              isUpActive
+                ? 'morpho-market-sort-arrow morpho-market-sort-arrow-up morpho-market-sort-arrow-active'
+                : 'morpho-market-sort-arrow morpho-market-sort-arrow-up'
+            }
+          />
+        </button>
+        <button
+          type="button"
+          className="morpho-market-sort-arrow-button"
+          onClick={() => toggleSortMode(downMode)}
+          aria-pressed={isDownActive}
+          title={downLabel}
+          aria-label={downLabel}
+        >
+          <span
+            className={
+              isDownActive
+                ? 'morpho-market-sort-arrow morpho-market-sort-arrow-down morpho-market-sort-arrow-active'
+                : 'morpho-market-sort-arrow morpho-market-sort-arrow-down'
+            }
+          />
+        </button>
       </span>
-    </button>
+    </span>
+  );
+}
+
+function MarketHeader({
+  sortMode,
+  onSortModeChange,
+  marketFilters,
+  onMarketFilterCommit,
+}: {
+  sortMode: MorphoSortMode;
+  onSortModeChange: (value: MorphoSortMode) => void;
+  marketFilters?: {
+    loan: string;
+    collateral: string;
+  };
+  onMarketFilterCommit?: (filters: { loan: string; collateral: string }) => void;
+}) {
+  const [loanInput, setLoanInput] = useState(marketFilters?.loan ?? '');
+  const [collateralInput, setCollateralInput] = useState(marketFilters?.collateral ?? '');
+
+  useEffect(() => {
+    setLoanInput(marketFilters?.loan ?? '');
+    setCollateralInput(marketFilters?.collateral ?? '');
+  }, [marketFilters?.collateral, marketFilters?.loan]);
+
+  const commitFilters = () => {
+    onMarketFilterCommit?.({
+      loan: loanInput.trim(),
+      collateral: collateralInput.trim(),
+    });
+  };
+
+  const handleFilterKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    commitFilters();
+  };
+
+  return (
+    <div className="morpho-market-header-stack">
+      <SortableHeader
+        label="市场"
+        upMode="loanSymbolDesc"
+        downMode="collateralSymbolDesc"
+        upLabel="按 loan_symbol 降序排序"
+        downLabel="按 collateral_symbol 降序排序"
+        sortMode={sortMode}
+        onSortModeChange={onSortModeChange}
+      />
+      {onMarketFilterCommit ? (
+        <div className="morpho-market-header-filters">
+          <input
+            className="morpho-market-header-filter-input"
+            type="text"
+            value={loanInput}
+            onChange={(event) => setLoanInput(event.target.value)}
+            onKeyDown={handleFilterKeyDown}
+            placeholder="loan"
+            aria-label="按 loan 筛选市场"
+          />
+          <input
+            className="morpho-market-header-filter-input"
+            type="text"
+            value={collateralInput}
+            onChange={(event) => setCollateralInput(event.target.value)}
+            onKeyDown={handleFilterKeyDown}
+            placeholder="collateral"
+            aria-label="按 collateral 筛选市场"
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -201,8 +273,13 @@ export function MorphoMarketTable({
   onToggleMarket,
   marketStateLoadingById,
   marketStateErrorById,
-  search,
+  title = '市场列表',
+  subtitle = '列表只展示核心指标，展开单个市场后再加载实时详情。',
+  search = '',
   onSearchChange,
+  searchPlaceholder = '搜索货币 / 货币地址 / market id',
+  marketFilters,
+  onMarketFilterCommit,
   sortMode,
   onSortModeChange,
   totalMarkets,
@@ -210,6 +287,10 @@ export function MorphoMarketTable({
   totalPages,
   pageSize,
   onPageChange,
+  showSorting = true,
+  showPagination = true,
+  emptyText = '当前筛选条件下没有可展示的 Morpho 市场。',
+  tableError = '',
 }: MorphoMarketTableProps) {
   const [copiedMarketId, setCopiedMarketId] = useState('');
   const [pageInput, setPageInput] = useState(String(page));
@@ -245,53 +326,87 @@ export function MorphoMarketTable({
     <div className="card morpho-detail-card">
       <div className="card-header">
         <div>
-          <span className="card-title morpho-section-title">市场列表</span>
-          <p className="morpho-section-subtitle">
-            列表只展示核心指标，展开单个市场后再加载实时详情。
-          </p>
+          <span className="card-title morpho-section-title">{title}</span>
+          <p className="morpho-section-subtitle">{subtitle}</p>
         </div>
-        <div className="morpho-market-table-controls">
-          <label className="morpho-market-search morpho-market-search-inline">
-            <input
-              className="address-input"
-              type="text"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="搜索货币 / 货币地址 / market id / oracle / irm"
-            />
-          </label>
-        </div>
+        {onSearchChange ? (
+          <div className="morpho-market-table-controls">
+            <label className="morpho-market-search morpho-market-search-inline">
+              <input
+                className="address-input"
+                type="text"
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder={searchPlaceholder}
+              />
+            </label>
+          </div>
+        ) : null}
       </div>
 
       <div className="table-wrap">
         <table className="pos-table morpho-table morpho-market-table morpho-market-table-compact">
           <thead>
             <tr>
-              <th>市场</th>
-              <th className="right">
-                <SortableHeader
-                  label="市场规模"
-                  column="totalMarketSize"
-                  sortMode={sortMode}
-                  onSortModeChange={onSortModeChange}
-                />
+              <th>
+                {showSorting ? (
+                  <MarketHeader
+                    sortMode={sortMode}
+                    onSortModeChange={onSortModeChange}
+                    marketFilters={marketFilters}
+                    onMarketFilterCommit={onMarketFilterCommit}
+                  />
+                ) : (
+                  '市场'
+                )}
               </th>
               <th className="right">
-                <SortableHeader
-                  label="利用率"
-                  column="utilization"
-                  sortMode={sortMode}
-                  onSortModeChange={onSortModeChange}
-                />
+                {showSorting ? (
+                  <SortableHeader
+                    label="市场规模"
+                    upMode="totalMarketSizeAsc"
+                    downMode="totalMarketSizeDesc"
+                    upLabel="按 total_market_size_usd 升序排序"
+                    downLabel="按 total_market_size_usd 降序排序"
+                    sortMode={sortMode}
+                    onSortModeChange={onSortModeChange}
+                  />
+                ) : (
+                  '市场规模'
+                )}
+              </th>
+              <th className="right">
+                {showSorting ? (
+                  <SortableHeader
+                    label="利用率"
+                    upMode="utilizationAsc"
+                    downMode="utilizationDesc"
+                    upLabel="按 utilization 升序排序"
+                    downLabel="按 utilization 降序排序"
+                    sortMode={sortMode}
+                    onSortModeChange={onSortModeChange}
+                  />
+                ) : (
+                  '利用率'
+                )}
               </th>
             </tr>
           </thead>
           <tbody>
+            {tableError ? (
+              <tr>
+                <td colSpan={3}>
+                  <div className="morpho-market-table-error-row">
+                    <span>{tableError}</span>
+                  </div>
+                </td>
+              </tr>
+            ) : null}
             {markets.length === 0 ? (
               <tr>
                 <td colSpan={3}>
                   <div className="morpho-market-inline-state">
-                    <span className="empty-text">当前筛选条件下没有可展示的 Morpho 市场。</span>
+                    <span className="empty-text">{emptyText}</span>
                   </div>
                 </td>
               </tr>
@@ -303,12 +418,12 @@ export function MorphoMarketTable({
                 const marketSizeUsd = resolveMarketSize(market);
                 const borrowSizeUsd = resolveBorrowSizeUsd(market);
                 const availableSpaceUsd = resolveAvailableSpaceUsd(market);
-                const availableSpacePercent = resolveAvailableSpacePercent(market);
-                const utilizationPercent = resolveRatioPercent(market.utilization);
-                const isUtilizationDanger = utilizationPercent !== null && utilizationPercent > 95;
+                const utilizationToneClass = resolveUtilizationToneClass(market.utilization);
                 const borrowCapacityUsageRatio = normalizeRatio(market.borrow_capacity_usage_rough);
                 const isBorrowCapacityOverloaded =
                   borrowCapacityUsageRatio !== null && borrowCapacityUsageRatio > 1;
+                const loanTokenAddress = market.loan_token_address;
+                const collateralTokenAddress = market.collateral_token_address;
 
                 return (
                   <Fragment key={market.market_id}>
@@ -401,45 +516,27 @@ export function MorphoMarketTable({
                                 </div>
                                 <div className="metric-box morpho-market-progress-box">
                                   <span className="metric-label">可用空间</span>
-                                  <strong className="morpho-metric-strong">
+                                  <strong
+                                    className={
+                                      utilizationToneClass
+                                        ? `morpho-metric-strong ${utilizationToneClass}`
+                                        : 'morpho-metric-strong'
+                                    }
+                                  >
                                     {formatUsdCompact(availableSpaceUsd)}
                                   </strong>
-                                  <div className="morpho-utilization-cell morpho-market-detail-progress">
-                                    <div className="morpho-utilization-bar" aria-hidden="true">
-                                      <span
-                                        className={
-                                          isUtilizationDanger
-                                            ? 'morpho-utilization-fill morpho-utilization-fill-available morpho-utilization-fill-danger'
-                                            : 'morpho-utilization-fill morpho-utilization-fill-available'
-                                        }
-                                        style={{ width: `${clampPercent(availableSpacePercent)}%` }}
-                                      />
-                                    </div>
-                                    <span className="morpho-utilization-value">
-                                      {formatPercentFromNumber(availableSpacePercent)}
-                                    </span>
-                                  </div>
                                 </div>
                                 <div className="metric-box morpho-market-progress-box">
                                   <span className="metric-label">利用率</span>
-                                  <strong className="morpho-metric-strong">
+                                  <strong
+                                    className={
+                                      utilizationToneClass
+                                        ? `morpho-metric-strong ${utilizationToneClass}`
+                                        : 'morpho-metric-strong'
+                                    }
+                                  >
                                     {formatPercent(market.utilization)}
                                   </strong>
-                                  <div className="morpho-utilization-cell morpho-market-detail-progress">
-                                    <div className="morpho-utilization-bar" aria-hidden="true">
-                                      <span
-                                        className={
-                                          isUtilizationDanger
-                                            ? 'morpho-utilization-fill morpho-utilization-fill-danger'
-                                            : 'morpho-utilization-fill'
-                                        }
-                                        style={{ width: `${clampPercent(utilizationPercent)}%` }}
-                                      />
-                                    </div>
-                                    <span className="morpho-utilization-value">
-                                      {formatPercentFromNumber(utilizationPercent)}
-                                    </span>
-                                  </div>
                                 </div>
                                 <div className="metric-box morpho-market-feature-metric">
                                   <span className="metric-label">LLTV</span>
@@ -474,18 +571,58 @@ export function MorphoMarketTable({
                                     {formatPercent(market.borrow_apy)}
                                   </strong>
                                 </div>
-                                <div className="metric-box">
+                                <div className="metric-box morpho-market-price-box">
                                   <span className="metric-label">
                                     {market.loan_symbol || 'loan'} 单价
                                   </span>
+                                  {loanTokenAddress ? (
+                                    <button
+                                      type="button"
+                                      className={
+                                        copiedMarketId === loanTokenAddress
+                                          ? 'morpho-market-copy-btn morpho-market-copy-btn-copied morpho-market-price-copy-btn'
+                                          : 'morpho-market-copy-btn morpho-market-price-copy-btn'
+                                      }
+                                      onClick={(event) =>
+                                        void handleCopyValue(event, loanTokenAddress)
+                                      }
+                                      title={`复制 ${market.loan_symbol || 'loan'} 地址`}
+                                      aria-label={`复制 ${market.loan_symbol || 'loan'} 地址`}
+                                    >
+                                      <span
+                                        className="morpho-market-copy-icon"
+                                        aria-hidden="true"
+                                      />
+                                    </button>
+                                  ) : null}
                                   <strong className="morpho-metric-strong">
                                     {formatUsdCompact(parseMetric(market.loan_token_price_usd))}
                                   </strong>
                                 </div>
-                                <div className="metric-box">
+                                <div className="metric-box morpho-market-price-box">
                                   <span className="metric-label">
                                     {market.collateral_symbol || 'collateral'} 单价
                                   </span>
+                                  {collateralTokenAddress ? (
+                                    <button
+                                      type="button"
+                                      className={
+                                        copiedMarketId === collateralTokenAddress
+                                          ? 'morpho-market-copy-btn morpho-market-copy-btn-copied morpho-market-price-copy-btn'
+                                          : 'morpho-market-copy-btn morpho-market-price-copy-btn'
+                                      }
+                                      onClick={(event) =>
+                                        void handleCopyValue(event, collateralTokenAddress)
+                                      }
+                                      title={`复制 ${market.collateral_symbol || 'collateral'} 地址`}
+                                      aria-label={`复制 ${market.collateral_symbol || 'collateral'} 地址`}
+                                    >
+                                      <span
+                                        className="morpho-market-copy-icon"
+                                        aria-hidden="true"
+                                      />
+                                    </button>
+                                  ) : null}
                                   <strong className="morpho-metric-strong">
                                     {formatUsdCompact(
                                       parseMetric(market.collateral_token_price_usd),
@@ -543,49 +680,51 @@ export function MorphoMarketTable({
         </table>
       </div>
 
-      <div className="morpho-market-pagination">
-        <span>
-          显示 {pageStart.toLocaleString()}-{pageEnd.toLocaleString()} /{' '}
-          {totalMarkets.toLocaleString()}，第 {page} / {totalPages} 页
-        </span>
-        <div className="morpho-market-pagination-actions">
-          <button
-            type="button"
-            className="switch-btn"
-            disabled={page <= 1}
-            onClick={() => onPageChange(Math.max(1, page - 1))}
-          >
-            上一页
-          </button>
-          <label className="morpho-market-page-jump">
-            <span>跳至</span>
-            <input
-              className="morpho-market-page-input"
-              type="number"
-              min={1}
-              max={totalPages}
-              value={pageInput}
-              onChange={(event) => setPageInput(event.target.value)}
-              onBlur={commitPageInput}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.currentTarget.blur();
-                }
-              }}
-              aria-label="跳转页码"
-            />
-            <span>页</span>
-          </label>
-          <button
-            type="button"
-            className="switch-btn"
-            disabled={page >= totalPages}
-            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-          >
-            下一页
-          </button>
+      {showPagination ? (
+        <div className="morpho-market-pagination">
+          <span>
+            显示 {pageStart.toLocaleString()}-{pageEnd.toLocaleString()} /{' '}
+            {totalMarkets.toLocaleString()}，第 {page} / {totalPages} 页
+          </span>
+          <div className="morpho-market-pagination-actions">
+            <button
+              type="button"
+              className="switch-btn"
+              disabled={page <= 1}
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+            >
+              上一页
+            </button>
+            <label className="morpho-market-page-jump">
+              <span>跳至</span>
+              <input
+                className="morpho-market-page-input"
+                type="number"
+                min={1}
+                max={totalPages}
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+                onBlur={commitPageInput}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.currentTarget.blur();
+                  }
+                }}
+                aria-label="跳转页码"
+              />
+              <span>页</span>
+            </label>
+            <button
+              type="button"
+              className="switch-btn"
+              disabled={page >= totalPages}
+              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            >
+              下一页
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
