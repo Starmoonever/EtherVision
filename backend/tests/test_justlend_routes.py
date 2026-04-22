@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from justlend_crawler.database import get_pool
+from justlend_crawler.api import service
 from starlette.testclient import TestClient
 
 from justlend_crawler.api.routes import router as justlend_router
@@ -96,8 +97,8 @@ def _market_row(ts: datetime) -> dict[str, object]:
         "total_reserves": "20",
         "total_supply": "1480",
         "utilization": "0.2",
-        "borrow_rate": "0.01",
-        "supply_rate": "0.004",
+        "borrow_rate": "0.000000001",
+        "supply_rate": "0.0000000004",
         "underlying_price_in_trx": "0.35",
         "price_usd": "1",
         "snapshot_at": ts,
@@ -157,6 +158,10 @@ def test_market_state_route_returns_latest_row() -> None:
     assert payload["symbol"] == "jUSDT"
     assert payload["underlying_symbol"] == "USDT"
     assert payload["price_usd"] == "1.00000000"
+    assert payload["borrow_apy"] == service._per_block_rate_to_apy("0.000000001")
+    assert payload["supply_apy"] == service._per_block_rate_to_apy("0.0000000004")
+    assert "borrow_rate" not in payload
+    assert "supply_rate" not in payload
     assert payload["timestamp"] == "2026-04-16T08:00:00Z"
 
 
@@ -214,6 +219,12 @@ def test_market_state_period_route_returns_points() -> None:
     assert len(data["points"]) == 2
     assert data["points"][0]["cash"] == "1200.000000000000000000"
     assert data["points"][1]["cash"] == "1500.000000000000000000"
+    assert data["points"][0]["borrow_apy"] == service._per_block_rate_to_apy(
+        "0.000000001"
+    )
+    assert data["points"][0]["supply_apy"] == service._per_block_rate_to_apy(
+        "0.0000000004"
+    )
 
 
 def test_position_route_requires_address() -> None:

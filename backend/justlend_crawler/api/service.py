@@ -76,6 +76,9 @@ _MAX_HF = Decimal("1e18")
 _SUMMARY_TOLERANCE_USD = Decimal("0.01")
 _JUSTLEND_API_MAX_RETRIES = 3
 _JUSTLEND_API_RETRY_BACKOFF_SECONDS = 0.5
+_SECONDS_PER_YEAR = Decimal("31536000")
+_TRON_BLOCK_INTERVAL_SECONDS = Decimal("3")
+_TRON_BLOCKS_PER_YEAR = int(_SECONDS_PER_YEAR / _TRON_BLOCK_INTERVAL_SECONDS)
 _MAX_DB_RATIO = Decimal("9999.999999")
 _POSITION_LIST_SORT_FIELDS = {
     "health_factor",
@@ -162,8 +165,8 @@ def _build_market_state_response(row: Any) -> JustLendMarketStateResponse:
         total_reserves=_fmt_optional_decimal(_row_get(row, "total_reserves"), scale=18),
         total_supply=_fmt_optional_decimal(_row_get(row, "total_supply"), scale=18),
         utilization=_fmt_optional_decimal(_row_get(row, "utilization"), scale=18),
-        borrow_rate=_fmt_optional_decimal(_row_get(row, "borrow_rate"), scale=18),
-        supply_rate=_fmt_optional_decimal(_row_get(row, "supply_rate"), scale=18),
+        borrow_apy=_per_block_rate_to_apy(_row_get(row, "borrow_rate")),
+        supply_apy=_per_block_rate_to_apy(_row_get(row, "supply_rate")),
         underlying_price_in_trx=_fmt_optional_decimal(
             _row_get(row, "underlying_price_in_trx"), scale=12
         ),
@@ -488,6 +491,18 @@ def _fmt_decimal(value: Decimal, scale: int = 8) -> str:
     with localcontext() as ctx:
         ctx.prec = max(28, digits + scale + 4)
         return format(value.quantize(quant), "f")
+
+
+def _per_block_rate_to_apy(value: Any) -> str | None:
+    rate = _optional_decimal(value)
+    if rate is None:
+        return None
+    if rate <= Decimal("-1"):
+        return None
+    with localcontext() as ctx:
+        ctx.prec = 80
+        apy = (Decimal("1") + rate) ** _TRON_BLOCKS_PER_YEAR - Decimal("1")
+    return _fmt_decimal(apy, scale=8)
 
 
 def _fmt_ratio(value: Decimal) -> str:

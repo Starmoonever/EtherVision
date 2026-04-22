@@ -283,6 +283,8 @@ JustLend 模块负责：
 - `GET /api/justlend/market/state/period`
 - `GET /api/justlend/positions`
 
+`GET /api/justlend/market/state` 与 `GET /api/justlend/market/state/period` 当前会将表中的 `borrow_rate` / `supply_rate` 视为“每块利率”，并在 API 响应中返回换算后的 `borrow_apy` / `supply_apy` 字段，不再直接暴露原始 `*_rate`。
+
 `GET /api/justlend/positions` 当前用于返回 JustLend 全量当前仓位概览：
 
 - 概览主表：`loan.justlend_current_user_positions`
