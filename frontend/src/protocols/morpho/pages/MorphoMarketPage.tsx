@@ -7,6 +7,7 @@ import {
 } from '../../../api/morpho';
 import { fetchAssetPrice } from '../../../api/price';
 import { PageHero } from '../../../shared/components/PageHero';
+import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 import {
   mergeMorphoMarketData,
   useMorphoData,
@@ -251,32 +252,26 @@ export function MorphoMarketPage() {
       <PageHero
         title="Morpho 市场页面"
         subtitle="浏览 Morpho 协议的市场数据，支持按分页查看和按 market id 查询两种模式。"
+        controls={
+          <SegmentedControl
+            ariaLabel="Morpho 市场视图"
+            value={activeView}
+            onChange={setActiveView}
+            options={[
+              {
+                value: 'mainstream',
+                label: '主流市场',
+                activeClassName: 'active-purple',
+              },
+              {
+                value: 'query',
+                label: '市场查询',
+                activeClassName: 'active-purple',
+              },
+            ]}
+          />
+        }
       />
-
-      <div
-        className="tabs-container morpho-market-mode-tabs"
-        role="tablist"
-        aria-label="Morpho 市场视图"
-      >
-        <button
-          type="button"
-          className={activeView === 'mainstream' ? 'tab-btn active' : 'tab-btn'}
-          onClick={() => setActiveView('mainstream')}
-          role="tab"
-          aria-selected={activeView === 'mainstream'}
-        >
-          主流市场
-        </button>
-        <button
-          type="button"
-          className={activeView === 'query' ? 'tab-btn active' : 'tab-btn'}
-          onClick={() => setActiveView('query')}
-          role="tab"
-          aria-selected={activeView === 'query'}
-        >
-          市场查询
-        </button>
-      </div>
 
       {activeView === 'mainstream' && loading ? (
         <div className="card morpho-market-loading-card">
@@ -329,6 +324,7 @@ export function MorphoMarketPage() {
           onPageChange={() => undefined}
           showSorting={false}
           showPagination={false}
+          showTableHeaderWhenEmpty={false}
           emptyText={queryEmptyText}
         />
       )}

@@ -2956,10 +2956,6 @@
   flex-wrap: wrap;
 }
 
-.morpho-market-mode-tabs {
-  margin-bottom: 1rem;
-}
-
 .morpho-market-search {
   min-width: min(100%, 320px);
   display: flex;

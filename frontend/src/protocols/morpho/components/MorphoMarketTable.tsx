@@ -36,6 +36,7 @@ interface MorphoMarketTableProps {
   onPageChange: (page: number) => void;
   showSorting?: boolean;
   showPagination?: boolean;
+  showTableHeaderWhenEmpty?: boolean;
   emptyText?: string;
   tableError?: string;
 }
@@ -289,6 +290,7 @@ export function MorphoMarketTable({
   onPageChange,
   showSorting = true,
   showPagination = true,
+  showTableHeaderWhenEmpty = true,
   emptyText = '当前筛选条件下没有可展示的 Morpho 市场。',
   tableError = '',
 }: MorphoMarketTableProps) {
@@ -346,52 +348,54 @@ export function MorphoMarketTable({
 
       <div className="table-wrap">
         <table className="pos-table morpho-table morpho-market-table morpho-market-table-compact">
-          <thead>
-            <tr>
-              <th>
-                {showSorting ? (
-                  <MarketHeader
-                    sortMode={sortMode}
-                    onSortModeChange={onSortModeChange}
-                    marketFilters={marketFilters}
-                    onMarketFilterCommit={onMarketFilterCommit}
-                  />
-                ) : (
-                  '市场'
-                )}
-              </th>
-              <th className="right">
-                {showSorting ? (
-                  <SortableHeader
-                    label="市场规模"
-                    upMode="totalMarketSizeAsc"
-                    downMode="totalMarketSizeDesc"
-                    upLabel="按 total_market_size_usd 升序排序"
-                    downLabel="按 total_market_size_usd 降序排序"
-                    sortMode={sortMode}
-                    onSortModeChange={onSortModeChange}
-                  />
-                ) : (
-                  '市场规模'
-                )}
-              </th>
-              <th className="right">
-                {showSorting ? (
-                  <SortableHeader
-                    label="利用率"
-                    upMode="utilizationAsc"
-                    downMode="utilizationDesc"
-                    upLabel="按 utilization 升序排序"
-                    downLabel="按 utilization 降序排序"
-                    sortMode={sortMode}
-                    onSortModeChange={onSortModeChange}
-                  />
-                ) : (
-                  '利用率'
-                )}
-              </th>
-            </tr>
-          </thead>
+          {showTableHeaderWhenEmpty || markets.length > 0 ? (
+            <thead>
+              <tr>
+                <th>
+                  {showSorting ? (
+                    <MarketHeader
+                      sortMode={sortMode}
+                      onSortModeChange={onSortModeChange}
+                      marketFilters={marketFilters}
+                      onMarketFilterCommit={onMarketFilterCommit}
+                    />
+                  ) : (
+                    '市场'
+                  )}
+                </th>
+                <th className="right">
+                  {showSorting ? (
+                    <SortableHeader
+                      label="市场规模"
+                      upMode="totalMarketSizeAsc"
+                      downMode="totalMarketSizeDesc"
+                      upLabel="按 total_market_size_usd 升序排序"
+                      downLabel="按 total_market_size_usd 降序排序"
+                      sortMode={sortMode}
+                      onSortModeChange={onSortModeChange}
+                    />
+                  ) : (
+                    '市场规模'
+                  )}
+                </th>
+                <th className="right">
+                  {showSorting ? (
+                    <SortableHeader
+                      label="利用率"
+                      upMode="utilizationAsc"
+                      downMode="utilizationDesc"
+                      upLabel="按 utilization 升序排序"
+                      downLabel="按 utilization 降序排序"
+                      sortMode={sortMode}
+                      onSortModeChange={onSortModeChange}
+                    />
+                  ) : (
+                    '利用率'
+                  )}
+                </th>
+              </tr>
+            </thead>
+          ) : null}
           <tbody>
             {tableError ? (
               <tr>
