@@ -2,24 +2,22 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from aave_crawler.api.routes import common_router
 from aave_crawler.database import get_pool
+from tests.helpers.routes import build_test_client
 
 
 def _build_client() -> TestClient:
-    app = FastAPI()
-    app.include_router(common_router)
-    app.state.w3 = object()
-    app.state.justlend_cfg = object()
-
     async def _override_pool():
         return object()
 
-    app.dependency_overrides[get_pool] = _override_pool
-    return TestClient(app)
+    return build_test_client(
+        router=common_router,
+        dependency_overrides={get_pool: _override_pool},
+        state={"w3": object(), "justlend_cfg": object()},
+    )
 
 
 def test_price_assets_route_ok() -> None:
