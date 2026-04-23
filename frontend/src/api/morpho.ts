@@ -350,8 +350,8 @@ function normalizeMorphoMarketConfig(
 
   return {
     market_id: marketId,
-    collateral_symbol: collateralSymbol ?? normalizePairSymbol(item.pair, 1),
-    loan_symbol: loanSymbol ?? normalizePairSymbol(item.pair, 0),
+    collateral_symbol: collateralSymbol ?? normalizePairSymbol(item.pair, 0),
+    loan_symbol: loanSymbol ?? normalizePairSymbol(item.pair, 1),
     collateral_token_address:
       item.collateralToken?.address ??
       collateralAsset?.token_address ??
@@ -370,7 +370,7 @@ function normalizeMorphoMarketConfig(
     oracle: item.oracle ?? null,
     irm: item.irm ?? null,
     pair:
-      item.pair ?? (loanSymbol && collateralSymbol ? `${loanSymbol}-${collateralSymbol}` : null),
+      collateralSymbol && loanSymbol ? `${collateralSymbol}-${loanSymbol}` : (item.pair ?? null),
     total_market_size_usd: normalizeDecimalString(
       item.total_market_size_usd ?? item.totalMarketSizeUsd,
     ),

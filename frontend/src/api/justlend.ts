@@ -116,8 +116,8 @@ export interface JustLendMarketStateResponse {
   total_reserves: string;
   total_supply: string;
   utilization: string;
-  borrow_rate: string;
-  supply_rate: string;
+  borrow_apy: string;
+  supply_apy: string;
   underlying_price_in_trx: string;
   price_usd: string;
   timestamp: string;
