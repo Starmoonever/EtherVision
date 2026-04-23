@@ -77,6 +77,7 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   }, [compoundAddress, compoundMarket]);
 
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
 
     const loadCompoundMarkets = async () => {
@@ -115,10 +116,10 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeCompoundMarketsVersion, activeTab]);
+  }, [active, activeCompoundMarketsVersion, activeTab]);
 
   useEffect(() => {
-    if (!compoundAddress || activeTab !== 'personal') return;
+    if (!active || !compoundAddress || activeTab !== 'personal') return;
 
     const loadCompound = async () => {
       setError('');
@@ -197,7 +198,7 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
     };
 
     void loadCompound();
-  }, [activeTab, compoundAddress, compoundMarket, compoundMarkets, personalVersion]);
+  }, [active, activeTab, compoundAddress, compoundMarket, compoundMarkets, personalVersion]);
 
   if (!active) return null;
 

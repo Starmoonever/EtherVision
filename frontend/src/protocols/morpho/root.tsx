@@ -41,7 +41,9 @@ export function MorphoProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   }, [morphoQueriedAddress, morphoQueriedMarketId]);
 
   useEffect(() => {
-    if (!morphoQueriedAddress || !morphoQueriedMarketId || activeTab !== 'personal') return;
+    if (!active || !morphoQueriedAddress || !morphoQueriedMarketId || activeTab !== 'personal') {
+      return;
+    }
 
     let cancelled = false;
 
@@ -87,7 +89,7 @@ export function MorphoProtocolRoot({ active, activeTab }: ProtocolRootProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, morphoQueriedAddress, morphoQueriedMarketId]);
+  }, [active, activeTab, morphoQueriedAddress, morphoQueriedMarketId]);
 
   if (!active) return null;
 
