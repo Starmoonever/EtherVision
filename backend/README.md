@@ -8,6 +8,7 @@
 - Compound
 - Morpho
 - JustLend
+- MakerDAO
 
 如果你是第一次接手本仓库，建议先看根 [README.md](../README.md)，再回到本文件看后端细节。
 
@@ -33,6 +34,7 @@ backend/
 ├── compound_crawler/
 ├── morpho_crawler/
 ├── justlend_crawler/
+├── makerdao_crawler/
 ├── crawler_shared/
 ├── scripts/
 └── tests/
@@ -48,6 +50,8 @@ backend/
   - Morpho Blue 市场、当前用户仓位与按请求懒加载的历史 replay
 - `justlend_crawler/`
   - JustLend 当前仓位、趋势回放、事件说明
+- `makerdao_crawler/`
+  - MakerDAO ilk 缓存、Vault 当前仓位与后续回放骨架
 - `crawler_shared/`
   - 共享配置、数据库、统一 API 入口与公共组件
 
@@ -152,8 +156,9 @@ uv run aave-crawler check 0xAddress
 - `uv run compound-crawler`
 - `uv run morpho-crawler`
 - `uv run justlend-crawler`
+- `uv run makerdao-crawler`
 
-当前仅 `aave-crawler` 保留可运行的 `watch` 命令；Compound / Morpho / JustLend 的 watcher 占位 CLI 已移除，避免在本仓库内误执行无实际补全逻辑的任务。
+当前仅 `aave-crawler` 保留可运行的 `watch` 命令；Compound / Morpho / JustLend / MakerDAO 的 watcher 占位 CLI 已移除，避免在本仓库内误执行无实际补全逻辑的任务。
 
 如果需要新增协议级命令，优先检查各自 `cli.py` 与 `crawler_shared.server` 的集成方式。
 
@@ -238,6 +243,30 @@ Morpho 模块当前聚焦 Morpho Blue：
 - 市场信息缓存
 - 单市场个人仓位 replay
 - 资产与额外信息的 JSONB 存储
+
+### MakerDAO
+
+MakerDAO 模块当前为后端骨架，已接入统一 API 与 CLI，围绕 Vault 场景预留了最小数据结构：
+
+- `loan.makerdao_ilks_current`
+  - 缓存 ilk 基础参数，如抵押资产、债务上限、清算比率
+- `loan.makerdao_current_vault_positions`
+  - 缓存当前 Vault 仓位，用于后续 owner / proxy / urn 查询
+- `loan.makerdao_position_snapshots`
+  - 预留交易级或块级回放快照
+
+当前已提供：
+
+- `GET /api/makerdao/status`
+- `GET /api/makerdao/ilks`
+- `GET /api/makerdao/position`
+- `uv run makerdao-crawler init-db`
+
+当前未提供：
+
+- 链上抓取与增量同步
+- Vault 交易回放
+- 清算事件解析
 
 Morpho 写路径里已经有较明确的“API 文本地址 -> DB bytes”的转换逻辑，改动时要连同读路径一起核对。
 

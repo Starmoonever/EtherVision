@@ -4,7 +4,7 @@
 
 当前仓库同时承载：
 
-- 后端采集与 API：Aave、Compound、Morpho、JustLend
+- 后端采集与 API：Aave、Compound、Morpho、JustLend、MakerDAO
 - 前端看板：个人仓位分析、历史回放、市场风险图表
 - PostgreSQL / ClickHouse 相关数据处理脚本与迁移
 
@@ -56,6 +56,11 @@ aave_liquidation/
 - 当前仓位与个人风险视图
 - 交易回放与趋势分析
 - 说明文案与 effect 解析
+
+### MakerDAO
+
+- Vault / ilk 后端骨架
+- 统一 API 接入与后续回放预留
 
 ## 运行前提
 
@@ -125,6 +130,7 @@ pnpm dev
    - `compound_crawler`
    - `morpho_crawler`
    - `justlend_crawler`
+   - `makerdao_crawler`
 2. 同步核对：
    - CLI 命令
    - API 路由

@@ -23,6 +23,7 @@ from crawler_shared.database import close_engine, init_engine
 from crawler_shared.tron_rpc import build_tron_rpc_client
 from justlend_crawler.api.routes import router as justlend_router
 from justlend_crawler.config import load_config as load_justlend_config
+from makerdao_crawler.api.routes import router as makerdao_router
 from morpho_crawler.api.routes import router as morpho_router
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,8 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     application = FastAPI(
-        title="Aave + Compound + JustLend + Morpho API",
-        description="统一提供 Aave、Compound、JustLend 与 Morpho 的查询接口",
+        title="Aave + Compound + JustLend + Morpho + MakerDAO API",
+        description="统一提供 Aave、Compound、JustLend、Morpho 与 MakerDAO 的查询接口",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     application.include_router(common_router)
     application.include_router(compound_router)
     application.include_router(justlend_router)
+    application.include_router(makerdao_router)
     application.include_router(morpho_router)
 
     @application.get("/aave/health", tags=["系统"])
@@ -91,6 +93,10 @@ def create_app() -> FastAPI:
 
     @application.get("/justlend/health", tags=["系统"])
     async def _justlend_health() -> dict:
+        return {"status": "ok"}
+
+    @application.get("/makerdao/health", tags=["系统"])
+    async def _makerdao_health() -> dict:
         return {"status": "ok"}
 
     return application

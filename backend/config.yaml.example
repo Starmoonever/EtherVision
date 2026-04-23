@@ -25,6 +25,9 @@ crawler:
   # 失败重试次数
   retry_count: 3
 
-justlend:
-  api_base_url: "https://openapi.just.network"
-  markets: []
+makerdao:
+  chain: "ethereum"
+  vat_address: ""
+  spotter_address: ""
+  dog_address: ""
+  ilk_names: []
