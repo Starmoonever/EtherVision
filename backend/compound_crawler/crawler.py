@@ -60,7 +60,6 @@ ETH_USD_PRICE_FEED = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
 PUBLIC_RPCS = [
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
-    "https://rpc.ankr.com/eth",
 ]
 
 COMET_FACTOR_SCALE = Decimal(10**18)

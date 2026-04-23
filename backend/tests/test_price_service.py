@@ -142,32 +142,68 @@ def _fake_w3_with_wsteth_rate_fallback(
 
 
 @pytest.mark.asyncio
-async def test_get_price_realtime_supports_address_compound_snapshot_fallback() -> None:
+async def test_get_price_realtime_supports_address_ethereum_cache_fallback() -> None:
     token_address = "0x1111111111111111111111111111111111111111"
-    pool = _FakePool(
-        price_row={
-            "price_usd": "12.34",
-            "timestamp": datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc),
-        },
-    )
 
-    with patch.object(
-        service,
-        "get_assets_prices",
-        new=AsyncMock(side_effect=Exception("execution reverted")),
+    with (
+        patch.object(
+            service,
+            "get_assets_prices",
+            new=AsyncMock(side_effect=Exception("execution reverted")),
+        ),
+        patch.object(
+            service,
+            "_get_latest_ethereum_bucket_cache_price",
+            new=AsyncMock(
+                return_value=(
+                    Decimal("12.34"),
+                    int(
+                        datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+                    ),
+                )
+            ),
+        ),
     ):
         resp = await service.get_price(
             MagicMock(),
             symbol=None,
             address=token_address,
-            pool=cast(asyncpg.Pool, pool),
+            pool=cast(asyncpg.Pool, _FakePool()),
         )
 
     assert resp.asset == token_address
     assert resp.token_address == token_address
     assert resp.price_usd == "12.34"
     assert resp.timestamp == "2026-03-20T12:00:00Z"
-    assert resp.source == "compound-snapshot"
+    assert resp.source == "ethereum-cache"
+
+
+@pytest.mark.asyncio
+async def test_get_price_realtime_supports_tron_current_bucket_cache_fallback() -> None:
+    token_address = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+    with (
+        patch(
+            "crawler_shared.api.service.ensure_tron_price_cache_table",
+            new=AsyncMock(),
+        ),
+        patch(
+            "crawler_shared.api.service.get_cached_tron_price_usd",
+            new=AsyncMock(return_value=Decimal("0.99")),
+        ),
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol=None,
+            address=token_address,
+            chain="tron",
+            pool=cast(asyncpg.Pool, _FakePool()),
+        )
+
+    assert resp.asset == "USDT"
+    assert resp.token_address == token_address
+    assert resp.price_usd == "0.99"
+    assert resp.source == "tron-cache"
 
 
 @pytest.mark.asyncio
@@ -176,12 +212,17 @@ async def test_get_price_realtime_derives_wsteth_from_steth_price_and_onchain_ra
 ):
     w3, rate_call = _fake_w3_with_ratio(int(Decimal("1.15") * Decimal(10**18)))
 
+    async def _defillama_price(token_address: str):
+        if token_address.lower() == "0x7f39c581f595b53c5cb5ba2d5da6c935e2ca0ae6":
+            return None
+        return Decimal("2000"), 1717200000
+
     with (
         patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
         patch.object(
             service,
             "_fetch_defillama_current_price",
-            new=AsyncMock(return_value=(Decimal("2000"), 1717200000)),
+            new=AsyncMock(side_effect=_defillama_price),
         ),
     ):
         resp = await service.get_price(
@@ -208,12 +249,17 @@ async def test_get_price_realtime_derives_wsteth_with_selector_fallback() -> Non
         )
     )
 
+    async def _defillama_price(token_address: str):
+        if token_address.lower() == "0x7f39c581f595b53c5cb5ba2d5da6c935e2ca0ae6":
+            return None
+        return Decimal("2000"), 1717200000
+
     with (
         patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
         patch.object(
             service,
             "_fetch_defillama_current_price",
-            new=AsyncMock(return_value=(Decimal("2000"), 1717200000)),
+            new=AsyncMock(side_effect=_defillama_price),
         ),
     ):
         resp = await service.get_price(
@@ -230,11 +276,16 @@ async def test_get_price_realtime_derives_wsteth_with_selector_fallback() -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_price_realtime_prefers_coingecko_for_wsteth_before_derived_price() -> (
+async def test_get_price_realtime_falls_back_to_coingecko_for_wsteth_after_derived_price() -> (
     None
 ):
     with (
         patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch.object(
+            service,
+            "_fetch_defillama_current_price",
+            new=AsyncMock(return_value=None),
+        ),
         patch.object(
             service,
             "_fetch_coingecko_current_price",
@@ -243,7 +294,7 @@ async def test_get_price_realtime_prefers_coingecko_for_wsteth_before_derived_pr
         patch.object(
             service,
             "_get_current_derived_price",
-            new=AsyncMock(side_effect=AssertionError("should not call derived price")),
+            new=AsyncMock(side_effect=Exception("derived failed")),
         ),
     ):
         resp = await service.get_price(
@@ -257,6 +308,40 @@ async def test_get_price_realtime_prefers_coingecko_for_wsteth_before_derived_pr
     assert resp.price_usd == "2456.78"
     assert resp.timestamp == "2024-06-01T00:00:00Z"
     assert resp.source == "coingecko"
+
+
+@pytest.mark.asyncio
+async def test_get_price_realtime_prefers_defillama_before_onchain_and_cache() -> None:
+    token_address = "0x3333333333333333333333333333333333333333"
+
+    with (
+        patch.object(
+            service,
+            "_fetch_defillama_current_price",
+            new=AsyncMock(return_value=(Decimal("101.23"), 1717200000)),
+        ),
+        patch.object(
+            service,
+            "get_assets_prices",
+            new=AsyncMock(side_effect=AssertionError("should not call oracle")),
+        ),
+        patch.object(
+            service,
+            "_get_latest_ethereum_bucket_cache_price",
+            new=AsyncMock(side_effect=AssertionError("should not call cache")),
+        ),
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol=None,
+            address=token_address,
+            pool=cast(asyncpg.Pool, _FakePool()),
+        )
+
+    assert resp.asset == token_address
+    assert resp.price_usd == "101.23"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "defillama"
 
 
 @pytest.mark.asyncio

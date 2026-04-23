@@ -12,19 +12,18 @@ from typing import Any
 
 import asyncpg
 from web3 import AsyncWeb3
-from web3.providers import AsyncHTTPProvider
 
+from aave_crawler.db import get_cached_ethereum_price_usd
+from aave_crawler.market_collector import _block_at_timestamp
 from aave_crawler.rpc import (
     CONTRACTS_V3,
     ORACLE_ABI,
-    PUBLIC_RPCS,
     WETH_ADDRESS,
     get_all_reserve_tokens,
     get_assets_prices,
     get_contracts,
     get_reserve_config,
 )
-from aave_crawler.market_collector import _block_at_timestamp
 from crawler_shared.price_history import (
     bucket_timestamps,
     get_historical_bucket_prices_usd,
@@ -101,17 +100,6 @@ _DERIVED_PRICE_SPECS: dict[str, DerivedPriceSpec] = {
     ),
 }
 
-_SQL_COMPOUND_V3_RESERVE_BY_SYMBOL = """
-SELECT
-    symbol,
-    CONCAT('0x', encode(reserve, 'hex')) AS token_address
-FROM loan.compound_v3_market_snapshot_reserves
-WHERE symbol IS NOT NULL
-  AND UPPER(symbol) = $1
-ORDER BY "timestamp" DESC
-LIMIT 1
-"""
-
 _SQL_JUSTLEND_LATEST_CURRENT_PRICE = """
 SELECT
     price_usd,
@@ -150,16 +138,6 @@ FROM (
       AND ((EXTRACT(EPOCH FROM snapshot_at)::bigint / 900) * 900) = ANY($2::bigint[])
 ) AS bucketed
 ORDER BY snapshot_bucket ASC, snapshot_at DESC
-"""
-
-_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE = """
-SELECT
-    price_usd,
-    "timestamp"
-FROM loan.compound_v3_market_snapshot_reserves
-WHERE reserve = decode(replace(lower($1), '0x', ''), 'hex')
-ORDER BY "timestamp" DESC
-LIMIT 1
 """
 
 
@@ -416,16 +394,6 @@ async def _fetch_coingecko_current_price(
     return None
 
 
-async def _get_latest_compound_v3_reserve_price(
-    pool: asyncpg.Pool,
-    token_address: str,
-) -> tuple[Decimal, int] | None:
-    row = await pool.fetchrow(_SQL_COMPOUND_V3_LATEST_RESERVE_PRICE, token_address)
-    if row is None or row["price_usd"] is None or row["timestamp"] is None:
-        return None
-    return Decimal(str(row["price_usd"])), int(row["timestamp"].timestamp())
-
-
 async def _get_latest_justlend_current_price(
     pool: asyncpg.Pool,
     token_address: str,
@@ -560,6 +528,18 @@ def _ts_to_utc_str(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+async def _get_latest_ethereum_bucket_cache_price(
+    pool: asyncpg.Pool,
+    token_address: str,
+    now_ts: int,
+) -> tuple[Decimal, int] | None:
+    price = await get_cached_ethereum_price_usd(pool, now_ts, token_address)
+    if price is None:
+        return None
+    bucket_ts = (now_ts // 900) * 900
+    return price, bucket_ts
+
+
 def _get_derived_price_spec(token_address: str) -> DerivedPriceSpec | None:
     return _DERIVED_PRICE_SPECS.get(token_address.lower())
 
@@ -605,37 +585,11 @@ async def _fetch_ratio_from_chain(
     if ratio is not None:
         return ratio
 
-    # 当前 provider 无法读取时，对独立公共 RPC 做一次兜底探测。
-    # latest 读取最适合该兜底；历史块也尝试，但是否可用取决于公共节点是否保留 archive 能力。
-    fallback_errors: list[str] = []
-    for url in PUBLIC_RPCS:
-        probe_w3 = AsyncWeb3(AsyncHTTPProvider(url, request_kwargs={"timeout": 10}))
-        try:
-            fallback_ratio, rpc_errors = await _try_with_provider(probe_w3)
-            if fallback_ratio is not None:
-                logger.warning(
-                    "derived price ratio fallback succeeded contract=%s block=%s rpc=%s initial_errors=%s",
-                    spec.rate_contract,
-                    block_desc,
-                    url,
-                    " | ".join(errors),
-                )
-                return fallback_ratio
-            fallback_errors.append(f"{url}: {' | '.join(rpc_errors)}")
-        except Exception as exc:
-            fallback_errors.append(f"{url}: {type(exc).__name__}: {exc}")
-        finally:
-            try:
-                await probe_w3.provider.disconnect()
-            except Exception:
-                logger.debug("failed to close fallback provider %s", url, exc_info=True)
-
-    all_errors = errors + fallback_errors
     logger.warning(
         "failed to fetch derived price ratio contract=%s block=%s errors=%s",
         spec.rate_contract,
         block_desc,
-        " | ".join(all_errors),
+        " | ".join(errors),
     )
     raise HTTPException(
         status_code=502,
@@ -751,12 +705,23 @@ async def get_price(
             )
 
         if timestamp is None:
+            now_ts = int(_time.time())
+            await ensure_tron_price_cache_table(pool)
+            cached_price = await get_cached_tron_price_usd(pool, now_ts, token_address)
+            if cached_price is not None:
+                return PriceResponse(
+                    asset=resolved_asset,
+                    price_usd=_fmt(cached_price, 2),
+                    token_address=token_address,
+                    timestamp=_ts_to_utc_str((now_ts // 900) * 900),
+                    source="tron-cache",
+                )
+
             current_price = await _get_latest_justlend_current_price(
                 pool, token_address
             )
             if current_price is not None:
                 price, snapshot_ts = current_price
-                await ensure_tron_price_cache_table(pool)
                 await _cache_tron_price(
                     pool=pool,
                     unix_ts=snapshot_ts,
@@ -844,6 +809,18 @@ async def get_price(
         )
 
     if timestamp is None:
+        now_ts = int(_time.time())
+        latest_price = await _fetch_defillama_current_price(token_address)
+        if latest_price is not None:
+            price, price_ts = latest_price
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(price_ts),
+                source="defillama",
+            )
+
         oracle_exc: Exception | None = None
         try:
             prices = await get_assets_prices(w3, [token_address])
@@ -857,35 +834,26 @@ async def get_price(
                 asset=resolved_asset,
                 price_usd=_fmt(price, 2),
                 token_address=token_address,
-                timestamp=_ts_to_utc_str(int(_time.time())),
+                timestamp=_ts_to_utc_str(now_ts),
                 source="on-chain",
             )
 
         if pool is not None:
-            snapshot = await _get_latest_compound_v3_reserve_price(pool, token_address)
-            if snapshot is not None:
-                price, snapshot_ts = snapshot
+            cached_snapshot = await _get_latest_ethereum_bucket_cache_price(
+                pool, token_address, now_ts
+            )
+            if cached_snapshot is not None:
+                price, snapshot_ts = cached_snapshot
                 return PriceResponse(
                     asset=resolved_asset,
                     price_usd=_fmt(price, 2),
                     token_address=token_address,
                     timestamp=_ts_to_utc_str(snapshot_ts),
-                    source="compound-snapshot",
+                    source="ethereum-cache",
                 )
 
         derived_spec = _get_derived_price_spec(token_address)
         derived_exc: Exception | None = None
-
-        coingecko_price = await _fetch_coingecko_current_price(token_address)
-        if coingecko_price is not None:
-            price, price_ts = coingecko_price
-            return PriceResponse(
-                asset=resolved_asset,
-                price_usd=_fmt(price, 2),
-                token_address=token_address,
-                timestamp=_ts_to_utc_str(price_ts),
-                source="coingecko",
-            )
 
         if derived_spec is not None:
             try:
@@ -906,15 +874,15 @@ async def get_price(
                         source=source,
                     )
 
-        latest_price = await _fetch_defillama_current_price(token_address)
-        if latest_price is not None:
-            price, price_ts = latest_price
+        coingecko_price = await _fetch_coingecko_current_price(token_address)
+        if coingecko_price is not None:
+            price, price_ts = coingecko_price
             return PriceResponse(
                 asset=resolved_asset,
                 price_usd=_fmt(price, 2),
                 token_address=token_address,
                 timestamp=_ts_to_utc_str(price_ts),
-                source="defillama",
+                source="coingecko",
             )
 
         if oracle_exc is not None:

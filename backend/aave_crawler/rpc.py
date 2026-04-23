@@ -108,7 +108,6 @@ PUBLIC_RPCS = [
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
     "https://1rpc.io/eth",
-    "https://rpc.ankr.com/eth",
     "https://cloudflare-eth.com",
 ]
 
@@ -673,11 +672,13 @@ async def fetch_user_position(
             )
             # 转换为 UserReserveData，保持后续处理代码不变
             results: list[UserReserveData | Exception] = [
-                UserReserveData(
-                    r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], bool(r[8])
+                (
+                    UserReserveData(
+                        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], bool(r[8])
+                    )
+                    if not isinstance(r, Exception)
+                    else r
                 )
-                if not isinstance(r, Exception)
-                else r
                 for r in raw_results
             ]
 

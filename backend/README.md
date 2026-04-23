@@ -100,6 +100,8 @@ uv sync
 - 代码层已优先使用 `ensure_ethereum_price_cache_table`、`get_cached_ethereum_price_usd`、`upsert_ethereum_price_cache` 这组 helper；旧的 `eth_*` helper 名称仅保留兼容
 - `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
 - 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
+- `GET /api/price?time=now` 的 Ethereum 实时查询优先级为：`DeFiLlama` -> 链上 oracle -> `loan.eth_price_timestamp` 当前桶缓存 -> 包装资产派生价格 -> `CoinGecko`
+- `GET /api/price?time=now` 的 Ethereum 实时查询在链上 oracle 失败后，只会接受 `loan.eth_price_timestamp` 当前 15 分钟桶命中的本地缓存作为数据库兜底；不再回退到可能长期未刷新的其他市场快照表
 - 对 `wstETH` 这类包装资产，统一价格接口允许走“链下原资产 USD 价格 × 链上汇率”的派生路径；当前已接入 `wstETH = stETH × stEthPerToken()`，其中历史价格会先定位到对应 bucket 的 Ethereum 区块，再读取该区块的链上汇率，因此依赖可用的 archive 级 EVM RPC
 
 TRON 价格查询的现状与约定：
@@ -107,6 +109,7 @@ TRON 价格查询的现状与约定：
 - `/api/price` 与 `/api/price/period` 已支持通过 `chain=tron` 或 TRON Base58 地址查询波场资产
 - TRON 小粒度价格缓存表为 `loan.tron_price_timestamp`，地址统一存储为规范化 Base58 `T...` 文本，并使用列级 `STORAGE PLAIN`
 - `loan.tron_price_timestamp` 采用“懒更新”模式：查询命中缓存则直接返回；查询未命中时，仅在当前 15 分钟桶触发一次 JustLend 市场接口抓取并回填该桶
+- `GET /api/price?time=now` 的 TRON 实时查询会先检查 `loan.tron_price_timestamp` 当前桶是否已命中；命中则直接返回，不再额外访问 JustLend current 表或外部接口
 - 对于未命中的历史 TRON bucket，当前仍回退到 `loan.justlend_market_snapshots` 中最近的市场快照；如果该表只有日级快照，则返回结果粒度也会受限于现有快照密度
 
 ## 常用命令
