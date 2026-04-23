@@ -122,13 +122,15 @@ export function CompoundMarketAssessment({
 
         {/* Right: Historical Data Panel */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-          <CompoundLiquidationChart
-            version={marketVersion}
-            market={activeMarketAddress}
-            marketSymbol={activeMarketSymbol}
-          />
+          {marketVersion === 'v3' ? (
+            <CompoundLiquidationChart
+              version={marketVersion}
+              market={activeMarketAddress}
+              marketSymbol={activeMarketSymbol}
+            />
+          ) : null}
 
-          <div style={{ marginTop: '2rem' }}>
+          <div style={{ marginTop: marketVersion === 'v3' ? '2rem' : 0 }}>
             <CompoundMarketHistoryChart
               version={marketVersion}
               market={activeMarketAddress}

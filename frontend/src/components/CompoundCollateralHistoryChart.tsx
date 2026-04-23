@@ -21,6 +21,10 @@ import {
 import type { CompoundMarketPoint } from '../api/compound';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import {
+  formatCompoundHistoryErrorMessage,
+  getDailySafeIntervalHours,
+} from './compoundHistorySampling';
 
 interface CompoundCollateralHistoryChartProps {
   version: 'v2' | 'v3';
@@ -147,9 +151,10 @@ export function CompoundCollateralHistoryChart({
 
         const start = formatUtcDateBoundary(customStart);
         const end = formatUtcDateBoundary(customEnd, true);
+        const intervalHours = version === 'v2' ? getDailySafeIntervalHours(startTs, endTs) : 24;
 
         const result = await fetchCompoundMarketHistoryWithMeta(version, market, start, end, {
-          interval: version === 'v2' ? 1 : 24,
+          interval: intervalHours,
         });
         setMeta(mergeRequestMetas([result.meta]));
 
@@ -160,7 +165,7 @@ export function CompoundCollateralHistoryChart({
         setData(sortedPoints);
       } catch (err) {
         console.error(err);
-        setError('无法加载抵押资产历史数据');
+        setError(formatCompoundHistoryErrorMessage(err, '无法加载抵押资产历史数据'));
       } finally {
         setLoading(false);
       }
@@ -572,7 +577,7 @@ export function CompoundCollateralHistoryChart({
             padding: '0.85rem 1rem',
           }}
         >
-          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里改为展示该 cToken
+          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里展示该 cToken
           市场的资金结构、流动性利用率和协议储备演化。
         </div>
 
