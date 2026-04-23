@@ -1,7 +1,9 @@
 import { apiFetch, apiFetchRaw } from './client';
 import type { DataWithMeta } from './requestMeta';
+import morphoVaultOpenapiSampleRaw from '../../openapi.json?raw';
 
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
+export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
 
 export type MorphoProtocol = 'blue';
 export type MorphoMarketSortField =
@@ -137,6 +139,65 @@ export interface MorphoMarketsResponse {
   total_pages: number;
 }
 
+export interface MorphoVaultAsset {
+  symbol: string | null;
+  address: string | null;
+  decimals: number | null;
+}
+
+export interface MorphoVaultAllocation {
+  market_id: string;
+  loan_symbol: string | null;
+  loan_address: string | null;
+  collateral_symbol: string | null;
+  collateral_address: string | null;
+  supply_assets: string | null;
+  supply_assets_usd: string | null;
+  supply_shares: string | null;
+  supply_cap: string | null;
+  supply_cap_usd: string | null;
+  liquidity_usd: string | null;
+  allocation_ratio: string | null;
+}
+
+export interface MorphoVaultResponse {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  listed: boolean | null;
+  chain_id: number | null;
+  chain_network: string | null;
+  asset: MorphoVaultAsset;
+  total_assets: string | null;
+  total_assets_raw: string | null;
+  total_assets_usd: string | null;
+  liquidity_usd: string | null;
+  total_supply: string | null;
+  share_price: string | null;
+  share_price_usd: string | null;
+  apy: string | null;
+  net_apy: string | null;
+  net_apy_excluding_rewards: string | null;
+  avg_net_apy: string | null;
+  avg_net_apy_excluding_rewards: string | null;
+  timelock_seconds: string | null;
+  timelock_days: string | null;
+  fee: string | null;
+  allocations: MorphoVaultAllocation[];
+  data_source: 'api' | 'mock';
+}
+
+export interface MorphoVaultReallocationPoint {
+  date: string;
+  reallocation_count: number;
+}
+
+export interface MorphoVaultReallocationResponse {
+  address: string;
+  points: MorphoVaultReallocationPoint[];
+  data_source: 'api' | 'mock' | 'empty';
+}
+
 interface MorphoMarketListItemApiPayload {
   market_id?: string;
   marketId?: string;
@@ -223,6 +284,75 @@ interface MorphoMarketStateApiPayload {
   collateralToken?: { address?: string | null; symbol?: string | null; decimals?: number | null };
 }
 
+interface MorphoVaultApiPayload {
+  data?: {
+    vaultByAddress?: MorphoVaultByAddressApiPayload | null;
+  };
+  vault?: MorphoVaultByAddressApiPayload | null;
+  vaultByAddress?: MorphoVaultByAddressApiPayload | null;
+}
+
+interface MorphoVaultByAddressApiPayload {
+  address?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  listed?: boolean | null;
+  asset?: {
+    address?: string | null;
+    symbol?: string | null;
+    decimals?: number | null;
+  } | null;
+  chain?: {
+    id?: number | null;
+    network?: string | null;
+  } | null;
+  state?: {
+    totalAssets?: string | number | null;
+    totalAssetsUsd?: string | number | null;
+    totalSupply?: string | number | null;
+    sharePriceNumber?: string | number | null;
+    sharePriceUsd?: string | number | null;
+    apy?: string | number | null;
+    netApy?: string | number | null;
+    netApyExcludingRewards?: string | number | null;
+    avgNetApy?: string | number | null;
+    avgNetApyExcludingRewards?: string | number | null;
+    timelock?: string | number | null;
+    fee?: string | number | null;
+    allocation?: MorphoVaultAllocationApiPayload[] | null;
+  } | null;
+}
+
+interface MorphoVaultAllocationApiPayload {
+  market?: {
+    marketId?: string | null;
+    uniqueKey?: string | null;
+    loanAsset?: {
+      symbol?: string | null;
+      address?: string | null;
+    } | null;
+    collateralAsset?: {
+      symbol?: string | null;
+      address?: string | null;
+    } | null;
+  } | null;
+  supplyAssets?: string | number | null;
+  supplyAssetsUsd?: string | number | null;
+  supplyShares?: string | number | null;
+  supplyCap?: string | number | null;
+  supplyCapUsd?: string | number | null;
+}
+
+interface MorphoVaultReallocationApiPayload {
+  address?: string | null;
+  points?: Array<{
+    date?: string | null;
+    timestamp?: string | null;
+    reallocation_count?: number | string | null;
+    count?: number | string | null;
+  }> | null;
+}
+
 const morphoPositionCache = new Map<string, { fetchedAt: number; data: MorphoPositionResponse }>();
 const morphoPositionInflight = new Map<string, Promise<MorphoPositionResponse>>();
 const morphoReplayCache = new Map<
@@ -234,6 +364,16 @@ const morphoMarketsCache = new Map<string, { fetchedAt: number; data: MorphoMark
 const morphoMarketsInflight = new Map<string, Promise<MorphoMarketsResponse>>();
 const morphoMarketStateCache = new Map<string, { fetchedAt: number; data: MorphoMarketState }>();
 const morphoMarketStateInflight = new Map<string, Promise<MorphoMarketState>>();
+const morphoVaultCache = new Map<string, { fetchedAt: number; data: MorphoVaultResponse }>();
+const morphoVaultInflight = new Map<string, Promise<MorphoVaultResponse>>();
+const morphoVaultReallocationsCache = new Map<
+  string,
+  { fetchedAt: number; data: MorphoVaultReallocationResponse }
+>();
+const morphoVaultReallocationsInflight = new Map<
+  string,
+  Promise<MorphoVaultReallocationResponse>
+>();
 
 function normalizePairSymbol(pair: string | null | undefined, index: number): string | null {
   if (!pair) return null;
@@ -270,6 +410,33 @@ function normalizeDecimalString(value: unknown): string | null {
     return trimmed || null;
   }
   return null;
+}
+
+function normalizeNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const numeric = typeof value === 'number' ? value : Number(String(value));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeRawAssetAmount(
+  value: unknown,
+  decimals: number | null | undefined,
+): string | null {
+  const raw = normalizeDecimalString(value);
+  if (!raw) return null;
+  const decimalPlaces = decimals ?? 0;
+  if (decimalPlaces <= 0) return raw;
+
+  if (/^\d+$/.test(raw)) {
+    const padded = raw.padStart(decimalPlaces + 1, '0');
+    const whole = padded.slice(0, -decimalPlaces);
+    const fraction = padded.slice(-decimalPlaces).replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : whole;
+  }
+
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return raw;
+  return String(numeric / 10 ** decimalPlaces);
 }
 
 function normalizeMetricValue(
@@ -438,6 +605,144 @@ function normalizeMorphoMarketState(item: MorphoMarketStateApiPayload): MorphoMa
     lltv: item.lltv_ratio ?? normalizeRatioString(item.lltv),
     oracle: item.oracle ?? null,
     irm: item.irm ?? null,
+  };
+}
+
+function resolveMorphoVaultSamplePayload(): MorphoVaultApiPayload {
+  return JSON.parse(morphoVaultOpenapiSampleRaw) as MorphoVaultApiPayload;
+}
+
+function getMorphoVaultPayload(payload: MorphoVaultApiPayload): MorphoVaultByAddressApiPayload {
+  const vault = payload.data?.vaultByAddress ?? payload.vaultByAddress ?? payload.vault;
+  if (!vault) throw new Error('Morpho vault 数据为空');
+  return vault;
+}
+
+function resolveVaultLiquidityUsd(
+  allocations: MorphoVaultAllocation[],
+  totalAssetsUsd: string | null,
+): string | null {
+  let total = 0;
+  let hasFiniteLiquidity = false;
+  for (const allocation of allocations) {
+    const cap = normalizeNumber(allocation.supply_cap_usd);
+    const used = normalizeNumber(allocation.supply_assets_usd);
+    if (cap === null || used === null || cap > 1e30) continue;
+    total += Math.max(0, cap - used);
+    hasFiniteLiquidity = true;
+  }
+
+  if (hasFiniteLiquidity) return String(total);
+
+  const totalAssets = normalizeNumber(totalAssetsUsd);
+  return totalAssets === null ? null : '0';
+}
+
+function normalizeMorphoVaultAllocation(
+  item: MorphoVaultAllocationApiPayload,
+  assetDecimals: number | null | undefined,
+  totalAssetsUsd: string | null,
+): MorphoVaultAllocation | null {
+  const market = item.market;
+  const marketId = market?.marketId ?? market?.uniqueKey ?? '';
+  if (!marketId) return null;
+  const supplyAssetsUsd = normalizeDecimalString(item.supplyAssetsUsd);
+  const supplyCapUsd = normalizeDecimalString(item.supplyCapUsd);
+  const supplyAssetsUsdNumber = normalizeNumber(supplyAssetsUsd);
+  const supplyCapUsdNumber = normalizeNumber(supplyCapUsd);
+  const totalAssetsUsdNumber = normalizeNumber(totalAssetsUsd);
+  const liquidityUsd =
+    supplyCapUsdNumber !== null && supplyAssetsUsdNumber !== null && supplyCapUsdNumber < 1e30
+      ? String(Math.max(0, supplyCapUsdNumber - supplyAssetsUsdNumber))
+      : null;
+
+  return {
+    market_id: marketId,
+    loan_symbol: market?.loanAsset?.symbol ?? null,
+    loan_address: market?.loanAsset?.address ?? null,
+    collateral_symbol: market?.collateralAsset?.symbol ?? null,
+    collateral_address: market?.collateralAsset?.address ?? null,
+    supply_assets: normalizeRawAssetAmount(item.supplyAssets, assetDecimals),
+    supply_assets_usd: supplyAssetsUsd,
+    supply_shares: normalizeDecimalString(item.supplyShares),
+    supply_cap: normalizeRawAssetAmount(item.supplyCap, assetDecimals),
+    supply_cap_usd: supplyCapUsd,
+    liquidity_usd: liquidityUsd,
+    allocation_ratio:
+      supplyAssetsUsdNumber !== null && totalAssetsUsdNumber !== null && totalAssetsUsdNumber > 0
+        ? String(supplyAssetsUsdNumber / totalAssetsUsdNumber)
+        : null,
+  };
+}
+
+function normalizeMorphoVaultResponse(
+  payload: MorphoVaultApiPayload,
+  dataSource: 'api' | 'mock',
+): MorphoVaultResponse {
+  const vault = getMorphoVaultPayload(payload);
+  const state = vault.state;
+  const assetDecimals = vault.asset?.decimals ?? null;
+  const totalAssetsUsd = normalizeDecimalString(state?.totalAssetsUsd);
+  const timelockSeconds = normalizeDecimalString(state?.timelock);
+  const allocations = (state?.allocation ?? [])
+    .map((item) => normalizeMorphoVaultAllocation(item, assetDecimals, totalAssetsUsd))
+    .filter((item): item is MorphoVaultAllocation => Boolean(item));
+
+  return {
+    address: vault.address ?? '',
+    symbol: vault.symbol ?? null,
+    name: vault.name ?? null,
+    listed: typeof vault.listed === 'boolean' ? vault.listed : null,
+    chain_id: vault.chain?.id ?? null,
+    chain_network: vault.chain?.network ?? null,
+    asset: {
+      symbol: vault.asset?.symbol ?? null,
+      address: vault.asset?.address ?? null,
+      decimals: assetDecimals,
+    },
+    total_assets: normalizeRawAssetAmount(state?.totalAssets, assetDecimals),
+    total_assets_raw: normalizeDecimalString(state?.totalAssets),
+    total_assets_usd: totalAssetsUsd,
+    liquidity_usd: resolveVaultLiquidityUsd(allocations, totalAssetsUsd),
+    total_supply: normalizeDecimalString(state?.totalSupply),
+    share_price: normalizeDecimalString(state?.sharePriceNumber),
+    share_price_usd: normalizeDecimalString(state?.sharePriceUsd),
+    apy: normalizeDecimalString(state?.apy),
+    net_apy: normalizeDecimalString(state?.netApy),
+    net_apy_excluding_rewards: normalizeDecimalString(state?.netApyExcludingRewards),
+    avg_net_apy: normalizeDecimalString(state?.avgNetApy),
+    avg_net_apy_excluding_rewards: normalizeDecimalString(state?.avgNetApyExcludingRewards),
+    timelock_seconds: timelockSeconds,
+    timelock_days:
+      timelockSeconds && Number.isFinite(Number(timelockSeconds))
+        ? String(Number(timelockSeconds) / 86400)
+        : null,
+    fee: normalizeDecimalString(state?.fee),
+    allocations,
+    data_source: dataSource,
+  };
+}
+
+function normalizeMorphoVaultReallocations(
+  payload: MorphoVaultReallocationApiPayload,
+  fallbackAddress: string,
+): MorphoVaultReallocationResponse {
+  const points = (payload.points ?? [])
+    .map((point) => {
+      const count = normalizeNumber(point.reallocation_count ?? point.count);
+      const date = point.date ?? point.timestamp?.slice(0, 10) ?? '';
+      if (!date || count === null) return null;
+      return {
+        date,
+        reallocation_count: count,
+      };
+    })
+    .filter((item): item is MorphoVaultReallocationPoint => Boolean(item));
+
+  return {
+    address: payload.address ?? fallbackAddress,
+    points,
+    data_source: points.length > 0 ? 'api' : 'empty',
   };
 }
 
@@ -891,4 +1196,111 @@ export async function fetchMorphoMarketStateWithMeta(
       fromCache: false,
     },
   };
+}
+
+export async function fetchMorphoVault(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<MorphoVaultResponse> {
+  const result = await fetchMorphoVaultWithMeta(address, options);
+  return result.data;
+}
+
+export async function fetchMorphoVaultWithMeta(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<DataWithMeta<MorphoVaultResponse>> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const force = options.force === true;
+  const cached = morphoVaultCache.get(normalizedAddress);
+
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = morphoVaultInflight.get(normalizedAddress);
+  if (!force && inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({ address });
+  const request = fetchMorphoWithFallback<MorphoVaultApiPayload>([
+    `/morpho/vault?${params.toString()}`,
+    `/morpho/vaults/${encodeURIComponent(address)}`,
+  ])
+    .then((payload) => normalizeMorphoVaultResponse(payload, 'api'))
+    .catch(() => normalizeMorphoVaultResponse(resolveMorphoVaultSamplePayload(), 'mock'))
+    .then((data) => {
+      morphoVaultCache.set(normalizedAddress, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      morphoVaultInflight.delete(normalizedAddress);
+    });
+
+  morphoVaultInflight.set(normalizedAddress, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export async function fetchMorphoVaultReallocations(
+  address: string,
+  options: { force?: boolean; start?: string; end?: string } = {},
+): Promise<MorphoVaultReallocationResponse> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const cacheKey = [normalizedAddress, options.start ?? 'default', options.end ?? 'default'].join(
+    ':',
+  );
+  const force = options.force === true;
+  const cached = morphoVaultReallocationsCache.get(cacheKey);
+
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = morphoVaultReallocationsInflight.get(cacheKey);
+  if (!force && inflight) return inflight;
+
+  const params = new URLSearchParams({
+    address,
+    ...(options.start ? { start: options.start } : {}),
+    ...(options.end ? { end: options.end } : {}),
+  });
+  const request = fetchMorphoWithFallback<MorphoVaultReallocationApiPayload>([
+    `/morpho/vault/reallocations?${params.toString()}`,
+  ])
+    .then((payload) => normalizeMorphoVaultReallocations(payload, address))
+    .catch(() => ({
+      address,
+      points: [],
+      data_source: 'empty' as const,
+    }))
+    .then((data) => {
+      morphoVaultReallocationsCache.set(cacheKey, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      morphoVaultReallocationsInflight.delete(cacheKey);
+    });
+
+  morphoVaultReallocationsInflight.set(cacheKey, request);
+  return request;
 }
