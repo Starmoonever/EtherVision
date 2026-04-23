@@ -348,7 +348,15 @@ async def test_get_positions_formats_page_and_detail_assets() -> None:
         result.items[0].assets[0].asset_address == "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
     )
     mocked_page.assert_awaited_once()
-    mocked_assets.assert_awaited_once()
+    assert mocked_assets.await_count == 2
+    first_call = mocked_assets.await_args_list[0]
+    second_call = mocked_assets.await_args_list[1]
+    assert first_call.kwargs["position_type"] == "all"
+    assert first_call.kwargs["is_collateral"] is None
+    assert first_call.kwargs["asset_address"] is None
+    assert second_call.kwargs["position_type"] == "supply"
+    assert second_call.kwargs["is_collateral"] is False
+    assert second_call.kwargs["asset_address"] == asset_address
 
 
 def test_build_justlend_user_predicate_supports_legacy_base58_bytea_storage() -> None:
@@ -429,9 +437,13 @@ async def test_get_positions_uses_asset_as_filter_even_without_asset_sort() -> N
     assert mocked_page.await_args.kwargs["asset_address"] == asset_address
     assert mocked_page.await_args.kwargs["position_type"] == "all"
     assert mocked_page.await_args.kwargs["is_collateral"] is None
-    mocked_assets.assert_awaited_once()
-    assert mocked_assets.await_args is not None
-    assert mocked_assets.await_args.kwargs["asset_address"] == asset_address
+    assert mocked_assets.await_count == 2
+    first_call = mocked_assets.await_args_list[0]
+    second_call = mocked_assets.await_args_list[1]
+    assert first_call.kwargs["asset_address"] is None
+    assert first_call.kwargs["position_type"] == "all"
+    assert second_call.kwargs["asset_address"] == asset_address
+    assert second_call.kwargs["position_type"] == "all"
 
 
 @pytest.mark.asyncio
@@ -1153,6 +1165,8 @@ def test_get_supported_tx_operation_types_returns_constant_values() -> None:
         "repay",
         "repay_behalf",
         "liquidation",
+        "enable_collateral",
+        "disable_collateral",
     ]
 
 
@@ -1302,6 +1316,16 @@ async def test_fetch_position_from_tron_rpc_matches_api_summary() -> None:
     with (
         patch.object(
             justlend_rpc,
+            "_get_now_block",
+            new=AsyncMock(
+                return_value=(
+                    12345678,
+                    datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+                )
+            ),
+        ),
+        patch.object(
+            justlend_rpc,
             "_call_account_snapshot",
             new=AsyncMock(side_effect=_mock_call_account_snapshot),
         ),
@@ -1400,6 +1424,16 @@ async def test_fetch_position_from_tron_rpc_marks_non_entered_supply_as_supply()
         raise AssertionError(contract_address)
 
     with (
+        patch.object(
+            justlend_rpc,
+            "_get_now_block",
+            new=AsyncMock(
+                return_value=(
+                    12345678,
+                    datetime(2026, 4, 3, 9, 49, 31, tzinfo=timezone.utc),
+                )
+            ),
+        ),
         patch.object(
             justlend_rpc,
             "_call_account_snapshot",
