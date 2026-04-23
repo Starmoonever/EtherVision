@@ -264,7 +264,7 @@ export function MorphoMarketPage() {
             options={[
               {
                 value: 'mainstream',
-                label: '主流市场',
+                label: '市场列表',
                 activeClassName: 'active-purple',
               },
               {
@@ -288,7 +288,7 @@ export function MorphoMarketPage() {
           onToggleMarket={handleToggleMarket}
           marketStateLoadingById={marketStateLoadingById}
           marketStateErrorById={marketStateErrorById}
-          title="主流市场列表"
+          title="市场列表"
           subtitle="分页展示市场核心指标，展开单个市场后再加载实时详情。"
           marketFilters={marketFilters}
           onMarketFilterCommit={(filters) => {

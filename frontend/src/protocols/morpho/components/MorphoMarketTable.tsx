@@ -94,8 +94,11 @@ function formatUsdCompact(value: number | null): string {
   return formatted === 'N/A' ? formatted : `$${formatted}`;
 }
 
-function resolvePair(market: MorphoMarketView): string {
-  return `${market.collateral_symbol || '?'}-${market.loan_symbol || '?'}`;
+function resolvePairParts(market: MorphoMarketView): { collateral: string; loan: string } {
+  return {
+    collateral: market.collateral_symbol || '?',
+    loan: market.loan_symbol || '?',
+  };
 }
 
 function resolveMarketSize(market: MorphoMarketView): number | null {
@@ -243,15 +246,18 @@ function HeaderFilterControl({
 }) {
   return (
     <div className="morpho-market-header-filter-control">
-      <input
-        className="morpho-market-header-filter-input"
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-      />
+      <label className="morpho-market-header-search-field">
+        <span className="morpho-market-header-search-icon" aria-hidden="true" />
+        <input
+          className="morpho-market-header-filter-input"
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+        />
+      </label>
       <SortDirectionButton
         ascMode={ascMode}
         descMode={descMode}
@@ -496,6 +502,7 @@ export function MorphoMarketTable({
                   borrowCapacityUsageRatio !== null && borrowCapacityUsageRatio > 1;
                 const loanTokenAddress = market.loan_token_address;
                 const collateralTokenAddress = market.collateral_token_address;
+                const pairParts = resolvePairParts(market);
 
                 return (
                   <Fragment key={market.market_id}>
@@ -517,7 +524,11 @@ export function MorphoMarketTable({
                             <span className="morpho-market-row-chevron" aria-hidden="true">
                               {isExpanded ? '-' : '+'}
                             </span>
-                            <strong className="token-symbol">{resolvePair(market)}</strong>
+                            <strong className="token-symbol morpho-market-pair-symbol">
+                              <span>{pairParts.collateral}</span>
+                              <span className="morpho-market-pair-separator"> / </span>
+                              <span>{pairParts.loan}</span>
+                            </strong>
                           </button>
                           <div className="morpho-market-id-line">
                             <span className="mono morpho-market-id" title={market.market_id}>

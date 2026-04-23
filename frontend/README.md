@@ -146,10 +146,10 @@ frontend/
 
 其中 Morpho 市场页当前依赖两类接口：
 
-- 市场列表：主流市场视图分页拉取 `market_id`、`pair`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段；页面访问第几页才请求第几页，不在前端一次性拉取所有页；主流市场筛选位于列表表头的“市场”列，分别对应 markets 接口的 `loan` 与 `collateral` 参数，两个值都可为空，并在输入框内按回车后提交请求
-- 市场状态：主流市场视图在用户展开单个 Morpho 市场行后按需请求 `GET /api/morpho/market/state`；市场查询视图在搜索框输入完整 `market_id` 后直接请求同一接口，并返回这一个市场的详情。该接口用于展示市场规模、借款规模、可用空间、利用率、LLTV、容量负载空间、Supply APY、Borrow APY、token 单价与地址等紧凑详情；详情中的市场规模直接读取 `total_market_size_usd`，借款规模由 `total_market_size_usd * utilization` 推导，可用空间由市场规模减借款规模推导；token 单价仅用于展示，不参与市场规模、借款规模和可用空间计算
+- 市场列表：市场视图分页拉取 `market_id`、`pair`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段；页面访问第几页才请求第几页，不在前端一次性拉取所有页；市场筛选位于列表表头的“市场”列，分别对应 markets 接口的 `loan` 与 `collateral` 参数，两个值都可为空，并在输入框内按回车后提交请求
+- 市场状态：市场视图在用户展开单个 Morpho 市场行后按需请求 `GET /api/morpho/market/state`；市场查询视图在搜索框输入完整 `market_id` 后直接请求同一接口，并返回这一个市场的详情。该接口用于展示市场规模、借款规模、可用空间、利用率、LLTV、容量负载空间、Supply APY、Borrow APY、token 单价与地址等紧凑详情；详情中的市场规模直接读取 `total_market_size_usd`，借款规模由 `total_market_size_usd * utilization` 推导，可用空间由市场规模减借款规模推导；token 单价仅用于展示，不参与市场规模、借款规模和可用空间计算
 
-Morpho 市场页不应在列表加载阶段批量请求所有市场状态；主流市场行内详情展开后才请求市场状态，市场查询只请求用户输入的单个 market id。
+Morpho 市场页不应在列表加载阶段批量请求所有市场状态；市场行内详情展开后才请求市场状态，市场查询只请求用户输入的单个 market id。
 
 维护时建议：
 
