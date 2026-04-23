@@ -491,27 +491,38 @@ export function CompoundCollateralHistoryChart({
             justifyContent: 'space-between',
             alignItems: 'center',
             marginBottom: '0.5rem',
+            gap: '1rem',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flexWrap: 'nowrap',
+              flex: '0 1 auto',
+              minWidth: 0,
+            }}
+          >
             <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
               {marketSymbol} v2 市场结构回顾
             </span>
             <ChartInfoButton title="Compound 抵押与结构图说明" items={explainItems} />
-            <span
-              style={{
-                fontSize: '0.75rem',
-                color: '#93c5fd',
-                background: 'rgba(37, 99, 235, 0.14)',
-                border: '1px solid rgba(96, 165, 250, 0.28)',
-                borderRadius: '999px',
-                padding: '0.2rem 0.65rem',
-              }}
-            >
-              单资产 cToken 市场
-            </span>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.5rem',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flexWrap: 'nowrap',
+              whiteSpace: 'nowrap',
+              flex: '1 1 auto',
+              minWidth: 0,
+              overflowX: 'auto',
+              scrollbarWidth: 'none',
+            }}
+          >
             <ChartDataStatus meta={meta} />
             {(['3M', '6M', '1Y'] as const).map((r) => (
               <button
