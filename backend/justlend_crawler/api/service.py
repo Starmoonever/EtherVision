@@ -1243,6 +1243,7 @@ def _build_event_snapshot_row(
     tx: dict[str, Any],
     balances: dict[str, dict[str, Decimal]],
     entered_markets: set[str],
+    collateral_overrides: dict[str, bool],
     market_catalog: dict[str, dict[str, Any]],
 ) -> JustLendEventPositionSnapshotRow:
     assets_jsonb: list[dict[str, Any]] = []
@@ -1276,7 +1277,7 @@ def _build_event_snapshot_row(
         if supply_amount > 0:
             value_usd = supply_amount * price_usd
             total_deposit_usd += value_usd
-            is_collateral = market_hex in entered_markets
+            is_collateral = collateral_overrides.get(market_hex, True)
             if is_collateral:
                 total_collateral_usd += value_usd
                 discounted_collateral_usd += value_usd * collateral_factor
@@ -1366,7 +1367,7 @@ def _build_event_snapshot_row(
         extra_jsonb={
             "source": "event_replay_approx",
             "market_count": len(balances),
-            "collateral_estimation_mode": "all_supply_as_collateral",
+            "collateral_estimation_mode": "supply_defaults_to_collateral_with_enter_exit_overrides",
         },
         brief=brief,
     )
@@ -1415,6 +1416,7 @@ async def _collect_and_cache_replay_misses(
     )
     balances: dict[str, dict[str, Decimal]] = {}
     entered_markets: set[str] = set()
+    collateral_overrides: dict[str, bool] = {}
     rows: list[JustLendEventPositionSnapshotRow] = []
     previous_row: JustLendEventPositionSnapshotRow | None = None
     for tx in full_txs:
@@ -1443,13 +1445,18 @@ async def _collect_and_cache_replay_misses(
             tx_markets.add(market_hex)
         if operation_type == "enable_collateral":
             entered_markets.update(tx_markets)
+            for market_hex_value in tx_markets:
+                collateral_overrides[market_hex_value] = True
         elif operation_type == "disable_collateral":
             entered_markets.difference_update(tx_markets)
+            for market_hex_value in tx_markets:
+                collateral_overrides[market_hex_value] = False
         row = _build_event_snapshot_row(
             user_address=user_address,
             tx=tx,
             balances=balances,
             entered_markets=entered_markets,
+            collateral_overrides=collateral_overrides,
             market_catalog=market_catalog,
         )
         row.brief = _build_snapshot_brief(

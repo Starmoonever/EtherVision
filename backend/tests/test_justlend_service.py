@@ -1008,13 +1008,112 @@ def test_build_event_snapshot_row_sets_symbol_open_position_and_detailed_brief()
         tx=tx,
         balances={market_hex: {"supply": Decimal("1.5"), "borrow": Decimal("0")}},
         entered_markets={market_hex},
+        collateral_overrides={},
         market_catalog={market_hex: catalog_entry},
     )
 
     assert row.symbol == "USDT"
     assert row.has_open_position is True
+    assert row.total_deposit_usd == Decimal("1.5")
     assert row.total_collateral_usd == Decimal("1.5")
     assert row.brief == "供给 1.5 USDT (价值 1.50 usd)"
+    assert row.extra_jsonb["collateral_estimation_mode"] == (
+        "supply_defaults_to_collateral_with_enter_exit_overrides"
+    )
+
+
+def test_build_event_snapshot_row_defaults_supply_to_collateral_without_overrides() -> (
+    None
+):
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    market_hex = service._tron_address_to_bytes(
+        "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"
+    ).hex()
+    catalog_entry = {
+        "market_address": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd",
+        "market_hex": market_hex,
+        "underlying_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+        "underlying_hex": service._tron_address_to_bytes(
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+        ).hex(),
+        "underlying_symbol": "USDT",
+        "underlying_decimals": 6,
+        "collateral_factor": Decimal("0.8"),
+        "price_usd": Decimal("1"),
+        "exchange_rate": None,
+    }
+    tx = {
+        "tx_hash": "22" * 32,
+        "method_id": "a0712d68",
+        "block_number": 124,
+        "block_timestamp": datetime(2026, 4, 3, 10, 0, 0, tzinfo=timezone.utc),
+        "market": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+        "_meta": catalog_entry,
+        "_brief": "供给 2 USDT (价值 2.00 usd)",
+        "parse_summary": "",
+        "parse_input": "",
+    }
+
+    row = service._build_event_snapshot_row(
+        user_address=user_address,
+        tx=tx,
+        balances={market_hex: {"supply": Decimal("2"), "borrow": Decimal("0")}},
+        entered_markets=set(),
+        collateral_overrides={},
+        market_catalog={market_hex: catalog_entry},
+    )
+
+    assert row.total_deposit_usd == Decimal("2")
+    assert row.total_collateral_usd == Decimal("2")
+    assert row.assets_jsonb[0]["side"] == "collateral"
+    assert row.assets_jsonb[0]["is_collateral"] is True
+
+
+def test_build_event_snapshot_row_disable_override_marks_supply_as_non_collateral() -> (
+    None
+):
+    user_address = service._tron_address_to_bytes("TVMbWf384CAtzJwge7n7EnzHTfDiwBZ7yZ")
+    market_hex = service._tron_address_to_bytes(
+        "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd"
+    ).hex()
+    catalog_entry = {
+        "market_address": "TXJgMdjVX5dKiQaUi9QobwNxtSQaFqccvd",
+        "market_hex": market_hex,
+        "underlying_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+        "underlying_hex": service._tron_address_to_bytes(
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+        ).hex(),
+        "underlying_symbol": "USDT",
+        "underlying_decimals": 6,
+        "collateral_factor": Decimal("0.8"),
+        "price_usd": Decimal("1"),
+        "exchange_rate": None,
+    }
+    tx = {
+        "tx_hash": "33" * 32,
+        "method_id": "ede4edd0",
+        "block_number": 125,
+        "block_timestamp": datetime(2026, 4, 3, 10, 5, 0, tzinfo=timezone.utc),
+        "market": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+        "_meta": catalog_entry,
+        "_brief": "移除抵押 2 USDT (价值 2.00 usd)",
+        "parse_summary": "",
+        "parse_input": "",
+    }
+
+    row = service._build_event_snapshot_row(
+        user_address=user_address,
+        tx=tx,
+        balances={market_hex: {"supply": Decimal("2"), "borrow": Decimal("0")}},
+        entered_markets=set(),
+        collateral_overrides={market_hex: False},
+        market_catalog={market_hex: catalog_entry},
+    )
+
+    assert row.total_deposit_usd == Decimal("2")
+    assert row.total_collateral_usd == Decimal("0")
+    assert row.assets_jsonb[0]["side"] == "supply"
+    assert row.assets_jsonb[0]["is_collateral"] is False
 
 
 def test_parse_tx_delta_redeem_uses_underlying_decimals_in_exchange_rate_scale() -> (
