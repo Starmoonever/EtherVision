@@ -11,7 +11,11 @@ import pytest
 from web3.exceptions import BadFunctionCallOutput
 
 from crawler_shared.api import service
-from crawler_shared.price_history import bucket_timestamp, get_historical_prices_usd
+from crawler_shared.price_history import (
+    bucket_timestamp,
+    get_historical_bucket_prices_usd,
+    get_historical_prices_usd,
+)
 
 
 class _FakePool:
@@ -309,6 +313,37 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_price_period_interval_is_treated_as_minutes() -> None:
+    start_ts = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+    end_ts = int(datetime(2024, 6, 10, tzinfo=timezone.utc).timestamp())
+    captured_buckets: list[int] = []
+
+    async def _capture_buckets(*_args, **kwargs):
+        captured_buckets.extend(kwargs["buckets"])
+        return {}
+
+    with patch.object(
+        service,
+        "get_historical_bucket_prices_usd",
+        new=AsyncMock(side_effect=_capture_buckets),
+    ):
+        with pytest.raises(Exception):
+            await service.get_price_period_service(
+                MagicMock(),
+                None,
+                symbol="DAI",
+                address=None,
+                start=start_ts,
+                end=end_ts,
+                interval=1440,
+            )
+
+    assert captured_buckets
+    assert len(captured_buckets) == 10
+    assert captured_buckets[1] - captured_buckets[0] == 1440 * 60
+
+
+@pytest.mark.asyncio
 async def test_get_price_historical_derives_wsteth_with_bucket_block_ratio() -> None:
     w3, rate_call = _fake_w3_with_ratio(int(Decimal("1.08") * Decimal(10**18)))
     requested_ts = int(datetime(2024, 6, 1, 0, 7, 12, tzinfo=timezone.utc).timestamp())
@@ -443,6 +478,48 @@ async def test_get_historical_prices_usd_supports_multiple_assets() -> None:
     assert prices["0x1111111111111111111111111111111111111111"] == Decimal("1.23")
     assert prices["0x2222222222222222222222222222222222222222"] == Decimal("4.56")
     upsert_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_historical_bucket_prices_uses_single_point_fetch_for_sparse_buckets() -> (
+    None
+):
+    token_address = "0x9999999999999999999999999999999999999999"
+    bucket0 = int(datetime(2026, 1, 23, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket1 = int(datetime(2026, 2, 2, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket2 = int(datetime(2026, 2, 12, 0, 0, tzinfo=timezone.utc).timestamp())
+
+    with (
+        patch(
+            "crawler_shared.price_history._fetch_defillama_chart_buckets",
+            new=AsyncMock(
+                side_effect=AssertionError("should not call chart for sparse buckets")
+            ),
+        ),
+        patch(
+            "crawler_shared.price_history.get_historical_price_usd",
+            new=AsyncMock(
+                side_effect=[
+                    (Decimal("1.00"), bucket0, "defillama"),
+                    (Decimal("1.01"), bucket1, "defillama"),
+                    (Decimal("1.02"), bucket2, "defillama"),
+                ]
+            ),
+        ) as point_fetch,
+    ):
+        result = await get_historical_bucket_prices_usd(
+            None,
+            token_address=token_address,
+            asset_label="DAI",
+            buckets=[bucket0, bucket1, bucket2],
+        )
+
+    assert result == {
+        bucket0: Decimal("1.00"),
+        bucket1: Decimal("1.01"),
+        bucket2: Decimal("1.02"),
+    }
+    assert point_fetch.await_count == 3
 
 
 @pytest.mark.asyncio
