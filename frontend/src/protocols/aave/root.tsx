@@ -30,7 +30,7 @@ export function AaveProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   }, [queriedAddress]);
 
   useEffect(() => {
-    if (!queriedAddress || activeTab !== 'personal') return;
+    if (!active || !queriedAddress || activeTab !== 'personal') return;
 
     const load = async (version: 'v2' | 'v3', setState: typeof setV2State) => {
       const cacheKey = `${version}:${queriedAddress.toLowerCase()}`;
@@ -67,7 +67,7 @@ export function AaveProtocolRoot({ active, activeTab }: ProtocolRootProps) {
     } else {
       void load('v3', setV3State);
     }
-  }, [activeTab, personalVersion, queriedAddress]);
+  }, [active, activeTab, personalVersion, queriedAddress]);
 
   if (!active) return null;
 
