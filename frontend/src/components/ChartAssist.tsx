@@ -197,8 +197,9 @@ export function ChartDataStatus({ meta }: ChartDataStatusProps) {
         display: 'flex',
         gap: '0.5rem',
         alignItems: 'center',
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
         justifyContent: 'flex-end',
+        whiteSpace: 'nowrap',
       }}
     >
       {items.map((item) => (
@@ -214,6 +215,7 @@ export function ChartDataStatus({ meta }: ChartDataStatusProps) {
             padding: '0.22rem 0.6rem',
             fontSize: '0.72rem',
             lineHeight: 1.2,
+            whiteSpace: 'nowrap',
           }}
         >
           <span style={{ color: '#64748b' }}>{item.label}</span>

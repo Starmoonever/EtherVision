@@ -16,7 +16,6 @@ type CompoundCacheEntry =
   | { kind: 'not_found' };
 
 const COMPOUND_V2_PERSONAL_MARKETS = new Set(['ceth', 'cwbtc', 'cusdt', 'cdai']);
-
 const emptyCompoundState = (): CompoundVersionState => ({
   data: null,
   loading: false,

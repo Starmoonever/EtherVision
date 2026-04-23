@@ -22,6 +22,11 @@ import {
 import { fetchAssetPriceWithMeta, fetchAssetPricePeriodWithMeta } from '../api/price';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import {
+  formatCompoundHistoryErrorMessage,
+  getDailySafeIntervalHours,
+  getDailySafeIntervalMinutes,
+} from './compoundHistorySampling';
 
 interface CompoundMarketHistoryChartProps {
   version: 'v2' | 'v3';
@@ -49,7 +54,13 @@ function formatUtcDateBoundary(date: string, endOfDay = false): string {
   return `${date} ${endOfDay ? '23' : '00'}:00:00`;
 }
 
-function getPriceIntervalMinutes(timeRange: '3M' | '6M' | '1Y' | null): number {
+function getPriceIntervalMinutes(
+  version: 'v2' | 'v3',
+  timeRange: '3M' | '6M' | '1Y' | null,
+  startTs: number,
+  endTs: number,
+): number {
+  if (version === 'v2') return getDailySafeIntervalMinutes(startTs, endTs);
   if (timeRange === '3M') return 360;
   if (timeRange === '6M') return 720;
   if (timeRange === '1Y') return 1440;
@@ -62,7 +73,7 @@ function getMarketStateIntervalHours(
   startTs: number,
   endTs: number,
 ): number {
-  if (version === 'v2') return 1;
+  if (version === 'v2') return getDailySafeIntervalHours(startTs, endTs);
   if (timeRange === '3M') return 24;
   if (timeRange === '6M') return 48;
   if (timeRange === '1Y') return 96;
@@ -205,7 +216,7 @@ export function CompoundMarketHistoryChart({
 
         const start = formatUtcDateBoundary(customStart);
         const end = formatUtcDateBoundary(customEnd, true);
-        const priceInterval = getPriceIntervalMinutes(timeRange);
+        const priceInterval = getPriceIntervalMinutes(version, timeRange, startTs, endTs);
         const marketStateInterval = getMarketStateIntervalHours(version, timeRange, startTs, endTs);
 
         if (version === 'v2') {
@@ -349,7 +360,7 @@ export function CompoundMarketHistoryChart({
         );
       } catch (err) {
         console.error(err);
-        setError('无法加载市场历史数据');
+        setError(formatCompoundHistoryErrorMessage(err, '无法加载市场历史数据'));
       } finally {
         setLoading(false);
       }
