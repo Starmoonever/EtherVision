@@ -15,6 +15,7 @@ SUPPORTED_PRICE_ASSETS: tuple[tuple[str, str, str], ...] = (
     ("USDC", "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "ethereum"),
     ("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7", "ethereum"),
     ("DAI", "0x6B175474E89094C44Da98b954EedeAC495271d0F", "ethereum"),
+    ("COMP", "0xc00e94Cb662C3520282E6f5717214004A7f26888", "ethereum"),
     ("USDS", "0xdC035D45d973E3EC169d2276DDab16f1e407384F", "ethereum"),
     ("GHO", "0x40D16FC0246aD09AaD9Ba06aDcD28A7e825cA331", "ethereum"),
     ("PYUSD", "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8", "ethereum"),
