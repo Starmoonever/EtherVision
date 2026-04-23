@@ -38,6 +38,19 @@ def bucket_timestamps(start_ts: int, end_ts: int, step_seconds: int) -> list[int
     ]
 
 
+def _group_contiguous_buckets(buckets: list[int]) -> list[list[int]]:
+    if not buckets:
+        return []
+    ordered = sorted(set(buckets))
+    groups: list[list[int]] = [[ordered[0]]]
+    for bucket in ordered[1:]:
+        if bucket - groups[-1][-1] == PRICE_BUCKET_SECONDS:
+            groups[-1].append(bucket)
+        else:
+            groups.append([bucket])
+    return groups
+
+
 async def _fetch_defillama_historical_price(
     token_address: str,
     *,
@@ -235,17 +248,22 @@ async def get_historical_bucket_prices_usd(
 
     missing = [bucket for bucket in unique_buckets if bucket not in cached]
     fetched: dict[int, Decimal] = {}
-    for chunk_start in range(0, len(missing), _MAX_CHART_BUCKETS):
-        chunk = missing[chunk_start : chunk_start + _MAX_CHART_BUCKETS]
-        if not chunk:
+    for group in _group_contiguous_buckets(missing):
+        if not group:
             continue
-        fetched.update(
-            await _fetch_defillama_chart_buckets(
-                token_address,
-                start_bucket=chunk[0],
-                end_bucket=chunk[-1],
+        if len(group) == 1:
+            continue
+        for chunk_start in range(0, len(group), _MAX_CHART_BUCKETS):
+            chunk = group[chunk_start : chunk_start + _MAX_CHART_BUCKETS]
+            if not chunk:
+                continue
+            fetched.update(
+                await _fetch_defillama_chart_buckets(
+                    token_address,
+                    start_bucket=chunk[0],
+                    end_bucket=chunk[-1],
+                )
             )
-        )
 
     result = dict(cached)
     for bucket in missing:
