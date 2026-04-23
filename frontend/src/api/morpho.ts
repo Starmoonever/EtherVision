@@ -237,7 +237,7 @@ const morphoMarketStateInflight = new Map<string, Promise<MorphoMarketState>>();
 
 function normalizePairSymbol(pair: string | null | undefined, index: number): string | null {
   if (!pair) return null;
-  const parts = pair.split('-');
+  const parts = pair.split(/[-/]/);
   return parts[index]?.trim() || null;
 }
 
@@ -370,7 +370,7 @@ function normalizeMorphoMarketConfig(
     oracle: item.oracle ?? null,
     irm: item.irm ?? null,
     pair:
-      collateralSymbol && loanSymbol ? `${collateralSymbol}-${loanSymbol}` : (item.pair ?? null),
+      collateralSymbol && loanSymbol ? `${collateralSymbol}/${loanSymbol}` : (item.pair ?? null),
     total_market_size_usd: normalizeDecimalString(
       item.total_market_size_usd ?? item.totalMarketSizeUsd,
     ),

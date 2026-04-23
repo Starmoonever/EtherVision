@@ -94,10 +94,6 @@ function formatUsdCompact(value: number | null): string {
   return formatted === 'N/A' ? formatted : `$${formatted}`;
 }
 
-function resolvePair(market: MorphoMarketView): string {
-  return `${market.collateral_symbol || '?'}-${market.loan_symbol || '?'}`;
-}
-
 function resolveMarketSize(market: MorphoMarketView): number | null {
   return parseMetric(market.total_market_size_usd);
 }
@@ -243,15 +239,18 @@ function HeaderFilterControl({
 }) {
   return (
     <div className="morpho-market-header-filter-control">
-      <input
-        className="morpho-market-header-filter-input"
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-      />
+      <label className="morpho-market-header-search-field">
+        <span className="morpho-market-header-search-icon" aria-hidden="true" />
+        <input
+          className="morpho-market-header-filter-input"
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+        />
+      </label>
       <SortDirectionButton
         ascMode={ascMode}
         descMode={descMode}
@@ -264,74 +263,49 @@ function HeaderFilterControl({
   );
 }
 
-function MarketHeader({
+function AssetHeader({
+  label,
+  value,
+  onChange,
+  onKeyDown,
+  placeholder,
+  ariaLabel,
+  ascMode,
+  descMode,
+  ascLabel,
+  descLabel,
   sortMode,
   onSortModeChange,
-  marketFilters,
-  onMarketFilterCommit,
 }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  placeholder: string;
+  ariaLabel: string;
+  ascMode: MorphoSortMode;
+  descMode: MorphoSortMode;
+  ascLabel: string;
+  descLabel: string;
   sortMode: MorphoSortMode;
   onSortModeChange: (value: MorphoSortMode) => void;
-  marketFilters?: {
-    loan: string;
-    collateral: string;
-  };
-  onMarketFilterCommit?: (filters: { loan: string; collateral: string }) => void;
 }) {
-  const [loanInput, setLoanInput] = useState(marketFilters?.loan ?? '');
-  const [collateralInput, setCollateralInput] = useState(marketFilters?.collateral ?? '');
-
-  useEffect(() => {
-    setLoanInput(marketFilters?.loan ?? '');
-    setCollateralInput(marketFilters?.collateral ?? '');
-  }, [marketFilters?.collateral, marketFilters?.loan]);
-
-  const commitFilters = () => {
-    onMarketFilterCommit?.({
-      loan: loanInput.trim(),
-      collateral: collateralInput.trim(),
-    });
-  };
-
-  const handleFilterKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    commitFilters();
-  };
-
   return (
-    <div className="morpho-market-header-stack">
-      <span className="morpho-market-sort-header">市场</span>
-      {onMarketFilterCommit ? (
-        <div className="morpho-market-header-filters">
-          <HeaderFilterControl
-            value={collateralInput}
-            onChange={setCollateralInput}
-            onKeyDown={handleFilterKeyDown}
-            placeholder="collateral"
-            ariaLabel="按 collateral 筛选市场"
-            ascMode="collateralSymbolAsc"
-            descMode="collateralSymbolDesc"
-            ascLabel="按 collateral_symbol 升序排序"
-            descLabel="按 collateral_symbol 降序排序"
-            sortMode={sortMode}
-            onSortModeChange={onSortModeChange}
-          />
-          <HeaderFilterControl
-            value={loanInput}
-            onChange={setLoanInput}
-            onKeyDown={handleFilterKeyDown}
-            placeholder="loan"
-            ariaLabel="按 loan 筛选市场"
-            ascMode="loanSymbolAsc"
-            descMode="loanSymbolDesc"
-            ascLabel="按 loan_symbol 升序排序"
-            descLabel="按 loan_symbol 降序排序"
-            sortMode={sortMode}
-            onSortModeChange={onSortModeChange}
-          />
-        </div>
-      ) : null}
+    <div className="morpho-market-asset-header">
+      <span className="morpho-market-sort-header">{label}</span>
+      <HeaderFilterControl
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        ariaLabel={ariaLabel}
+        ascMode={ascMode}
+        descMode={descMode}
+        ascLabel={ascLabel}
+        descLabel={descLabel}
+        sortMode={sortMode}
+        onSortModeChange={onSortModeChange}
+      />
     </div>
   );
 }
@@ -364,12 +338,19 @@ export function MorphoMarketTable({
 }: MorphoMarketTableProps) {
   const [copiedMarketId, setCopiedMarketId] = useState('');
   const [pageInput, setPageInput] = useState(String(page));
+  const [loanInput, setLoanInput] = useState(marketFilters?.loan ?? '');
+  const [collateralInput, setCollateralInput] = useState(marketFilters?.collateral ?? '');
   const pageStart = totalMarkets === 0 ? 0 : (page - 1) * pageSize + 1;
   const pageEnd = Math.min(page * pageSize, totalMarkets);
 
   useEffect(() => {
     setPageInput(String(page));
   }, [page]);
+
+  useEffect(() => {
+    setLoanInput(marketFilters?.loan ?? '');
+    setCollateralInput(marketFilters?.collateral ?? '');
+  }, [marketFilters?.collateral, marketFilters?.loan]);
 
   const commitPageInput = () => {
     const nextPage = Number(pageInput);
@@ -390,6 +371,19 @@ export function MorphoMarketTable({
     window.setTimeout(() => {
       setCopiedMarketId((current) => (current === value ? '' : current));
     }, 1400);
+  };
+
+  const commitMarketFilters = () => {
+    onMarketFilterCommit?.({
+      loan: loanInput.trim(),
+      collateral: collateralInput.trim(),
+    });
+  };
+
+  const handleFilterKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    commitMarketFilters();
   };
 
   return (
@@ -416,22 +410,60 @@ export function MorphoMarketTable({
 
       <div className="table-wrap">
         <table className="pos-table morpho-table morpho-market-table morpho-market-table-compact">
+          <colgroup>
+            <col className="morpho-market-col-id" />
+            <col className="morpho-market-col-asset" />
+            <col className="morpho-market-col-asset" />
+            <col className="morpho-market-col-size" />
+            <col className="morpho-market-col-utilization" />
+          </colgroup>
           {showTableHeaderWhenEmpty || markets.length > 0 ? (
             <thead>
               <tr>
                 <th>
-                  {showSorting ? (
-                    <MarketHeader
+                  <span className="morpho-market-sort-header">Market ID</span>
+                </th>
+                <th>
+                  {showSorting && onMarketFilterCommit ? (
+                    <AssetHeader
+                      label="Collateral"
+                      value={collateralInput}
+                      onChange={setCollateralInput}
+                      onKeyDown={handleFilterKeyDown}
+                      placeholder=""
+                      ariaLabel="按 collateral 筛选市场"
+                      ascMode="collateralSymbolAsc"
+                      descMode="collateralSymbolDesc"
+                      ascLabel="按 collateral_symbol 升序排序"
+                      descLabel="按 collateral_symbol 降序排序"
                       sortMode={sortMode}
                       onSortModeChange={onSortModeChange}
-                      marketFilters={marketFilters}
-                      onMarketFilterCommit={onMarketFilterCommit}
                     />
                   ) : (
-                    '市场'
+                    'Collateral'
                   )}
                 </th>
-                <th className="right">
+                <th>
+                  {showSorting && onMarketFilterCommit ? (
+                    <AssetHeader
+                      label="Loan"
+                      value={loanInput}
+                      onChange={setLoanInput}
+                      onKeyDown={handleFilterKeyDown}
+                      placeholder=""
+                      ariaLabel="按 loan 筛选市场"
+                      ascMode="loanSymbolAsc"
+                      descMode="loanSymbolDesc"
+                      ascLabel="按 loan_symbol 升序排序"
+                      descLabel="按 loan_symbol 降序排序"
+                      sortMode={sortMode}
+                      onSortModeChange={onSortModeChange}
+                    />
+                  ) : (
+                    'Loan'
+                  )}
+                </th>
+                <th className="right morpho-market-metric-header">
                   {showSorting ? (
                     <SortableHeader
                       label="市场规模"
@@ -446,7 +478,7 @@ export function MorphoMarketTable({
                     '市场规模'
                   )}
                 </th>
-                <th className="right">
+                <th className="right morpho-market-metric-header">
                   {showSorting ? (
                     <SortableHeader
                       label="利用率"
@@ -467,7 +499,7 @@ export function MorphoMarketTable({
           <tbody>
             {tableError ? (
               <tr>
-                <td colSpan={3}>
+                <td colSpan={5}>
                   <div className="morpho-market-table-error-row">
                     <span>{tableError}</span>
                   </div>
@@ -476,7 +508,7 @@ export function MorphoMarketTable({
             ) : null}
             {markets.length === 0 ? (
               <tr>
-                <td colSpan={3}>
+                <td colSpan={5}>
                   <div className="morpho-market-inline-state">
                     <span className="empty-text">{emptyText}</span>
                   </div>
@@ -508,43 +540,111 @@ export function MorphoMarketTable({
                       onClick={() => onToggleMarket(market)}
                     >
                       <td>
-                        <div className="morpho-market-pair-cell">
+                        <div className="morpho-market-id-cell">
                           <button
                             type="button"
-                            className="morpho-market-row-toggle"
+                            className="morpho-market-row-toggle morpho-market-id-toggle"
                             aria-expanded={isExpanded}
                           >
-                            <span className="morpho-market-row-chevron" aria-hidden="true">
-                              {isExpanded ? '-' : '+'}
-                            </span>
-                            <strong className="token-symbol">{resolvePair(market)}</strong>
-                          </button>
-                          <div className="morpho-market-id-line">
                             <span className="mono morpho-market-id" title={market.market_id}>
                               {compactMarketId(market.market_id)}
                             </span>
-                            <button
-                              type="button"
-                              className={
-                                copiedMarketId === market.market_id
-                                  ? 'morpho-market-copy-btn morpho-market-copy-btn-copied'
-                                  : 'morpho-market-copy-btn'
-                              }
-                              onClick={(event) => void handleCopyValue(event, market.market_id)}
-                              title={
-                                copiedMarketId === market.market_id
-                                  ? 'Market ID 已复制'
-                                  : '复制 Market ID'
-                              }
-                              aria-label={
-                                copiedMarketId === market.market_id
-                                  ? 'Market ID 已复制'
-                                  : '复制 Market ID'
-                              }
-                            >
-                              <span className="morpho-market-copy-icon" aria-hidden="true" />
-                            </button>
-                          </div>
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              copiedMarketId === market.market_id
+                                ? 'morpho-market-copy-btn morpho-market-copy-btn-copied'
+                                : 'morpho-market-copy-btn'
+                            }
+                            onClick={(event) => void handleCopyValue(event, market.market_id)}
+                            title={
+                              copiedMarketId === market.market_id
+                                ? 'Market ID 已复制'
+                                : '复制 Market ID'
+                            }
+                            aria-label={
+                              copiedMarketId === market.market_id
+                                ? 'Market ID 已复制'
+                                : '复制 Market ID'
+                            }
+                          >
+                            <span className="morpho-market-copy-icon" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="morpho-market-asset-cell">
+                          <span className="token-symbol">{market.collateral_symbol || '?'}</span>
+                          {collateralTokenAddress ? (
+                            <>
+                              <span
+                                className="mono morpho-market-token-address-text"
+                                title={collateralTokenAddress}
+                              >
+                                {compactAddress(collateralTokenAddress)}
+                              </span>
+                              <button
+                                type="button"
+                                className={
+                                  copiedMarketId === collateralTokenAddress
+                                    ? 'morpho-market-copy-btn morpho-market-copy-btn-copied morpho-market-address-copy-btn'
+                                    : 'morpho-market-copy-btn morpho-market-address-copy-btn'
+                                }
+                                onClick={(event) =>
+                                  void handleCopyValue(event, collateralTokenAddress)
+                                }
+                                title={
+                                  copiedMarketId === collateralTokenAddress
+                                    ? 'Collateral 地址已复制'
+                                    : `复制 ${compactAddress(collateralTokenAddress)}`
+                                }
+                                aria-label={
+                                  copiedMarketId === collateralTokenAddress
+                                    ? 'Collateral 地址已复制'
+                                    : '复制 Collateral 地址'
+                                }
+                              >
+                                <span className="morpho-market-copy-icon" aria-hidden="true" />
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="morpho-market-asset-cell">
+                          <span className="token-symbol">{market.loan_symbol || '?'}</span>
+                          {loanTokenAddress ? (
+                            <>
+                              <span
+                                className="mono morpho-market-token-address-text"
+                                title={loanTokenAddress}
+                              >
+                                {compactAddress(loanTokenAddress)}
+                              </span>
+                              <button
+                                type="button"
+                                className={
+                                  copiedMarketId === loanTokenAddress
+                                    ? 'morpho-market-copy-btn morpho-market-copy-btn-copied morpho-market-address-copy-btn'
+                                    : 'morpho-market-copy-btn morpho-market-address-copy-btn'
+                                }
+                                onClick={(event) => void handleCopyValue(event, loanTokenAddress)}
+                                title={
+                                  copiedMarketId === loanTokenAddress
+                                    ? 'Loan 地址已复制'
+                                    : `复制 ${compactAddress(loanTokenAddress)}`
+                                }
+                                aria-label={
+                                  copiedMarketId === loanTokenAddress
+                                    ? 'Loan 地址已复制'
+                                    : '复制 Loan 地址'
+                                }
+                              >
+                                <span className="morpho-market-copy-icon" aria-hidden="true" />
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       </td>
                       <td className="right">
@@ -561,7 +661,7 @@ export function MorphoMarketTable({
 
                     {isExpanded ? (
                       <tr className="morpho-market-detail-row">
-                        <td colSpan={3}>
+                        <td colSpan={5}>
                           {loading ? (
                             <div className="morpho-market-inline-state">
                               <div className="spinner"></div>
