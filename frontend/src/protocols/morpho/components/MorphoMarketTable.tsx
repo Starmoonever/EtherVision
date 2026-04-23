@@ -4,7 +4,9 @@ import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 
 export type MorphoSortMode =
   | 'default'
+  | 'loanSymbolAsc'
   | 'loanSymbolDesc'
+  | 'collateralSymbolAsc'
   | 'collateralSymbolDesc'
   | 'totalMarketSizeDesc'
   | 'totalMarketSizeAsc'
@@ -93,8 +95,7 @@ function formatUsdCompact(value: number | null): string {
 }
 
 function resolvePair(market: MorphoMarketView): string {
-  if (market.pair) return market.pair;
-  return `${market.loan_symbol || '?'}-${market.collateral_symbol || '?'}`;
+  return `${market.collateral_symbol || '?'}-${market.loan_symbol || '?'}`;
 }
 
 function resolveMarketSize(market: MorphoMarketView): number | null {
@@ -132,67 +133,134 @@ function resolveUtilizationToneClass(value: string | null | undefined): string {
   return 'morpho-market-value-safe';
 }
 
+function getSortDirection(
+  sortMode: MorphoSortMode,
+  ascMode: MorphoSortMode,
+  descMode: MorphoSortMode,
+): 'asc' | 'desc' | 'none' {
+  if (sortMode === ascMode) return 'asc';
+  if (sortMode === descMode) return 'desc';
+  return 'none';
+}
+
+function SortDirectionButton({
+  ascMode,
+  descMode,
+  ascLabel,
+  descLabel,
+  sortMode,
+  onSortModeChange,
+}: {
+  ascMode: MorphoSortMode;
+  descMode: MorphoSortMode;
+  ascLabel: string;
+  descLabel: string;
+  sortMode: MorphoSortMode;
+  onSortModeChange: (value: MorphoSortMode) => void;
+}) {
+  const direction = getSortDirection(sortMode, ascMode, descMode);
+  const nextMode = direction === 'desc' ? ascMode : descMode;
+  const activeLabel = direction === 'asc' ? ascLabel : descLabel;
+
+  return (
+    <button
+      type="button"
+      className="morpho-market-sort-arrow-button"
+      onClick={() => onSortModeChange(nextMode)}
+      aria-pressed={direction !== 'none'}
+      title={activeLabel}
+      aria-label={activeLabel}
+    >
+      <span
+        className={
+          direction === 'asc'
+            ? 'morpho-market-sort-arrow morpho-market-sort-arrow-up morpho-market-sort-arrow-active'
+            : direction === 'desc'
+              ? 'morpho-market-sort-arrow morpho-market-sort-arrow-down morpho-market-sort-arrow-active'
+              : 'morpho-market-sort-arrow morpho-market-sort-arrow-down'
+        }
+      />
+    </button>
+  );
+}
+
 function SortableHeader({
   label,
-  upMode,
-  downMode,
-  upLabel,
-  downLabel,
+  ascMode,
+  descMode,
+  ascLabel,
+  descLabel,
   sortMode,
   onSortModeChange,
 }: {
   label: string;
-  upMode: MorphoSortMode;
-  downMode: MorphoSortMode;
-  upLabel: string;
-  downLabel: string;
+  ascMode: MorphoSortMode;
+  descMode: MorphoSortMode;
+  ascLabel: string;
+  descLabel: string;
   sortMode: MorphoSortMode;
   onSortModeChange: (value: MorphoSortMode) => void;
 }) {
-  const isUpActive = sortMode === upMode;
-  const isDownActive = sortMode === downMode;
-  const toggleSortMode = (nextMode: MorphoSortMode) => {
-    onSortModeChange(sortMode === nextMode ? 'default' : nextMode);
-  };
-
   return (
     <span className="morpho-market-sort-header">
       <span>{label}</span>
-      <span className="morpho-market-sort-arrows">
-        <button
-          type="button"
-          className="morpho-market-sort-arrow-button"
-          onClick={() => toggleSortMode(upMode)}
-          aria-pressed={isUpActive}
-          title={upLabel}
-          aria-label={upLabel}
-        >
-          <span
-            className={
-              isUpActive
-                ? 'morpho-market-sort-arrow morpho-market-sort-arrow-up morpho-market-sort-arrow-active'
-                : 'morpho-market-sort-arrow morpho-market-sort-arrow-up'
-            }
-          />
-        </button>
-        <button
-          type="button"
-          className="morpho-market-sort-arrow-button"
-          onClick={() => toggleSortMode(downMode)}
-          aria-pressed={isDownActive}
-          title={downLabel}
-          aria-label={downLabel}
-        >
-          <span
-            className={
-              isDownActive
-                ? 'morpho-market-sort-arrow morpho-market-sort-arrow-down morpho-market-sort-arrow-active'
-                : 'morpho-market-sort-arrow morpho-market-sort-arrow-down'
-            }
-          />
-        </button>
-      </span>
+      <SortDirectionButton
+        ascMode={ascMode}
+        descMode={descMode}
+        ascLabel={ascLabel}
+        descLabel={descLabel}
+        sortMode={sortMode}
+        onSortModeChange={onSortModeChange}
+      />
     </span>
+  );
+}
+
+function HeaderFilterControl({
+  value,
+  onChange,
+  onKeyDown,
+  placeholder,
+  ariaLabel,
+  ascMode,
+  descMode,
+  ascLabel,
+  descLabel,
+  sortMode,
+  onSortModeChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  placeholder: string;
+  ariaLabel: string;
+  ascMode: MorphoSortMode;
+  descMode: MorphoSortMode;
+  ascLabel: string;
+  descLabel: string;
+  sortMode: MorphoSortMode;
+  onSortModeChange: (value: MorphoSortMode) => void;
+}) {
+  return (
+    <div className="morpho-market-header-filter-control">
+      <input
+        className="morpho-market-header-filter-input"
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+      />
+      <SortDirectionButton
+        ascMode={ascMode}
+        descMode={descMode}
+        ascLabel={ascLabel}
+        descLabel={descLabel}
+        sortMode={sortMode}
+        onSortModeChange={onSortModeChange}
+      />
+    </div>
   );
 }
 
@@ -233,34 +301,34 @@ function MarketHeader({
 
   return (
     <div className="morpho-market-header-stack">
-      <SortableHeader
-        label="市场"
-        upMode="loanSymbolDesc"
-        downMode="collateralSymbolDesc"
-        upLabel="按 loan_symbol 降序排序"
-        downLabel="按 collateral_symbol 降序排序"
-        sortMode={sortMode}
-        onSortModeChange={onSortModeChange}
-      />
+      <span className="morpho-market-sort-header">市场</span>
       {onMarketFilterCommit ? (
         <div className="morpho-market-header-filters">
-          <input
-            className="morpho-market-header-filter-input"
-            type="text"
-            value={loanInput}
-            onChange={(event) => setLoanInput(event.target.value)}
-            onKeyDown={handleFilterKeyDown}
-            placeholder="loan"
-            aria-label="按 loan 筛选市场"
-          />
-          <input
-            className="morpho-market-header-filter-input"
-            type="text"
+          <HeaderFilterControl
             value={collateralInput}
-            onChange={(event) => setCollateralInput(event.target.value)}
+            onChange={setCollateralInput}
             onKeyDown={handleFilterKeyDown}
             placeholder="collateral"
-            aria-label="按 collateral 筛选市场"
+            ariaLabel="按 collateral 筛选市场"
+            ascMode="collateralSymbolAsc"
+            descMode="collateralSymbolDesc"
+            ascLabel="按 collateral_symbol 升序排序"
+            descLabel="按 collateral_symbol 降序排序"
+            sortMode={sortMode}
+            onSortModeChange={onSortModeChange}
+          />
+          <HeaderFilterControl
+            value={loanInput}
+            onChange={setLoanInput}
+            onKeyDown={handleFilterKeyDown}
+            placeholder="loan"
+            ariaLabel="按 loan 筛选市场"
+            ascMode="loanSymbolAsc"
+            descMode="loanSymbolDesc"
+            ascLabel="按 loan_symbol 升序排序"
+            descLabel="按 loan_symbol 降序排序"
+            sortMode={sortMode}
+            onSortModeChange={onSortModeChange}
           />
         </div>
       ) : null}
@@ -367,10 +435,10 @@ export function MorphoMarketTable({
                   {showSorting ? (
                     <SortableHeader
                       label="市场规模"
-                      upMode="totalMarketSizeAsc"
-                      downMode="totalMarketSizeDesc"
-                      upLabel="按 total_market_size_usd 升序排序"
-                      downLabel="按 total_market_size_usd 降序排序"
+                      ascMode="totalMarketSizeAsc"
+                      descMode="totalMarketSizeDesc"
+                      ascLabel="按 total_market_size_usd 升序排序"
+                      descLabel="按 total_market_size_usd 降序排序"
                       sortMode={sortMode}
                       onSortModeChange={onSortModeChange}
                     />
@@ -382,10 +450,10 @@ export function MorphoMarketTable({
                   {showSorting ? (
                     <SortableHeader
                       label="利用率"
-                      upMode="utilizationAsc"
-                      downMode="utilizationDesc"
-                      upLabel="按 utilization 升序排序"
-                      downLabel="按 utilization 降序排序"
+                      ascMode="utilizationAsc"
+                      descMode="utilizationDesc"
+                      ascLabel="按 utilization 升序排序"
+                      descLabel="按 utilization 降序排序"
                       sortMode={sortMode}
                       onSortModeChange={onSortModeChange}
                     />

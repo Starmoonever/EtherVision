@@ -3404,6 +3404,14 @@
   min-width: 0;
 }
 
+.morpho-market-header-filter-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
 .morpho-market-header-filter-input {
   width: 100%;
   min-width: 0;
@@ -3441,12 +3449,6 @@
   padding: 0.65rem 0.8rem;
 }
 
-.morpho-market-sort-arrows {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0.14rem;
-}
-
 .morpho-market-sort-arrow-button {
   appearance: none;
   border: 0;
@@ -3456,9 +3458,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 0.9rem;
-  height: 0.7rem;
+  width: 1.15rem;
+  height: 1.15rem;
   padding: 0;
+  border-radius: 4px;
+  opacity: 0.82;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.morpho-market-sort-arrow-button:hover {
+  background: rgba(125, 211, 252, 0.1);
+  color: #f8fafc;
+  opacity: 1;
 }
 
 .morpho-market-sort-arrow-button:focus {
@@ -3473,40 +3487,52 @@
 
 .morpho-market-sort-arrow {
   position: relative;
-  width: 0.52rem;
-  height: 0.52rem;
-  opacity: 0.48;
+  width: 0.78rem;
+  height: 0.82rem;
+  opacity: 0.56;
 }
 
 .morpho-market-sort-arrow::before,
 .morpho-market-sort-arrow::after {
   position: absolute;
   left: 50%;
-  width: 0.34rem;
-  height: 0.1rem;
-  border-radius: 999px;
-  background: currentColor;
   content: '';
 }
 
+.morpho-market-sort-arrow::before {
+  width: 0.11rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.morpho-market-sort-arrow::after {
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+}
+
 .morpho-market-sort-arrow-up::before {
-  top: 0.18rem;
-  transform: translateX(-82%) rotate(-45deg);
+  bottom: 0.08rem;
 }
 
 .morpho-market-sort-arrow-up::after {
-  top: 0.18rem;
-  transform: translateX(-18%) rotate(45deg);
+  top: 0.06rem;
+  border-right: 0.29rem solid transparent;
+  border-bottom: 0.34rem solid currentColor;
+  border-left: 0.29rem solid transparent;
 }
 
 .morpho-market-sort-arrow-down::before {
-  bottom: 0.18rem;
-  transform: translateX(-82%) rotate(45deg);
+  top: 0.08rem;
 }
 
 .morpho-market-sort-arrow-down::after {
-  bottom: 0.18rem;
-  transform: translateX(-18%) rotate(-45deg);
+  bottom: 0.06rem;
+  border-top: 0.34rem solid currentColor;
+  border-right: 0.29rem solid transparent;
+  border-left: 0.29rem solid transparent;
 }
 
 .morpho-market-sort-arrow-active {

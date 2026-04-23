@@ -65,7 +65,11 @@ function resolveMarketSortParams(sortMode: MorphoSortMode): {
   sortBy?: MorphoMarketSortField;
   sortOrder?: MorphoMarketSortOrder;
 } {
+  if (sortMode === 'loanSymbolAsc') return { sortBy: 'loan_symbol', sortOrder: 'asc' };
   if (sortMode === 'loanSymbolDesc') return { sortBy: 'loan_symbol', sortOrder: 'desc' };
+  if (sortMode === 'collateralSymbolAsc') {
+    return { sortBy: 'collateral_symbol', sortOrder: 'asc' };
+  }
   if (sortMode === 'collateralSymbolDesc') {
     return { sortBy: 'collateral_symbol', sortOrder: 'desc' };
   }
