@@ -8,6 +8,7 @@ SUPPORTED_PRICE_ASSETS: tuple[tuple[str, str, str], ...] = (
     ("ETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "ethereum"),
     ("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "ethereum"),
     ("WBTC", "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "ethereum"),
+    ("cbBTC", "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "ethereum"),
     ("tBTC", "0x18084fbA666a33d37592fA2633fD49a74DD93a88", "ethereum"),
     ("eBTC", "0x657e8C867D8b37dcc18fEE6fDbcE5A28000d3069", "ethereum"),
     ("LBTC", "0x8236a87084f8B84306f72007F36F2618A5634494", "ethereum"),

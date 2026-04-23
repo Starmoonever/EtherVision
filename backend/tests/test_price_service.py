@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
+from web3.exceptions import BadFunctionCallOutput
 
 from crawler_shared.api import service
 from crawler_shared.price_history import bucket_timestamp, get_historical_prices_usd
@@ -105,6 +106,41 @@ class _CancelledClientSession:
         return False
 
 
+def _fake_w3_with_ratio(raw_ratio: int):
+    rate_call = MagicMock()
+    rate_call.call = AsyncMock(return_value=raw_ratio)
+    functions = MagicMock()
+    functions.stEthPerToken.return_value = rate_call
+    contract = MagicMock()
+    contract.functions = functions
+    eth = MagicMock()
+    eth.contract.return_value = contract
+    w3 = MagicMock()
+    w3.eth = eth
+    return w3, rate_call
+
+
+def _fake_w3_with_wsteth_rate_fallback(
+    *,
+    steth_per_token_exc: Exception,
+    get_steth_by_wsteth_raw: int,
+):
+    steth_per_token_call = MagicMock()
+    steth_per_token_call.call = AsyncMock(side_effect=steth_per_token_exc)
+    get_steth_by_wsteth_call = MagicMock()
+    get_steth_by_wsteth_call.call = AsyncMock(return_value=get_steth_by_wsteth_raw)
+    functions = MagicMock()
+    functions.stEthPerToken.return_value = steth_per_token_call
+    functions.getStETHByWstETH.return_value = get_steth_by_wsteth_call
+    contract = MagicMock()
+    contract.functions = functions
+    eth = MagicMock()
+    eth.contract.return_value = contract
+    w3 = MagicMock()
+    w3.eth = eth
+    return w3, steth_per_token_call, get_steth_by_wsteth_call
+
+
 @pytest.mark.asyncio
 async def test_get_price_realtime_supports_address_compound_snapshot_fallback() -> None:
     token_address = "0x1111111111111111111111111111111111111111"
@@ -132,6 +168,95 @@ async def test_get_price_realtime_supports_address_compound_snapshot_fallback() 
     assert resp.price_usd == "12.34"
     assert resp.timestamp == "2026-03-20T12:00:00Z"
     assert resp.source == "compound-snapshot"
+
+
+@pytest.mark.asyncio
+async def test_get_price_realtime_derives_wsteth_from_steth_price_and_onchain_ratio() -> (
+    None
+):
+    w3, rate_call = _fake_w3_with_ratio(int(Decimal("1.15") * Decimal(10**18)))
+
+    with (
+        patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch.object(
+            service,
+            "_fetch_defillama_current_price",
+            new=AsyncMock(return_value=(Decimal("2000"), 1717200000)),
+        ),
+    ):
+        resp = await service.get_price(
+            w3,
+            symbol="wstETH",
+            address=None,
+            pool=None,
+        )
+
+    assert resp.asset == "wstETH"
+    assert resp.token_address == "0x7f39C581F595B53c5cb5bA2D5dA6c935E2Ca0Ae6"
+    assert resp.price_usd == "2300.00"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "derived-defillama+onchain"
+    rate_call.call.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_price_realtime_derives_wsteth_with_selector_fallback() -> None:
+    w3, steth_per_token_call, get_steth_by_wsteth_call = (
+        _fake_w3_with_wsteth_rate_fallback(
+            steth_per_token_exc=BadFunctionCallOutput("empty response"),
+            get_steth_by_wsteth_raw=int(Decimal("1.12") * Decimal(10**18)),
+        )
+    )
+
+    with (
+        patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch.object(
+            service,
+            "_fetch_defillama_current_price",
+            new=AsyncMock(return_value=(Decimal("2000"), 1717200000)),
+        ),
+    ):
+        resp = await service.get_price(
+            w3,
+            symbol="wstETH",
+            address=None,
+            pool=None,
+        )
+
+    assert resp.price_usd == "2240.00"
+    assert resp.source == "derived-defillama+onchain"
+    steth_per_token_call.call.assert_awaited_once_with()
+    get_steth_by_wsteth_call.call.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_price_realtime_prefers_coingecko_for_wsteth_before_derived_price() -> (
+    None
+):
+    with (
+        patch.object(service, "get_assets_prices", new=AsyncMock(return_value=[0])),
+        patch.object(
+            service,
+            "_fetch_coingecko_current_price",
+            new=AsyncMock(return_value=(Decimal("2456.78"), 1717200000)),
+        ),
+        patch.object(
+            service,
+            "_get_current_derived_price",
+            new=AsyncMock(side_effect=AssertionError("should not call derived price")),
+        ),
+    ):
+        resp = await service.get_price(
+            MagicMock(),
+            symbol="wstETH",
+            address=None,
+            pool=None,
+        )
+
+    assert resp.asset == "wstETH"
+    assert resp.price_usd == "2456.78"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "coingecko"
 
 
 @pytest.mark.asyncio
@@ -177,6 +302,95 @@ async def test_get_price_period_supports_direct_evm_address() -> None:
     assert resp.token_address == token_address
     assert resp.source == "defillama"
     assert [item.price_usd for item in resp.prices] == ["9.87", "9.91"]
+    assert [item.timestamp for item in resp.prices] == [
+        "2024-06-01T00:00:00Z",
+        "2024-06-01T01:00:00Z",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_price_historical_derives_wsteth_with_bucket_block_ratio() -> None:
+    w3, rate_call = _fake_w3_with_ratio(int(Decimal("1.08") * Decimal(10**18)))
+    requested_ts = int(datetime(2024, 6, 1, 0, 7, 12, tzinfo=timezone.utc).timestamp())
+    bucket_ts = bucket_timestamp(requested_ts)
+
+    with (
+        patch.object(
+            service,
+            "get_historical_price_usd",
+            new=AsyncMock(return_value=(Decimal("2500"), bucket_ts, "defillama")),
+        ),
+        patch.object(
+            service,
+            "_block_at_timestamp",
+            new=AsyncMock(return_value=19_000_000),
+        ),
+    ):
+        resp = await service.get_price(
+            w3,
+            symbol="wstETH",
+            address=None,
+            pool=None,
+            timestamp=requested_ts,
+        )
+
+    assert resp.asset == "wstETH"
+    assert resp.price_usd == "2700.00"
+    assert resp.timestamp == "2024-06-01T00:00:00Z"
+    assert resp.source == "derived-defillama+onchain"
+    rate_call.call.assert_awaited_once_with(block_identifier=19_000_000)
+
+
+@pytest.mark.asyncio
+async def test_get_price_period_derives_wsteth_from_bucket_prices_and_block_rates() -> (
+    None
+):
+    bucket0 = int(datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    bucket1 = int(datetime(2024, 6, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    rate_call = MagicMock()
+    rate_call.call = AsyncMock(
+        side_effect=[
+            int(Decimal("1.10") * Decimal(10**18)),
+            int(Decimal("1.20") * Decimal(10**18)),
+        ]
+    )
+    functions = MagicMock()
+    functions.stEthPerToken.return_value = rate_call
+    contract = MagicMock()
+    contract.functions = functions
+    eth = MagicMock()
+    eth.contract.return_value = contract
+    w3 = MagicMock()
+    w3.eth = eth
+
+    with (
+        patch.object(
+            service,
+            "get_historical_bucket_prices_usd",
+            new=AsyncMock(
+                return_value={bucket0: Decimal("2000"), bucket1: Decimal("2100")}
+            ),
+        ),
+        patch.object(
+            service,
+            "_block_at_timestamp",
+            new=AsyncMock(side_effect=[18_000_000, 18_000_300]),
+        ),
+    ):
+        resp = await service.get_price_period_service(
+            w3,
+            None,
+            symbol="wstETH",
+            address=None,
+            start=bucket0,
+            end=bucket1,
+            interval=60,
+        )
+
+    assert resp.asset == "wstETH"
+    assert resp.token_address == "0x7f39C581F595B53c5cb5bA2D5dA6c935E2Ca0Ae6"
+    assert resp.source == "derived-defillama+onchain"
+    assert [item.price_usd for item in resp.prices] == ["2200.00", "2520.00"]
     assert [item.timestamp for item in resp.prices] == [
         "2024-06-01T00:00:00Z",
         "2024-06-01T01:00:00Z",

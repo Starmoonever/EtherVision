@@ -100,6 +100,7 @@ uv sync
 - 代码层已优先使用 `ensure_ethereum_price_cache_table`、`get_cached_ethereum_price_usd`、`upsert_ethereum_price_cache` 这组 helper；旧的 `eth_*` helper 名称仅保留兼容
 - `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
 - 当前该套历史价格桶缓存只覆盖 Ethereum 资产，暂不包含 TRON
+- 对 `wstETH` 这类包装资产，统一价格接口允许走“链下原资产 USD 价格 × 链上汇率”的派生路径；当前已接入 `wstETH = stETH × stEthPerToken()`，其中历史价格会先定位到对应 bucket 的 Ethereum 区块，再读取该区块的链上汇率，因此依赖可用的 archive 级 EVM RPC
 
 TRON 价格查询的现状与约定：
 

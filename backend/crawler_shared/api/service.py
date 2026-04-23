@@ -5,22 +5,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import time as _time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import asyncpg
 from web3 import AsyncWeb3
+from web3.providers import AsyncHTTPProvider
 
 from aave_crawler.rpc import (
     CONTRACTS_V3,
     ORACLE_ABI,
+    PUBLIC_RPCS,
     WETH_ADDRESS,
     get_all_reserve_tokens,
     get_assets_prices,
     get_contracts,
     get_reserve_config,
 )
+from aave_crawler.market_collector import _block_at_timestamp
 from crawler_shared.price_history import (
     bucket_timestamps,
     get_historical_bucket_prices_usd,
@@ -55,6 +59,47 @@ logger = logging.getLogger(__name__)
 
 _cache: dict = {}
 _TRON_PRICE_CACHE_TTL_SECONDS = 60
+
+_WSTETH_RATE_SCALE = Decimal(10**18)
+_WSTETH_ABI: list[dict[str, Any]] = [
+    {
+        "inputs": [],
+        "name": "stEthPerToken",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "_wstETHAmount", "type": "uint256"}],
+        "name": "getStETHByWstETH",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
+@dataclass(frozen=True)
+class DerivedPriceSpec:
+    base_asset: str
+    base_token_address: str
+    rate_contract: str
+    rate_scale: Decimal
+    rate_reads: tuple[tuple[str, tuple[Any, ...]], ...]
+
+
+_DERIVED_PRICE_SPECS: dict[str, DerivedPriceSpec] = {
+    "0x7f39c581f595b53c5cb5ba2d5da6c935e2ca0ae6": DerivedPriceSpec(
+        base_asset="stETH",
+        base_token_address="0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+        rate_contract="0x7f39C581F595B53c5cb5bA2D5dA6c935E2Ca0Ae6",
+        rate_scale=_WSTETH_RATE_SCALE,
+        rate_reads=(
+            ("stEthPerToken", ()),
+            ("getStETHByWstETH", (10**18,)),
+        ),
+    ),
+}
 
 _SQL_COMPOUND_V3_RESERVE_BY_SYMBOL = """
 SELECT
@@ -515,6 +560,157 @@ def _ts_to_utc_str(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _get_derived_price_spec(token_address: str) -> DerivedPriceSpec | None:
+    return _DERIVED_PRICE_SPECS.get(token_address.lower())
+
+
+async def _fetch_ratio_from_chain(
+    w3: AsyncWeb3,
+    *,
+    spec: DerivedPriceSpec,
+    block_number: int | None = None,
+) -> Decimal:
+    from fastapi import HTTPException
+
+    async def _try_with_provider(
+        provider_w3: AsyncWeb3,
+    ) -> tuple[Decimal | None, list[str]]:
+        contract = provider_w3.eth.contract(
+            address=AsyncWeb3.to_checksum_address(spec.rate_contract),
+            abi=_WSTETH_ABI,
+        )
+        errors: list[str] = []
+        for function_name, function_args in spec.rate_reads:
+            try:
+                fn = getattr(contract.functions, function_name)
+                bound = fn(*function_args)
+                if block_number is None:
+                    raw_ratio = await bound.call()
+                else:
+                    raw_ratio = await bound.call(block_identifier=block_number)
+
+                ratio = Decimal(int(raw_ratio)) / spec.rate_scale
+                if ratio <= 0:
+                    raise ValueError("链上汇率返回非正数")
+                return ratio, errors
+            except Exception as exc:
+                errors.append(
+                    f"{function_name}{function_args}: {type(exc).__name__}: {exc}"
+                )
+        return None, errors
+
+    block_desc = "latest" if block_number is None else str(block_number)
+
+    ratio, errors = await _try_with_provider(w3)
+    if ratio is not None:
+        return ratio
+
+    # 当前 provider 无法读取时，对独立公共 RPC 做一次兜底探测。
+    # latest 读取最适合该兜底；历史块也尝试，但是否可用取决于公共节点是否保留 archive 能力。
+    fallback_errors: list[str] = []
+    for url in PUBLIC_RPCS:
+        probe_w3 = AsyncWeb3(AsyncHTTPProvider(url, request_kwargs={"timeout": 10}))
+        try:
+            fallback_ratio, rpc_errors = await _try_with_provider(probe_w3)
+            if fallback_ratio is not None:
+                logger.warning(
+                    "derived price ratio fallback succeeded contract=%s block=%s rpc=%s initial_errors=%s",
+                    spec.rate_contract,
+                    block_desc,
+                    url,
+                    " | ".join(errors),
+                )
+                return fallback_ratio
+            fallback_errors.append(f"{url}: {' | '.join(rpc_errors)}")
+        except Exception as exc:
+            fallback_errors.append(f"{url}: {type(exc).__name__}: {exc}")
+        finally:
+            try:
+                await probe_w3.provider.disconnect()
+            except Exception:
+                logger.debug("failed to close fallback provider %s", url, exc_info=True)
+
+    all_errors = errors + fallback_errors
+    logger.warning(
+        "failed to fetch derived price ratio contract=%s block=%s errors=%s",
+        spec.rate_contract,
+        block_desc,
+        " | ".join(all_errors),
+    )
+    raise HTTPException(
+        status_code=502,
+        detail=(f"无法读取链上汇率 contract={spec.rate_contract} block={block_desc}"),
+    )
+
+
+async def _get_current_derived_price(
+    w3: AsyncWeb3,
+    *,
+    spec: DerivedPriceSpec,
+) -> tuple[Decimal, int, str] | None:
+    base_price = await _fetch_defillama_current_price(spec.base_token_address)
+    base_source = "defillama"
+    if base_price is None:
+        base_price = await _fetch_coingecko_current_price(spec.base_token_address)
+        base_source = "coingecko"
+    if base_price is None:
+        return None
+
+    base_usd, base_ts = base_price
+    ratio = await _fetch_ratio_from_chain(w3, spec=spec)
+    return base_usd * ratio, base_ts, f"derived-{base_source}+onchain"
+
+
+async def _get_historical_derived_price(
+    w3: AsyncWeb3,
+    pool: asyncpg.Pool | None,
+    *,
+    spec: DerivedPriceSpec,
+    requested_ts: int,
+) -> tuple[Decimal, int, str]:
+    base_price, bucket_ts, base_source = await get_historical_price_usd(
+        pool,
+        token_address=spec.base_token_address,
+        asset_label=spec.base_asset,
+        requested_ts=requested_ts,
+    )
+    block_number = await _block_at_timestamp(w3, bucket_ts, pool)
+    ratio = await _fetch_ratio_from_chain(w3, spec=spec, block_number=block_number)
+    return base_price * ratio, bucket_ts, f"derived-{base_source}+onchain"
+
+
+async def _get_historical_derived_bucket_prices(
+    w3: AsyncWeb3,
+    pool: asyncpg.Pool | None,
+    *,
+    spec: DerivedPriceSpec,
+    buckets: list[int],
+) -> tuple[dict[int, Decimal], str]:
+    base_prices = await get_historical_bucket_prices_usd(
+        pool,
+        token_address=spec.base_token_address,
+        asset_label=spec.base_asset,
+        buckets=buckets,
+    )
+    if not base_prices:
+        return {}, "derived-defillama+onchain"
+
+    unique_buckets = sorted(base_prices.keys())
+    block_numbers = await asyncio.gather(
+        *[_block_at_timestamp(w3, bucket, pool) for bucket in unique_buckets]
+    )
+    ratios = await asyncio.gather(
+        *[
+            _fetch_ratio_from_chain(w3, spec=spec, block_number=block_number)
+            for block_number in block_numbers
+        ]
+    )
+    return {
+        bucket: base_prices[bucket] * ratio
+        for bucket, ratio in zip(unique_buckets, ratios)
+    }, "derived-defillama+onchain"
+
+
 async def get_supported_price_assets() -> PriceAssetsResponse:
     return PriceAssetsResponse(
         assets=[
@@ -677,16 +873,8 @@ async def get_price(
                     source="compound-snapshot",
                 )
 
-        latest_price = await _fetch_defillama_current_price(token_address)
-        if latest_price is not None:
-            price, price_ts = latest_price
-            return PriceResponse(
-                asset=resolved_asset,
-                price_usd=_fmt(price, 2),
-                token_address=token_address,
-                timestamp=_ts_to_utc_str(price_ts),
-                source="defillama",
-            )
+        derived_spec = _get_derived_price_spec(token_address)
+        derived_exc: Exception | None = None
 
         coingecko_price = await _fetch_coingecko_current_price(token_address)
         if coingecko_price is not None:
@@ -699,6 +887,36 @@ async def get_price(
                 source="coingecko",
             )
 
+        if derived_spec is not None:
+            try:
+                derived_price = await _get_current_derived_price(
+                    w3,
+                    spec=derived_spec,
+                )
+            except Exception as exc:
+                derived_exc = exc
+            else:
+                if derived_price is not None:
+                    price, price_ts, source = derived_price
+                    return PriceResponse(
+                        asset=resolved_asset,
+                        price_usd=_fmt(price, 2),
+                        token_address=token_address,
+                        timestamp=_ts_to_utc_str(price_ts),
+                        source=source,
+                    )
+
+        latest_price = await _fetch_defillama_current_price(token_address)
+        if latest_price is not None:
+            price, price_ts = latest_price
+            return PriceResponse(
+                asset=resolved_asset,
+                price_usd=_fmt(price, 2),
+                token_address=token_address,
+                timestamp=_ts_to_utc_str(price_ts),
+                source="defillama",
+            )
+
         if oracle_exc is not None:
             logger.warning(
                 "failed to fetch realtime price asset=%s token=%s: %s",
@@ -706,17 +924,33 @@ async def get_price(
                 token_address,
                 oracle_exc,
             )
+        if derived_exc is not None:
+            logger.warning(
+                "failed to fetch derived realtime price asset=%s token=%s: %s",
+                symbol or address,
+                token_address,
+                derived_exc,
+            )
         raise HTTPException(
             status_code=502,
             detail=f"无法获取资产 '{symbol or address}' 的实时价格",
         )
 
-    price, bucket_ts, source = await get_historical_price_usd(
-        pool,
-        token_address=token_address,
-        asset_label=resolved_asset,
-        requested_ts=timestamp,
-    )
+    derived_spec = _get_derived_price_spec(token_address)
+    if derived_spec is not None:
+        price, bucket_ts, source = await _get_historical_derived_price(
+            w3,
+            pool,
+            spec=derived_spec,
+            requested_ts=timestamp,
+        )
+    else:
+        price, bucket_ts, source = await get_historical_price_usd(
+            pool,
+            token_address=token_address,
+            asset_label=resolved_asset,
+            requested_ts=timestamp,
+        )
 
     return PriceResponse(
         asset=resolved_asset,
@@ -814,12 +1048,22 @@ async def get_price_period_service(
             prices=items,
         )
 
-    price_map = await get_historical_bucket_prices_usd(
-        pool,
-        token_address=token_address,
-        asset_label=resolved_asset,
-        buckets=expected_buckets,
-    )
+    derived_spec = _get_derived_price_spec(token_address)
+    if derived_spec is not None:
+        price_map, source = await _get_historical_derived_bucket_prices(
+            w3,
+            pool,
+            spec=derived_spec,
+            buckets=expected_buckets,
+        )
+    else:
+        price_map = await get_historical_bucket_prices_usd(
+            pool,
+            token_address=token_address,
+            asset_label=resolved_asset,
+            buckets=expected_buckets,
+        )
+        source = "defillama"
     items = [
         PricePeriodItem(
             price_usd=_fmt(price_map[bucket], 2),
@@ -836,6 +1080,6 @@ async def get_price_period_service(
     return PricePeriodResponse(
         asset=resolved_asset,
         token_address=token_address,
-        source="defillama",
+        source=source,
         prices=items,
     )
