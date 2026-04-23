@@ -516,9 +516,14 @@ export function MorphoMarketTable({
               </tr>
             ) : (
               markets.map((market) => {
-                const isExpanded = market.market_id === expandedMarketId;
-                const loading = marketStateLoadingById[market.market_id] === true;
-                const detailError = marketStateErrorById[market.market_id];
+                const marketStateKey = market.market_id.toLowerCase();
+                const expandedMarketKey = expandedMarketId.toLowerCase();
+                const isExpanded = marketStateKey === expandedMarketKey;
+                const loading =
+                  marketStateLoadingById[market.market_id] === true ||
+                  marketStateLoadingById[marketStateKey] === true;
+                const detailError =
+                  marketStateErrorById[market.market_id] ?? marketStateErrorById[marketStateKey];
                 const marketSizeUsd = resolveMarketSize(market);
                 const borrowSizeUsd = resolveBorrowSizeUsd(market);
                 const availableSpaceUsd = resolveAvailableSpaceUsd(market);

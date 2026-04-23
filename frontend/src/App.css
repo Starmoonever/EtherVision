@@ -3257,20 +3257,6 @@
   top: 0.02rem;
 }
 
-.morpho-market-row-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.35rem;
-  height: 1.35rem;
-  border: 1px solid rgba(96, 165, 250, 0.24);
-  border-radius: 6px;
-  color: #7dd3fc;
-  font-weight: 800;
-  line-height: 1;
-  flex: 0 0 auto;
-}
-
 .morpho-market-detail-row td {
   background: rgba(8, 15, 29, 0.5);
   padding: 0.8rem;
@@ -3410,12 +3396,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.morpho-market-name-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
 }
 
 .morpho-market-table-compact {
@@ -3793,6 +3773,456 @@
   font-variant-numeric: tabular-nums;
 }
 
+.morpho-vault-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.morpho-vault-search-card,
+.morpho-vault-overview-card,
+.morpho-vault-allocation-card,
+.morpho-vault-reallocation-card {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.morpho-vault-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.morpho-vault-identity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1rem;
+}
+
+.morpho-vault-kicker {
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.morpho-vault-identity h2 {
+  color: #f8fafc;
+  font-size: 1.55rem;
+  line-height: 1.15;
+  margin: 0.2rem 0 0.35rem;
+}
+
+.morpho-vault-version {
+  border: 1px solid rgba(125, 211, 252, 0.32);
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #bae6fd;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 0.28rem 0.55rem;
+}
+
+.morpho-vault-copy-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  width: fit-content;
+  max-width: 100%;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.morpho-vault-copy-line span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-copy-line i {
+  position: relative;
+  width: 0.78rem;
+  height: 0.78rem;
+  color: #93c5fd;
+}
+
+.morpho-vault-copy-line i::before,
+.morpho-vault-copy-line i::after {
+  position: absolute;
+  width: 0.48rem;
+  height: 0.56rem;
+  border: 1.4px solid currentColor;
+  border-radius: 2px;
+  content: '';
+}
+
+.morpho-vault-copy-line i::before {
+  left: 0.05rem;
+  top: 0.17rem;
+  opacity: 0.7;
+}
+
+.morpho-vault-copy-line i::after {
+  right: 0.04rem;
+  top: 0.02rem;
+}
+
+.morpho-vault-copy-line:hover,
+.morpho-vault-copy-line-copied {
+  color: #bae6fd;
+}
+
+.morpho-vault-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.morpho-vault-metric-grid .metric-box {
+  min-height: 7rem;
+}
+
+.morpho-vault-metric-grid strong {
+  color: #f8fafc;
+  font-size: 1.2rem;
+}
+
+.morpho-vault-metric-grid small {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-sub-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.morpho-vault-sub-metrics span {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.42);
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.32rem 0.55rem;
+}
+
+.morpho-vault-detail-layout {
+  display: block;
+}
+
+.morpho-vault-detail-main {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.morpho-vault-allocation-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+  min-height: 24rem;
+}
+
+.morpho-vault-pie-panel {
+  flex: 0 0 calc(40% - 0.5rem);
+  border: 1px solid rgba(96, 165, 250, 0.12);
+  border-radius: 8px;
+  background: rgba(8, 15, 29, 0.38);
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.morpho-vault-pie-layout {
+  display: grid;
+  grid-template-rows: minmax(12rem, 1fr) auto;
+  gap: 0.85rem;
+  height: 100%;
+  min-height: 22rem;
+}
+
+.morpho-vault-pie {
+  position: relative;
+  width: 100%;
+  min-height: 13.5rem;
+}
+
+.morpho-vault-allocation-chart {
+  position: relative;
+  flex: 1 1 calc(60% - 0.5rem);
+  min-width: 0;
+  height: 24rem;
+  border: 1px solid rgba(96, 165, 250, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(148, 163, 184, 0.04), transparent 34%), rgba(8, 15, 29, 0.38);
+  padding: 0.65rem 0.45rem 1.1rem;
+}
+
+.morpho-vault-pie-center {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  pointer-events: none;
+  text-align: center;
+}
+
+.morpho-vault-pie-center strong {
+  color: #f8fafc;
+  font-size: 1.25rem;
+  line-height: 1.1;
+}
+
+.morpho-vault-pie-center span {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.morpho-vault-pie-center small {
+  color: #7dd3fc;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-top: 0.15rem;
+}
+
+.morpho-vault-allocation-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+.morpho-vault-allocation-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.morpho-vault-allocation-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.morpho-vault-allocation-list::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+}
+
+.morpho-vault-allocation-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.48);
+  color: #cbd5e1;
+  cursor: pointer;
+  font: inherit;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.morpho-vault-allocation-item:hover,
+.morpho-vault-allocation-item-active {
+  border-color: rgba(125, 211, 252, 0.38);
+  background: rgba(14, 165, 233, 0.12);
+}
+
+.morpho-vault-allocation-item-active {
+  transform: translateY(-1px);
+}
+
+.morpho-vault-allocation-item-selected {
+  border-color: rgba(125, 211, 252, 0.7);
+  box-shadow:
+    inset 3px 0 0 #38bdf8,
+    0 0 18px rgba(56, 189, 248, 0.12);
+}
+
+.morpho-vault-pie-slice {
+  cursor: pointer;
+}
+
+.morpho-vault-allocation-swatch {
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 3px;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.52);
+}
+
+.morpho-vault-allocation-name {
+  overflow: hidden;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-allocation-value,
+.morpho-vault-allocation-share {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.morpho-vault-allocation-share {
+  color: #bae6fd;
+}
+
+.morpho-vault-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.8rem;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  font-weight: 700;
+  min-height: 1.4rem;
+  padding: 0 0.3rem 0.25rem 3.25rem;
+}
+
+.morpho-vault-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.morpho-vault-chart-legend i {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+}
+
+.morpho-vault-legend-cap {
+  height: 2px;
+  background: rgba(226, 232, 240, 0.52);
+}
+
+.morpho-vault-legend-allocation {
+  background: #38bdf8;
+}
+
+.morpho-vault-legend-liquidity {
+  background: #86efac;
+}
+
+.morpho-vault-legend-warning {
+  width: 0;
+  height: 0;
+  border-right: 0.4rem solid transparent;
+  border-bottom: 0.72rem solid #f87171;
+  border-left: 0.4rem solid transparent;
+  border-radius: 0;
+}
+
+.morpho-vault-histogram-column,
+.morpho-vault-histogram-column-selected {
+  cursor: pointer;
+}
+
+.morpho-vault-histogram-selected-frame {
+  filter: none;
+}
+
+.morpho-vault-histogram-liquidity {
+  filter: drop-shadow(0 0 5px rgba(134, 239, 172, 0.58));
+}
+
+.morpho-vault-histogram-risk-triangle {
+  fill: #f87171;
+  filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.48));
+}
+
+.morpho-vault-axis-tick {
+  cursor: pointer;
+  fill: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.morpho-vault-axis-tick circle {
+  fill: #475569;
+}
+
+.morpho-vault-axis-tick:hover,
+.morpho-vault-axis-tick-selected {
+  fill: #bae6fd;
+}
+
+.morpho-vault-axis-tick:hover circle,
+.morpho-vault-axis-tick-selected circle {
+  fill: #7dd3fc;
+}
+
+.morpho-vault-axis-tick-selected text {
+  filter: drop-shadow(0 0 5px rgba(56, 189, 248, 0.48));
+}
+
+.morpho-vault-market-placeholder,
+.morpho-vault-empty-chart {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  gap: 0.35rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.morpho-vault-market-placeholder strong,
+.morpho-vault-empty-chart strong {
+  color: #f8fafc;
+}
+
+.morpho-vault-reallocation-bars {
+  display: grid;
+  grid-auto-columns: minmax(2.4rem, 1fr);
+  grid-auto-flow: column;
+  gap: 0.5rem;
+  height: 13rem;
+  align-items: end;
+  overflow-x: auto;
+}
+
+.morpho-vault-reallocation-item {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.35rem;
+  height: 100%;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.morpho-vault-reallocation-item span {
+  display: block;
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(180deg, #fbbf24, #f97316);
+}
+
 .justlend-caption {
   color: #64748b;
   font-size: 0.82rem;
@@ -3976,8 +4406,29 @@
   .protocol-market-summary-grid,
   .morpho-keyline,
   .morpho-summary-layout,
-  .morpho-summary-group-grid {
+  .morpho-summary-group-grid,
+  .morpho-vault-search-row,
+  .morpho-vault-detail-layout,
+  .morpho-vault-metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-allocation-layout {
+    flex-direction: column;
+  }
+
+  .morpho-vault-pie-panel {
+    flex-basis: auto;
+  }
+
+  .morpho-vault-pie-layout {
+    grid-template-columns: minmax(12rem, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: 1fr;
+    min-height: 16rem;
+  }
+
+  .morpho-vault-allocation-list {
+    max-height: 16rem;
   }
 
   .justlend-summary-grid,
@@ -3999,6 +4450,19 @@
   .justlend-summary-grid,
   .protocol-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-pie-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(12rem, 1fr) auto;
+  }
+
+  .morpho-vault-allocation-item {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .morpho-vault-allocation-value {
+    display: none;
   }
 }
 

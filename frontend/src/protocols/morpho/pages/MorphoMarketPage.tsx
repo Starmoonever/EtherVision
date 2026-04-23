@@ -14,9 +14,10 @@ import {
   type MorphoMarketView,
 } from '../../../hooks/useMorphoData';
 import { MorphoMarketTable, type MorphoSortMode } from '../components/MorphoMarketTable';
+import { MorphoVaultPage } from './MorphoVaultPage';
 
 const MORPHO_MARKETS_PAGE_SIZE = 10;
-type MorphoMarketViewMode = 'mainstream' | 'query';
+type MorphoMarketViewMode = 'mainstream' | 'query' | 'vaults';
 
 function isMorphoMarketId(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
@@ -185,7 +186,7 @@ export function MorphoMarketPage() {
   }, []);
 
   useEffect(() => {
-    if (activeView !== 'query' || !queriedMarketId) return;
+    if ((activeView !== 'query' && activeView !== 'vaults') || !queriedMarketId) return;
 
     setExpandedMarketId(queriedMarketId);
     if (
@@ -208,9 +209,10 @@ export function MorphoMarketPage() {
 
   useEffect(() => {
     const activeMarkets = activeView === 'query' ? queryMarkets : visibleMarkets;
+    const expandedMarketKey = expandedMarketId.toLowerCase();
     if (
       expandedMarketId &&
-      !activeMarkets.some((market) => market.market_id === expandedMarketId)
+      !activeMarkets.some((market) => market.market_id.toLowerCase() === expandedMarketKey)
     ) {
       setExpandedMarketId('');
     }
@@ -238,6 +240,19 @@ export function MorphoMarketPage() {
     setMarketStateLoadingById({});
     await reload();
   };
+
+  const handleVaultMarketSelect = useCallback(
+    (marketId: string) => {
+      const normalizedMarketId = marketId.toLowerCase();
+      setQuerySearch(normalizedMarketId);
+      setExpandedMarketId(normalizedMarketId);
+      void loadMarketState(
+        mergeMorphoMarketData(createMarketConfigFromId(normalizedMarketId), null),
+        true,
+      );
+    },
+    [loadMarketState],
+  );
 
   const refreshedAtText = fetchedAt
     ? new Date(fetchedAt).toLocaleString('zh-CN', {
@@ -270,6 +285,11 @@ export function MorphoMarketPage() {
               {
                 value: 'query',
                 label: '市场查询',
+                activeClassName: 'active-purple',
+              },
+              {
+                value: 'vaults',
+                label: 'Morpho Vaults',
                 activeClassName: 'active-purple',
               },
             ]}
@@ -307,7 +327,7 @@ export function MorphoMarketPage() {
           onPageChange={setMarketPage}
           tableError={error}
         />
-      ) : (
+      ) : activeView === 'query' ? (
         <MorphoMarketTable
           markets={queryMarkets}
           expandedMarketId={expandedMarketId}
@@ -330,6 +350,18 @@ export function MorphoMarketPage() {
           showPagination={false}
           showTableHeaderWhenEmpty={false}
           emptyText={queryEmptyText}
+        />
+      ) : (
+        <MorphoVaultPage
+          selectedMarketId={queriedMarketId}
+          onMarketSelect={handleVaultMarketSelect}
+          queryMarkets={queryMarkets}
+          expandedMarketId={expandedMarketId}
+          onToggleMarket={handleToggleMarket}
+          marketStateLoadingById={marketStateLoadingById}
+          marketStateErrorById={marketStateErrorById}
+          sortMode={sortMode}
+          onSortModeChange={setSortMode}
         />
       )}
 
