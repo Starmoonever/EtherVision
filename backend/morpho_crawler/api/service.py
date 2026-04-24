@@ -273,6 +273,8 @@ async def get_vault_state_main_graphql(
     *,
     address: str,
     chain_id: int = 1,
+    w3: AsyncWeb3 | None = None,
+    pool: AsyncpgPool | None = None,
 ) -> MorphoVaultStateGraphQLResponse:
     raw = (address or "").strip()
     if not raw:
@@ -281,6 +283,23 @@ async def get_vault_state_main_graphql(
         checksum = AsyncWeb3.to_checksum_address(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"无效 EVM 地址: {exc}") from exc
+    # api/morpho/vault/v1/state相关：优先查表命中，减少 GraphQL 请求
+    if pool is not None:
+        table_data = await _fetch_vault_v1_state_from_table(
+            pool, vault_address=checksum
+        )
+        if table_data is not None:
+            vault_table = (table_data.get("data") or {}).get("vaultByAddress") or {}
+            allocations_table = (
+                (vault_table.get("state") or {}).get("allocation")
+            ) or []
+            if w3 is not None and isinstance(allocations_table, list):
+                await _mark_vault_allocation_market_data_sources(
+                    w3, pool=pool, allocations=allocations_table
+                )
+            if isinstance(vault_table, dict):
+                vault_table["dataSource"] = "table"
+            return MorphoVaultStateGraphQLResponse(data=table_data.get("data") or {})
 
     payload = {
         "query": _VAULT_BY_ADDRESS_MAIN_GRAPHQL,
@@ -372,10 +391,248 @@ async def get_vault_state_main_graphql(
             state["allocation"] = allocation_value
         else:
             state["liquidityUsd"] = liquidity_usd_value
+    if isinstance(vault, dict):
+        vault["dataSource"] = "graphql"
+        allocations_graphql = ((vault.get("state") or {}).get("allocation")) or []
+        if (
+            w3 is not None
+            and pool is not None
+            and isinstance(allocations_graphql, list)
+        ):
+            await _mark_vault_allocation_market_data_sources(
+                w3, pool=pool, allocations=allocations_graphql
+            )
+    # api/morpho/vault/v1/state相关：GraphQL 命中后回写 vault 当前表（下次优先查表）
+    if pool is not None and isinstance(vault, dict):
+        await _upsert_vault_v1_state_to_table(pool, vault=vault)
 
     return MorphoVaultStateGraphQLResponse(
         data=data if isinstance(data, dict) else {"vaultByAddress": vault},
     )
+
+
+# api/morpho/vault/v1/state相关：按地址查 vault 当前表并组装接口结构
+async def _fetch_vault_v1_state_from_table(
+    pool: AsyncpgPool, *, vault_address: str
+) -> dict[str, Any] | None:
+    vault_addr_b = _evm_to_db_bytes(vault_address)
+    async with pool.acquire() as conn:
+        head = await conn.fetchrow(
+            """
+            SELECT
+                vault_address,
+                vault_name,
+                asset_address,
+                asset_symbol,
+                asset_decimals,
+                total_assets_usd,
+                apy,
+                net_apy,
+                net_apy_excluding_rewards,
+                avg_net_apy,
+                avg_net_apy_excluding_rewards,
+                timelock_seconds,
+                fee_raw,
+                liquidity_usd
+            FROM loan.morpho_vault_v1_current
+            WHERE vault_address = $1
+            LIMIT 1
+            """,
+            vault_addr_b,
+        )
+        if head is None:
+            return None
+        alloc_rows = await conn.fetch(
+            """
+            SELECT
+                a.market_id,
+                a.supply_assets_usd,
+                a.supply_cap_usd,
+                a.liquidity_usd,
+                m.loan_symbol,
+                m.loan_address,
+                m.collateral_symbol,
+                m.collateral_address
+            FROM loan.morpho_vault_v1_allocation_current AS a
+            LEFT JOIN loan.morpho_blue_current_markets AS m
+              ON m.market_id = a.market_id
+            WHERE a.vault_address = $1
+            ORDER BY a.market_id
+            """,
+            vault_addr_b,
+        )
+    allocation: list[dict[str, Any]] = []
+    for row in alloc_rows:
+        allocation.append(
+            {
+                "market": {
+                    "market_id": str(row["market_id"]),
+                    "loanAsset": {
+                        "symbol": row["loan_symbol"],
+                        "address": _normalize_evm_address(
+                            str(row["loan_address"] or ZERO_ADDRESS)
+                        ),
+                    },
+                    "collateralAsset": {
+                        "symbol": row["collateral_symbol"],
+                        "address": _normalize_evm_address(
+                            str(row["collateral_address"] or ZERO_ADDRESS)
+                        ),
+                    },
+                },
+                "supplyAssetsUsd": float(row["supply_assets_usd"] or 0),
+                "supplyCapUsd": float(row["supply_cap_usd"] or 0),
+                "liquidityUsd": float(row["liquidity_usd"] or 0),
+            }
+        )
+    return {
+        "data": {
+            "vaultByAddress": {
+                "address": _db_bytes_to_evm(head["vault_address"]),
+                "name": head["vault_name"],
+                "asset": {
+                    "address": _db_bytes_to_evm(head["asset_address"]),
+                    "symbol": head["asset_symbol"],
+                    "decimals": head["asset_decimals"],
+                },
+                "state": {
+                    "totalAssetsUsd": float(head["total_assets_usd"] or 0),
+                    "apy": float(head["apy"] or 0),
+                    "netApy": float(head["net_apy"] or 0),
+                    "netApyExcludingRewards": float(
+                        head["net_apy_excluding_rewards"] or 0
+                    ),
+                    "avgNetApy": float(head["avg_net_apy"] or 0),
+                    "avgNetApyExcludingRewards": float(
+                        head["avg_net_apy_excluding_rewards"] or 0
+                    ),
+                    "timelock": int(head["timelock_seconds"] or 0),
+                    "fee": float(head["fee_raw"] or 0),
+                    "liquidityUsd": float(head["liquidity_usd"] or 0),
+                    "allocation": allocation,
+                },
+            }
+        }
+    }
+
+
+# api/morpho/vault/v1/state相关：回写 vault 当前表
+async def _upsert_vault_v1_state_to_table(
+    pool: AsyncpgPool, *, vault: dict[str, Any]
+) -> None:
+    state = vault.get("state") or {}
+    asset = vault.get("asset") or {}
+    vault_addr = str(vault.get("address") or "").strip()
+    if not vault_addr:
+        return
+    vault_addr_b = _evm_to_db_bytes(vault_addr)
+    asset_addr_b = _evm_to_db_bytes(str(asset.get("address") or ZERO_ADDRESS))
+    allocation = state.get("allocation") or []
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO loan.morpho_vault_v1_current (
+                    vault_address, vault_name, asset_address, asset_symbol, asset_decimals,
+                    total_assets_usd, apy, net_apy, net_apy_excluding_rewards,
+                    avg_net_apy, avg_net_apy_excluding_rewards, timelock_seconds,
+                    fee_raw, liquidity_usd, source_ts, updated_at
+                )
+                VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW()
+                )
+                ON CONFLICT (vault_address) DO UPDATE SET
+                    vault_name = EXCLUDED.vault_name,
+                    asset_address = EXCLUDED.asset_address,
+                    asset_symbol = EXCLUDED.asset_symbol,
+                    asset_decimals = EXCLUDED.asset_decimals,
+                    total_assets_usd = EXCLUDED.total_assets_usd,
+                    apy = EXCLUDED.apy,
+                    net_apy = EXCLUDED.net_apy,
+                    net_apy_excluding_rewards = EXCLUDED.net_apy_excluding_rewards,
+                    avg_net_apy = EXCLUDED.avg_net_apy,
+                    avg_net_apy_excluding_rewards = EXCLUDED.avg_net_apy_excluding_rewards,
+                    timelock_seconds = EXCLUDED.timelock_seconds,
+                    fee_raw = EXCLUDED.fee_raw,
+                    liquidity_usd = EXCLUDED.liquidity_usd,
+                    source_ts = NOW(),
+                    updated_at = NOW()
+                """,
+                vault_addr_b,
+                vault.get("name"),
+                asset_addr_b,
+                asset.get("symbol"),
+                asset.get("decimals"),
+                state.get("totalAssetsUsd"),
+                state.get("apy"),
+                state.get("netApy"),
+                state.get("netApyExcludingRewards"),
+                state.get("avgNetApy"),
+                state.get("avgNetApyExcludingRewards"),
+                state.get("timelock"),
+                state.get("fee"),
+                state.get("liquidityUsd"),
+            )
+            await conn.execute(
+                """
+                DELETE FROM loan.morpho_vault_v1_allocation_current
+                WHERE vault_address = $1
+                """,
+                vault_addr_b,
+            )
+            rows: list[tuple[Any, ...]] = []
+            for item in allocation:
+                if not isinstance(item, dict):
+                    continue
+                market_id = str(
+                    ((item.get("market") or {}).get("market_id") or "")
+                ).strip()
+                if not market_id:
+                    continue
+                rows.append(
+                    (
+                        vault_addr_b,
+                        market_id,
+                        item.get("supplyAssetsUsd"),
+                        item.get("supplyCapUsd"),
+                        item.get("liquidityUsd"),
+                    )
+                )
+            if rows:
+                await conn.executemany(
+                    """
+                    INSERT INTO loan.morpho_vault_v1_allocation_current (
+                        vault_address, market_id, supply_assets_usd, supply_cap_usd, liquidity_usd, source_ts, updated_at
+                    )
+                    VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
+                    """,
+                    rows,
+                )
+
+
+# api/morpho/vault/v1/state相关：为 allocation.market 标记 dataSource，必要时触发 market/state 回写
+async def _mark_vault_allocation_market_data_sources(
+    w3: AsyncWeb3, *, pool: AsyncpgPool, allocations: list[dict[str, Any]]
+) -> None:
+    for item in allocations:
+        if not isinstance(item, dict):
+            continue
+        market = item.get("market")
+        if not isinstance(market, dict):
+            continue
+        market_id = str(market.get("market_id") or "").strip()
+        if not market_id:
+            continue
+        row = await _fetch_market_state_row_from_table(pool, market_id)
+        if row is not None:
+            market["dataSource"] = "table"
+            continue
+        # 未命中时调用 market/state 链上分支并回写表
+        try:
+            await get_market_state(w3, pool=pool, market_id=market_id, date=None)
+            market["dataSource"] = "chain"
+        except HTTPException:
+            market["dataSource"] = "chain_error"
 
 
 # api/morpho/vault/v1/state相关：查询单 market 的可用流动性（supplyAssets - borrowAssets）

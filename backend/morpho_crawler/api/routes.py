@@ -165,10 +165,16 @@ async def market_state(
     summary="Morpho Vault V1 状态（主站 GraphQL）",
 )
 async def vault_state(
+    request: Request,
+    pool: AsyncpgPool,
     address: str = Query(..., description="Vault 合约地址（EVM）"),
 ) -> MorphoVaultStateGraphQLResponse:
     # api/morpho/vault/v1/state相关：固定主网查询，不暴露 chain_id
-    return await get_vault_state_main_graphql(address=address)
+    return await get_vault_state_main_graphql(
+        address=address,
+        w3=_w3(request),
+        pool=pool,
+    )
 
 
 # api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state（Morpho 主站 GraphQL vaultV2ByAddress）
