@@ -3,6 +3,7 @@ import { AaveProtocolRoot } from './aave';
 import { CompoundProtocolRoot } from './compound';
 import { MorphoProtocolRoot } from './morpho';
 import { JustLendProtocolRoot } from './justlend';
+import { MakerDaoProtocolRoot } from './makerdao';
 
 export const protocolRegistry: ProtocolDefinition[] = [
   {
@@ -24,5 +25,10 @@ export const protocolRegistry: ProtocolDefinition[] = [
     id: 'justlend',
     label: 'JustLend',
     Root: JustLendProtocolRoot,
+  },
+  {
+    id: 'makerdao',
+    label: 'MakerDAO',
+    Root: MakerDaoProtocolRoot,
   },
 ];

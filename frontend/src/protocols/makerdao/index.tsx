@@ -1,0 +1,1 @@
+export { MakerDaoProtocolRoot } from './root';
