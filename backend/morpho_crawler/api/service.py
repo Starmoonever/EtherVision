@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -156,6 +157,18 @@ query MorphoVaultByAddress($address: String!, $chainId: Int!) {
 }
 """.strip()
 
+# api/morpho/vault/v1/state相关：按 market_id 查询 market 的 supply/borrow，用于估算可提取流动性
+_MARKET_LIQUIDITY_BY_ID_GRAPHQL = """
+query MarketLiquidity($marketId: String!, $chainId: Int!) {
+  marketById(marketId: $marketId, chainId: $chainId) {
+    state {
+      supplyAssets
+      borrowAssets
+    }
+  }
+}
+""".strip()
+
 # api/morpho/markets相关：为 True 时对每页市场请求 Blue API 填充 TVL/利用率；False 时跳过请求（字段为 null），保留下方拉取实现以便恢复
 MORPHO_MARKETS_FETCH_BLUE_STATE = True
 
@@ -242,12 +255,111 @@ async def get_vault_state_main_graphql(
             detail = str(errs[0].get("message") or detail)
         raise HTTPException(status_code=404, detail=detail)
 
+    # api/morpho/vault/v1/state相关：基于 allocation 与 market 可用流动性估算 liquidity / liquidityUsd
+    state = vault.get("state") if isinstance(vault, dict) else None
+    allocations = state.get("allocation") if isinstance(state, dict) else None
+    if isinstance(state, dict) and isinstance(allocations, list):
+        liquidity_raw = Decimal("0")
+        liquidity_usd = Decimal("0")
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                tasks = [
+                    _fetch_market_available_liquidity_assets(
+                        client,
+                        market_id=str(
+                            ((item.get("market") or {}).get("market_id") or "")
+                        ).strip(),
+                        chain_id=chain_id,
+                    )
+                    if isinstance(item, dict)
+                    else _done_none()
+                    for item in allocations
+                ]
+                available_list = await asyncio.gather(*tasks, return_exceptions=True)
+        except httpx.HTTPError:
+            available_list = [None for _ in allocations]
+
+        for item, available_any in zip(allocations, available_list):
+            if not isinstance(item, dict):
+                continue
+            available_assets: Decimal | None
+            if isinstance(available_any, BaseException):
+                available_assets = None
+            elif isinstance(available_any, Decimal):
+                available_assets = available_any
+            else:
+                available_assets = None
+            try:
+                alloc_assets = Decimal(str(item.get("supplyAssets") or 0))
+            except Exception:
+                alloc_assets = Decimal("0")
+            try:
+                alloc_usd = Decimal(str(item.get("supplyAssetsUsd") or 0))
+            except Exception:
+                alloc_usd = Decimal("0")
+            if alloc_assets <= 0:
+                continue
+            if available_assets is None:
+                # 回退：查不到 market 状态时按 allocation 近似
+                liq_assets = alloc_assets
+            else:
+                liq_assets = min(alloc_assets, available_assets)
+            if liq_assets < 0:
+                liq_assets = Decimal("0")
+            liquidity_raw += liq_assets
+            liquidity_usd += alloc_usd * (liq_assets / alloc_assets)
+
+        liquidity_value = int(liquidity_raw)
+        liquidity_usd_value = float(liquidity_usd)
+        # api/morpho/vault/v1/state相关：把 liquidity 字段放在 fee 下、allocation 上
+        if "allocation" in state:
+            allocation_value = state.pop("allocation")
+            state["liquidity"] = liquidity_value
+            state["liquidityUsd"] = liquidity_usd_value
+            state["allocation"] = allocation_value
+        else:
+            state["liquidity"] = liquidity_value
+            state["liquidityUsd"] = liquidity_usd_value
+
     return MorphoVaultStateGraphQLResponse(
         data=data if isinstance(data, dict) else {"vaultByAddress": vault},
         extensions=body.get("extensions")
         if isinstance(body.get("extensions"), dict)
         else None,
     )
+
+
+# api/morpho/vault/v1/state相关：查询单 market 的可用流动性（supplyAssets - borrowAssets）
+async def _fetch_market_available_liquidity_assets(
+    client: httpx.AsyncClient,
+    *,
+    market_id: str,
+    chain_id: int,
+) -> Decimal | None:
+    if not market_id:
+        return None
+    payload = {
+        "query": _MARKET_LIQUIDITY_BY_ID_GRAPHQL,
+        "variables": {"marketId": market_id, "chainId": chain_id},
+    }
+    resp = await client.post(MORPHO_BLUE_GRAPHQL_URL, json=payload)
+    resp.raise_for_status()
+    body = cast(dict[str, Any], resp.json())
+    if body.get("errors"):
+        return None
+    state = ((body.get("data") or {}).get("marketById") or {}).get("state") or {}
+    try:
+        supply_assets = Decimal(str(state.get("supplyAssets") or 0))
+        borrow_assets = Decimal(str(state.get("borrowAssets") or 0))
+    except Exception:
+        return None
+    available = supply_assets - borrow_assets
+    return available if available > 0 else Decimal("0")
+
+
+# api/morpho/vault/v1/state相关：给 gather 用的空协程占位
+async def _done_none() -> None:
+    return None
 
 
 # api/morpho/markets相关：当链上查询失败时，从硬编码 pair 文本回退构造 assets
