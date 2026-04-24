@@ -199,14 +199,10 @@ class MorphoMarketStateResponse(BaseModel):
     )
 
 
-# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（Morpho 主站 GraphQL 原始包：data + extensions）
+# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（仅保留 data）
 class MorphoVaultStateGraphQLResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     data: dict[str, Any] = Field(
         description="GraphQL data 字段，含 vaultByAddress（与 Morpho 官网响应一致）。"
-    )
-    extensions: dict[str, Any] | None = Field(
-        default=None,
-        description="GraphQL extensions（如 complexity、warnings），无则 null。",
     )

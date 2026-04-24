@@ -115,7 +115,6 @@ _VAULT_BY_ADDRESS_MAIN_GRAPHQL = """
 query MorphoVaultByAddress($address: String!, $chainId: Int!) {
   vaultByAddress(address: $address, chainId: $chainId) {
     address
-    symbol
     name
     asset {
       address
@@ -123,11 +122,7 @@ query MorphoVaultByAddress($address: String!, $chainId: Int!) {
       decimals
     }
     state {
-      totalAssets
       totalAssetsUsd
-      totalSupply
-      sharePriceNumber
-      sharePriceUsd
       apy
       netApy
       netApyExcludingRewards
@@ -149,8 +144,6 @@ query MorphoVaultByAddress($address: String!, $chainId: Int!) {
         }
         supplyAssets
         supplyAssetsUsd
-        supplyShares
-        supplyCap
         supplyCapUsd
       }
     }
@@ -175,29 +168,19 @@ _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL = """
 query VaultV2ByAddress($address: String!, $chainId: Int!) {
   vaultV2ByAddress(address: $address, chainId: $chainId) {
     address
-    symbol
     name
-    totalAssets
-    totalSupply
     totalAssetsUsd
-    idleAssets
     idleAssetsUsd
-    liquidity
     liquidityUsd
-    sharePrice
     apy
     netApy
     netApyExcludingRewards
     avgNetApy
     avgNetApyExcludingRewards
     maxApy
-    forceDeallocatableLiquidity
     forceDeallocatableLiquidityUsd
     performanceFee
     managementFee
-    liquidityData {
-      __typename
-    }
     asset {
       address
       symbol
@@ -232,17 +215,6 @@ query VaultV2ByAddress($address: String!, $chainId: Int!) {
         pendingAddress
         pendingExecutableAt
       }
-    }
-    warnings {
-      type
-      level
-      metadata {
-        __typename
-      }
-    }
-    metadata {
-      description
-      image
     }
   }
 }
@@ -334,11 +306,10 @@ async def get_vault_state_main_graphql(
             detail = str(errs[0].get("message") or detail)
         raise HTTPException(status_code=404, detail=detail)
 
-    # api/morpho/vault/v1/state相关：基于 allocation 与 market 可用流动性估算 liquidity / liquidityUsd
+    # api/morpho/vault/v1/state相关：基于 allocation 与 market 可用流动性估算 liquidityUsd
     state = vault.get("state") if isinstance(vault, dict) else None
     allocations = state.get("allocation") if isinstance(state, dict) else None
     if isinstance(state, dict) and isinstance(allocations, list):
-        liquidity_raw = Decimal("0")
         liquidity_usd = Decimal("0")
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -377,14 +348,8 @@ async def get_vault_state_main_graphql(
             except Exception:
                 alloc_usd = Decimal("0")
             if alloc_assets <= 0:
-                if "supplyCap" in item:
-                    supply_cap_value = item.pop("supplyCap")
-                    item["liquidity"] = 0
-                    item["liquidityUsd"] = 0.0
-                    item["supplyCap"] = supply_cap_value
-                else:
-                    item["liquidity"] = 0
-                    item["liquidityUsd"] = 0.0
+                item.pop("supplyAssets", None)
+                item["liquidityUsd"] = 0.0
                 continue
             if available_assets is None:
                 # 回退：查不到 market 状态时按 allocation 近似
@@ -393,36 +358,23 @@ async def get_vault_state_main_graphql(
                 liq_assets = min(alloc_assets, available_assets)
             if liq_assets < 0:
                 liq_assets = Decimal("0")
-            # api/morpho/vault/v1/state相关：为每个 allocation 增加 market 级 liquidity / liquidityUsd（Ii 口径）
+            # api/morpho/vault/v1/state相关：为每个 allocation 增加 market 级 liquidityUsd（Ii 口径）
             liq_usd_i = alloc_usd * (liq_assets / alloc_assets)
-            if "supplyCap" in item:
-                supply_cap_value = item.pop("supplyCap")
-                item["liquidity"] = int(liq_assets)
-                item["liquidityUsd"] = float(liq_usd_i)
-                item["supplyCap"] = supply_cap_value
-            else:
-                item["liquidity"] = int(liq_assets)
-                item["liquidityUsd"] = float(liq_usd_i)
-            liquidity_raw += liq_assets
+            item.pop("supplyAssets", None)
+            item["liquidityUsd"] = float(liq_usd_i)
             liquidity_usd += liq_usd_i
 
-        liquidity_value = int(liquidity_raw)
         liquidity_usd_value = float(liquidity_usd)
-        # api/morpho/vault/v1/state相关：把 liquidity 字段放在 fee 下、allocation 上
+        # api/morpho/vault/v1/state相关：把 liquidityUsd 字段放在 fee 下、allocation 上
         if "allocation" in state:
             allocation_value = state.pop("allocation")
-            state["liquidity"] = liquidity_value
             state["liquidityUsd"] = liquidity_usd_value
             state["allocation"] = allocation_value
         else:
-            state["liquidity"] = liquidity_value
             state["liquidityUsd"] = liquidity_usd_value
 
     return MorphoVaultStateGraphQLResponse(
         data=data if isinstance(data, dict) else {"vaultByAddress": vault},
-        extensions=body.get("extensions")
-        if isinstance(body.get("extensions"), dict)
-        else None,
     )
 
 
@@ -499,9 +451,6 @@ async def get_vault_v2_state_main_graphql(
 
     return MorphoVaultStateGraphQLResponse(
         data=data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
-        extensions=body.get("extensions")
-        if isinstance(body.get("extensions"), dict)
-        else None,
     )
 
 
