@@ -3,6 +3,7 @@ import type { DataWithMeta } from './requestMeta';
 
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
 export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
+export const MORPHO_VAULT_V2_SAMPLE_ADDRESS = '0x9a1D6bd5b8642C41F25e0958129B85f8E1176F3e';
 
 export type MorphoProtocol = 'blue';
 export type MorphoMarketSortField =
@@ -186,6 +187,63 @@ export interface MorphoVaultResponse {
   data_source: 'api';
 }
 
+export interface MorphoVaultV2Asset {
+  symbol: string | null;
+  address: string | null;
+  decimals: number | null;
+}
+
+export interface MorphoVaultV2Gate {
+  address: string | null;
+  abdicated: boolean;
+  pending_abdication_executable_at: string | null;
+  pending_address: string | null;
+  pending_executable_at: string | null;
+}
+
+export interface MorphoVaultV2GatesConfig {
+  send_shares_gate: MorphoVaultV2Gate | null;
+  receive_assets_gate: MorphoVaultV2Gate | null;
+  receive_shares_gate: MorphoVaultV2Gate | null;
+  send_assets_gate: MorphoVaultV2Gate | null;
+}
+
+export interface MorphoVaultV2Response {
+  id: string | null;
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  type: string | null;
+  listed: boolean | null;
+  creation_block_number: number | null;
+  creation_timestamp: string | null;
+  asset: MorphoVaultV2Asset;
+  total_assets: string | null;
+  total_assets_usd: string | null;
+  idle_assets: string | null;
+  idle_assets_usd: string | null;
+  liquidity: string | null;
+  liquidity_usd: string | null;
+  total_supply: string | null;
+  share_price: string | null;
+  apy: string | null;
+  net_apy: string | null;
+  net_apy_excluding_rewards: string | null;
+  avg_net_apy: string | null;
+  avg_net_apy_excluding_rewards: string | null;
+  performance_fee: string | null;
+  management_fee: string | null;
+  performance_fee_recipient: string | null;
+  management_fee_recipient: string | null;
+  chain_id: number | null;
+  chain_network: string | null;
+  owner_address: string | null;
+  curator_address: string | null;
+  factory_address: string | null;
+  gates_config: MorphoVaultV2GatesConfig;
+  data_source: 'api';
+}
+
 export interface MorphoVaultReallocationPoint {
   date: string;
   reallocation_count: number;
@@ -326,6 +384,67 @@ interface MorphoVaultByAddressApiPayload {
   } | null;
 }
 
+interface MorphoVaultV2ApiPayload {
+  data?: {
+    vaultV2ByAddress?: MorphoVaultV2ByAddressApiPayload | null;
+  };
+  vaultV2ByAddress?: MorphoVaultV2ByAddressApiPayload | null;
+}
+
+interface MorphoVaultV2ByAddressApiPayload {
+  id?: string | null;
+  address?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  type?: string | null;
+  listed?: boolean | null;
+  creationBlockNumber?: number | string | null;
+  creationTimestamp?: string | null;
+  totalAssets?: string | number | null;
+  totalSupply?: string | number | null;
+  totalAssetsUsd?: string | number | null;
+  idleAssets?: string | number | null;
+  idleAssetsUsd?: string | number | null;
+  liquidity?: string | number | null;
+  liquidityUsd?: string | number | null;
+  sharePrice?: string | number | null;
+  apy?: string | number | null;
+  netApy?: string | number | null;
+  netApyExcludingRewards?: string | number | null;
+  avgNetApy?: string | number | null;
+  avgNetApyExcludingRewards?: string | number | null;
+  performanceFee?: string | number | null;
+  managementFee?: string | number | null;
+  performanceFeeRecipient?: string | null;
+  managementFeeRecipient?: string | null;
+  asset?: {
+    address?: string | null;
+    symbol?: string | null;
+    decimals?: number | null;
+  } | null;
+  chain?: {
+    id?: number | null;
+    network?: string | null;
+  } | null;
+  owner?: { address?: string | null } | null;
+  curator?: { address?: string | null } | null;
+  factory?: { address?: string | null } | null;
+  gatesConfig?: {
+    sendSharesGate?: MorphoVaultV2GateApiPayload | null;
+    receiveAssetsGate?: MorphoVaultV2GateApiPayload | null;
+    receiveSharesGate?: MorphoVaultV2GateApiPayload | null;
+    sendAssetsGate?: MorphoVaultV2GateApiPayload | null;
+  } | null;
+}
+
+interface MorphoVaultV2GateApiPayload {
+  address?: string | null;
+  abdicated?: boolean | null;
+  pendingAbdicationExecutableAt?: string | null;
+  pendingAddress?: string | null;
+  pendingExecutableAt?: string | null;
+}
+
 interface MorphoVaultAllocationApiPayload {
   market?: {
     marketId?: string | null;
@@ -372,6 +491,8 @@ const morphoMarketStateCache = new Map<string, { fetchedAt: number; data: Morpho
 const morphoMarketStateInflight = new Map<string, Promise<MorphoMarketState>>();
 const morphoVaultCache = new Map<string, { fetchedAt: number; data: MorphoVaultResponse }>();
 const morphoVaultInflight = new Map<string, Promise<MorphoVaultResponse>>();
+const morphoVaultV2Cache = new Map<string, { fetchedAt: number; data: MorphoVaultV2Response }>();
+const morphoVaultV2Inflight = new Map<string, Promise<MorphoVaultV2Response>>();
 const morphoVaultReallocationsCache = new Map<
   string,
   { fetchedAt: number; data: MorphoVaultReallocationResponse }
@@ -610,6 +731,27 @@ function getMorphoVaultPayload(payload: MorphoVaultApiPayload): MorphoVaultByAdd
   return vault;
 }
 
+function getMorphoVaultV2Payload(
+  payload: MorphoVaultV2ApiPayload,
+): MorphoVaultV2ByAddressApiPayload {
+  const vault = payload.data?.vaultV2ByAddress ?? payload.vaultV2ByAddress;
+  if (!vault) throw new Error('Morpho vault v2 数据为空');
+  return vault;
+}
+
+function normalizeMorphoVaultV2Gate(
+  gate: MorphoVaultV2GateApiPayload | null | undefined,
+): MorphoVaultV2Gate | null {
+  if (!gate) return null;
+  return {
+    address: gate.address ?? null,
+    abdicated: gate.abdicated === true,
+    pending_abdication_executable_at: gate.pendingAbdicationExecutableAt ?? null,
+    pending_address: gate.pendingAddress ?? null,
+    pending_executable_at: gate.pendingExecutableAt ?? null,
+  };
+}
+
 function normalizeMorphoVaultAllocation(
   item: MorphoVaultAllocationApiPayload,
   assetDecimals: number | null | undefined,
@@ -690,6 +832,59 @@ function normalizeMorphoVaultResponse(
         : null,
     fee: normalizeDecimalString(state?.fee),
     allocations,
+    data_source: dataSource,
+  };
+}
+
+function normalizeMorphoVaultV2Response(
+  payload: MorphoVaultV2ApiPayload,
+  dataSource: 'api',
+): MorphoVaultV2Response {
+  const vault = getMorphoVaultV2Payload(payload);
+  const assetDecimals = vault.asset?.decimals ?? null;
+
+  return {
+    id: vault.id ?? null,
+    address: vault.address ?? '',
+    symbol: vault.symbol ?? null,
+    name: vault.name ?? null,
+    type: vault.type ?? null,
+    listed: typeof vault.listed === 'boolean' ? vault.listed : null,
+    creation_block_number: normalizeNumber(vault.creationBlockNumber),
+    creation_timestamp: vault.creationTimestamp ?? null,
+    asset: {
+      symbol: vault.asset?.symbol ?? null,
+      address: vault.asset?.address ?? null,
+      decimals: assetDecimals,
+    },
+    total_assets: normalizeRawAssetAmount(vault.totalAssets, assetDecimals),
+    total_assets_usd: normalizeDecimalString(vault.totalAssetsUsd),
+    idle_assets: normalizeRawAssetAmount(vault.idleAssets, assetDecimals),
+    idle_assets_usd: normalizeDecimalString(vault.idleAssetsUsd),
+    liquidity: normalizeRawAssetAmount(vault.liquidity, assetDecimals),
+    liquidity_usd: normalizeDecimalString(vault.liquidityUsd),
+    total_supply: normalizeDecimalString(vault.totalSupply),
+    share_price: normalizeDecimalString(vault.sharePrice),
+    apy: normalizeDecimalString(vault.apy),
+    net_apy: normalizeDecimalString(vault.netApy),
+    net_apy_excluding_rewards: normalizeDecimalString(vault.netApyExcludingRewards),
+    avg_net_apy: normalizeDecimalString(vault.avgNetApy),
+    avg_net_apy_excluding_rewards: normalizeDecimalString(vault.avgNetApyExcludingRewards),
+    performance_fee: normalizeDecimalString(vault.performanceFee),
+    management_fee: normalizeDecimalString(vault.managementFee),
+    performance_fee_recipient: vault.performanceFeeRecipient ?? null,
+    management_fee_recipient: vault.managementFeeRecipient ?? null,
+    chain_id: vault.chain?.id ?? null,
+    chain_network: vault.chain?.network ?? null,
+    owner_address: vault.owner?.address ?? null,
+    curator_address: vault.curator?.address ?? null,
+    factory_address: vault.factory?.address ?? null,
+    gates_config: {
+      send_shares_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.sendSharesGate),
+      receive_assets_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.receiveAssetsGate),
+      receive_shares_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.receiveSharesGate),
+      send_assets_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.sendAssetsGate),
+    },
     data_source: dataSource,
   };
 }
@@ -1272,4 +1467,65 @@ export async function fetchMorphoVaultReallocations(
 
   morphoVaultReallocationsInflight.set(cacheKey, request);
   return request;
+}
+
+export async function fetchMorphoVaultV2(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<MorphoVaultV2Response> {
+  const result = await fetchMorphoVaultV2WithMeta(address, options);
+  return result.data;
+}
+
+export async function fetchMorphoVaultV2WithMeta(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<DataWithMeta<MorphoVaultV2Response>> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const force = options.force === true;
+  const cached = morphoVaultV2Cache.get(normalizedAddress);
+
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = morphoVaultV2Inflight.get(normalizedAddress);
+  if (!force && inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({ address });
+  const request = fetchMorphoWithFallback<MorphoVaultV2ApiPayload>([
+    `/morpho/vault/v2/state?${params.toString()}`,
+  ])
+    .then((payload) => normalizeMorphoVaultV2Response(payload, 'api'))
+    .then((data) => {
+      morphoVaultV2Cache.set(normalizedAddress, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      morphoVaultV2Inflight.delete(normalizedAddress);
+    });
+
+  morphoVaultV2Inflight.set(normalizedAddress, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
 }

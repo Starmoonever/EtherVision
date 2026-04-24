@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { isAddress } from 'viem';
 import {
   Bar,
@@ -13,15 +13,18 @@ import {
   YAxis,
 } from 'recharts';
 import {
-  fetchMorphoVault,
-  fetchMorphoVaultReallocations,
+  fetchMorphoVaultWithMeta,
+  fetchMorphoVaultV2WithMeta,
   MORPHO_VAULT_SAMPLE_ADDRESS,
+  MORPHO_VAULT_V2_SAMPLE_ADDRESS,
   type MorphoVaultAllocation,
-  type MorphoVaultReallocationPoint,
   type MorphoVaultResponse,
+  type MorphoVaultV2Gate,
+  type MorphoVaultV2Response,
 } from '../../../api/morpho';
 import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 import type { MorphoMarketView } from '../../../hooks/useMorphoData';
+import { SegmentedControl } from '../../../shared/components/SegmentedControl';
 import { MorphoMarketTable, type MorphoSortMode } from '../components/MorphoMarketTable';
 
 interface MorphoVaultPageProps {
@@ -36,13 +39,10 @@ interface MorphoVaultPageProps {
   onSortModeChange: (value: MorphoSortMode) => void;
 }
 
+type MorphoVaultVersion = 'v1' | 'v2';
+
 const usdFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
-});
-
-const compactUsdFormatter = new Intl.NumberFormat('en-US', {
-  maximumFractionDigits: 2,
-  notation: 'compact',
 });
 
 const numberFormatter = new Intl.NumberFormat('en-US', {
@@ -64,10 +64,10 @@ const ALLOCATION_COLORS = [
   '#f97316',
 ];
 const vaultTooltipContentStyle = {
-  border: '1px solid rgba(125, 211, 252, 0.22)',
+  border: '1px solid rgba(15, 23, 42, 0.92)',
   borderRadius: 8,
-  background: 'rgba(8, 15, 29, 0.96)',
-  boxShadow: '0 18px 36px rgba(2, 6, 23, 0.38)',
+  background: 'rgba(2, 6, 23, 0.98)',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.52)',
   color: '#e2e8f0',
 };
 const vaultTooltipLabelStyle = {
@@ -94,7 +94,15 @@ function formatSmartUsd(value: string | null | undefined): string {
 
 function formatCompactUsd(value: string | null | undefined): string {
   const numeric = parseNumber(value);
-  return numeric === null ? 'N/A' : `$${compactUsdFormatter.format(numeric)}`;
+  if (numeric === null) return 'N/A';
+  const absolute = Math.abs(numeric);
+  if (absolute >= 1_000_000_000)
+    return `$${(numeric / 1_000_000_000).toFixed(absolute >= 10_000_000_000 ? 0 : 1).replace(/\.0$/, '')}B`;
+  if (absolute >= 1_000_000)
+    return `$${(numeric / 1_000_000).toFixed(absolute >= 100_000_000 ? 0 : 1).replace(/\.0$/, '')}M`;
+  if (absolute >= 1_000)
+    return `$${(numeric / 1_000).toFixed(absolute >= 100_000 ? 0 : 1).replace(/\.0$/, '')}K`;
+  return `$${usdFormatter.format(numeric)}`;
 }
 
 function formatNumber(value: string | null | undefined): string {
@@ -110,6 +118,13 @@ function formatPercent(value: string | null | undefined): string {
 function formatDays(value: string | null | undefined): string {
   const numeric = parseNumber(value);
   return numeric === null ? 'N/A' : `${numberFormatter.format(numeric)} 天`;
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { hour12: false });
 }
 
 function buildVaultNetApyTooltip(vault: MorphoVaultResponse): string {
@@ -160,8 +175,6 @@ function createAllocationBars(allocations: MorphoVaultAllocation[]) {
         allocation: allocationUsd,
         quotaUsd: allocationUsd,
         supplyCapUsd,
-        capReference: supplyCapUsd ?? allocationUsd,
-        capGap: supplyCapUsd !== null ? Math.max(0, supplyCapUsd - allocationUsd) : 0,
         liquidityUsd,
         liquidity: liquidityUsd,
         isIdle,
@@ -187,69 +200,55 @@ function formatAxisUsd(value: number): string {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(0)}B`;
   if (value >= 100_000_000) return `$${(value / 1_000_000).toFixed(0)}M`;
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  return `$${compactUsdFormatter.format(value).replace('$', '')}`;
+  return formatCompactUsd(String(value));
 }
 
 type AllocationHistogramItem = ReturnType<typeof createAllocationBars>[number];
 
-interface AllocationCapLineProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  payload?: AllocationHistogramItem;
-  highlightedMarketId?: string;
-}
-
-function AllocationCapLine({
-  x = 0,
-  y = 0,
-  width = 0,
-  height = 0,
-  payload,
-  highlightedMarketId = '',
-}: AllocationCapLineProps) {
-  if (!payload || payload.isIdle || payload.supplyCapUsd === null || width <= 0 || height <= 0) {
-    return null;
-  }
-
-  const isHighlighted = payload.marketId === highlightedMarketId;
-  const capWidth = Math.min(Math.max(width * 0.82, 26), width - 2);
-  const capX = x + (width - capWidth) / 2;
-  const capY = Math.max(8, y - 7);
+function AllocationTooltipContent({ item }: { item: AllocationHistogramItem | null }) {
+  if (!item) return null;
 
   return (
-    <g className="morpho-vault-bar-hit-target">
-      <line
-        x1={capX}
-        y1={capY}
-        x2={capX + capWidth}
-        y2={capY}
-        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
-        strokeWidth={isHighlighted ? 3 : 2.4}
-        strokeDasharray="6 3"
-        strokeLinecap="round"
-      />
-      <line
-        x1={capX}
-        y1={capY - 4}
-        x2={capX}
-        y2={capY + 4}
-        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
-        strokeWidth={isHighlighted ? 2.2 : 1.8}
-        strokeLinecap="round"
-      />
-      <line
-        x1={capX + capWidth}
-        y1={capY - 4}
-        x2={capX + capWidth}
-        y2={capY + 4}
-        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
-        strokeWidth={isHighlighted ? 2.2 : 1.8}
-        strokeLinecap="round"
-      />
-    </g>
+    <div style={vaultTooltipContentStyle}>
+      <div style={vaultTooltipLabelStyle}>{item.label}</div>
+      <div className="morpho-vault-chart-tooltip-row">
+        <span>分配资产</span>
+        <strong>{formatCompactUsd(String(item.quotaUsd))}</strong>
+      </div>
+      <div className="morpho-vault-chart-tooltip-row">
+        <span>流动性</span>
+        <strong>{formatCompactUsd(String(item.liquidityUsd))}</strong>
+      </div>
+      <div className="morpho-vault-chart-tooltip-row">
+        <span>市场容量</span>
+        <strong>{item.isIdle ? 'Idle' : formatCompactUsd(String(item.supplyCapUsd))}</strong>
+      </div>
+    </div>
   );
+}
+
+function AllocationBarTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: AllocationHistogramItem }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const item = payload.find((entry) => entry.payload?.marketId)?.payload ?? null;
+  return <AllocationTooltipContent item={item} />;
+}
+
+function AllocationPieTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: AllocationHistogramItem }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const item = payload[0]?.payload ?? null;
+  return <AllocationTooltipContent item={item} />;
 }
 
 interface AllocationLiquidityShapeProps {
@@ -384,7 +383,7 @@ function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
               copied={copied}
               onCopy={copy}
             />
-            <span className="morpho-vault-version">V2</span>
+            <span className="morpho-vault-version">V1</span>
           </div>
         </div>
         <h2>{vault.name || vault.symbol || 'Morpho Vault'}</h2>
@@ -444,14 +443,222 @@ function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
   );
 }
 
+function MorphoVaultV2Overview({ vault }: { vault: MorphoVaultV2Response }) {
+  const { copied, copy } = useCopiedValue();
+  const gateCards: Array<{
+    key: string;
+    label: string;
+    desc: string;
+    gate: MorphoVaultV2Gate | null;
+  }> = [
+    {
+      key: 'receive_assets_gate',
+      label: '资金存入',
+      desc: '任何人是否可以直接存入资产，以及管理员是否仍保留拦截能力。',
+      gate: vault.gates_config.receive_assets_gate,
+    },
+    {
+      key: 'send_shares_gate',
+      label: '份额赎回',
+      desc: '赎回相关指令的门控状态，决定退出路径是否保持开放。',
+      gate: vault.gates_config.send_shares_gate,
+    },
+    {
+      key: 'receive_shares_gate',
+      label: '份额转让',
+      desc: '份额接收与流转是否保持开放，是否仍受管理员门控影响。',
+      gate: vault.gates_config.receive_shares_gate,
+    },
+    {
+      key: 'send_assets_gate',
+      label: '资产出库',
+      desc: '资产发出流程的最后一道门控，常用于极端情况下的合规审计。',
+      gate: vault.gates_config.send_assets_gate,
+    },
+  ];
+
+  return (
+    <>
+      <section className="card morpho-detail-card morpho-vault-overview-card">
+        <div className="morpho-vault-hero-band">
+          <div className="morpho-vault-hero-meta">
+            <span className="morpho-vault-kicker">Vault</span>
+            <div className="morpho-vault-hero-actions">
+              <MorphoVaultCopyLine
+                label="Vault 地址"
+                value={vault.address}
+                copied={copied}
+                onCopy={copy}
+              />
+              <span className="morpho-vault-version">V2</span>
+            </div>
+          </div>
+          <h2>{vault.name || vault.symbol || 'Morpho Vault V2'}</h2>
+          <div className="morpho-vault-hero-summary">
+            <p>
+              以 {vault.asset.symbol || '底层资产'} 为基底，当前总资产{' '}
+              {formatCompactUsd(vault.total_assets_usd)}，净收益 {formatPercent(vault.net_apy)}。
+            </p>
+            <div className="morpho-vault-tag-row morpho-vault-tag-row-hero">
+              <span className="morpho-vault-tag">
+                Management Fee {formatPercent(vault.management_fee)}
+              </span>
+              <span className="morpho-vault-tag">
+                Performance Fee {formatPercent(vault.performance_fee)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="morpho-vault-detail-layout">
+          <div className="morpho-vault-detail-main">
+            <div className="morpho-vault-metric-grid">
+              <div className="metric-box morpho-vault-asset-box">
+                <span className="metric-label">底层资产</span>
+                <strong>{vault.asset.symbol || 'N/A'}</strong>
+                <MorphoVaultCopyLine
+                  label="底层资产地址"
+                  value={vault.asset.address}
+                  copied={copied}
+                  onCopy={copy}
+                />
+              </div>
+              <div className="metric-box">
+                <span className="metric-label">Total Assets</span>
+                <strong>{formatSmartUsd(vault.total_assets_usd)}</strong>
+                <small>{formatNumber(vault.total_assets)}</small>
+              </div>
+              <div className="metric-box">
+                <span className="metric-label">Liquidity</span>
+                <strong>{formatSmartUsd(vault.liquidity_usd)}</strong>
+                <small>{formatNumber(vault.liquidity)}</small>
+              </div>
+              <div className="metric-box">
+                <span className="metric-label">Net APY</span>
+                <strong>{formatPercent(vault.net_apy)}</strong>
+                <small>APY {formatPercent(vault.apy)}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="card morpho-detail-card morpho-vault-v2-info-card">
+        <div className="card-header">
+          <div>
+            <span className="card-title morpho-section-title">基础信息</span>
+            <p className="morpho-section-subtitle">V2 vault 的基础属性与创建信息。</p>
+          </div>
+        </div>
+        <div className="morpho-vault-v2-detail-grid">
+          <div className="metric-box">
+            <span className="metric-label">Type</span>
+            <strong>{vault.type || 'N/A'}</strong>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">Creation Block</span>
+            <strong>{vault.creation_block_number?.toLocaleString('en-US') || 'N/A'}</strong>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">Creation Time</span>
+            <strong>{formatDateTime(vault.creation_timestamp)}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="card morpho-detail-card morpho-vault-v2-gates-card">
+        <div className="card-header">
+          <div>
+            <span className="card-title morpho-section-title">Gate Config</span>
+            <p className="morpho-section-subtitle">
+              展示 V2 vault 四类门控的开放状态、治理保留权与待生效变更。
+            </p>
+          </div>
+        </div>
+        <div className="morpho-vault-v2-gates-grid">
+          {gateCards.map((item) => {
+            const gate = item.gate;
+            const isOpen = gate?.address === null;
+            const isLocked = gate?.abdicated === true;
+            const hasPending = Boolean(
+              gate?.pending_address ||
+              gate?.pending_executable_at ||
+              gate?.pending_abdication_executable_at,
+            );
+
+            return (
+              <div className="morpho-vault-gate-card" key={item.key}>
+                <div className="morpho-vault-gate-card-head">
+                  <div>
+                    <strong>{item.label}</strong>
+                    <p>{item.desc}</p>
+                  </div>
+                  <div className="morpho-vault-gate-badges">
+                    <span
+                      className={
+                        isOpen
+                          ? 'morpho-vault-gate-badge morpho-vault-gate-badge-open'
+                          : 'morpho-vault-gate-badge morpho-vault-gate-badge-guarded'
+                      }
+                    >
+                      {isOpen ? 'Open' : 'Guarded'}
+                    </span>
+                    <span
+                      className={
+                        isLocked
+                          ? 'morpho-vault-gate-badge morpho-vault-gate-badge-locked'
+                          : 'morpho-vault-gate-badge morpho-vault-gate-badge-admin'
+                      }
+                    >
+                      {isLocked ? 'Locked' : 'Admin'}
+                    </span>
+                  </div>
+                </div>
+                {hasPending ? (
+                  <div className="morpho-vault-gate-pending-banner">
+                    <strong>检测到待处理门控变更</strong>
+                    <span>
+                      {gate?.pending_address ? compactAddress(gate.pending_address) : '地址待定'}
+                      {gate?.pending_executable_at
+                        ? ` · 可执行于 ${formatDateTime(gate.pending_executable_at)}`
+                        : gate?.pending_abdication_executable_at
+                          ? ` · 待废弃于 ${formatDateTime(gate.pending_abdication_executable_at)}`
+                          : ''}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="morpho-vault-gate-footer">
+                  <span>当前门控地址</span>
+                  {gate?.address ? (
+                    <MorphoVaultCopyLine
+                      label={`${item.label} Gate`}
+                      value={gate.address}
+                      copied={copied}
+                      onCopy={copy}
+                    />
+                  ) : (
+                    <strong>None (Permissionless)</strong>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </>
+  );
+}
+
 function MorphoVaultAllocationChart({
   vault,
   selectedMarketId,
   onMarketSelect,
+  marketQuerySection,
 }: {
   vault: MorphoVaultResponse;
   selectedMarketId: string;
   onMarketSelect: (marketId: string) => void;
+  marketQuerySection?: ReactNode;
 }) {
   const bars = useMemo(() => createAllocationBars(vault.allocations), [vault.allocations]);
   const totalTvl = useMemo(() => bars.reduce((sum, item) => sum + item.supplyUsd, 0), [bars]);
@@ -485,7 +692,7 @@ function MorphoVaultAllocationChart({
         </div>
         <div className="morpho-vault-insight-strip">
           <span>{legendItems.length} 个分配</span>
-          <span>最大仓位 {percentFormatter.format(largestShare * 100)}%</span>
+          <span>最大分配 {percentFormatter.format(largestShare * 100)}%</span>
           <span>Idle {percentFormatter.format(idleShare * 100)}%</span>
         </div>
       </div>
@@ -502,7 +709,7 @@ function MorphoVaultAllocationChart({
                       nameKey="label"
                       cx="50%"
                       cy="50%"
-                      innerRadius="76%"
+                      innerRadius="65%"
                       outerRadius="88%"
                       startAngle={90}
                       endAngle={-270}
@@ -521,24 +728,20 @@ function MorphoVaultAllocationChart({
                         <Cell
                           key={item.marketId}
                           fill={item.color}
-                          stroke="rgba(8, 15, 29, 0.82)"
-                          strokeWidth={2}
+                          stroke="rgba(2, 6, 23, 0.96)"
+                          strokeWidth={3.2}
                           opacity={activeAllocationIndex === index ? 1 : 0.7}
                           className="morpho-vault-pie-slice"
                         />
                       ))}
                     </Pie>
-                    <Tooltip
-                      formatter={(value) => [formatUsd(String(value)), '分配资产']}
-                      labelFormatter={(label) => String(label)}
-                      contentStyle={vaultTooltipContentStyle}
-                      labelStyle={vaultTooltipLabelStyle}
-                      itemStyle={{ color: '#e2e8f0' }}
-                    />
+                    <Tooltip content={<AllocationPieTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="morpho-vault-pie-center">
-                  <span>{activeAllocation ? 'Selected %' : 'Total TVL'}</span>
+                  <span>
+                    {activeAllocation ? activeAllocation.displayName : vault.asset.symbol || 'TVL'}
+                  </span>
                   <strong>
                     {activeAllocation
                       ? `${percentFormatter.format(activeAllocation.share * 100)}%`
@@ -592,12 +795,8 @@ function MorphoVaultAllocationChart({
         <div className="morpho-vault-allocation-chart">
           <div className="morpho-vault-chart-legend">
             <span>
-              <i className="morpho-vault-legend-cap" />
-              Cap
-            </span>
-            <span>
               <i className="morpho-vault-legend-allocation" />
-              Quota
+              Allocation
             </span>
             <span>
               <i className="morpho-vault-legend-liquidity" />
@@ -649,27 +848,7 @@ function MorphoVaultAllocationChart({
                 width={44}
               />
               <Tooltip
-                formatter={(_, name, item) => {
-                  const payload = item.payload as AllocationHistogramItem | undefined;
-                  if (!payload) return ['N/A', String(name)];
-                  return [
-                    [
-                      `Quota ${formatUsd(String(payload.quotaUsd))}`,
-                      payload.isIdle
-                        ? 'Cap Idle'
-                        : `Cap ${formatUsd(String(payload.supplyCapUsd))}`,
-                      `Liquidity ${formatUsd(String(payload.liquidityUsd))}`,
-                    ].join(' / '),
-                    'Market',
-                  ];
-                }}
-                labelFormatter={(_, items) => {
-                  const payload = items?.[0]?.payload as AllocationHistogramItem | undefined;
-                  return payload ? `${payload.label} · ${payload.shortId}` : '';
-                }}
-                contentStyle={vaultTooltipContentStyle}
-                labelStyle={vaultTooltipLabelStyle}
-                itemStyle={{ color: '#e2e8f0' }}
+                content={<AllocationBarTooltip />}
                 cursor={{ fill: 'rgba(15, 23, 42, 0.42)' }}
               />
               <Bar
@@ -689,15 +868,6 @@ function MorphoVaultAllocationChart({
                 ))}
               </Bar>
               <Bar
-                dataKey="capGap"
-                fill="transparent"
-                barSize={24}
-                stackId="quota-stack"
-                shape={<AllocationCapLine highlightedMarketId={highlightedMarketId} />}
-                legendType="none"
-                isAnimationActive={false}
-              />
-              <Bar
                 dataKey="liquidity"
                 barSize={4}
                 radius={[1, 1, 0, 0]}
@@ -716,40 +886,9 @@ function MorphoVaultAllocationChart({
           </ResponsiveContainer>
         </div>
       </div>
-    </section>
-  );
-}
-
-function MorphoVaultReallocationChart({ points }: { points: MorphoVaultReallocationPoint[] }) {
-  const maxCount = Math.max(1, ...points.map((point) => point.reallocation_count));
-
-  return (
-    <section className="card morpho-detail-card morpho-vault-reallocation-card">
-      <div className="card-header">
-        <div>
-          <span className="card-title morpho-section-title">重分配次数</span>
-          <p className="morpho-section-subtitle">
-            预留后端接口，后续展示每天 vault reallocation 次数。
-          </p>
-        </div>
-      </div>
-      {points.length > 0 ? (
-        <div className="morpho-vault-reallocation-bars">
-          {points.map((point) => (
-            <div className="morpho-vault-reallocation-item" key={point.date}>
-              <span
-                style={{ height: `${Math.max(6, (point.reallocation_count / maxCount) * 100)}%` }}
-              />
-              <small>{point.date.slice(5)}</small>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="morpho-vault-empty-chart">
-          <strong>等待后端接入</strong>
-          <span>接口预留：/api/morpho/vault/reallocations</span>
-        </div>
-      )}
+      {marketQuerySection ? (
+        <div className="morpho-vault-allocation-market-section">{marketQuerySection}</div>
+      ) : null}
     </section>
   );
 }
@@ -765,14 +904,24 @@ export function MorphoVaultPage({
   sortMode,
   onSortModeChange,
 }: MorphoVaultPageProps) {
+  const [vaultVersion, setVaultVersion] = useState<MorphoVaultVersion>('v1');
+  const [vaultAddressByVersion, setVaultAddressByVersion] = useState<
+    Record<MorphoVaultVersion, string>
+  >({
+    v1: MORPHO_VAULT_SAMPLE_ADDRESS,
+    v2: MORPHO_VAULT_V2_SAMPLE_ADDRESS,
+  });
   const [vaultAddress, setVaultAddress] = useState(MORPHO_VAULT_SAMPLE_ADDRESS);
   const [vault, setVault] = useState<MorphoVaultResponse | null>(null);
-  const [reallocationPoints, setReallocationPoints] = useState<MorphoVaultReallocationPoint[]>([]);
+  const [vaultV2, setVaultV2] = useState<MorphoVaultV2Response | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [vaultFetchedAt, setVaultFetchedAt] = useState<number | null>(null);
+  const [vaultFromCache, setVaultFromCache] = useState(false);
+  const activeVaultAddress = vaultAddressByVersion[vaultVersion];
 
   const loadVaultForAddress = useCallback(
-    async (address: string, force = false) => {
+    async (address: string, force = false, version: MorphoVaultVersion = vaultVersion) => {
       const normalizedAddress = address.trim();
       setError('');
 
@@ -783,17 +932,29 @@ export function MorphoVaultPage({
 
       setLoading(true);
       try {
-        const [vaultData, reallocationData] = await Promise.all([
-          fetchMorphoVault(normalizedAddress, { force }),
-          fetchMorphoVaultReallocations(normalizedAddress, { force }),
-        ]);
-        setVault(vaultData);
-        setReallocationPoints(reallocationData.points);
-        const firstMarketId = vaultData.allocations.find(
-          (allocation) => allocation.market_id,
-        )?.market_id;
-        if (firstMarketId) {
-          onMarketSelect(firstMarketId);
+        setVaultAddressByVersion((current) => ({
+          ...current,
+          [version]: normalizedAddress,
+        }));
+
+        if (version === 'v2') {
+          setVault(null);
+          const result = await fetchMorphoVaultV2WithMeta(normalizedAddress, { force });
+          setVaultV2(result.data);
+          setVaultFetchedAt(result.meta.fetchedAt);
+          setVaultFromCache(result.meta.fromCache);
+        } else {
+          setVaultV2(null);
+          const result = await fetchMorphoVaultWithMeta(normalizedAddress, { force });
+          setVault(result.data);
+          setVaultFetchedAt(result.meta.fetchedAt);
+          setVaultFromCache(result.meta.fromCache);
+          const firstMarketId = result.data.allocations.find(
+            (allocation) => allocation.market_id,
+          )?.market_id;
+          if (firstMarketId) {
+            onMarketSelect(firstMarketId);
+          }
         }
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '无法加载 Morpho vault 数据');
@@ -801,19 +962,26 @@ export function MorphoVaultPage({
         setLoading(false);
       }
     },
-    [onMarketSelect],
+    [onMarketSelect, vaultVersion],
   );
 
   const loadVault = useCallback(
     async (force = false) => {
-      await loadVaultForAddress(vaultAddress, force);
+      await loadVaultForAddress(vaultAddress, force, vaultVersion);
     },
-    [loadVaultForAddress, vaultAddress],
+    [loadVaultForAddress, vaultAddress, vaultVersion],
   );
 
+  const refreshedAtText = vaultFetchedAt
+    ? new Date(vaultFetchedAt).toLocaleString('zh-CN', {
+        hour12: false,
+      })
+    : 'N/A';
+
   useEffect(() => {
-    void loadVaultForAddress(MORPHO_VAULT_SAMPLE_ADDRESS, false);
-  }, [loadVaultForAddress]);
+    setVaultAddress(activeVaultAddress);
+    void loadVaultForAddress(activeVaultAddress, false, vaultVersion);
+  }, [activeVaultAddress, loadVaultForAddress, vaultVersion]);
 
   return (
     <div className="morpho-vault-page">
@@ -821,7 +989,20 @@ export function MorphoVaultPage({
         <div className="card-header">
           <div>
             <span className="card-title morpho-section-title">Vault 搜索</span>
-            <p className="morpho-section-subtitle">输入 Morpho vault 地址查询实时详情。</p>
+            <p className="morpho-section-subtitle">
+              输入 Morpho vault 地址查询实时详情，并在 V1 / V2 间切换查看不同接口。
+            </p>
+          </div>
+          <div className="morpho-vault-version-switch">
+            <SegmentedControl
+              ariaLabel="Morpho vault 版本"
+              value={vaultVersion}
+              onChange={(value) => setVaultVersion(value as MorphoVaultVersion)}
+              options={[
+                { value: 'v1', label: 'Vault V1', activeClassName: 'active-purple' },
+                { value: 'v2', label: 'Vault V2', activeClassName: 'active-purple' },
+              ]}
+            />
           </div>
         </div>
         <div className="morpho-vault-search-row">
@@ -850,42 +1031,63 @@ export function MorphoVaultPage({
         </div>
       ) : null}
 
-      {vault ? (
+      {(vaultVersion === 'v1' ? vault !== null : vaultV2 !== null) ? (
+        <div className="card morpho-detail-card morpho-market-toolbar">
+          <div className="morpho-market-toolbar-copy">
+            <strong>数据状态</strong>
+            <span>
+              最近更新 {refreshedAtText} {vaultFromCache ? '· 缓存命中' : '· 实时拉取'}
+            </span>
+          </div>
+          <div className="morpho-market-toolbar-actions">
+            <button type="button" className="switch-btn" onClick={() => void loadVault(true)}>
+              刷新数据
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {vaultVersion === 'v2' && vaultV2 ? <MorphoVaultV2Overview vault={vaultV2} /> : null}
+
+      {vaultVersion === 'v1' && vault ? (
         <>
           <MorphoVaultOverview vault={vault} />
           <MorphoVaultAllocationChart
             vault={vault}
             selectedMarketId={selectedMarketId}
             onMarketSelect={onMarketSelect}
+            marketQuerySection={
+              selectedMarketId ? (
+                <MorphoMarketTable
+                  markets={queryMarkets}
+                  expandedMarketId={expandedMarketId}
+                  onToggleMarket={onToggleMarket}
+                  marketStateLoadingById={marketStateLoadingById}
+                  marketStateErrorById={marketStateErrorById}
+                  title="市场查询结果"
+                  subtitle={`来自 Vault allocation: ${compactMarketId(selectedMarketId)}`}
+                  sortMode={sortMode}
+                  onSortModeChange={onSortModeChange}
+                  totalMarkets={queryMarkets.length}
+                  page={1}
+                  totalPages={1}
+                  pageSize={Math.max(queryMarkets.length, 1)}
+                  onPageChange={() => undefined}
+                  showSorting={false}
+                  showPagination={false}
+                  showTableHeaderWhenEmpty={false}
+                  emptyText="正在等待该市场的 state 详情。"
+                  embedded
+                  forceExpanded
+                />
+              ) : (
+                <section className="morpho-vault-market-placeholder morpho-vault-market-placeholder-embedded">
+                  <strong>市场查询结果</strong>
+                  <span>点击 allocation 图表中的市场后，会在这里直接展示对应 market state。</span>
+                </section>
+              )
+            }
           />
-          {selectedMarketId ? (
-            <MorphoMarketTable
-              markets={queryMarkets}
-              expandedMarketId={expandedMarketId}
-              onToggleMarket={onToggleMarket}
-              marketStateLoadingById={marketStateLoadingById}
-              marketStateErrorById={marketStateErrorById}
-              title="市场查询结果"
-              subtitle={`来自 Vault allocation: ${compactMarketId(selectedMarketId)}`}
-              sortMode={sortMode}
-              onSortModeChange={onSortModeChange}
-              totalMarkets={queryMarkets.length}
-              page={1}
-              totalPages={1}
-              pageSize={Math.max(queryMarkets.length, 1)}
-              onPageChange={() => undefined}
-              showSorting={false}
-              showPagination={false}
-              showTableHeaderWhenEmpty={false}
-              emptyText="正在等待该市场的 state 详情。"
-            />
-          ) : (
-            <section className="card morpho-detail-card morpho-vault-market-placeholder">
-              <strong>市场查询结果</strong>
-              <span>点击 allocation 图底部市场标签后，将在这里查询并展示 market state。</span>
-            </section>
-          )}
-          <MorphoVaultReallocationChart points={reallocationPoints} />
         </>
       ) : null}
     </div>
