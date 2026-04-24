@@ -49,6 +49,7 @@ from ..rpc import (
     fetch_user_market_replay_events,
 )
 from .constants import MORPHO_BLUE_GRAPHQL_URL  # api/morpho/markets相关
+from .constants import MORPHO_MAIN_GRAPHQL_URL  # api/morpho/vault/state相关
 from .schemas import (
     MorphoMarketAssetItem,  # api/morpho/markets相关
     MorphoMarketListItem,  # api/morpho/markets相关
@@ -60,6 +61,7 @@ from .schemas import (
     MorphoPositionResponse,
     MorphoScaffoldStatusResponse,
 )
+from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/state相关
 
 BRIEF_LABELS = {
     "supply": "供给",
@@ -101,6 +103,54 @@ query MarketMetrics($marketId: String!, $chainId: Int!) {
     state {
       sizeUsd
       utilization
+    }
+  }
+}
+""".strip()
+
+# api/morpho/vault/state相关：Morpho 主站 GraphQL，与 openapi 示例中 vaultByAddress / state / allocation 字段对齐
+_VAULT_BY_ADDRESS_MAIN_GRAPHQL = """
+query MorphoVaultByAddress($address: String!, $chainId: Int!) {
+  vaultByAddress(address: $address, chainId: $chainId) {
+    address
+    symbol
+    name
+    asset {
+      address
+      symbol
+      decimals
+    }
+    state {
+      totalAssets
+      totalAssetsUsd
+      totalSupply
+      sharePriceNumber
+      sharePriceUsd
+      apy
+      netApy
+      netApyExcludingRewards
+      avgNetApy
+      avgNetApyExcludingRewards
+      timelock
+      fee
+      allocation {
+        market {
+          uniqueKey
+          loanAsset {
+            symbol
+            address
+          }
+          collateralAsset {
+            symbol
+            address
+          }
+        }
+        supplyAssets
+        supplyAssetsUsd
+        supplyShares
+        supplyCap
+        supplyCapUsd
+      }
     }
   }
 }
@@ -152,6 +202,52 @@ async def _fetch_market_metrics_from_blue_api(
     except (TypeError, ValueError):
         util_f = None
     return size_f, util_f, loan_asset, collateral_asset
+
+
+# api/morpho/vault/state相关：GET /api/morpho/vault/state，透传 Morpho 主站 GraphQL 的 data + extensions
+async def get_vault_state_main_graphql(
+    *,
+    address: str,
+    chain_id: int = 1,
+) -> MorphoVaultStateGraphQLResponse:
+    raw = (address or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="address 不能为空")
+    try:
+        checksum = AsyncWeb3.to_checksum_address(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"无效 EVM 地址: {exc}") from exc
+
+    payload = {
+        "query": _VAULT_BY_ADDRESS_MAIN_GRAPHQL,
+        "variables": {"address": checksum, "chainId": chain_id},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(MORPHO_MAIN_GRAPHQL_URL, json=payload)
+            resp.raise_for_status()
+            body = cast(dict[str, Any], resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho 主站 GraphQL 请求失败: {exc}",
+        ) from exc
+
+    errs = body.get("errors") or []
+    data = body.get("data")
+    vault = (data or {}).get("vaultByAddress") if isinstance(data, dict) else None
+    if vault is None:
+        detail = "未找到该链上的 Vault"
+        if errs and isinstance(errs[0], dict):
+            detail = str(errs[0].get("message") or detail)
+        raise HTTPException(status_code=404, detail=detail)
+
+    return MorphoVaultStateGraphQLResponse(
+        data=data if isinstance(data, dict) else {"vaultByAddress": vault},
+        extensions=body.get("extensions")
+        if isinstance(body.get("extensions"), dict)
+        else None,
+    )
 
 
 # api/morpho/markets相关：当链上查询失败时，从硬编码 pair 文本回退构造 assets
