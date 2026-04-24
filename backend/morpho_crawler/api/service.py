@@ -298,6 +298,14 @@ async def get_vault_state_main_graphql(
             except Exception:
                 alloc_usd = Decimal("0")
             if alloc_assets <= 0:
+                if "supplyCap" in item:
+                    supply_cap_value = item.pop("supplyCap")
+                    item["liquidity"] = 0
+                    item["liquidityUsd"] = 0.0
+                    item["supplyCap"] = supply_cap_value
+                else:
+                    item["liquidity"] = 0
+                    item["liquidityUsd"] = 0.0
                 continue
             if available_assets is None:
                 # 回退：查不到 market 状态时按 allocation 近似
@@ -306,8 +314,18 @@ async def get_vault_state_main_graphql(
                 liq_assets = min(alloc_assets, available_assets)
             if liq_assets < 0:
                 liq_assets = Decimal("0")
+            # api/morpho/vault/v1/state相关：为每个 allocation 增加 market 级 liquidity / liquidityUsd（Ii 口径）
+            liq_usd_i = alloc_usd * (liq_assets / alloc_assets)
+            if "supplyCap" in item:
+                supply_cap_value = item.pop("supplyCap")
+                item["liquidity"] = int(liq_assets)
+                item["liquidityUsd"] = float(liq_usd_i)
+                item["supplyCap"] = supply_cap_value
+            else:
+                item["liquidity"] = int(liq_assets)
+                item["liquidityUsd"] = float(liq_usd_i)
             liquidity_raw += liq_assets
-            liquidity_usd += alloc_usd * (liq_assets / alloc_assets)
+            liquidity_usd += liq_usd_i
 
         liquidity_value = int(liquidity_raw)
         liquidity_usd_value = float(liquidity_usd)
