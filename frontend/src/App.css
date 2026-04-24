@@ -4397,6 +4397,23 @@
   filter: drop-shadow(0 8px 18px rgba(2, 6, 23, 0.18));
 }
 
+.morpho-vault-pie-slice-active {
+  filter: drop-shadow(0 0 8px rgba(248, 250, 252, 0.22))
+    drop-shadow(0 12px 24px rgba(2, 6, 23, 0.26));
+}
+
+.morpho-vault-bar-cell {
+  cursor: pointer;
+  transition:
+    filter 140ms ease,
+    opacity 140ms ease;
+}
+
+.morpho-vault-bar-cell-active {
+  filter: drop-shadow(0 0 8px rgba(248, 250, 252, 0.2))
+    drop-shadow(0 10px 18px rgba(2, 6, 23, 0.22));
+}
+
 .morpho-vault-pie .recharts-tooltip-wrapper,
 .morpho-vault-allocation-chart .recharts-tooltip-wrapper {
   z-index: 30 !important;

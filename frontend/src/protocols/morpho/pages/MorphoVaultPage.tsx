@@ -55,13 +55,18 @@ const percentFormatter = new Intl.NumberFormat('en-US', {
 });
 
 const ALLOCATION_COLORS = [
-  '#38bdf8',
-  '#22c55e',
-  '#f59e0b',
-  '#a78bfa',
+  '#60a5fa',
+  '#4ade80',
+  '#fb923c',
   '#f472b6',
-  '#14b8a6',
-  '#f97316',
+  '#2dd4bf',
+  '#facc15',
+  '#c084fc',
+  '#38bdf8',
+  '#f87171',
+  '#a3e635',
+  '#f0abfc',
+  '#34d399',
 ];
 const vaultTooltipContentStyle = {
   border: '1px solid rgba(15, 23, 42, 0.92)',
@@ -195,6 +200,44 @@ function createAllocationLegendItems(
   }));
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = hex.replace('#', '');
+  if (!/^[\da-f]{6}$/i.test(normalized)) return hex;
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function mixHexColor(hex: string, mixWith: string, weight: number): string {
+  const normalized = hex.replace('#', '');
+  const target = mixWith.replace('#', '');
+  if (!/^[\da-f]{6}$/i.test(normalized) || !/^[\da-f]{6}$/i.test(target)) return hex;
+
+  const sourceRgb = [0, 2, 4].map((offset) =>
+    Number.parseInt(normalized.slice(offset, offset + 2), 16),
+  );
+  const targetRgb = [0, 2, 4].map((offset) =>
+    Number.parseInt(target.slice(offset, offset + 2), 16),
+  );
+  const mixed = sourceRgb.map((channel, index) =>
+    Math.round(channel * (1 - weight) + targetRgb[index] * weight),
+  );
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function createLiquidityColor(hex: string): string {
+  return mixHexColor(hex, '#ffffff', 0.5);
+}
+
+function createLiquidityStrokeColor(hex: string): string {
+  return mixHexColor(hex, '#ffffff', 0.68);
+}
+
+function createPieActiveStroke(hex: string): string {
+  return mixHexColor(hex, '#f8fafc', 0.44);
+}
+
 function formatAxisUsd(value: number): string {
   if (value <= 0) return '$0';
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(0)}B`;
@@ -203,7 +246,7 @@ function formatAxisUsd(value: number): string {
   return formatCompactUsd(String(value));
 }
 
-type AllocationHistogramItem = ReturnType<typeof createAllocationBars>[number];
+type AllocationHistogramItem = ReturnType<typeof createAllocationLegendItems>[number];
 
 function AllocationTooltipContent({ item }: { item: AllocationHistogramItem | null }) {
   if (!item) return null;
@@ -236,18 +279,6 @@ function AllocationBarTooltip({
 }) {
   if (!active || !payload?.length) return null;
   const item = payload.find((entry) => entry.payload?.marketId)?.payload ?? null;
-  return <AllocationTooltipContent item={item} />;
-}
-
-function AllocationPieTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload?: AllocationHistogramItem }>;
-}) {
-  if (!active || !payload?.length) return null;
-  const item = payload[0]?.payload ?? null;
   return <AllocationTooltipContent item={item} />;
 }
 
@@ -676,6 +707,8 @@ function MorphoVaultAllocationChart({
     [legendItems],
   );
   const largestShare = legendItems[0]?.share ?? 0;
+  const activeAllocationColor = activeAllocation?.color ?? '#38bdf8';
+  const activeLiquidityColor = createLiquidityColor(activeAllocationColor);
 
   useEffect(() => {
     setHoveredAllocationIndex(null);
@@ -728,14 +761,21 @@ function MorphoVaultAllocationChart({
                         <Cell
                           key={item.marketId}
                           fill={item.color}
-                          stroke="rgba(2, 6, 23, 0.96)"
-                          strokeWidth={3.2}
-                          opacity={activeAllocationIndex === index ? 1 : 0.7}
-                          className="morpho-vault-pie-slice"
+                          stroke={
+                            activeAllocationIndex === index
+                              ? createPieActiveStroke(item.color)
+                              : 'rgba(2, 6, 23, 0.96)'
+                          }
+                          strokeWidth={activeAllocationIndex === index ? 4.4 : 3.2}
+                          opacity={1}
+                          className={
+                            activeAllocationIndex === index
+                              ? 'morpho-vault-pie-slice morpho-vault-pie-slice-active'
+                              : 'morpho-vault-pie-slice'
+                          }
                         />
                       ))}
                     </Pie>
-                    <Tooltip content={<AllocationPieTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="morpho-vault-pie-center">
@@ -795,20 +835,36 @@ function MorphoVaultAllocationChart({
         <div className="morpho-vault-allocation-chart">
           <div className="morpho-vault-chart-legend">
             <span>
-              <i className="morpho-vault-legend-allocation" />
+              <i
+                className="morpho-vault-legend-allocation"
+                style={{ background: activeAllocationColor }}
+              />
               Allocation
             </span>
             <span>
-              <i className="morpho-vault-legend-liquidity" />
+              <i
+                className="morpho-vault-legend-liquidity"
+                style={{ background: activeLiquidityColor }}
+              />
               Liquidity
             </span>
           </div>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
-              data={bars}
+              data={legendItems}
               barGap={0}
               margin={{ top: 12, right: 10, bottom: 84, left: 6 }}
               className="morpho-vault-clickable-chart"
+              onMouseMove={(event) => {
+                const activeEvent = event as unknown as {
+                  activePayload?: Array<{ payload?: AllocationHistogramItem }>;
+                };
+                const payload = activeEvent.activePayload?.[0]?.payload;
+                if (!payload?.marketId) return;
+                const index = legendItems.findIndex((item) => item.marketId === payload.marketId);
+                if (index >= 0) setHoveredAllocationIndex(index);
+              }}
+              onMouseLeave={() => setHoveredAllocationIndex(null)}
               onClick={(event) => {
                 const activeEvent = event as unknown as {
                   activePayload?: Array<{ payload?: AllocationHistogramItem }>;
@@ -830,7 +886,7 @@ function MorphoVaultAllocationChart({
                 tick={(props) => (
                   <AllocationAxisTick
                     {...props}
-                    items={bars}
+                    items={legendItems}
                     selectedMarketId={highlightedMarketId}
                     onMarketSelect={onMarketSelect}
                   />
@@ -853,32 +909,47 @@ function MorphoVaultAllocationChart({
               />
               <Bar
                 dataKey="allocation"
-                fill="#3b82f6"
                 barSize={24}
                 stackId="quota-stack"
                 radius={[2, 2, 0, 0]}
                 isAnimationActive={false}
               >
-                {bars.map((item) => (
+                {legendItems.map((item) => (
                   <Cell
                     key={`allocation-${item.marketId}`}
-                    fill={item.marketId === highlightedMarketId ? '#60a5fa' : '#3b82f6'}
-                    fillOpacity={item.marketId === highlightedMarketId ? 1 : 0.45}
+                    fill={item.color}
+                    fillOpacity={1}
+                    stroke={
+                      item.marketId === highlightedMarketId ? hexToRgba(item.color, 0.95) : 'none'
+                    }
+                    strokeWidth={item.marketId === highlightedMarketId ? 2 : 0}
+                    className={
+                      item.marketId === highlightedMarketId
+                        ? 'morpho-vault-bar-cell morpho-vault-bar-cell-active'
+                        : 'morpho-vault-bar-cell'
+                    }
                   />
                 ))}
               </Bar>
               <Bar
                 dataKey="liquidity"
-                barSize={4}
-                radius={[1, 1, 0, 0]}
+                barSize={24}
+                radius={[2, 2, 0, 0]}
                 shape={<AllocationLiquidityShape />}
                 isAnimationActive={false}
               >
-                {bars.map((item) => (
+                {legendItems.map((item) => (
                   <Cell
                     key={`liquidity-${item.marketId}`}
-                    fill="#10b981"
-                    fillOpacity={item.marketId === highlightedMarketId ? 1 : 0.55}
+                    fill={createLiquidityColor(item.color)}
+                    fillOpacity={1}
+                    stroke={createLiquidityStrokeColor(item.color)}
+                    strokeWidth={item.marketId === highlightedMarketId ? 2 : 1}
+                    className={
+                      item.marketId === highlightedMarketId
+                        ? 'morpho-vault-bar-cell morpho-vault-bar-cell-active'
+                        : 'morpho-vault-bar-cell'
+                    }
                   />
                 ))}
               </Bar>
