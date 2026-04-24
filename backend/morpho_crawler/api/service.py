@@ -953,7 +953,103 @@ async def get_market_state(
     payload["total_market_size_usd"] = await _estimate_total_market_size_usd_from_price(
         w3, payload
     )
+    # api/morpho/market/state相关：查表未命中时将链上结果回写 loan.morpho_blue_current_markets
+    await _upsert_market_state_row_to_table(pool, payload=payload)
     return MorphoMarketStateResponse(**payload)
+
+
+# api/morpho/market/state相关：链上 market/state 结果回写当前市场缓存表
+async def _upsert_market_state_row_to_table(
+    pool: AsyncpgPool, *, payload: dict[str, Any]
+) -> None:
+    market_id = _normalize_market_id_text(str(payload.get("marketId") or ""))
+    if not market_id:
+        return
+
+    loan_token = payload.get("loanToken") or {}
+    collateral_token = payload.get("collateralToken") or {}
+    loan_address = str(loan_token.get("address") or "").strip()
+    if not loan_address:
+        return
+    collateral_address = str(collateral_token.get("address") or "").strip() or None
+    total_market_size_usd = payload.get("total_market_size_usd")
+    total_market_size_usd_dec: Decimal | None = None
+    if total_market_size_usd is not None:
+        try:
+            total_market_size_usd_dec = Decimal(str(total_market_size_usd))
+        except Exception:
+            total_market_size_usd_dec = None
+
+    lltv = payload.get("lltv") or {}
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO loan.morpho_blue_current_markets (
+                market_id,
+                loan_symbol,
+                loan_address,
+                loan_decimals,
+                collateral_symbol,
+                collateral_address,
+                collateral_decimals,
+                oracle,
+                irm,
+                lltv_raw,
+                total_supply_assets,
+                total_supply_shares,
+                total_borrow_assets,
+                total_borrow_shares,
+                last_update,
+                fee_raw,
+                total_market_size_usd,
+                source,
+                is_active,
+                updated_at
+            )
+            VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,
+                $10,$11,$12,$13,$14,$15,$16,$17,$18,TRUE,NOW()
+            )
+            ON CONFLICT (market_id) DO UPDATE SET
+                loan_symbol = EXCLUDED.loan_symbol,
+                loan_address = EXCLUDED.loan_address,
+                loan_decimals = EXCLUDED.loan_decimals,
+                collateral_symbol = EXCLUDED.collateral_symbol,
+                collateral_address = EXCLUDED.collateral_address,
+                collateral_decimals = EXCLUDED.collateral_decimals,
+                oracle = EXCLUDED.oracle,
+                irm = EXCLUDED.irm,
+                lltv_raw = EXCLUDED.lltv_raw,
+                total_supply_assets = EXCLUDED.total_supply_assets,
+                total_supply_shares = EXCLUDED.total_supply_shares,
+                total_borrow_assets = EXCLUDED.total_borrow_assets,
+                total_borrow_shares = EXCLUDED.total_borrow_shares,
+                last_update = EXCLUDED.last_update,
+                fee_raw = EXCLUDED.fee_raw,
+                total_market_size_usd = EXCLUDED.total_market_size_usd,
+                source = EXCLUDED.source,
+                is_active = TRUE,
+                updated_at = NOW()
+            """,
+            market_id,
+            loan_token.get("symbol"),
+            loan_address,
+            int(loan_token.get("decimals") or 0),
+            collateral_token.get("symbol"),
+            collateral_address,
+            int(collateral_token.get("decimals") or 0),
+            str(payload.get("oracle") or ZERO_ADDRESS),
+            str(payload.get("irm") or ZERO_ADDRESS),
+            Decimal(str(lltv.get("raw") or 0)),
+            Decimal(str(payload.get("totalSupplyAssets") or 0)),
+            Decimal(str(payload.get("totalSupplyShares") or 0)),
+            Decimal(str(payload.get("totalBorrowAssets") or 0)),
+            Decimal(str(payload.get("totalBorrowShares") or 0)),
+            int(payload.get("lastUpdate") or 0),
+            Decimal(str(payload.get("fee") or 0)),
+            total_market_size_usd_dec,
+            "api-market-state-chain",
+        )
 
 
 def parse_utc_time(value: str) -> int:
