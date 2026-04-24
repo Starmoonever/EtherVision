@@ -3,6 +3,7 @@ import { isAddress } from 'viem';
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   Pie,
   PieChart,
@@ -85,6 +86,12 @@ function formatUsd(value: string | null | undefined): string {
   return numeric === null ? 'N/A' : `$${usdFormatter.format(numeric)}`;
 }
 
+function formatSmartUsd(value: string | null | undefined): string {
+  const numeric = parseNumber(value);
+  if (numeric === null) return 'N/A';
+  return Math.abs(numeric) >= 1_000_000 ? formatCompactUsd(value) : formatUsd(value);
+}
+
 function formatCompactUsd(value: string | null | undefined): string {
   const numeric = parseNumber(value);
   return numeric === null ? 'N/A' : `$${compactUsdFormatter.format(numeric)}`;
@@ -103,6 +110,16 @@ function formatPercent(value: string | null | undefined): string {
 function formatDays(value: string | null | undefined): string {
   const numeric = parseNumber(value);
   return numeric === null ? 'N/A' : `${numberFormatter.format(numeric)} 天`;
+}
+
+function buildVaultNetApyTooltip(vault: MorphoVaultResponse): string {
+  return [
+    `Net APY: ${formatPercent(vault.net_apy)}`,
+    `Gross APY: ${formatPercent(vault.apy)}`,
+    `Net APY excl. rewards: ${formatPercent(vault.net_apy_excluding_rewards)}`,
+    `Avg net APY: ${formatPercent(vault.avg_net_apy)}`,
+    `Avg net APY excl. rewards: ${formatPercent(vault.avg_net_apy_excluding_rewards)}`,
+  ].join('\n');
 }
 
 function compactAddress(address: string | null | undefined): string {
@@ -127,26 +144,28 @@ function resolveAllocationDisplayName(allocation: MorphoVaultAllocation): string
 function createAllocationBars(allocations: MorphoVaultAllocation[]) {
   return allocations
     .map((allocation) => {
-      const supplyUsd = parseNumber(allocation.supply_assets_usd) ?? 0;
+      const allocationUsd = parseNumber(allocation.supply_assets_usd) ?? 0;
       const supplyCapUsdRaw = parseNumber(allocation.supply_cap_usd);
       const isIdle = !allocation.collateral_symbol;
       const supplyCapUsd =
         !isIdle && supplyCapUsdRaw !== null && supplyCapUsdRaw < 1e30 ? supplyCapUsdRaw : null;
       const liquidityUsd = parseNumber(allocation.liquidity_usd) ?? 0;
-      const histogramMaxUsd = Math.max(supplyUsd, liquidityUsd, supplyCapUsd ?? 0);
 
       return {
         marketId: allocation.market_id,
         label: resolveAllocationLabel(allocation),
         displayName: resolveAllocationDisplayName(allocation),
         shortId: compactMarketId(allocation.market_id),
-        supplyUsd,
+        supplyUsd: allocationUsd,
+        allocation: allocationUsd,
+        quotaUsd: allocationUsd,
         supplyCapUsd,
+        capReference: supplyCapUsd ?? allocationUsd,
+        capGap: supplyCapUsd !== null ? Math.max(0, supplyCapUsd - allocationUsd) : 0,
         liquidityUsd,
-        histogramMaxUsd,
+        liquidity: liquidityUsd,
         isIdle,
-        hasLiquidityWarning: liquidityUsd < supplyUsd,
-        allocation,
+        rawAllocation: allocation,
       };
     })
     .sort((left, right) => right.supplyUsd - left.supplyUsd);
@@ -164,110 +183,97 @@ function createAllocationLegendItems(
 }
 
 function formatAxisUsd(value: number): string {
+  if (value <= 0) return '$0';
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(0)}B`;
+  if (value >= 100_000_000) return `$${(value / 1_000_000).toFixed(0)}M`;
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
   return `$${compactUsdFormatter.format(value).replace('$', '')}`;
 }
 
 type AllocationHistogramItem = ReturnType<typeof createAllocationBars>[number];
 
-interface AllocationHistogramShapeProps {
+interface AllocationCapLineProps {
   x?: number;
   y?: number;
   width?: number;
   height?: number;
   payload?: AllocationHistogramItem;
-  selectedMarketId?: string;
+  highlightedMarketId?: string;
 }
 
-function AllocationHistogramColumn({
+function AllocationCapLine({
   x = 0,
   y = 0,
   width = 0,
   height = 0,
   payload,
-  selectedMarketId = '',
-}: AllocationHistogramShapeProps) {
-  if (!payload || width <= 0 || height <= 0 || payload.histogramMaxUsd <= 0) return null;
+  highlightedMarketId = '',
+}: AllocationCapLineProps) {
+  if (!payload || payload.isIdle || payload.supplyCapUsd === null || width <= 0 || height <= 0) {
+    return null;
+  }
 
-  const isSelected = payload.marketId === selectedMarketId;
-  const bottom = y + height;
-  const allocationWidth = Math.min(20, Math.max(6, width * 0.48));
-  const liquidityWidth = Math.min(8, Math.max(3, width * 0.18));
-  const barGap = Math.min(5, Math.max(2, width * 0.08));
-  const groupWidth = allocationWidth + barGap + liquidityWidth;
-  const groupX = x + (width - groupWidth) / 2;
-  const allocationX = groupX;
-  const liquidityX = groupX + allocationWidth + barGap;
-  const toHeight = (value: number | null) =>
-    value === null ? 0 : Math.max(value > 0 ? 3 : 0, (value / payload.histogramMaxUsd) * height);
-  const capHeight = payload.isIdle ? 0 : toHeight(payload.supplyCapUsd);
-  const allocationHeight = toHeight(payload.supplyUsd);
-  const liquidityHeight = toHeight(payload.liquidityUsd);
-  const barTop = bottom - Math.max(allocationHeight, liquidityHeight);
-  const triangleX = groupX + groupWidth / 2;
-  const triangleY = Math.max(y + 6, barTop - 12);
+  const isHighlighted = payload.marketId === highlightedMarketId;
+  const capWidth = Math.min(Math.max(width * 0.82, 26), width - 2);
+  const capX = x + (width - capWidth) / 2;
+  const capY = Math.max(8, y - 7);
 
   return (
-    <g
-      className={
-        [
-          'morpho-vault-histogram-column',
-          payload.hasLiquidityWarning ? 'morpho-vault-histogram-column-warning' : '',
-          isSelected ? 'morpho-vault-histogram-column-selected' : '',
-        ]
-          .filter(Boolean)
-          .join(' ') || undefined
-      }
-    >
-      {isSelected ? (
-        <rect
-          x={groupX - 5}
-          y={y}
-          width={groupWidth + 10}
-          height={height}
-          rx={7}
-          fill="rgba(125, 211, 252, 0.07)"
-          className="morpho-vault-histogram-selected-frame"
-        />
-      ) : null}
-      {capHeight > 0 ? (
-        <line
-          x1={groupX - 5}
-          y1={bottom - capHeight}
-          x2={groupX + groupWidth + 5}
-          y2={bottom - capHeight}
-          stroke="rgba(226, 232, 240, 0.46)"
-          strokeWidth={2}
-          strokeLinecap="round"
-        />
-      ) : null}
-      {allocationHeight > 0 ? (
-        <rect
-          x={allocationX}
-          y={bottom - allocationHeight}
-          width={allocationWidth}
-          height={allocationHeight}
-          rx={4}
-          fill={isSelected ? '#7dd3fc' : '#38bdf8'}
-          fillOpacity={0.82}
-        />
-      ) : null}
-      {liquidityHeight > 0 ? (
-        <rect
-          x={liquidityX}
-          y={bottom - liquidityHeight}
-          width={liquidityWidth}
-          height={liquidityHeight}
-          rx={3}
-          fill="#86efac"
-          className="morpho-vault-histogram-liquidity"
-        />
-      ) : null}
-      {payload.hasLiquidityWarning ? (
-        <path
-          d={`M${triangleX},${triangleY} L${triangleX - 5},${triangleY + 9} L${triangleX + 5},${triangleY + 9} Z`}
-          className="morpho-vault-histogram-risk-triangle"
-        />
-      ) : null}
+    <g className="morpho-vault-bar-hit-target">
+      <line
+        x1={capX}
+        y1={capY}
+        x2={capX + capWidth}
+        y2={capY}
+        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
+        strokeWidth={isHighlighted ? 3 : 2.4}
+        strokeDasharray="6 3"
+        strokeLinecap="round"
+      />
+      <line
+        x1={capX}
+        y1={capY - 4}
+        x2={capX}
+        y2={capY + 4}
+        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
+        strokeWidth={isHighlighted ? 2.2 : 1.8}
+        strokeLinecap="round"
+      />
+      <line
+        x1={capX + capWidth}
+        y1={capY - 4}
+        x2={capX + capWidth}
+        y2={capY + 4}
+        stroke={isHighlighted ? '#cbd5e1' : '#64748b'}
+        strokeWidth={isHighlighted ? 2.2 : 1.8}
+        strokeLinecap="round"
+      />
+    </g>
+  );
+}
+
+interface AllocationLiquidityShapeProps {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  payload?: AllocationHistogramItem;
+  fill?: string;
+}
+
+function AllocationLiquidityShape({
+  x = 0,
+  y = 0,
+  width = 0,
+  height = 0,
+  payload,
+  fill = '#10b981',
+}: AllocationLiquidityShapeProps) {
+  if (!payload || width <= 0 || height <= 0) return null;
+
+  return (
+    <g className="morpho-vault-bar-hit-target">
+      <rect x={x} y={y} width={width} height={height} rx={1} fill={fill} />
     </g>
   );
 }
@@ -296,8 +302,6 @@ function AllocationAxisTick({
   if (!item) return null;
   const numericX = Number(x);
   const numericY = Number(y);
-  const shouldShowLabel =
-    isSelected || items.length <= 8 || index % Math.ceil(items.length / 8) === 0;
 
   return (
     <g
@@ -312,13 +316,9 @@ function AllocationAxisTick({
       aria-label={`查询 ${item.label}`}
     >
       <title>{item.marketId}</title>
-      {shouldShowLabel ? (
-        <text x={0} y={0} dy={18} textAnchor="middle">
-          {payload?.value ?? item.displayName}
-        </text>
-      ) : (
-        <circle cx={0} cy={16} r={2.2} />
-      )}
+      <text x={0} y={0} dy={16} textAnchor="end" transform="rotate(-45)">
+        {payload?.value ?? item.displayName}
+      </text>
     </g>
   );
 }
@@ -370,25 +370,38 @@ function MorphoVaultCopyLine({
 
 function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
   const { copied, copy } = useCopiedValue();
+  const netApyTooltip = buildVaultNetApyTooltip(vault);
 
   return (
     <section className="card morpho-detail-card morpho-vault-overview-card">
-      <div className="morpho-vault-detail-layout">
-        <div className="morpho-vault-detail-main">
-          <div className="morpho-vault-identity">
-            <div>
-              <span className="morpho-vault-kicker">Vault</span>
-              <h2>{vault.name || vault.symbol || 'Morpho Vault'}</h2>
-              <MorphoVaultCopyLine
-                label="Vault 地址"
-                value={vault.address}
-                copied={copied}
-                onCopy={copy}
-              />
-            </div>
+      <div className="morpho-vault-hero-band">
+        <div className="morpho-vault-hero-meta">
+          <span className="morpho-vault-kicker">Vault</span>
+          <div className="morpho-vault-hero-actions">
+            <MorphoVaultCopyLine
+              label="Vault 地址"
+              value={vault.address}
+              copied={copied}
+              onCopy={copy}
+            />
             <span className="morpho-vault-version">V2</span>
           </div>
+        </div>
+        <h2>{vault.name || vault.symbol || 'Morpho Vault'}</h2>
+        <div className="morpho-vault-hero-summary">
+          <p>
+            以 {vault.asset.symbol || '底层资产'} 为基底，当前总资产{' '}
+            {formatCompactUsd(vault.total_assets_usd)}，净收益 {formatPercent(vault.net_apy)}。
+          </p>
+          <div className="morpho-vault-tag-row morpho-vault-tag-row-hero">
+            <span className="morpho-vault-tag">Fee {formatPercent(vault.fee)}</span>
+            <span className="morpho-vault-tag">Timelock {formatDays(vault.timelock_days)}</span>
+          </div>
+        </div>
+      </div>
 
+      <div className="morpho-vault-detail-layout">
+        <div className="morpho-vault-detail-main">
           <div className="morpho-vault-metric-grid">
             <div className="metric-box morpho-vault-asset-box">
               <span className="metric-label">底层资产</span>
@@ -402,32 +415,30 @@ function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
             </div>
             <div className="metric-box">
               <span className="metric-label">资产总美元值</span>
-              <strong>{formatUsd(vault.total_assets_usd)}</strong>
+              <strong>{formatSmartUsd(vault.total_assets_usd)}</strong>
               <small>
                 {formatNumber(vault.total_assets)} {vault.asset.symbol || ''}
               </small>
             </div>
             <div className="metric-box">
-              <span className="metric-label">Liquidity</span>
-              <strong>{formatUsd(vault.liquidity_usd)}</strong>
-              <small>由 supply cap 与已分配资产推导</small>
+              <span className="metric-label">Liquidity Buffer</span>
+              <strong>{formatSmartUsd(vault.liquidity_usd)}</strong>
+              <small>由 allocation 与 cap 推导</small>
             </div>
             <div className="metric-box">
               <span className="metric-label">Net APY</span>
-              <strong>{formatPercent(vault.net_apy)}</strong>
-              <small>APY {formatPercent(vault.apy)}</small>
+              <button
+                type="button"
+                className="morpho-vault-apy-trigger"
+                data-tooltip={netApyTooltip}
+                aria-label={netApyTooltip}
+              >
+                <strong>{formatPercent(vault.net_apy)}</strong>
+              </button>
+              <small>Gross APY {formatPercent(vault.apy)}</small>
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="morpho-vault-sub-metrics">
-        <span>fee {formatPercent(vault.fee)}</span>
-        <span>timelock {formatDays(vault.timelock_days)}</span>
-        <span>net APY excl. rewards {formatPercent(vault.net_apy_excluding_rewards)}</span>
-        <span>avg net APY {formatPercent(vault.avg_net_apy)}</span>
-        <span>avg net APY excl. rewards {formatPercent(vault.avg_net_apy_excluding_rewards)}</span>
-        <span>{vault.data_source === 'mock' ? 'mock: frontend/openapi.json' : 'api'}</span>
       </div>
     </section>
   );
@@ -452,6 +463,12 @@ function MorphoVaultAllocationChart({
   const activeAllocationIndex =
     hoveredAllocationIndex ?? (selectedAllocationIndex >= 0 ? selectedAllocationIndex : 0);
   const activeAllocation = legendItems[activeAllocationIndex] ?? legendItems[0] ?? null;
+  const highlightedMarketId = activeAllocation?.marketId ?? selectedMarketId;
+  const idleShare = useMemo(
+    () => legendItems.filter((item) => item.isIdle).reduce((sum, item) => sum + item.share, 0),
+    [legendItems],
+  );
+  const largestShare = legendItems[0]?.share ?? 0;
 
   useEffect(() => {
     setHoveredAllocationIndex(null);
@@ -465,6 +482,11 @@ function MorphoVaultAllocationChart({
           <p className="morpho-section-subtitle">
             按 vault 当前市场分配顺序展示，点击市场标签查询 market state。
           </p>
+        </div>
+        <div className="morpho-vault-insight-strip">
+          <span>{legendItems.length} 个分配</span>
+          <span>最大仓位 {percentFormatter.format(largestShare * 100)}%</span>
+          <span>Idle {percentFormatter.format(idleShare * 100)}%</span>
         </div>
       </div>
       <div className="morpho-vault-allocation-layout">
@@ -480,7 +502,7 @@ function MorphoVaultAllocationChart({
                       nameKey="label"
                       cx="50%"
                       cy="50%"
-                      innerRadius="66%"
+                      innerRadius="76%"
                       outerRadius="88%"
                       startAngle={90}
                       endAngle={-270}
@@ -516,7 +538,7 @@ function MorphoVaultAllocationChart({
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="morpho-vault-pie-center">
-                  <span>{activeAllocation ? 'Selected' : 'Total TVL'}</span>
+                  <span>{activeAllocation ? 'Selected %' : 'Total TVL'}</span>
                   <strong>
                     {activeAllocation
                       ? `${percentFormatter.format(activeAllocation.share * 100)}%`
@@ -571,25 +593,23 @@ function MorphoVaultAllocationChart({
           <div className="morpho-vault-chart-legend">
             <span>
               <i className="morpho-vault-legend-cap" />
-              Supply Cap
+              Cap
             </span>
             <span>
               <i className="morpho-vault-legend-allocation" />
-              Allocation
+              Quota
             </span>
             <span>
               <i className="morpho-vault-legend-liquidity" />
-              Market Liquidity
-            </span>
-            <span>
-              <i className="morpho-vault-legend-warning" />
-              Liquidity &lt; Allocation
+              Liquidity
             </span>
           </div>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={bars}
-              margin={{ top: 10, right: 4, bottom: 0, left: 0 }}
+              barGap={0}
+              margin={{ top: 12, right: 10, bottom: 84, left: 6 }}
+              className="morpho-vault-clickable-chart"
               onClick={(event) => {
                 const activeEvent = event as unknown as {
                   activePayload?: Array<{ payload?: AllocationHistogramItem }>;
@@ -598,27 +618,35 @@ function MorphoVaultAllocationChart({
                 if (payload?.marketId) onMarketSelect(payload.marketId);
               }}
             >
+              <CartesianGrid
+                vertical={false}
+                stroke="rgba(148, 163, 184, 1)"
+                strokeOpacity={0.05}
+              />
               <XAxis
                 dataKey="displayName"
-                height={42}
+                height={62}
                 interval={0}
                 tickLine={false}
                 tick={(props) => (
                   <AllocationAxisTick
                     {...props}
                     items={bars}
-                    selectedMarketId={selectedMarketId}
+                    selectedMarketId={highlightedMarketId}
                     onMarketSelect={onMarketSelect}
                   />
                 )}
                 stroke="rgba(148, 163, 184, 0.42)"
               />
               <YAxis
+                domain={[0, 'auto']}
+                tickCount={5}
+                allowDecimals={false}
                 tickFormatter={formatAxisUsd}
                 tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }}
                 axisLine={false}
                 tickLine={false}
-                width={52}
+                width={44}
               />
               <Tooltip
                 formatter={(_, name, item) => {
@@ -626,13 +654,13 @@ function MorphoVaultAllocationChart({
                   if (!payload) return ['N/A', String(name)];
                   return [
                     [
-                      `Allocation ${formatUsd(String(payload.supplyUsd))}`,
+                      `Quota ${formatUsd(String(payload.quotaUsd))}`,
                       payload.isIdle
-                        ? 'Supply Cap Idle'
-                        : `Supply Cap ${formatUsd(String(payload.supplyCapUsd))}`,
+                        ? 'Cap Idle'
+                        : `Cap ${formatUsd(String(payload.supplyCapUsd))}`,
                       `Liquidity ${formatUsd(String(payload.liquidityUsd))}`,
                     ].join(' / '),
-                    payload.hasLiquidityWarning ? 'Liquidity Warning' : 'Market Column',
+                    'Market',
                   ];
                 }}
                 labelFormatter={(_, items) => {
@@ -645,11 +673,45 @@ function MorphoVaultAllocationChart({
                 cursor={{ fill: 'rgba(15, 23, 42, 0.42)' }}
               />
               <Bar
-                dataKey="histogramMaxUsd"
-                shape={<AllocationHistogramColumn selectedMarketId={selectedMarketId} />}
-                barSize={34}
+                dataKey="allocation"
+                fill="#3b82f6"
+                barSize={24}
+                stackId="quota-stack"
+                radius={[2, 2, 0, 0]}
+                isAnimationActive={false}
+              >
+                {bars.map((item) => (
+                  <Cell
+                    key={`allocation-${item.marketId}`}
+                    fill={item.marketId === highlightedMarketId ? '#60a5fa' : '#3b82f6'}
+                    fillOpacity={item.marketId === highlightedMarketId ? 1 : 0.45}
+                  />
+                ))}
+              </Bar>
+              <Bar
+                dataKey="capGap"
+                fill="transparent"
+                barSize={24}
+                stackId="quota-stack"
+                shape={<AllocationCapLine highlightedMarketId={highlightedMarketId} />}
+                legendType="none"
                 isAnimationActive={false}
               />
+              <Bar
+                dataKey="liquidity"
+                barSize={4}
+                radius={[1, 1, 0, 0]}
+                shape={<AllocationLiquidityShape />}
+                isAnimationActive={false}
+              >
+                {bars.map((item) => (
+                  <Cell
+                    key={`liquidity-${item.marketId}`}
+                    fill="#10b981"
+                    fillOpacity={item.marketId === highlightedMarketId ? 1 : 0.55}
+                  />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -756,11 +818,11 @@ export function MorphoVaultPage({
   return (
     <div className="morpho-vault-page">
       <section className="card morpho-detail-card morpho-vault-search-card">
-        <div>
-          <span className="card-title morpho-section-title">Vault 搜索</span>
-          <p className="morpho-section-subtitle">
-            输入 Morpho vault 地址查询详情；后端未接入时使用 frontend/openapi.json 样例。
-          </p>
+        <div className="card-header">
+          <div>
+            <span className="card-title morpho-section-title">Vault 搜索</span>
+            <p className="morpho-section-subtitle">输入 Morpho vault 地址查询实时详情。</p>
+          </div>
         </div>
         <div className="morpho-vault-search-row">
           <input

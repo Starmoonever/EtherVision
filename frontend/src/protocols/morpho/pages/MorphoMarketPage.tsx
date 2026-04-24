@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchMorphoMarketStateWithMeta,
   type MorphoMarketConfig,
@@ -109,11 +109,10 @@ export function MorphoMarketPage() {
     collateral: marketFilters.collateral,
   });
   const [querySearch, setQuerySearch] = useState('');
-  const deferredQuerySearch = useDeferredValue(querySearch);
   const queriedMarketId = useMemo(() => {
-    const keyword = deferredQuerySearch.trim();
+    const keyword = querySearch.trim();
     return isMorphoMarketId(keyword) ? keyword.toLowerCase() : '';
-  }, [deferredQuerySearch]);
+  }, [querySearch]);
   const [expandedMarketId, setExpandedMarketId] = useState('');
   const [marketStateById, setMarketStateById] = useState<Record<string, MorphoMarketView>>({});
   const [marketStateLoadingById, setMarketStateLoadingById] = useState<Record<string, boolean>>({});
