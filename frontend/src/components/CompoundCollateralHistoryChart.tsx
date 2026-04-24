@@ -21,6 +21,10 @@ import {
 import type { CompoundMarketPoint } from '../api/compound';
 import { ChartDataStatus, ChartInfoButton, type ExplainItem } from './ChartAssist';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../api/requestMeta';
+import {
+  formatCompoundHistoryErrorMessage,
+  getDailySafeIntervalHours,
+} from './compoundHistorySampling';
 
 interface CompoundCollateralHistoryChartProps {
   version: 'v2' | 'v3';
@@ -147,9 +151,10 @@ export function CompoundCollateralHistoryChart({
 
         const start = formatUtcDateBoundary(customStart);
         const end = formatUtcDateBoundary(customEnd, true);
+        const intervalHours = version === 'v2' ? getDailySafeIntervalHours(startTs, endTs) : 24;
 
         const result = await fetchCompoundMarketHistoryWithMeta(version, market, start, end, {
-          interval: version === 'v2' ? 1 : 24,
+          interval: intervalHours,
         });
         setMeta(mergeRequestMetas([result.meta]));
 
@@ -160,7 +165,7 @@ export function CompoundCollateralHistoryChart({
         setData(sortedPoints);
       } catch (err) {
         console.error(err);
-        setError('无法加载抵押资产历史数据');
+        setError(formatCompoundHistoryErrorMessage(err, '无法加载抵押资产历史数据'));
       } finally {
         setLoading(false);
       }
@@ -486,27 +491,38 @@ export function CompoundCollateralHistoryChart({
             justifyContent: 'space-between',
             alignItems: 'center',
             marginBottom: '0.5rem',
+            gap: '1rem',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flexWrap: 'nowrap',
+              flex: '0 1 auto',
+              minWidth: 0,
+            }}
+          >
             <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>
               {marketSymbol} v2 市场结构回顾
             </span>
             <ChartInfoButton title="Compound 抵押与结构图说明" items={explainItems} />
-            <span
-              style={{
-                fontSize: '0.75rem',
-                color: '#93c5fd',
-                background: 'rgba(37, 99, 235, 0.14)',
-                border: '1px solid rgba(96, 165, 250, 0.28)',
-                borderRadius: '999px',
-                padding: '0.2rem 0.65rem',
-              }}
-            >
-              单资产 cToken 市场
-            </span>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.5rem',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flexWrap: 'nowrap',
+              whiteSpace: 'nowrap',
+              flex: '1 1 auto',
+              minWidth: 0,
+              overflowX: 'auto',
+              scrollbarWidth: 'none',
+            }}
+          >
             <ChartDataStatus meta={meta} />
             {(['3M', '6M', '1Y'] as const).map((r) => (
               <button
@@ -572,7 +588,7 @@ export function CompoundCollateralHistoryChart({
             padding: '0.85rem 1rem',
           }}
         >
-          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里改为展示该 cToken
+          Compound v2 的每个市场只对应一个底层资产，没有 v3 那种多抵押篮子。 这里展示该 cToken
           市场的资金结构、流动性利用率和协议储备演化。
         </div>
 

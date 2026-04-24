@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchAssetPrice } from '../api';
 import type { CompoundMarket } from '../api/compound';
-import { fetchCompoundMarketConfigV2, getCompoundV2BaseAssetSymbol } from '../api/compound';
+import { getCompoundV2BaseAssetSymbol } from '../api/compound';
 import { CompoundPriceTrend } from './CompoundPriceTrend';
 import { CompoundMarketHistoryChart } from './CompoundMarketHistoryChart';
 import { CompoundCollateralHistoryChart } from './CompoundCollateralHistoryChart';
@@ -24,6 +24,8 @@ export function CompoundMarketAssessment({
   const activeMarket = markets.find((item) => item.address === selectedMarket) ?? markets[0];
   const activeMarketAddress = activeMarket?.address ?? '';
   const activeMarketSymbol = activeMarket?.symbol ?? '';
+  const displayPriceSymbol =
+    marketVersion === 'v2' ? getCompoundV2BaseAssetSymbol(activeMarketSymbol) : activeMarketSymbol;
 
   useEffect(() => {
     if (!activeMarketAddress) return;
@@ -39,19 +41,10 @@ export function CompoundMarketAssessment({
     const fetchPrice = async () => {
       try {
         if (marketVersion === 'v2') {
-          // For Compound v2 cTokens, we need to fetch the underlying token price and multiply by exchange_rate
+          // v2 左侧实时价格卡片只展示底层资产价格，不再显示 cToken 价格。
           const baseSymbol = getCompoundV2BaseAssetSymbol(activeMarketSymbol);
           const basePrice = await fetchAssetPrice(baseSymbol);
-
-          const today = new Date().toISOString().slice(0, 10) + ' 00:00:00';
-          const configRes = await fetchCompoundMarketConfigV2(activeMarketSymbol, today);
-
-          if (configRes && configRes.market_config && configRes.market_config.exchange_rate) {
-            const exchangeRate = parseFloat(configRes.market_config.exchange_rate);
-            setAssetPrice(basePrice * exchangeRate);
-          } else {
-            setAssetPrice(basePrice); // fallback if exchange rate fails
-          }
+          setAssetPrice(basePrice);
         } else {
           // Compound v3 handles regular tokens
           const price = await fetchAssetPrice(activeMarketSymbol);
@@ -99,7 +92,7 @@ export function CompoundMarketAssessment({
                 marginBottom: '0.75rem',
               }}
             >
-              <span className="card-title">{activeMarketSymbol} 实时价格</span>
+              <span className="card-title">{displayPriceSymbol} 实时价格</span>
               <span className="badge green-badge">Live</span>
             </div>
             <div className="metric-value" style={{ fontSize: '2.2rem' }}>
@@ -122,13 +115,15 @@ export function CompoundMarketAssessment({
 
         {/* Right: Historical Data Panel */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-          <CompoundLiquidationChart
-            version={marketVersion}
-            market={activeMarketAddress}
-            marketSymbol={activeMarketSymbol}
-          />
+          {marketVersion === 'v3' ? (
+            <CompoundLiquidationChart
+              version={marketVersion}
+              market={activeMarketAddress}
+              marketSymbol={activeMarketSymbol}
+            />
+          ) : null}
 
-          <div style={{ marginTop: '2rem' }}>
+          <div style={{ marginTop: marketVersion === 'v3' ? '2rem' : 0 }}>
             <CompoundMarketHistoryChart
               version={marketVersion}
               market={activeMarketAddress}

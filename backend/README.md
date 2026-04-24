@@ -100,6 +100,7 @@ uv sync
 统一价格接口 `GET /api/price` 与 `GET /api/price/period` 当前对 Ethereum 资产采用 15 分钟时间桶语义：
 
 - 历史价格请求会先将请求时间对齐到 15 分钟桶，再查缓存或外部价格源
+- `/api/price/period` 的 `interval` 参数单位是“分钟”；例如 `60` 表示 1 小时，`1440` 表示 1 天，`14400` 表示 10 天
 - `loan.eth_price_timestamp` 虽然沿用历史表名，但实际存储的是 Ethereum 链上多资产的历史 USD 价格缓存，不是仅限 ETH 代币
 - 代码层已优先使用 `ensure_ethereum_price_cache_table`、`get_cached_ethereum_price_usd`、`upsert_ethereum_price_cache` 这组 helper；旧的 `eth_*` helper 名称仅保留兼容
 - `GET /api/price/period` 返回的时间点同样是桶时间，不再表示秒级精确成交时间
