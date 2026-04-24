@@ -41,6 +41,8 @@ interface MorphoMarketTableProps {
   showTableHeaderWhenEmpty?: boolean;
   emptyText?: string;
   tableError?: string;
+  embedded?: boolean;
+  forceExpanded?: boolean;
 }
 
 const percentFormatter = new Intl.NumberFormat('en-US', {
@@ -335,6 +337,8 @@ export function MorphoMarketTable({
   showTableHeaderWhenEmpty = true,
   emptyText = '当前筛选条件下没有可展示的 Morpho 市场。',
   tableError = '',
+  embedded = false,
+  forceExpanded = false,
 }: MorphoMarketTableProps) {
   const [copiedMarketId, setCopiedMarketId] = useState('');
   const [pageInput, setPageInput] = useState(String(page));
@@ -387,7 +391,13 @@ export function MorphoMarketTable({
   };
 
   return (
-    <div className="card morpho-detail-card">
+    <div
+      className={
+        embedded
+          ? 'morpho-market-table-shell morpho-market-table-shell-embedded'
+          : 'card morpho-detail-card morpho-market-table-shell'
+      }
+    >
       <div className="card-header">
         <div>
           <span className="card-title morpho-section-title">{title}</span>
@@ -518,7 +528,10 @@ export function MorphoMarketTable({
               markets.map((market) => {
                 const marketStateKey = market.market_id.toLowerCase();
                 const expandedMarketKey = expandedMarketId.toLowerCase();
-                const isExpanded = marketStateKey === expandedMarketKey;
+                const isExpanded =
+                  forceExpanded && markets.length === 1
+                    ? true
+                    : marketStateKey === expandedMarketKey;
                 const loading =
                   marketStateLoadingById[market.market_id] === true ||
                   marketStateLoadingById[marketStateKey] === true;
@@ -542,7 +555,10 @@ export function MorphoMarketTable({
                           ? 'morpho-market-row morpho-market-row-active'
                           : 'morpho-market-row'
                       }
-                      onClick={() => onToggleMarket(market)}
+                      onClick={() => {
+                        if (forceExpanded && isExpanded) return;
+                        onToggleMarket(market);
+                      }}
                     >
                       <td>
                         <div className="morpho-market-id-cell">
