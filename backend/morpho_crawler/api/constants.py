@@ -416,5 +416,5 @@ MORPHO_MARKETS_BLUE_API_CHAIN_ID = 1
 # api/morpho/markets相关：Morpho 官方 Blue API（与 app 市场数据同源）
 MORPHO_BLUE_GRAPHQL_URL = "https://blue-api.morpho.org/graphql"
 
-# api/morpho/vault/state相关：Morpho 主站 GraphQL（Vault / vaultByAddress 与官网一致）
+# api/morpho/vault/v1/state相关：Morpho 主站 GraphQL（Vault / vaultByAddress 与官网一致）
 MORPHO_MAIN_GRAPHQL_URL = "https://api.morpho.org/graphql"

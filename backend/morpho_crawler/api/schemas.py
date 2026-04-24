@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from typing import Any  # api/morpho/vault/state相关
-from pydantic import ConfigDict  # api/morpho/vault/state相关
+from typing import Any  # api/morpho/vault/v1/state相关
+from pydantic import ConfigDict  # api/morpho/vault/v1/state相关
 
 
 class MorphoScaffoldStatusResponse(BaseModel):
@@ -199,7 +199,7 @@ class MorphoMarketStateResponse(BaseModel):
     )
 
 
-# api/morpho/vault/state相关：GET /api/morpho/vault/state（Morpho 主站 GraphQL 原始包：data + extensions）
+# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（Morpho 主站 GraphQL 原始包：data + extensions）
 class MorphoVaultStateGraphQLResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 

@@ -49,7 +49,7 @@ from ..rpc import (
     fetch_user_market_replay_events,
 )
 from .constants import MORPHO_BLUE_GRAPHQL_URL  # api/morpho/markets相关
-from .constants import MORPHO_MAIN_GRAPHQL_URL  # api/morpho/vault/state相关
+from .constants import MORPHO_MAIN_GRAPHQL_URL  # api/morpho/vault/v1/state相关
 from .schemas import (
     MorphoMarketAssetItem,  # api/morpho/markets相关
     MorphoMarketListItem,  # api/morpho/markets相关
@@ -61,7 +61,7 @@ from .schemas import (
     MorphoPositionResponse,
     MorphoScaffoldStatusResponse,
 )
-from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/state相关
+from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/v1/state相关
 
 BRIEF_LABELS = {
     "supply": "供给",
@@ -108,7 +108,7 @@ query MarketMetrics($marketId: String!, $chainId: Int!) {
 }
 """.strip()
 
-# api/morpho/vault/state相关：Morpho 主站 GraphQL，与 openapi 示例中 vaultByAddress / state / allocation 字段对齐
+# api/morpho/vault/v1/state相关：Morpho 主站 GraphQL，与 openapi 示例中 vaultByAddress / state / allocation 字段对齐
 _VAULT_BY_ADDRESS_MAIN_GRAPHQL = """
 query MorphoVaultByAddress($address: String!, $chainId: Int!) {
   vaultByAddress(address: $address, chainId: $chainId) {
@@ -135,7 +135,7 @@ query MorphoVaultByAddress($address: String!, $chainId: Int!) {
       fee
       allocation {
         market {
-          uniqueKey
+          market_id: marketId
           loanAsset {
             symbol
             address
@@ -204,7 +204,7 @@ async def _fetch_market_metrics_from_blue_api(
     return size_f, util_f, loan_asset, collateral_asset
 
 
-# api/morpho/vault/state相关：GET /api/morpho/vault/state，透传 Morpho 主站 GraphQL 的 data + extensions
+# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state，透传 Morpho 主站 GraphQL 的 data + extensions
 async def get_vault_state_main_graphql(
     *,
     address: str,
