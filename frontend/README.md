@@ -8,6 +8,7 @@
 - Compound
 - Morpho
 - JustLend
+- MakerDAO
 
 ## 技术栈
 
@@ -143,6 +144,7 @@ frontend/
 - Morpho 市场静态配置与实时状态
 - Morpho 搜索历史
 - Compound 与 JustLend 的专用接口
+- MakerDAO Vault 个人仓位接口
 
 其中 Morpho 市场页当前依赖两类接口：
 

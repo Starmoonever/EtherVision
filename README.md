@@ -4,7 +4,7 @@
 
 当前仓库同时承载：
 
-- 后端采集与 API：Aave、Compound、Morpho、JustLend
+- 后端采集与 API：Aave、Compound、Morpho、JustLend、MakerDAO
 - 前端看板：个人仓位分析、历史回放、市场风险图表
 - PostgreSQL / ClickHouse 相关数据处理脚本与迁移
 
@@ -56,6 +56,11 @@ aave_liquidation/
 - 当前仓位与个人风险视图
 - 交易回放与趋势分析
 - 说明文案与 effect 解析
+
+### MakerDAO
+
+- Vault 个人仓位查询
+- 抵押债务、健康因子与清算价格展示
 
 ## 运行前提
 

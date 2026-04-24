@@ -27,3 +27,9 @@ export type {
 } from './compound';
 export { fetchMorphoPosition, fetchMorphoPositionWithMeta } from './morpho';
 export type { MorphoPositionAsset, MorphoPositionResponse, MorphoProtocol } from './morpho';
+export { fetchMakerDaoPosition, fetchMakerDaoPositionWithMeta } from './makerdao';
+export type {
+  MakerDaoPositionAsset,
+  MakerDaoPositionResponse,
+  MakerDaoVaultPosition,
+} from './makerdao';
