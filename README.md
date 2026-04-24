@@ -59,8 +59,8 @@ aave_liquidation/
 
 ### MakerDAO
 
-- Vault 个人仓位查询
-- 抵押债务、健康因子与清算价格展示
+- Vault 当前仓位链上实时查询
+- ilk 缓存、Vault 快照与后续回放预留
 
 ## 运行前提
 
@@ -130,6 +130,7 @@ pnpm dev
    - `compound_crawler`
    - `morpho_crawler`
    - `justlend_crawler`
+   - `makerdao_crawler`
 2. 同步核对：
    - CLI 命令
    - API 路由

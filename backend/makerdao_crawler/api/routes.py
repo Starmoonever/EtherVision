@@ -1,0 +1,54 @@
+"""FastAPI routes for MakerDAO scaffold."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Query, Request
+
+from ..database import AsyncpgPool
+from . import service
+from .schemas import (
+    MakerDaoIlkListResponse,
+    MakerDaoScaffoldStatusResponse,
+    MakerDaoVaultPositionResponse,
+)
+
+router = APIRouter(prefix="/api/makerdao")
+
+
+@router.get(
+    "/status",
+    response_model=MakerDaoScaffoldStatusResponse,
+    summary="Inspect MakerDAO scaffold status",
+)
+async def status() -> MakerDaoScaffoldStatusResponse:
+    return service.get_scaffold_status()
+
+
+@router.get(
+    "/ilks",
+    response_model=MakerDaoIlkListResponse,
+    summary="List MakerDAO ilks from cache",
+)
+async def ilks(pool: AsyncpgPool) -> MakerDaoIlkListResponse:
+    return await service.get_ilks(pool)
+
+
+@router.get(
+    "/position",
+    response_model=MakerDaoVaultPositionResponse,
+    summary="Query live MakerDAO vault positions by address",
+)
+async def position(
+    request: Request,
+    address: str = Query(..., description="MakerDAO owner / proxy / urn address"),
+    vault_id: int | None = Query(None, description="可选过滤：vault 编号"),
+    ilk: str | None = Query(None, description="可选过滤：MakerDAO ilk"),
+    include_empty: bool = Query(False, description="是否返回空仓位"),
+) -> MakerDaoVaultPositionResponse:
+    return await service.get_user_vault_position(
+        address=address,
+        w3=getattr(request.app.state, "w3", None),
+        vault_id=vault_id,
+        ilk=ilk,
+        include_empty=include_empty,
+    )

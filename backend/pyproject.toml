@@ -22,6 +22,7 @@ api = "crawler_shared.server:main"
 aave-crawler = "aave_crawler.cli:cli"
 compound-crawler = "compound_crawler.cli:cli"
 justlend-crawler = "justlend_crawler.cli:cli"
+makerdao-crawler = "makerdao_crawler.cli:cli"
 morpho-crawler = "morpho_crawler.cli:cli"
 
 [build-system]
@@ -34,6 +35,7 @@ packages = [
     "compound_crawler",
     "crawler_shared",
     "justlend_crawler",
+    "makerdao_crawler",
     "morpho_crawler",
 ]
 

@@ -8,6 +8,7 @@
 - Compound
 - Morpho
 - JustLend
+- MakerDAO
 
 如果你是第一次接手本仓库，建议先看根 [README.md](../README.md)，再回到本文件看后端细节。
 
@@ -33,6 +34,7 @@ backend/
 ├── compound_crawler/
 ├── morpho_crawler/
 ├── justlend_crawler/
+├── makerdao_crawler/
 ├── crawler_shared/
 ├── scripts/
 └── tests/
@@ -48,6 +50,8 @@ backend/
   - Morpho Blue 市场、当前用户仓位与按请求懒加载的历史 replay
 - `justlend_crawler/`
   - JustLend 当前仓位、趋势回放、事件说明
+- `makerdao_crawler/`
+  - MakerDAO ilk 缓存、Vault 当前仓位与后续回放骨架
 - `crawler_shared/`
   - 共享配置、数据库、统一 API 入口与公共组件
 
@@ -82,6 +86,7 @@ uv sync
 - 可选的 ClickHouse 连接信息
 - crawler 并发、批大小、超时、重试
 - watcher 轮询间隔与回看窗口
+- MakerDAO 主网合约覆盖项；默认已硬编码常用核心合约地址，通常无需填写
 
 ### 配置查找顺序
 
@@ -153,8 +158,9 @@ uv run aave-crawler check 0xAddress
 - `uv run compound-crawler`
 - `uv run morpho-crawler`
 - `uv run justlend-crawler`
+- `uv run makerdao-crawler`
 
-当前仅 `aave-crawler` 保留可运行的 `watch` 命令；Compound / Morpho / JustLend 的 watcher 占位 CLI 已移除，避免在本仓库内误执行无实际补全逻辑的任务。
+当前仅 `aave-crawler` 保留可运行的 `watch` 命令；Compound / Morpho / JustLend / MakerDAO 的 watcher 占位 CLI 已移除，避免在本仓库内误执行无实际补全逻辑的任务。
 
 如果需要新增协议级命令，优先检查各自 `cli.py` 与 `crawler_shared.server` 的集成方式。
 
@@ -239,6 +245,34 @@ Morpho 模块当前聚焦 Morpho Blue：
 - 市场信息缓存
 - 单市场个人仓位 replay
 - 资产与额外信息的 JSONB 存储
+
+### MakerDAO
+
+MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当前仓位链上实时查询，同时保留缓存表结构供后续回放和批量同步使用：
+
+- `loan.makerdao_ilks_current`
+  - 缓存 ilk 基础参数，如抵押资产、债务上限、清算比率
+- `loan.makerdao_current_vault_positions`
+  - 预留当前 Vault 仓位缓存；当前 `/api/makerdao/position` 优先走链上实时查询，不依赖该表
+- `loan.makerdao_position_snapshots`
+  - 预留交易级或块级回放快照
+
+当前已提供：
+
+- `GET /api/makerdao/status`
+- `GET /api/makerdao/ilks`
+- `GET /api/makerdao/position`
+  - 必填 `address`，可传 owner / proxy / urn 地址
+  - 可选 `vault_id`、`ilk`、`include_empty`
+  - 当前读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY`
+  - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
+- `uv run makerdao-crawler init-db`
+
+当前未提供：
+
+- 链上抓取与增量同步
+- Vault 交易回放
+- 清算事件解析
 
 Morpho 写路径里已经有较明确的“API 文本地址 -> DB bytes”的转换逻辑，改动时要连同读路径一起核对。
 
