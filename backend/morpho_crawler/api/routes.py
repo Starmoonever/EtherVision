@@ -19,6 +19,7 @@ from .service import (
     get_user_position,
 )
 from .service import get_vault_state_main_graphql  # api/morpho/vault/v1/state相关
+from .service import get_vault_v2_state_main_graphql  # api/morpho/vault/v2/state相关
 
 router = APIRouter(prefix="/api/morpho")
 
@@ -165,6 +166,19 @@ async def market_state(
 )
 async def vault_state(
     address: str = Query(..., description="Vault 合约地址（EVM）"),
-    chain_id: int = Query(1, ge=1, description="链 ID，默认 1（Ethereum）"),
 ) -> MorphoVaultStateGraphQLResponse:
-    return await get_vault_state_main_graphql(address=address, chain_id=chain_id)
+    # api/morpho/vault/v1/state相关：固定主网查询，不暴露 chain_id
+    return await get_vault_state_main_graphql(address=address)
+
+
+# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state（Morpho 主站 GraphQL vaultV2ByAddress）
+@router.get(
+    "/vault/v2/state",
+    response_model=MorphoVaultStateGraphQLResponse,
+    summary="Morpho Vault V2 状态（主站 GraphQL）",
+)
+async def vault_v2_state(
+    address: str = Query(..., description="Vault V2 合约地址（EVM）"),
+) -> MorphoVaultStateGraphQLResponse:
+    # api/morpho/vault/v2/state相关：固定主网查询，不暴露 chain_id
+    return await get_vault_v2_state_main_graphql(address=address)

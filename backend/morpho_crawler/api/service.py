@@ -51,6 +51,7 @@ from ..rpc import (
 )
 from .constants import MORPHO_BLUE_GRAPHQL_URL  # api/morpho/markets相关
 from .constants import MORPHO_MAIN_GRAPHQL_URL  # api/morpho/vault/v1/state相关
+from .constants import MORPHO_MAIN_GRAPHQL_URL_V2  # api/morpho/vault/v2/state相关
 from .schemas import (
     MorphoMarketAssetItem,  # api/morpho/markets相关
     MorphoMarketListItem,  # api/morpho/markets相关
@@ -164,6 +165,84 @@ query MarketLiquidity($marketId: String!, $chainId: Int!) {
     state {
       supplyAssets
       borrowAssets
+    }
+  }
+}
+""".strip()
+
+# api/morpho/vault/v2/state相关：Morpho 主站 GraphQL，字段对齐 tmp/morpho_vault_v2_xxx.json
+_VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL = """
+query VaultV2ByAddress($address: String!, $chainId: Int!) {
+  vaultV2ByAddress(address: $address, chainId: $chainId) {
+    address
+    symbol
+    name
+    totalAssets
+    totalSupply
+    totalAssetsUsd
+    idleAssets
+    idleAssetsUsd
+    liquidity
+    liquidityUsd
+    sharePrice
+    apy
+    netApy
+    netApyExcludingRewards
+    avgNetApy
+    avgNetApyExcludingRewards
+    maxApy
+    forceDeallocatableLiquidity
+    forceDeallocatableLiquidityUsd
+    performanceFee
+    managementFee
+    liquidityData {
+      __typename
+    }
+    asset {
+      address
+      symbol
+      decimals
+    }
+    gatesConfig {
+      sendSharesGate {
+        address
+        abdicated
+        pendingAbdicationExecutableAt
+        pendingAddress
+        pendingExecutableAt
+      }
+      receiveAssetsGate {
+        address
+        abdicated
+        pendingAbdicationExecutableAt
+        pendingAddress
+        pendingExecutableAt
+      }
+      receiveSharesGate {
+        address
+        abdicated
+        pendingAbdicationExecutableAt
+        pendingAddress
+        pendingExecutableAt
+      }
+      sendAssetsGate {
+        address
+        abdicated
+        pendingAbdicationExecutableAt
+        pendingAddress
+        pendingExecutableAt
+      }
+    }
+    warnings {
+      type
+      level
+      metadata {
+        __typename
+      }
+    }
+    metadata {
+      description
+      image
     }
   }
 }
@@ -378,6 +457,52 @@ async def _fetch_market_available_liquidity_assets(
 # api/morpho/vault/v1/state相关：给 gather 用的空协程占位
 async def _done_none() -> None:
     return None
+
+
+# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，透传 Morpho 主站 GraphQL 的 data + extensions
+async def get_vault_v2_state_main_graphql(
+    *,
+    address: str,
+    chain_id: int = 1,
+) -> MorphoVaultStateGraphQLResponse:
+    raw = (address or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="address 不能为空")
+    try:
+        checksum = AsyncWeb3.to_checksum_address(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"无效 EVM 地址: {exc}") from exc
+
+    payload = {
+        "query": _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL,
+        "variables": {"address": checksum, "chainId": chain_id},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(MORPHO_MAIN_GRAPHQL_URL_V2, json=payload)
+            resp.raise_for_status()
+            body = cast(dict[str, Any], resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho 主站 GraphQL V2 请求失败: {exc}",
+        ) from exc
+
+    errs = body.get("errors") or []
+    data = body.get("data")
+    vault = (data or {}).get("vaultV2ByAddress") if isinstance(data, dict) else None
+    if vault is None:
+        detail = "未找到该链上的 V2 Vault"
+        if errs and isinstance(errs[0], dict):
+            detail = str(errs[0].get("message") or detail)
+        raise HTTPException(status_code=404, detail=detail)
+
+    return MorphoVaultStateGraphQLResponse(
+        data=data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
+        extensions=body.get("extensions")
+        if isinstance(body.get("extensions"), dict)
+        else None,
+    )
 
 
 # api/morpho/markets相关：当链上查询失败时，从硬编码 pair 文本回退构造 assets

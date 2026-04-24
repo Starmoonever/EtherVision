@@ -14,3 +14,6 @@ MORPHO_BLUE_GRAPHQL_URL = "https://blue-api.morpho.org/graphql"
 
 # api/morpho/vault/v1/state相关：Morpho 主站 GraphQL（Vault / vaultByAddress 与官网一致）
 MORPHO_MAIN_GRAPHQL_URL = "https://api.morpho.org/graphql"
+
+# api/morpho/vault/v2/state相关：Morpho 主站 GraphQL（VaultV2 / vaultV2ByAddress）
+MORPHO_MAIN_GRAPHQL_URL_V2 = "https://api.morpho.org/graphql"
