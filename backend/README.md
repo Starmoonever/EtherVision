@@ -86,6 +86,7 @@ uv sync
 - 可选的 ClickHouse 连接信息
 - crawler 并发、批大小、超时、重试
 - watcher 轮询间隔与回看窗口
+- MakerDAO 主网合约覆盖项；默认已硬编码常用核心合约地址，通常无需填写
 
 ### 配置查找顺序
 
@@ -247,12 +248,12 @@ Morpho 模块当前聚焦 Morpho Blue：
 
 ### MakerDAO
 
-MakerDAO 模块当前为后端骨架，已接入统一 API 与 CLI，围绕 Vault 场景预留了最小数据结构：
+MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当前仓位链上实时查询，同时保留缓存表结构供后续回放和批量同步使用：
 
 - `loan.makerdao_ilks_current`
   - 缓存 ilk 基础参数，如抵押资产、债务上限、清算比率
 - `loan.makerdao_current_vault_positions`
-  - 缓存当前 Vault 仓位，用于后续 owner / proxy / urn 查询
+  - 预留当前 Vault 仓位缓存；当前 `/api/makerdao/position` 优先走链上实时查询，不依赖该表
 - `loan.makerdao_position_snapshots`
   - 预留交易级或块级回放快照
 
@@ -261,6 +262,10 @@ MakerDAO 模块当前为后端骨架，已接入统一 API 与 CLI，围绕 Vaul
 - `GET /api/makerdao/status`
 - `GET /api/makerdao/ilks`
 - `GET /api/makerdao/position`
+  - 必填 `address`，可传 owner / proxy / urn 地址
+  - 可选 `vault_id`、`ilk`、`include_empty`
+  - 当前读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY`
+  - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
 
 当前未提供：

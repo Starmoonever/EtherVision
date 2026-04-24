@@ -59,8 +59,8 @@ aave_liquidation/
 
 ### MakerDAO
 
-- Vault / ilk 后端骨架
-- 统一 API 接入与后续回放预留
+- Vault 当前仓位链上实时查询
+- ilk 缓存、Vault 快照与后续回放预留
 
 ## 运行前提
 

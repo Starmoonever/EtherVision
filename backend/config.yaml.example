@@ -26,8 +26,11 @@ crawler:
   retry_count: 3
 
 makerdao:
+  # 当前只支持 Ethereum 主网 MakerDAO/Sky MCD。
   chain: "ethereum"
+  # MakerDAO 核心合约地址默认已在代码中硬编码；仅在需要覆盖主网地址或测试部署时填写。
   vat_address: ""
   spotter_address: ""
   dog_address: ""
+  # 直接按 urn 地址查询时，用该白名单尝试识别 ilk；留空则使用代码内置主流 ilk。
   ilk_names: []
