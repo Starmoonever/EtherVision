@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from typing import Any  # api/morpho/vault/v1/state相关
+from pydantic import ConfigDict  # api/morpho/vault/v1/state相关
+
 
 class MorphoScaffoldStatusResponse(BaseModel):
     module: str = Field(description="模块名。")
@@ -193,4 +196,17 @@ class MorphoMarketStateResponse(BaseModel):
     )
     debtScaleDebtLike: MorphoMarketSimpleMetricField = Field(
         description="借款规模（Debt-like）。"
+    )
+
+
+# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（Morpho 主站 GraphQL 原始包：data + extensions）
+class MorphoVaultStateGraphQLResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    data: dict[str, Any] = Field(
+        description="GraphQL data 字段，含 vaultByAddress（与 Morpho 官网响应一致）。"
+    )
+    extensions: dict[str, Any] | None = Field(
+        default=None,
+        description="GraphQL extensions（如 complexity、warnings），无则 null。",
     )
