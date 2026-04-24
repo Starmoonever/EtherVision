@@ -3794,6 +3794,108 @@
   align-items: center;
 }
 
+.morpho-vault-hero-band {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.05rem 1.1rem;
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 42%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(8, 15, 29, 0.76));
+}
+
+.morpho-vault-hero-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.morpho-vault-hero-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.morpho-vault-hero-band h2 {
+  margin: 0.08rem 0 0.12rem;
+  color: #f8fafc;
+  font-size: 1.55rem;
+  line-height: 1.15;
+}
+
+.morpho-vault-hero-band p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.morpho-vault-hero-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.morpho-vault-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.morpho-vault-hero-stat {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.34);
+}
+
+.morpho-vault-hero-stat span,
+.morpho-vault-section-label {
+  color: #93c5fd;
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.morpho-vault-hero-stat strong {
+  color: #f8fafc;
+  font-size: 1.2rem;
+  line-height: 1.15;
+}
+
+.morpho-vault-hero-stat small {
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+.morpho-vault-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.morpho-vault-tag-row-hero {
+  justify-content: flex-end;
+}
+
+.morpho-vault-tag {
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.42);
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.38rem 0.7rem;
+}
+
 .morpho-vault-identity {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3838,6 +3940,10 @@
   cursor: pointer;
   font: inherit;
   padding: 0;
+}
+
+.morpho-vault-hero-actions .morpho-vault-copy-line {
+  color: #cbd5e1;
 }
 
 .morpho-vault-copy-line span {
@@ -3894,28 +4000,62 @@
   font-size: 1.2rem;
 }
 
+.morpho-vault-apy-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: help;
+  text-align: left;
+}
+
+.morpho-vault-apy-trigger::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.55rem);
+  z-index: 8;
+  width: min(320px, 72vw);
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  color: #dbeafe;
+  background: rgba(2, 6, 23, 0.96);
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.34);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.6;
+  letter-spacing: 0;
+  white-space: pre-line;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.morpho-vault-apy-trigger:hover::after,
+.morpho-vault-apy-trigger:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.morpho-vault-apy-trigger:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.55);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
 .morpho-vault-metric-grid small {
   color: #94a3b8;
   font-size: 0.72rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.morpho-vault-sub-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.morpho-vault-sub-metrics span {
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.42);
-  color: #94a3b8;
-  font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0.32rem 0.55rem;
 }
 
 .morpho-vault-detail-layout {
@@ -3932,11 +4072,11 @@
   display: flex;
   gap: 1rem;
   align-items: stretch;
-  min-height: 24rem;
+  min-height: 40.625rem;
 }
 
 .morpho-vault-pie-panel {
-  flex: 0 0 calc(40% - 0.5rem);
+  flex: 0 0 calc(32% - 0.5rem);
   border: 1px solid rgba(96, 165, 250, 0.12);
   border-radius: 8px;
   background: rgba(8, 15, 29, 0.38);
@@ -3949,25 +4089,31 @@
   grid-template-rows: minmax(12rem, 1fr) auto;
   gap: 0.85rem;
   height: 100%;
-  min-height: 22rem;
+  min-height: 40.625rem;
 }
 
 .morpho-vault-pie {
   position: relative;
   width: 100%;
-  min-height: 13.5rem;
+  min-height: 20rem;
 }
 
 .morpho-vault-allocation-chart {
   position: relative;
-  flex: 1 1 calc(60% - 0.5rem);
+  flex: 1 1 calc(68% - 0.5rem);
   min-width: 0;
-  height: 24rem;
+  height: 40.625rem;
   border: 1px solid rgba(96, 165, 250, 0.12);
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(148, 163, 184, 0.04), transparent 34%), rgba(8, 15, 29, 0.38);
-  padding: 0.65rem 0.45rem 1.1rem;
+  padding: 0.75rem 0.55rem 1.2rem 0.35rem;
+}
+
+.morpho-vault-clickable-chart .recharts-bar-rectangle,
+.morpho-vault-clickable-chart .recharts-xAxis .recharts-layer,
+.morpho-vault-bar-hit-target {
+  cursor: pointer;
 }
 
 .morpho-vault-pie-center {
@@ -3984,6 +4130,7 @@
   color: #f8fafc;
   font-size: 1.25rem;
   line-height: 1.1;
+  font-weight: 600;
 }
 
 .morpho-vault-pie-center span {
@@ -4103,6 +4250,23 @@
   padding: 0 0.3rem 0.25rem 3.25rem;
 }
 
+.morpho-vault-insight-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.morpho-vault-insight-strip span {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.42);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.34rem 0.6rem;
+}
+
 .morpho-vault-chart-legend span {
   display: inline-flex;
   align-items: center;
@@ -4112,47 +4276,25 @@
 .morpho-vault-chart-legend i {
   width: 0.7rem;
   height: 0.7rem;
-  border-radius: 3px;
+  border-radius: 0;
 }
 
 .morpho-vault-legend-cap {
   height: 2px;
-  background: rgba(226, 232, 240, 0.52);
+  border-radius: 999px;
+  background: #334155;
 }
 
 .morpho-vault-legend-allocation {
-  background: #38bdf8;
+  background: #3b82f6;
+  border-radius: 2px;
 }
 
 .morpho-vault-legend-liquidity {
-  background: #86efac;
-}
-
-.morpho-vault-legend-warning {
-  width: 0;
-  height: 0;
-  border-right: 0.4rem solid transparent;
-  border-bottom: 0.72rem solid #f87171;
-  border-left: 0.4rem solid transparent;
-  border-radius: 0;
-}
-
-.morpho-vault-histogram-column,
-.morpho-vault-histogram-column-selected {
-  cursor: pointer;
-}
-
-.morpho-vault-histogram-selected-frame {
-  filter: none;
-}
-
-.morpho-vault-histogram-liquidity {
-  filter: drop-shadow(0 0 5px rgba(134, 239, 172, 0.58));
-}
-
-.morpho-vault-histogram-risk-triangle {
-  fill: #f87171;
-  filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.48));
+  width: 0.18rem;
+  height: 0.82rem;
+  background: #10b981;
+  border-radius: 999px;
 }
 
 .morpho-vault-axis-tick {
@@ -4162,22 +4304,9 @@
   font-weight: 800;
 }
 
-.morpho-vault-axis-tick circle {
-  fill: #475569;
-}
-
 .morpho-vault-axis-tick:hover,
 .morpho-vault-axis-tick-selected {
   fill: #bae6fd;
-}
-
-.morpho-vault-axis-tick:hover circle,
-.morpho-vault-axis-tick-selected circle {
-  fill: #7dd3fc;
-}
-
-.morpho-vault-axis-tick-selected text {
-  filter: drop-shadow(0 0 5px rgba(56, 189, 248, 0.48));
 }
 
 .morpho-vault-market-placeholder,
@@ -4417,6 +4546,23 @@
     flex-direction: column;
   }
 
+  .morpho-vault-hero-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-hero-summary {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .morpho-vault-hero-actions {
+    justify-content: flex-start;
+  }
+
+  .morpho-vault-tag-row-hero {
+    justify-content: flex-start;
+  }
+
   .morpho-vault-pie-panel {
     flex-basis: auto;
   }
@@ -4429,6 +4575,14 @@
 
   .morpho-vault-allocation-list {
     max-height: 16rem;
+  }
+
+  .morpho-vault-insight-strip {
+    justify-content: flex-start;
+  }
+
+  .morpho-vault-chart-legend {
+    padding-left: 0;
   }
 
   .justlend-summary-grid,
@@ -4458,11 +4612,15 @@
   }
 
   .morpho-vault-allocation-item {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
 
   .morpho-vault-allocation-value {
     display: none;
+  }
+
+  .morpho-vault-hero-stats {
+    grid-template-columns: 1fr;
   }
 }
 

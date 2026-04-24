@@ -1,6 +1,5 @@
 import { apiFetch, apiFetchRaw } from './client';
 import type { DataWithMeta } from './requestMeta';
-import morphoVaultOpenapiSampleRaw from '../../openapi.json?raw';
 
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
 export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
@@ -184,7 +183,7 @@ export interface MorphoVaultResponse {
   timelock_days: string | null;
   fee: string | null;
   allocations: MorphoVaultAllocation[];
-  data_source: 'api' | 'mock';
+  data_source: 'api';
 }
 
 export interface MorphoVaultReallocationPoint {
@@ -254,6 +253,8 @@ interface MorphoMarketStateApiPayload {
   marketId?: string;
   total_market_size_usd?: string | number | null;
   totalMarketSizeUsd?: string | number | null;
+  liquidityUsd?: string | number | null;
+  liquidity_usd?: string | number | null;
   total_collateral_usd?: string | number | null;
   total_debt_usd?: string | number | null;
   totalSupplyAssets?: string | number | null;
@@ -309,6 +310,8 @@ interface MorphoVaultByAddressApiPayload {
   state?: {
     totalAssets?: string | number | null;
     totalAssetsUsd?: string | number | null;
+    liquidityUsd?: string | number | null;
+    liquidity_usd?: string | number | null;
     totalSupply?: string | number | null;
     sharePriceNumber?: string | number | null;
     sharePriceUsd?: string | number | null;
@@ -326,6 +329,7 @@ interface MorphoVaultByAddressApiPayload {
 interface MorphoVaultAllocationApiPayload {
   market?: {
     marketId?: string | null;
+    market_id?: string | null;
     uniqueKey?: string | null;
     loanAsset?: {
       symbol?: string | null;
@@ -338,6 +342,8 @@ interface MorphoVaultAllocationApiPayload {
   } | null;
   supplyAssets?: string | number | null;
   supplyAssetsUsd?: string | number | null;
+  liquidityUsd?: string | number | null;
+  liquidity_usd?: string | number | null;
   supplyShares?: string | number | null;
   supplyCap?: string | number | null;
   supplyCapUsd?: string | number | null;
@@ -551,10 +557,7 @@ function normalizeMorphoMarketState(item: MorphoMarketStateApiPayload): MorphoMa
   const rawTotalBorrowAssets = normalizeDecimalString(item.totalBorrowAssets);
   const displayTotalSupplyAssets = normalizeDecimalString(item.marketScaleTvlLike?.value);
   const displayTotalBorrowAssets = normalizeDecimalString(item.debtScaleDebtLike?.value);
-  const displayAvailableLiquidity =
-    typeof item.availableLiquidity === 'object' && item.availableLiquidity !== null
-      ? normalizeDecimalString(item.availableLiquidity.value)
-      : normalizeDecimalString(item.availableLiquidity);
+  const displayAvailableLiquidity = normalizeDecimalString(item.liquidityUsd ?? item.liquidity_usd);
 
   return {
     market_id: marketId,
@@ -581,14 +584,7 @@ function normalizeMorphoMarketState(item: MorphoMarketStateApiPayload): MorphoMa
         item.annualBorrowRate,
     ),
     available_liquidity: displayAvailableLiquidity,
-    available_liquidity_is_raw:
-      typeof item.availableLiquidity === 'object' && item.availableLiquidity !== null
-        ? inferMetricIsRaw(item.availableLiquidity, null, [
-            'totalSupplyAssets-totalBorrowAssets',
-            'totalSupplyAssets',
-            'totalBorrowAssets',
-          ])
-        : false,
+    available_liquidity_is_raw: false,
     utilization: normalizeMetricValue(item.utilization),
     borrow_capacity_usage_rough: normalizeMetricValue(item.borrowCapacityUsageRough),
     is_liquidatable: typeof item.is_liquidatable === 'boolean' ? item.is_liquidatable : null,
@@ -608,34 +604,10 @@ function normalizeMorphoMarketState(item: MorphoMarketStateApiPayload): MorphoMa
   };
 }
 
-function resolveMorphoVaultSamplePayload(): MorphoVaultApiPayload {
-  return JSON.parse(morphoVaultOpenapiSampleRaw) as MorphoVaultApiPayload;
-}
-
 function getMorphoVaultPayload(payload: MorphoVaultApiPayload): MorphoVaultByAddressApiPayload {
   const vault = payload.data?.vaultByAddress ?? payload.vaultByAddress ?? payload.vault;
   if (!vault) throw new Error('Morpho vault 数据为空');
   return vault;
-}
-
-function resolveVaultLiquidityUsd(
-  allocations: MorphoVaultAllocation[],
-  totalAssetsUsd: string | null,
-): string | null {
-  let total = 0;
-  let hasFiniteLiquidity = false;
-  for (const allocation of allocations) {
-    const cap = normalizeNumber(allocation.supply_cap_usd);
-    const used = normalizeNumber(allocation.supply_assets_usd);
-    if (cap === null || used === null || cap > 1e30) continue;
-    total += Math.max(0, cap - used);
-    hasFiniteLiquidity = true;
-  }
-
-  if (hasFiniteLiquidity) return String(total);
-
-  const totalAssets = normalizeNumber(totalAssetsUsd);
-  return totalAssets === null ? null : '0';
 }
 
 function normalizeMorphoVaultAllocation(
@@ -644,17 +616,13 @@ function normalizeMorphoVaultAllocation(
   totalAssetsUsd: string | null,
 ): MorphoVaultAllocation | null {
   const market = item.market;
-  const marketId = market?.marketId ?? market?.uniqueKey ?? '';
+  const marketId = market?.marketId ?? market?.market_id ?? market?.uniqueKey ?? '';
   if (!marketId) return null;
   const supplyAssetsUsd = normalizeDecimalString(item.supplyAssetsUsd);
+  const explicitLiquidityUsd = normalizeDecimalString(item.liquidityUsd ?? item.liquidity_usd);
   const supplyCapUsd = normalizeDecimalString(item.supplyCapUsd);
   const supplyAssetsUsdNumber = normalizeNumber(supplyAssetsUsd);
-  const supplyCapUsdNumber = normalizeNumber(supplyCapUsd);
   const totalAssetsUsdNumber = normalizeNumber(totalAssetsUsd);
-  const liquidityUsd =
-    supplyCapUsdNumber !== null && supplyAssetsUsdNumber !== null && supplyCapUsdNumber < 1e30
-      ? String(Math.max(0, supplyCapUsdNumber - supplyAssetsUsdNumber))
-      : null;
 
   return {
     market_id: marketId,
@@ -667,7 +635,7 @@ function normalizeMorphoVaultAllocation(
     supply_shares: normalizeDecimalString(item.supplyShares),
     supply_cap: normalizeRawAssetAmount(item.supplyCap, assetDecimals),
     supply_cap_usd: supplyCapUsd,
-    liquidity_usd: liquidityUsd,
+    liquidity_usd: explicitLiquidityUsd,
     allocation_ratio:
       supplyAssetsUsdNumber !== null && totalAssetsUsdNumber !== null && totalAssetsUsdNumber > 0
         ? String(supplyAssetsUsdNumber / totalAssetsUsdNumber)
@@ -677,12 +645,15 @@ function normalizeMorphoVaultAllocation(
 
 function normalizeMorphoVaultResponse(
   payload: MorphoVaultApiPayload,
-  dataSource: 'api' | 'mock',
+  dataSource: 'api',
 ): MorphoVaultResponse {
   const vault = getMorphoVaultPayload(payload);
   const state = vault.state;
   const assetDecimals = vault.asset?.decimals ?? null;
   const totalAssetsUsd = normalizeDecimalString(state?.totalAssetsUsd);
+  const explicitVaultLiquidityUsd = normalizeDecimalString(
+    state?.liquidityUsd ?? state?.liquidity_usd,
+  );
   const timelockSeconds = normalizeDecimalString(state?.timelock);
   const allocations = (state?.allocation ?? [])
     .map((item) => normalizeMorphoVaultAllocation(item, assetDecimals, totalAssetsUsd))
@@ -703,7 +674,7 @@ function normalizeMorphoVaultResponse(
     total_assets: normalizeRawAssetAmount(state?.totalAssets, assetDecimals),
     total_assets_raw: normalizeDecimalString(state?.totalAssets),
     total_assets_usd: totalAssetsUsd,
-    liquidity_usd: resolveVaultLiquidityUsd(allocations, totalAssetsUsd),
+    liquidity_usd: explicitVaultLiquidityUsd,
     total_supply: normalizeDecimalString(state?.totalSupply),
     share_price: normalizeDecimalString(state?.sharePriceNumber),
     share_price_usd: normalizeDecimalString(state?.sharePriceUsd),
@@ -1237,11 +1208,9 @@ export async function fetchMorphoVaultWithMeta(
 
   const params = new URLSearchParams({ address });
   const request = fetchMorphoWithFallback<MorphoVaultApiPayload>([
-    `/morpho/vault?${params.toString()}`,
-    `/morpho/vaults/${encodeURIComponent(address)}`,
+    `/morpho/vault/v1/state?${params.toString()}`,
   ])
     .then((payload) => normalizeMorphoVaultResponse(payload, 'api'))
-    .catch(() => normalizeMorphoVaultResponse(resolveMorphoVaultSamplePayload(), 'mock'))
     .then((data) => {
       morphoVaultCache.set(normalizedAddress, { fetchedAt: Date.now(), data });
       return data;
