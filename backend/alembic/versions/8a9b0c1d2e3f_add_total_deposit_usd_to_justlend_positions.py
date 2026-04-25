@@ -1,6 +1,6 @@
 """add total_deposit_usd to justlend position tables
 
-Revision ID: 7a8b9c0d1e2f
+Revision ID: 8a9b0c1d2e3f
 Revises: 6f7a8b9c0d1e
 Create Date: 2026-04-21 10:10:00.000000
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "7a8b9c0d1e2f"
+revision: str = "8a9b0c1d2e3f"
 down_revision: Union[str, Sequence[str], None] = "6f7a8b9c0d1e"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

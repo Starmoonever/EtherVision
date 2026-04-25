@@ -6,14 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from makerdao_crawler.constants import MAKERDAO_DEFAULT_CONTRACTS
 from makerdao_crawler.api import service as makerdao_service
 from makerdao_crawler.api.routes import router as makerdao_router
 from makerdao_crawler.api.schemas import (
+    MakerDaoIlkListItem,
+    MakerDaoIlkListResponse,
     MakerDaoPositionAssetResponse,
     MakerDaoVaultPositionItemResponse,
     MakerDaoVaultPositionResponse,
 )
+from makerdao_crawler.constants import MAKERDAO_DEFAULT_CONTRACTS
 from makerdao_crawler.database import get_pool
 
 from tests.helpers.routes import build_test_client
@@ -51,6 +53,40 @@ class _FakePool:
         return _AcquireCtx(self._conn)
 
 
+class _FakeCall:
+    def __init__(self, value):
+        self._value = value
+
+    async def call(self):
+        return self._value
+
+
+class _FakeFunctions:
+    def __init__(self, *, ilks_value):
+        self._ilks_value = ilks_value
+
+    def ilks(self, _ilk):
+        return _FakeCall(self._ilks_value)
+
+
+class _FakeContract:
+    def __init__(self, *, ilks_value):
+        self.functions = _FakeFunctions(ilks_value=ilks_value)
+
+
+class _FakeEth:
+    def __init__(self, contracts):
+        self._contracts = contracts
+
+    def contract(self, *, address, abi):
+        return self._contracts[address.lower()]
+
+
+class _FakeWeb3:
+    def __init__(self, contracts):
+        self.eth = _FakeEth(contracts)
+
+
 def _build_client(*, ilks=None, positions=None):
     fake_pool = _FakePool(_FakeConn(ilks=ilks, positions=positions))
 
@@ -77,21 +113,34 @@ def test_status_route_returns_scaffold_metadata() -> None:
     }
 
 
-def test_ilks_route_returns_cached_ilks() -> None:
+def test_ilks_route_returns_live_ilks(monkeypatch) -> None:
     ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
-    row = {
-        "ilk": "ETH-A",
-        "vault_type": "vault",
-        "gem_symbol": "WETH",
-        "gem_address": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
-        "debt_ceiling": "100000000",
-        "liquidation_ratio": "1.45",
-        "liquidation_penalty": "0.13",
-        "stability_fee": "0.05",
-        "dust": "5000",
-        "updated_at": ts,
-    }
-    with _build_client(ilks=[row]) as client:
+
+    async def _fake_get_ilks(pool, **kwargs):
+        assert pool is not None
+        assert "w3" in kwargs
+        return MakerDaoIlkListResponse(
+            chain="ethereum",
+            protocol="makerdao",
+            ilks=[
+                MakerDaoIlkListItem(
+                    ilk="ETH-A",
+                    vault_type="vault",
+                    gem_symbol="WETH",
+                    gem_address="0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+                    debt_ceiling="100000000",
+                    liquidation_ratio="1.45",
+                    liquidation_penalty="0.13",
+                    stability_fee=None,
+                    dust="5000",
+                    updated_at=ts.isoformat().replace("+00:00", "Z"),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(makerdao_service, "get_ilks", _fake_get_ilks)
+
+    with _build_client() as client:
         response = client.get("/api/makerdao/ilks")
 
     assert response.status_code == 200
@@ -107,7 +156,7 @@ def test_ilks_route_returns_cached_ilks() -> None:
                 "debt_ceiling": "100000000",
                 "liquidation_ratio": "1.45",
                 "liquidation_penalty": "0.13",
-                "stability_fee": "0.05",
+                "stability_fee": None,
                 "dust": "5000",
                 "updated_at": "2026-04-23T10:00:00Z",
             }
@@ -248,3 +297,183 @@ async def test_direct_urn_ilk_scan_honors_explicit_config(monkeypatch) -> None:
     )
 
     assert ilks == ["ETH-A", "ALLOCATOR-SPARK-A"]
+
+
+@pytest.mark.asyncio
+async def test_get_ilks_returns_cached_rows_without_live_fetch(monkeypatch) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    pool = _FakePool(
+        _FakeConn(
+            ilks=[
+                {
+                    "ilk": "ETH-A",
+                    "vault_type": "vault",
+                    "gem_symbol": "WETH",
+                    "gem_address": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+                    "debt_ceiling": "100000000",
+                    "liquidation_ratio": "1.45",
+                    "liquidation_penalty": "0.13",
+                    "stability_fee": None,
+                    "dust": "5000",
+                    "updated_at": ts,
+                }
+            ]
+        )
+    )
+
+    async def _unexpected_live_fetch(**_kwargs):
+        raise AssertionError("live fetch should not run when cache has rows")
+
+    monkeypatch.setattr(makerdao_service, "_fetch_live_ilks", _unexpected_live_fetch)
+
+    result = await makerdao_service.get_ilks(pool, w3="fake-w3")
+
+    assert result.chain == "ethereum"
+    assert result.protocol == "makerdao"
+    assert len(result.ilks) == 1
+    assert result.ilks[0].ilk == "ETH-A"
+    assert result.ilks[0].gem_symbol == "WETH"
+
+
+@pytest.mark.asyncio
+async def test_get_ilks_backfills_live_items_when_cache_is_empty(monkeypatch) -> None:
+    contracts = makerdao_service._MakerDaoContracts(**MAKERDAO_DEFAULT_CONTRACTS)
+    pool = _FakePool(_FakeConn(ilks=[]))
+    persisted: list[dict] = []
+
+    async def _fake_load_ilk_names(w3, loaded_contracts, *, include_registry=True):
+        assert w3 == "fake-w3"
+        assert loaded_contracts == contracts
+        assert include_registry is True
+        return ["WBTC-A", "ETH-A"]
+
+    async def _fake_build_live_ilk_item(w3, loaded_contracts, ilk_name, updated_at):
+        assert w3 == "fake-w3"
+        assert loaded_contracts == contracts
+        assert updated_at.tzinfo is not None
+        return MakerDaoIlkListItem(
+            ilk=ilk_name,
+            vault_type="vault",
+            gem_symbol=ilk_name.split("-")[0],
+            gem_address=None,
+            debt_ceiling="0",
+            liquidation_ratio="1",
+            liquidation_penalty=None,
+            stability_fee=None,
+            dust="0",
+            updated_at=updated_at.isoformat().replace("+00:00", "Z"),
+        )
+
+    monkeypatch.setattr(makerdao_service, "_load_contract_addresses", lambda: contracts)
+    monkeypatch.setattr(makerdao_service, "_load_ilk_names", _fake_load_ilk_names)
+    monkeypatch.setattr(
+        makerdao_service,
+        "_build_live_ilk_item",
+        _fake_build_live_ilk_item,
+    )
+
+    async def _fake_upsert_ilk(_pool, payload):
+        persisted.append(payload)
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "upsert_ilk",
+        _fake_upsert_ilk,
+    )
+
+    result = await makerdao_service.get_ilks(pool, w3="fake-w3")
+
+    assert result.chain == "ethereum"
+    assert result.protocol == "makerdao"
+    assert [item.ilk for item in result.ilks] == ["ETH-A", "WBTC-A"]
+    assert [payload["ilk"] for payload in persisted] == ["ETH-A", "WBTC-A"]
+
+
+@pytest.mark.asyncio
+async def test_build_live_ilk_item_converts_maker_units() -> None:
+    contracts = makerdao_service._MakerDaoContracts(**MAKERDAO_DEFAULT_CONTRACTS)
+    w3 = _FakeWeb3(
+        {
+            contracts.vat.lower(): _FakeContract(
+                ilks_value=(
+                    0,
+                    makerdao_service.RAY,
+                    0,
+                    100_000_000 * makerdao_service.RAD,
+                    5_000 * makerdao_service.RAD,
+                )
+            ),
+            contracts.spotter.lower(): _FakeContract(
+                ilks_value=(
+                    "0x0000000000000000000000000000000000000000",
+                    int(Decimal("1.45") * makerdao_service.RAY),
+                )
+            ),
+            contracts.dog.lower(): _FakeContract(
+                ilks_value=(
+                    "0x0000000000000000000000000000000000000000",
+                    int(Decimal("1.13") * makerdao_service.WAD),
+                    0,
+                    0,
+                )
+            ),
+        }
+    )
+
+    item = await makerdao_service._build_live_ilk_item(
+        w3,
+        contracts,
+        "ETH-A",
+        datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert item is not None
+    assert item.ilk == "ETH-A"
+    assert item.gem_symbol == "WETH"
+    assert item.debt_ceiling == "100000000"
+    assert item.liquidation_ratio == "1.45"
+    assert item.liquidation_penalty == "0.13"
+    assert item.stability_fee is None
+    assert item.dust == "5000"
+
+
+@pytest.mark.asyncio
+async def test_build_live_ilk_item_treats_zero_chop_as_unknown_penalty() -> None:
+    contracts = makerdao_service._MakerDaoContracts(**MAKERDAO_DEFAULT_CONTRACTS)
+    w3 = _FakeWeb3(
+        {
+            contracts.vat.lower(): _FakeContract(
+                ilks_value=(
+                    0,
+                    makerdao_service.RAY,
+                    0,
+                    100_000_000 * makerdao_service.RAD,
+                    5_000 * makerdao_service.RAD,
+                )
+            ),
+            contracts.spotter.lower(): _FakeContract(
+                ilks_value=(
+                    "0x0000000000000000000000000000000000000000",
+                    int(Decimal("1.45") * makerdao_service.RAY),
+                )
+            ),
+            contracts.dog.lower(): _FakeContract(
+                ilks_value=(
+                    "0x0000000000000000000000000000000000000000",
+                    0,
+                    0,
+                    0,
+                )
+            ),
+        }
+    )
+
+    item = await makerdao_service._build_live_ilk_item(
+        w3,
+        contracts,
+        "ALLOCATOR-SPARK-A",
+        datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert item is not None
+    assert item.liquidation_penalty is None

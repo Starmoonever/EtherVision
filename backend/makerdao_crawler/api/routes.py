@@ -27,10 +27,10 @@ async def status() -> MakerDaoScaffoldStatusResponse:
 @router.get(
     "/ilks",
     response_model=MakerDaoIlkListResponse,
-    summary="List MakerDAO ilks from cache",
+    summary="List MakerDAO ilks from cache with live backfill",
 )
-async def ilks(pool: AsyncpgPool) -> MakerDaoIlkListResponse:
-    return await service.get_ilks(pool)
+async def ilks(request: Request, pool: AsyncpgPool) -> MakerDaoIlkListResponse:
+    return await service.get_ilks(pool, w3=getattr(request.app.state, "w3", None))
 
 
 @router.get(

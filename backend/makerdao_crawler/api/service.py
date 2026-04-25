@@ -23,7 +23,7 @@ from ..constants import (
     RAY,
     WAD,
 )
-from ..db import fetch_current_vault_positions, fetch_ilks
+from ..db import fetch_current_vault_positions, fetch_ilks, upsert_ilk
 from .schemas import (
     MakerDaoIlkListItem,
     MakerDaoIlkListResponse,
@@ -164,8 +164,18 @@ def get_scaffold_status() -> MakerDaoScaffoldStatusResponse:
     )
 
 
-async def get_ilks(pool: Any) -> MakerDaoIlkListResponse:
+async def get_ilks(pool: Any, *, w3: Any = None) -> MakerDaoIlkListResponse:
     rows = await fetch_ilks(pool)
+    if rows:
+        return _build_ilks_response_from_rows(rows)
+
+    response = await _fetch_live_ilks(w3=w3)
+    for item in response.ilks:
+        await upsert_ilk(pool, _ilk_item_to_payload(item))
+    return response
+
+
+def _build_ilks_response_from_rows(rows: list[Any]) -> MakerDaoIlkListResponse:
     return MakerDaoIlkListResponse(
         chain=MAKERDAO_CHAIN,
         protocol=MAKERDAO_PROTOCOL,
@@ -190,6 +200,118 @@ async def get_ilks(pool: Any) -> MakerDaoIlkListResponse:
             )
             for row in rows
         ],
+    )
+
+
+def _ilk_item_to_payload(item: MakerDaoIlkListItem) -> dict[str, Any]:
+    return {
+        "ilk": item.ilk,
+        "chain": MAKERDAO_CHAIN,
+        "protocol": MAKERDAO_PROTOCOL,
+        "vault_type": item.vault_type,
+        "gem_symbol": item.gem_symbol,
+        "gem_address": item.gem_address,
+        "join_address": None,
+        "clip_address": None,
+        "pip_address": None,
+        "debt_ceiling": item.debt_ceiling,
+        "liquidation_ratio": item.liquidation_ratio,
+        "liquidation_penalty": item.liquidation_penalty,
+        "stability_fee": item.stability_fee,
+        "dust": item.dust,
+        "extra_jsonb": {"source": "onchain-live-backfill"},
+    }
+
+
+async def _fetch_live_ilks(*, w3: Any = None) -> MakerDaoIlkListResponse:
+    own_w3 = False
+    active_w3 = w3
+    try:
+        if active_w3 is None:
+            cfg = load_config()
+            active_w3 = await build_web3(cast(Any, cfg))
+            own_w3 = True
+
+        contracts = _load_contract_addresses()
+        updated_at = datetime.now(timezone.utc)
+        items: list[MakerDaoIlkListItem] = []
+        for ilk_name in await _load_ilk_names(active_w3, contracts):
+            item = await _build_live_ilk_item(
+                active_w3,
+                contracts,
+                ilk_name,
+                updated_at,
+            )
+            if item is not None:
+                items.append(item)
+        return MakerDaoIlkListResponse(
+            chain=MAKERDAO_CHAIN,
+            protocol=MAKERDAO_PROTOCOL,
+            ilks=sorted(items, key=lambda item: item.ilk),
+        )
+    finally:
+        if own_w3 and isinstance(active_w3, AsyncWeb3):
+            try:
+                await active_w3.provider.disconnect()
+            except Exception:
+                pass
+
+
+async def _build_live_ilk_item(
+    w3: Any,
+    contracts: _MakerDaoContracts,
+    ilk_name: str,
+    updated_at: datetime,
+) -> MakerDaoIlkListItem | None:
+    ilk_bytes = _text_to_bytes32(ilk_name)
+    vat = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(contracts.vat),
+        abi=VAT_ABI,
+    )
+    spotter = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(contracts.spotter),
+        abi=SPOTTER_ABI,
+    )
+    dog = w3.eth.contract(
+        address=AsyncWeb3.to_checksum_address(contracts.dog),
+        abi=DOG_ABI,
+    )
+
+    try:
+        _art_total, _rate_raw, _spot_raw, line_raw, dust_raw = await vat.functions.ilks(
+            ilk_bytes
+        ).call()
+        _pip_address, mat_raw = await spotter.functions.ilks(ilk_bytes).call()
+    except Exception:
+        return None
+
+    chop_raw = None
+    try:
+        _clip_address, chop_raw, _hole_raw, _dirt_raw = await dog.functions.ilks(
+            ilk_bytes
+        ).call()
+    except Exception:
+        pass
+
+    metadata = await _load_ilk_metadata(w3, contracts, ilk_name)
+    debt_ceiling = Decimal(int(line_raw)) / Decimal(RAD)
+    dust = Decimal(int(dust_raw)) / Decimal(RAD)
+    liquidation_ratio = Decimal(int(mat_raw)) / Decimal(RAY) if mat_raw else None
+    liquidation_penalty = None
+    if chop_raw is not None and int(chop_raw) > 0:
+        liquidation_penalty = Decimal(int(chop_raw)) / Decimal(WAD) - Decimal(1)
+
+    return MakerDaoIlkListItem(
+        ilk=ilk_name,
+        vault_type=MAKERDAO_DEFAULT_VAULT_TYPE,
+        gem_symbol=metadata.get("symbol") or ilk_name.split("-")[0],
+        gem_address=metadata.get("token_address"),
+        debt_ceiling=_fmt_optional_decimal(debt_ceiling),
+        liquidation_ratio=_fmt_optional_decimal(liquidation_ratio),
+        liquidation_penalty=_fmt_optional_decimal(liquidation_penalty),
+        stability_fee=None,
+        dust=_fmt_optional_decimal(dust),
+        updated_at=_record_ts(updated_at),
     )
 
 

@@ -251,7 +251,7 @@ Morpho 模块当前聚焦 Morpho Blue：
 MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当前仓位链上实时查询，同时保留缓存表结构供后续回放和批量同步使用：
 
 - `loan.makerdao_ilks_current`
-  - 缓存 ilk 基础参数，如抵押资产、债务上限、清算比率
+  - ilk 基础参数缓存，如抵押资产、债务上限、清算比率；当前 `/api/makerdao/ilks` 读表优先，空表时链上读取并回写
 - `loan.makerdao_current_vault_positions`
   - 预留当前 Vault 仓位缓存；当前 `/api/makerdao/position` 优先走链上实时查询，不依赖该表
 - `loan.makerdao_position_snapshots`
@@ -261,6 +261,8 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
 
 - `GET /api/makerdao/status`
 - `GET /api/makerdao/ilks`
+  - 优先读取 `loan.makerdao_ilks_current`
+  - 若表为空，则链上读取 `ILK_REGISTRY`、`Vat`、`Spotter`、`Dog`，返回 ilk、抵押资产、债务上限、清算比率、清算罚金、dust 等字段，并回写缓存表
 - `GET /api/makerdao/position`
   - 必填 `address`，可传 owner / proxy / urn 地址
   - 可选 `vault_id`、`ilk`、`include_empty`
