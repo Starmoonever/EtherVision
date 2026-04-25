@@ -146,6 +146,20 @@ frontend/
 - Compound 与 JustLend 的专用接口
 - MakerDAO Vault 个人仓位接口
 
+其中 JustLend 页面当前包含：
+
+- 个人账户分析：通过 TRON Base58 地址查询当前仓位，展示存款、抵押、债务、健康因子、LTV、清算阈值、资产结构与交易回放
+- 宏观市场评估：通过 `GET /api/justlend/markets`、`GET /api/justlend/market/state` 与 `GET /api/justlend/market/state/period` 展示市场规模、利率、流动性与历史状态
+- 大户 / 风险仓位：通过 `GET /api/justlend/positions` 分页展示当前仓位概览，并支持按资产、仓位类型、抵押状态与风险指标筛选排序
+
+其中 MakerDAO 页面当前包含：
+
+- 个人账户分析：通过 `GET /api/makerdao/position` 查询 owner / proxy / urn 地址对应的 Vault 仓位
+- 请求固定带 `include_empty=true`，用于区分“后端请求失败 / 无数据”和“地址存在但为空仓位”
+- 页面展示 Vault 数量、总抵押、总债务、最差健康因子、健康 Vault 数量、抵押类型与 Vault 明细
+- Vault 明细展示 vault id、ilk、抵押品、抵押数量、抵押价值、债务、清算率、清算价格、健康因子与数据时间
+- MakerDAO 宏观市场页当前为占位页，等待后端市场接口后再接入
+
 其中 Morpho 市场页当前依赖以下接口：
 
 - 市场列表：市场视图分页拉取 `market_id`、`collateral`、`loan`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段；页面访问第几页才请求第几页，不在前端一次性拉取所有页；市场筛选位于列表表头的 `Collateral` 与 `Loan` 列，分别对应 markets 接口的 `collateral` 与 `loan` 参数，两个值都可为空，并在输入框内按回车后提交请求

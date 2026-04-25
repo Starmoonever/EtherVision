@@ -10,6 +10,8 @@
 - JustLend
 - MakerDAO
 
+补充说明：前端当前已接入 MakerDAO 个人 Vault 查询接口 `GET /api/makerdao/position`。本地后端目录尚未包含独立的 `makerdao_crawler/` 模块；如果 MakerDAO API 实现后续同步到本仓库，需要同步补充本文件的模块职责、路由、测试与数据库说明。
+
 如果你是第一次接手本仓库，建议先看根 [README.md](../README.md)，再回到本文件看后端细节。
 
 ## 技术栈
@@ -299,6 +301,7 @@ JustLend 模块负责：
 - 市场列表与市场状态查询
 - 市场最新态缓存与历史快照
 - 用户趋势回放
+- 全量当前仓位分页分析
 - 交易 effect 解释
 - TRON 地址与说明文案处理
 
@@ -318,6 +321,8 @@ JustLend 模块负责：
 当前新增的 JustLend 市场接口包括：
 
 - `GET /api/justlend/markets`
+- `GET /api/justlend/position`
+- `GET /api/justlend/position/replay`
 - `GET /api/justlend/market/state`
 - `GET /api/justlend/market/state/period`
 - `GET /api/justlend/positions`
@@ -360,6 +365,17 @@ uv run python scripts/justlend/backfill_current_positions_from_history.py --user
 - 第一版先打通数据库与只读查询链路
 - 当前脚本默认抓取最新市场状态，不提供任意历史块高回放
 - `borrow_cap`、`supply_cap` 等字段在第一版中仍可能为空，后续按可用链上方法补齐
+
+### MakerDAO
+
+当前前端已按统一 API 形态接入 MakerDAO 个人账户分析：
+
+- 接口路径：`GET /api/makerdao/position`
+- 查询参数：`address` 必填，`vault_id`、`ilk` 可选，`include_empty` 用于区分空仓位与无数据
+- 前端个人页会固定传 `include_empty=true`
+- 响应用于展示 Vault 抵押、债务、健康因子、清算比例与清算价格
+
+注意：本地后端代码当前未包含独立 MakerDAO 模块目录，也未在 `crawler_shared.server` 中看到 MakerDAO router 注册。维护 MakerDAO 后端文档前，应先确认接口实现来源是否已经同步到本仓库，避免把外部部署状态写成当前代码事实。
 
 ## 数据库与迁移
 
