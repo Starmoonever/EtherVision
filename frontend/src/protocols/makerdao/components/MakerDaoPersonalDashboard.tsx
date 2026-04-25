@@ -5,6 +5,7 @@ import {
   type MakerDaoVaultPosition,
 } from '../../../api/makerdao';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../../../api/requestMeta';
+import { ChartDataStatus } from '../../../components/ChartAssist';
 
 interface MakerDaoPersonalDashboardProps {
   address: string;
@@ -79,6 +80,25 @@ function findWorstVault(positions: MakerDaoVaultPosition[]): MakerDaoVaultPositi
   }, null);
 }
 
+function riskLabel(vault: MakerDaoVaultPosition | null): string {
+  if (!vault) return '空仓位';
+  if (toNum(vault.debt_value_usd) <= 0) return '无活跃债务';
+  if (!vault.is_healthy) return '高风险';
+
+  const hf = toNum(vault.health_factor);
+  if (hf > 0 && hf < 1.35) return '需重点观察';
+  if (hf > 0 && hf < 2) return '相对可控';
+  return '相对稳健';
+}
+
+function riskToneClass(vault: MakerDaoVaultPosition | null): string {
+  const label = riskLabel(vault);
+  if (label === '高风险') return 'justlend-risk-danger';
+  if (label === '需重点观察') return 'justlend-risk-watch';
+  if (label === '空仓位' || label === '无活跃债务') return 'justlend-risk-neutral';
+  return 'justlend-risk-safe';
+}
+
 export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboardProps) {
   const [data, setData] = useState<MakerDaoPositionResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -96,7 +116,7 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
       setError('');
 
       try {
-        const result = await fetchMakerDaoPositionWithMeta({ address });
+        const result = await fetchMakerDaoPositionWithMeta({ address, includeEmpty: true });
         if (cancelled) return;
         setData(result.data);
         setMeta(mergeRequestMetas([result.meta]));
@@ -178,7 +198,15 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
     ? new Date(meta.lastUpdatedAt).toLocaleString('zh-CN', { hour12: false })
     : formatDateTime(positions[0]?.snapshot_at);
   const worstVault = summary.worstVault;
-
+  const riskFocusText = worstVault
+    ? `Vault #${worstVault.vault_id || '--'} · ${worstVault.ilk || worstVault.vault_type || '--'}`
+    : '暂无活跃 Vault';
+  const riskBadgeClass = riskToneClass(worstVault);
+  const overviewMetaItems = [
+    { label: '地址', value: data.address || address, mono: true },
+    { label: '最近更新', value: refreshedAtText },
+    { label: '数据状态', value: meta.cacheStatus === 'hit' ? '缓存命中' : '实时拉取' },
+  ];
   return (
     <div className="makerdao-dashboard">
       <div className="card makerdao-account-card">
@@ -187,10 +215,38 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
             <span className="card-title">账户概览</span>
             <span className="badge green-badge">{data.chain || 'Ethereum'}</span>
             <span className="badge badge-brand-soft">{data.protocol || 'MakerDAO'}</span>
+            <span className={`badge ${riskBadgeClass}`}>{riskLabel(worstVault)}</span>
           </div>
-          <span className="address-badge" title={data.address || address}>
-            {shortAddress(data.address || address)}
-          </span>
+          <ChartDataStatus meta={meta} />
+        </div>
+
+        <div className="justlend-overview-grid makerdao-overview-grid">
+          <div className="justlend-overview-copy">
+            <div className="justlend-market-kicker">Vault Overview</div>
+            <h2 className="justlend-market-title">
+              {worstVault ? `当前重点关注 ${riskFocusText}` : '当前地址没有 MakerDAO Vault 仓位'}
+            </h2>
+            <p className="justlend-market-copy">
+              MakerDAO 个人账户分析会按 Vault 汇总抵押价值、DAI 债务、健康因子与清算价格，
+              用来快速判断该地址是否存在需要优先排查的 Vault。
+            </p>
+          </div>
+
+          <div className="justlend-overview-side">
+            <div className="justlend-overview-pills">
+              {overviewMetaItems.map((item) => (
+                <div key={item.label} className="justlend-overview-pill">
+                  <span className="justlend-overview-pill-label">{item.label}</span>
+                  <span
+                    className={`justlend-overview-pill-value ${item.mono ? 'mono' : ''}`}
+                    title={item.value}
+                  >
+                    {item.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className="summary-grid makerdao-summary-grid">
@@ -207,7 +263,7 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
             <span className="metric-value red">{formatUsd(summary.totalDebtUsd)}</span>
           </div>
           <div className="metric-box">
-            <span className="metric-label">最差健康因子</span>
+            <span className="metric-label">健康因子</span>
             <span className={`metric-value ${healthTone(worstVault?.health_factor)}`}>
               {formatHealthFactor(worstVault?.health_factor)}
             </span>
@@ -222,16 +278,6 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
             <span className="metric-label">抵押类型</span>
             <span className="metric-value blue">{summary.vaultTypes}</span>
           </div>
-        </div>
-
-        <div className="makerdao-meta-row">
-          <span>最近更新：{refreshedAtText}</span>
-          <span>{meta.cacheStatus === 'hit' ? '缓存命中' : '实时拉取'}</span>
-          {worstVault ? (
-            <span>
-              风险关注：Vault #{worstVault.vault_id} · {worstVault.ilk || worstVault.vault_type}
-            </span>
-          ) : null}
         </div>
       </div>
 
