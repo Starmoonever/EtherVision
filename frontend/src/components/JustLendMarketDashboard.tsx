@@ -1,9 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -20,98 +22,6 @@ import { justLendChartTheme } from './justlendTheme';
 
 const marketPalette = justLendChartTheme.palettes.market;
 const USD_CALCULATION_SCALE = 10;
-const BASE_RATE_ONLY_SUPPLY_SYMBOLS = new Set(['USDD', 'wstUSDT', 'sTRX']);
-
-function BaseRateInfoBadge() {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [panelStyle, setPanelStyle] = useState<{ top: number; left: number; width: number }>({
-    top: 0,
-    left: 16,
-    width: 300,
-  });
-
-  useEffect(() => {
-    if (!open) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-
-    const updatePosition = () => {
-      const triggerRect = wrapRef.current?.getBoundingClientRect();
-      if (!triggerRect) return;
-
-      const viewportPadding = 16;
-      const panelWidth = Math.min(320, window.innerWidth - viewportPadding * 2);
-      const desiredLeft = triggerRect.left + triggerRect.width / 2 - panelWidth / 2;
-      const clampedLeft = Math.min(
-        Math.max(viewportPadding, desiredLeft),
-        window.innerWidth - panelWidth - viewportPadding,
-      );
-
-      setPanelStyle({
-        top: Math.min(triggerRect.bottom + 8, window.innerHeight - 24),
-        left: clampedLeft,
-        width: panelWidth,
-      });
-    };
-
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [open]);
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex' }}>
-      <button
-        type="button"
-        className="justlend-rate-note-badge"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-      >
-        基础利率
-      </button>
-
-      {open ? (
-        <div
-          style={{
-            position: 'fixed',
-            top: `${panelStyle.top}px`,
-            left: `${panelStyle.left}px`,
-            width: `${panelStyle.width}px`,
-            maxWidth: 'calc(100vw - 32px)',
-            zIndex: 1000,
-            background: '#0b1220',
-            border: '1px solid #334155',
-            borderRadius: '10px',
-            padding: '0.85rem 0.95rem',
-            boxShadow: '0 12px 24px rgba(2,6,23,0.55)',
-            color: '#cbd5e1',
-            fontSize: '0.82rem',
-            lineHeight: 1.6,
-          }}
-        >
-          当前市场利率为基础利率，不包含激励利率。
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function toNum(value: string | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -179,6 +89,11 @@ function formatDateTime(value: string): string {
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return value;
   return new Date(parsed).toLocaleString();
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value));
 }
 
 function marketLabel(item: JustLendMarketItem): string {
@@ -255,11 +170,6 @@ export function JustLendMarketDashboard({
     () => markets.find((item) => item.market === selectedMarket) ?? null,
     [markets, selectedMarket],
   );
-  const isBaseRateOnlySupplyMarket = useMemo(() => {
-    const symbol = marketState?.underlying_symbol ?? selectedMarketItem?.underlying_symbol ?? '';
-    return BASE_RATE_ONLY_SUPPLY_SYMBOLS.has(symbol);
-  }, [marketState?.underlying_symbol, selectedMarketItem?.underlying_symbol]);
-
   const marketMetrics = useMemo(() => {
     if (!marketState) return null;
     const priceUsd = toNum(marketState.price_usd);
@@ -282,8 +192,6 @@ export function JustLendMarketDashboard({
       reserveUsd,
       supplyUsd,
       utilizationPct: ratioToPercent(marketState.utilization),
-      borrowRatePct: ratioToPercent(marketState.borrow_apy),
-      supplyRatePct: ratioToPercent(marketState.supply_apy),
       collateralFactorPct: ratioToPercent(marketState.collateral_factor),
       reserveFactorPct: ratioToPercent(marketState.reserve_factor),
       borrowCap: toNum(marketState.borrow_cap),
@@ -314,33 +222,29 @@ export function JustLendMarketDashboard({
     ];
   }, [marketMetrics]);
 
-  const rateAndFactorData = useMemo(() => {
+  const parameterGaugeData = useMemo(() => {
     if (!marketMetrics) return [];
     return [
       {
-        name: 'Borrow Rate',
-        value: marketMetrics.borrowRatePct,
-        fill: justLendChartTheme.series.borrowRate,
-      },
-      {
-        name: 'Supply Rate',
-        value: marketMetrics.supplyRatePct,
-        fill: justLendChartTheme.series.supplyRate,
-      },
-      {
         name: 'Utilization',
+        label: '资金利用率',
         value: marketMetrics.utilizationPct,
         fill: justLendChartTheme.series.utilization,
+        hint: '已借出资金占资金池规模的比例',
       },
       {
         name: 'Collateral Factor',
+        label: '抵押系数',
         value: marketMetrics.collateralFactorPct,
         fill: justLendChartTheme.series.collateralFactor,
+        hint: '抵押资产可计入借款额度的比例',
       },
       {
         name: 'Reserve Factor',
+        label: '储备系数',
         value: marketMetrics.reserveFactorPct,
         fill: justLendChartTheme.series.reserveFactor,
+        hint: '利息进入协议储备的比例',
       },
     ];
   }, [marketMetrics]);
@@ -368,42 +272,6 @@ export function JustLendMarketDashboard({
       },
     ];
   }, [marketMetrics]);
-
-  const rateAndFactorDetails = useMemo(() => {
-    if (!marketMetrics) return [];
-    return [
-      {
-        name: 'Borrow Rate',
-        color: justLendChartTheme.series.borrowRate,
-        primary: formatPercent(marketMetrics.borrowRatePct),
-        secondary: '当前借款利率',
-      },
-      {
-        name: 'Supply Rate',
-        color: justLendChartTheme.series.supplyRate,
-        primary: formatPercent(marketMetrics.supplyRatePct),
-        secondary: isBaseRateOnlySupplyMarket ? '当前供应利率（基础，不含激励）' : '当前供应利率',
-      },
-      {
-        name: 'Utilization',
-        color: justLendChartTheme.series.utilization,
-        primary: formatPercent(marketMetrics.utilizationPct),
-        secondary: '资金利用率',
-      },
-      {
-        name: 'Collateral Factor',
-        color: justLendChartTheme.series.collateralFactor,
-        primary: formatPercent(marketMetrics.collateralFactorPct),
-        secondary: '抵押系数',
-      },
-      {
-        name: 'Reserve Factor',
-        color: justLendChartTheme.series.reserveFactor,
-        primary: formatPercent(marketMetrics.reserveFactorPct),
-        secondary: '储备系数',
-      },
-    ];
-  }, [isBaseRateOnlySupplyMarket, marketMetrics]);
 
   if (marketsLoading) {
     return (
@@ -443,17 +311,6 @@ export function JustLendMarketDashboard({
         },
         { label: '借款规模', value: formatUsd(marketMetrics.borrowUsd), tone: 'red' as const },
         { label: '可用现金', value: formatUsd(marketMetrics.cashUsd), tone: 'blue' as const },
-        {
-          label: '供应利率',
-          value: formatPercent(marketMetrics.supplyRatePct),
-          tone: 'green' as const,
-          noteBadge: isBaseRateOnlySupplyMarket ? '基础利率' : '',
-        },
-        {
-          label: '借款利率',
-          value: formatPercent(marketMetrics.borrowRatePct),
-          tone: 'red' as const,
-        },
       ]
     : [];
 
@@ -614,7 +471,6 @@ export function JustLendMarketDashboard({
               <div key={item.label} className="metric-box">
                 <div className="justlend-metric-label-row">
                   <span className="metric-label">{item.label}</span>
-                  {item.noteBadge ? <BaseRateInfoBadge /> : null}
                 </div>
                 <span className={`metric-value ${item.tone}`}>{item.value}</span>
               </div>
@@ -685,87 +541,59 @@ export function JustLendMarketDashboard({
                   Snapshot
                 </span>
               </div>
-              <div style={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={rateAndFactorData}
-                    margin={{ top: 16, right: 18, left: 8, bottom: 8 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke={justLendChartTheme.grid} />
-                    <XAxis
-                      dataKey="name"
-                      stroke={justLendChartTheme.axis.secondary}
-                      tick={marketChartTick}
-                    />
-                    <YAxis
-                      stroke={justLendChartTheme.axis.primary}
-                      tick={marketChartTick}
-                      domain={[0, 100]}
-                      tickFormatter={(value) => `${Number(value)}%`}
-                    />
-                    <Tooltip
-                      cursor={false}
-                      contentStyle={marketTooltipContentStyle}
-                      labelStyle={marketTooltipLabelStyle}
-                      itemStyle={marketTooltipItemStyle}
-                      formatter={(value: unknown) => [formatPercent(Number(value ?? 0)), '当前值']}
-                    />
-                    <Bar dataKey="value" radius={[8, 8, 0, 0]} maxBarSize={34} activeBar={false}>
-                      {rateAndFactorData.map((item) => (
-                        <Cell key={item.name} fill={item.fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div
-                className="justlend-allocation-list"
-                style={{
-                  flexDirection: 'column',
-                  gap: '0.6rem',
-                  overflowX: 'hidden',
-                  overflowY: 'auto',
-                  maxHeight: '224px',
-                  paddingRight: '0.25rem',
-                  paddingBottom: 0,
-                }}
-              >
-                {rateAndFactorDetails.map((item) => (
-                  <div key={item.name} className="justlend-allocation-item">
-                    <div className="justlend-allocation-main">
-                      <span className="justlend-risk-dot" style={{ background: item.color }} />
-                      <span className="token-symbol">{item.name}</span>
-                      <span className="justlend-allocation-share">{item.primary}</span>
+              <div className="justlend-parameter-gauge-grid">
+                {parameterGaugeData.map((item) => {
+                  const value = clampPercent(item.value);
+                  const chartData = [
+                    { name: item.label, value },
+                    { name: '剩余', value: Math.max(0, 100 - value) },
+                  ];
+                  return (
+                    <div key={item.name} className="justlend-parameter-gauge-card">
+                      <div className="justlend-parameter-gauge-chart">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={chartData}
+                              dataKey="value"
+                              nameKey="name"
+                              innerRadius="68%"
+                              outerRadius="88%"
+                              startAngle={90}
+                              endAngle={-270}
+                              paddingAngle={1}
+                              stroke={justLendChartTheme.stroke.asset}
+                              strokeWidth={1}
+                            >
+                              <Cell fill={item.fill} />
+                              <Cell fill="#1e293b" />
+                            </Pie>
+                            <Tooltip
+                              contentStyle={marketTooltipContentStyle}
+                              labelStyle={marketTooltipLabelStyle}
+                              itemStyle={marketTooltipItemStyle}
+                              formatter={(tooltipValue: unknown, name: unknown) => [
+                                formatPercent(Number(tooltipValue ?? 0)),
+                                String(name),
+                              ]}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="justlend-parameter-gauge-center">
+                          <strong>{formatPercent(item.value)}</strong>
+                          <span>{item.label}</span>
+                        </div>
+                      </div>
+                      <div className="justlend-parameter-gauge-copy">
+                        <span className="justlend-risk-dot" style={{ background: item.fill }} />
+                        <span>{item.hint}</span>
+                      </div>
                     </div>
-                    <div className="justlend-allocation-meta">
-                      <span>{item.secondary}</span>
-                      <span className="mono">{item.primary}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-              {isBaseRateOnlySupplyMarket ? (
-                <div
-                  className="justlend-banner justlend-banner-soft"
-                  style={{ marginTop: '0.85rem', padding: '0.75rem 0.9rem' }}
-                >
-                  <div className="justlend-banner-copy" style={{ lineHeight: 1.55 }}>
-                    当前市场利率只是基础利率，不含激励利率。
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
 
-          <div>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <div className="card-header">
-                <span className="card-title">市场参数面板</span>
-                <span className="badge" style={justLendChartTheme.badge.neutral}>
-                  Params
-                </span>
-              </div>
-              <div className="summary-grid protocol-summary-grid" style={{ marginTop: 0 }}>
+              <div className="justlend-parameter-metric-grid">
                 <div className="metric-box">
                   <span className="metric-label">Collateral Factor</span>
                   <span className="metric-value green">

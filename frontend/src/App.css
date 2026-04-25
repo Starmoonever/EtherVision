@@ -465,8 +465,60 @@
     linear-gradient(135deg, rgba(21, 28, 44, 0.98), rgba(15, 23, 42, 0.98));
 }
 
+.makerdao-filter-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 170px));
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.makerdao-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.makerdao-filter-field input {
+  width: 100%;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  letter-spacing: normal;
+  outline: none;
+  padding: 0.48rem 0.62rem;
+  text-transform: none;
+}
+
+.makerdao-filter-field input:focus {
+  border-color: var(--accent-secondary);
+}
+
 .makerdao-summary-grid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.makerdao-overview-side {
+  justify-self: end;
+  align-items: flex-end;
+  width: min(100%, 720px);
+}
+
+.makerdao-overview-pills {
+  justify-content: flex-end;
+  align-items: flex-end;
+}
+
+.makerdao-overview-pill {
+  justify-content: flex-end;
+  max-width: 100%;
 }
 
 .makerdao-meta-row {
@@ -500,6 +552,162 @@
   font-size: 0.78rem;
 }
 
+.makerdao-table-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  margin: -0.35rem 0 1rem;
+}
+
+.makerdao-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.28rem;
+}
+
+.makerdao-copy-btn {
+  appearance: none;
+  width: fit-content;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.18rem 0.5rem;
+}
+
+.makerdao-copy-btn:hover {
+  border-color: rgba(147, 197, 253, 0.48);
+  color: #dbeafe;
+}
+
+.makerdao-debt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  align-items: flex-end;
+}
+
+.makerdao-debt-cell span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.makerdao-detail-row td {
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0;
+}
+
+.makerdao-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border-top: 1px solid rgba(96, 165, 250, 0.14);
+}
+
+.makerdao-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.makerdao-detail-item {
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.32);
+  padding: 0.72rem 0.8rem;
+}
+
+.makerdao-detail-label {
+  display: block;
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  margin-bottom: 0.36rem;
+}
+
+.makerdao-detail-value,
+.makerdao-detail-value-row {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.makerdao-detail-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.makerdao-full-address {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: #dbeafe;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.makerdao-assets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.makerdao-assets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.makerdao-asset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.makerdao-asset-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.5);
+  padding: 0.7rem 0.8rem;
+}
+
+.makerdao-asset-main,
+.makerdao-asset-side {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.makerdao-asset-main strong,
+.makerdao-asset-side strong {
+  color: var(--text-strong);
+}
+
+.makerdao-asset-side {
+  justify-content: flex-end;
+}
+
+.makerdao-empty-detail {
+  color: var(--text-subtle);
+  font-size: 0.86rem;
+}
+
 .makerdao-notice {
   display: flex;
   flex-direction: column;
@@ -528,8 +736,18 @@
 }
 
 @media (max-width: 700px) {
+  .makerdao-filter-row,
   .makerdao-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .makerdao-detail-grid,
+  .makerdao-asset-row {
+    grid-template-columns: 1fr;
+  }
+
+  .makerdao-asset-side {
+    justify-content: flex-start;
   }
 }
 
@@ -651,6 +869,90 @@
     0 0 18px rgba(248, 113, 113, 0.28);
   animation: justlend-risk-button-breathe 1.8s ease-in-out infinite;
 }
+
+.justlend-parameter-gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.justlend-parameter-gauge-card {
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.62);
+  padding: 0.95rem;
+}
+
+.justlend-parameter-gauge-chart {
+  position: relative;
+  height: 190px;
+}
+
+.justlend-parameter-gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  text-align: center;
+}
+
+.justlend-parameter-gauge-center strong {
+  color: #f8fafc;
+  font-size: 1.24rem;
+  line-height: 1.1;
+}
+
+.justlend-parameter-gauge-center span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  margin-top: 0.28rem;
+}
+
+.justlend-parameter-gauge-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.justlend-parameter-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.95rem;
+}
+
+.justlend-parameter-metric-grid .metric-box {
+  margin: 0;
+  padding: 0.72rem 0.8rem;
+}
+
+.justlend-parameter-metric-grid .metric-label {
+  font-size: 0.68rem;
+}
+
+.justlend-parameter-metric-grid .metric-value {
+  font-size: 1rem;
+}
+
+@media (max-width: 900px) {
+  .justlend-parameter-gauge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .justlend-parameter-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @keyframes justlend-hf-pulse {
   0%,
   100% {
