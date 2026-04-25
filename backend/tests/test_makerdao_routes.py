@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from makerdao_crawler.api import service as makerdao_service
 from makerdao_crawler.api.routes import router as makerdao_router
@@ -192,3 +193,12 @@ def test_position_route_returns_live_vault_positions(monkeypatch) -> None:
     assert payload["positions"][0]["data_source"] == "onchain-live"
     assert payload["positions"][0]["assets"][0]["role"] == "collateral"
     assert payload["positions"][0]["assets"][1]["role"] == "debt"
+
+
+def test_fmt_decimal_handles_values_larger_than_default_decimal_precision() -> None:
+    value = Decimal("123456789012345678901234567890.123456789012345678")
+
+    assert (
+        makerdao_service._fmt_decimal(value)
+        == "123456789012345678901234567890.123456789012345678"
+    )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, NamedTuple, cast
 
 from fastapi import HTTPException
@@ -670,7 +670,15 @@ def _row_get(row: Any, key: str) -> Any:
 
 def _fmt_decimal(value: Any, scale: int = 18) -> str:
     decimal_value = Decimal(str(value or 0))
-    normalized = decimal_value.quantize(Decimal(1).scaleb(-scale)).normalize()
+    quant = Decimal(1).scaleb(-scale)
+    precision = max(
+        len(decimal_value.as_tuple().digits),
+        decimal_value.adjusted() + scale + 2,
+        scale + 1,
+    )
+    with localcontext() as ctx:
+        ctx.prec = precision
+        normalized = decimal_value.quantize(quant).normalize()
     return format(normalized, "f")
 
 
