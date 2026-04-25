@@ -68,17 +68,60 @@ const ALLOCATION_COLORS = [
   '#f0abfc',
   '#34d399',
 ];
-const vaultTooltipContentStyle = {
-  border: '1px solid rgba(15, 23, 42, 0.92)',
-  borderRadius: 8,
-  background: 'rgba(2, 6, 23, 0.98)',
-  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.52)',
-  color: '#e2e8f0',
-};
-const vaultTooltipLabelStyle = {
-  color: '#bae6fd',
-  fontWeight: 800,
-};
+const LIQUIDITY_BAR_RADIUS = 5;
+const MORPHO_VAULT_HISTORY_STORAGE_KEY = 'morpho_vault_search_history_by_version';
+const MORPHO_VAULT_LEGACY_HISTORY_STORAGE_KEY = 'morpho_vault_search_history';
+const MORPHO_VAULT_HISTORY_LIMIT = 30;
+
+type MorphoVaultSearchHistoryByVersion = Record<MorphoVaultVersion, string[]>;
+
+function emptyMorphoVaultSearchHistory(): MorphoVaultSearchHistoryByVersion {
+  return { v1: [], v2: [] };
+}
+
+function normalizeVaultHistoryList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, MORPHO_VAULT_HISTORY_LIMIT);
+}
+
+function loadMorphoVaultSearchHistory(): MorphoVaultSearchHistoryByVersion {
+  try {
+    const stored = localStorage.getItem(MORPHO_VAULT_HISTORY_STORAGE_KEY);
+    if (!stored) {
+      const legacy = normalizeVaultHistoryList(
+        JSON.parse(localStorage.getItem(MORPHO_VAULT_LEGACY_HISTORY_STORAGE_KEY) ?? '[]'),
+      );
+      return { v1: legacy, v2: [] };
+    }
+    const parsed = JSON.parse(stored) as unknown;
+    if (!parsed || typeof parsed !== 'object') return emptyMorphoVaultSearchHistory();
+    const record = parsed as Partial<Record<MorphoVaultVersion, unknown>>;
+    return {
+      v1: normalizeVaultHistoryList(record.v1),
+      v2: normalizeVaultHistoryList(record.v2),
+    };
+  } catch {
+    return emptyMorphoVaultSearchHistory();
+  }
+}
+
+function saveMorphoVaultSearchHistory(history: MorphoVaultSearchHistoryByVersion): void {
+  try {
+    localStorage.setItem(
+      MORPHO_VAULT_HISTORY_STORAGE_KEY,
+      JSON.stringify({
+        v1: history.v1.slice(0, MORPHO_VAULT_HISTORY_LIMIT),
+        v2: history.v2.slice(0, MORPHO_VAULT_HISTORY_LIMIT),
+      }),
+    );
+  } catch {
+    // localStorage may be unavailable or full; vault search should still work.
+  }
+}
 
 function parseNumber(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -227,11 +270,7 @@ function mixHexColor(hex: string, mixWith: string, weight: number): string {
 }
 
 function createLiquidityColor(hex: string): string {
-  return mixHexColor(hex, '#ffffff', 0.5);
-}
-
-function createLiquidityStrokeColor(hex: string): string {
-  return mixHexColor(hex, '#ffffff', 0.68);
+  return mixHexColor(hex, '#ffffff', 0.38);
 }
 
 function createPieActiveStroke(hex: string): string {
@@ -252,17 +291,20 @@ function AllocationTooltipContent({ item }: { item: AllocationHistogramItem | nu
   if (!item) return null;
 
   return (
-    <div style={vaultTooltipContentStyle}>
-      <div style={vaultTooltipLabelStyle}>{item.label}</div>
-      <div className="morpho-vault-chart-tooltip-row">
+    <div className="morpho-market-chart-tooltip">
+      <div className="morpho-market-chart-tooltip-title">
+        <span style={{ background: item.color }} />
+        <strong>{item.label}</strong>
+      </div>
+      <div className="morpho-market-chart-tooltip-row">
         <span>分配资产</span>
         <strong>{formatCompactUsd(String(item.quotaUsd))}</strong>
       </div>
-      <div className="morpho-vault-chart-tooltip-row">
+      <div className="morpho-market-chart-tooltip-row">
         <span>流动性</span>
         <strong>{formatCompactUsd(String(item.liquidityUsd))}</strong>
       </div>
-      <div className="morpho-vault-chart-tooltip-row">
+      <div className="morpho-market-chart-tooltip-row">
         <span>市场容量</span>
         <strong>{item.isIdle ? 'Idle' : formatCompactUsd(String(item.supplyCapUsd))}</strong>
       </div>
@@ -289,6 +331,10 @@ interface AllocationLiquidityShapeProps {
   height?: number;
   payload?: AllocationHistogramItem;
   fill?: string;
+  fillOpacity?: number;
+  stroke?: string;
+  strokeWidth?: number;
+  radius?: number;
 }
 
 function AllocationLiquidityShape({
@@ -298,12 +344,34 @@ function AllocationLiquidityShape({
   height = 0,
   payload,
   fill = '#10b981',
+  fillOpacity = 1,
+  stroke = 'none',
+  strokeWidth = 0,
+  radius = LIQUIDITY_BAR_RADIUS,
 }: AllocationLiquidityShapeProps) {
   if (!payload || width <= 0 || height <= 0) return null;
+  const cornerRadius = Math.min(radius, width / 2, height);
+  const right = x + width;
+  const bottom = y + height;
+  const path = [
+    `M ${x} ${bottom}`,
+    `L ${x} ${y + cornerRadius}`,
+    `Q ${x} ${y} ${x + cornerRadius} ${y}`,
+    `L ${right - cornerRadius} ${y}`,
+    `Q ${right} ${y} ${right} ${y + cornerRadius}`,
+    `L ${right} ${bottom}`,
+    'Z',
+  ].join(' ');
 
   return (
     <g className="morpho-vault-bar-hit-target">
-      <rect x={x} y={y} width={width} height={height} rx={1} fill={fill} />
+      <path
+        d={path}
+        fill={fill}
+        fillOpacity={fillOpacity}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
     </g>
   );
 }
@@ -316,6 +384,7 @@ interface AllocationAxisTickProps {
   items: AllocationHistogramItem[];
   selectedMarketId: string;
   onMarketSelect: (marketId: string) => void;
+  onMarketPin?: (marketId: string) => void;
 }
 
 function AllocationAxisTick({
@@ -326,6 +395,7 @@ function AllocationAxisTick({
   items,
   selectedMarketId,
   onMarketSelect,
+  onMarketPin,
 }: AllocationAxisTickProps) {
   const item = items[index];
   const isSelected = item?.marketId === selectedMarketId;
@@ -341,7 +411,10 @@ function AllocationAxisTick({
           ? 'morpho-vault-axis-tick morpho-vault-axis-tick-selected'
           : 'morpho-vault-axis-tick'
       }
-      onClick={() => onMarketSelect(item.marketId)}
+      onClick={() => {
+        onMarketPin?.(item.marketId);
+        onMarketSelect(item.marketId);
+      }}
       role="button"
       aria-label={`查询 ${item.label}`}
     >
@@ -451,12 +524,12 @@ function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
               </small>
             </div>
             <div className="metric-box">
-              <span className="metric-label">Liquidity Buffer</span>
+              <span className="metric-label">流动性</span>
               <strong>{formatSmartUsd(vault.liquidity_usd)}</strong>
-              <small>由 allocation 与 cap 推导</small>
+              <small>由 allocation 与 markets信息推导</small>
             </div>
             <div className="metric-box">
-              <span className="metric-label">Net APY</span>
+              <span className="metric-label">净年化收益率</span>
               <button
                 type="button"
                 className="morpho-vault-apy-trigger"
@@ -694,25 +767,38 @@ function MorphoVaultAllocationChart({
   const bars = useMemo(() => createAllocationBars(vault.allocations), [vault.allocations]);
   const totalTvl = useMemo(() => bars.reduce((sum, item) => sum + item.supplyUsd, 0), [bars]);
   const legendItems = useMemo(() => createAllocationLegendItems(bars, totalTvl), [bars, totalTvl]);
-  const selectedAllocationIndex = legendItems.findIndex(
-    (item) => item.marketId === selectedMarketId,
-  );
-  const [hoveredAllocationIndex, setHoveredAllocationIndex] = useState<number | null>(null);
-  const activeAllocationIndex =
-    hoveredAllocationIndex ?? (selectedAllocationIndex >= 0 ? selectedAllocationIndex : 0);
-  const activeAllocation = legendItems[activeAllocationIndex] ?? legendItems[0] ?? null;
+  const [hoveredMarketId, setHoveredMarketId] = useState<string | null>(null);
+  const [pinnedMarketId, setPinnedMarketId] = useState<string | null>(null);
+  const defaultMarketId = selectedMarketId || legendItems[0]?.marketId || null;
+  const activeMarketId = hoveredMarketId ?? pinnedMarketId ?? defaultMarketId;
+  const activeAllocation =
+    legendItems.find((item) => item.marketId === activeMarketId) ?? legendItems[0] ?? null;
   const highlightedMarketId = activeAllocation?.marketId ?? selectedMarketId;
   const idleShare = useMemo(
     () => legendItems.filter((item) => item.isIdle).reduce((sum, item) => sum + item.share, 0),
     [legendItems],
   );
   const largestShare = legendItems[0]?.share ?? 0;
-  const activeAllocationColor = activeAllocation?.color ?? '#38bdf8';
-  const activeLiquidityColor = createLiquidityColor(activeAllocationColor);
 
   useEffect(() => {
-    setHoveredAllocationIndex(null);
+    setHoveredMarketId(null);
+    setPinnedMarketId(null);
   }, [vault.address, legendItems.length]);
+
+  useEffect(() => {
+    if (!selectedMarketId) return;
+    setPinnedMarketId(selectedMarketId);
+  }, [selectedMarketId]);
+
+  const previewMarket = (marketId: string | null) => {
+    setHoveredMarketId(marketId);
+  };
+
+  const pinMarket = (marketId: string, shouldQuery = false) => {
+    setPinnedMarketId(marketId);
+    setHoveredMarketId(marketId);
+    if (shouldQuery) onMarketSelect(marketId);
+  };
 
   return (
     <section className="card morpho-detail-card morpho-vault-allocation-card">
@@ -750,31 +836,29 @@ function MorphoVaultAllocationChart({
                       cornerRadius={5}
                       labelLine={false}
                       isAnimationActive={false}
-                      onClick={(item) => {
-                        const payload = item.payload as AllocationHistogramItem | undefined;
-                        if (payload?.marketId) onMarketSelect(payload.marketId);
-                      }}
-                      onMouseEnter={(_, index) => setHoveredAllocationIndex(index)}
-                      onMouseLeave={() => setHoveredAllocationIndex(null)}
+                      onMouseLeave={() => previewMarket(null)}
                     >
-                      {legendItems.map((item, index) => (
-                        <Cell
-                          key={item.marketId}
-                          fill={item.color}
-                          stroke={
-                            activeAllocationIndex === index
-                              ? createPieActiveStroke(item.color)
-                              : 'rgba(2, 6, 23, 0.96)'
-                          }
-                          strokeWidth={activeAllocationIndex === index ? 4.4 : 3.2}
-                          opacity={1}
-                          className={
-                            activeAllocationIndex === index
-                              ? 'morpho-vault-pie-slice morpho-vault-pie-slice-active'
-                              : 'morpho-vault-pie-slice'
-                          }
-                        />
-                      ))}
+                      {legendItems.map((item) => {
+                        const isActive = item.marketId === highlightedMarketId;
+                        return (
+                          <Cell
+                            key={item.marketId}
+                            fill={item.color}
+                            stroke={
+                              isActive ? createPieActiveStroke(item.color) : 'rgba(2, 6, 23, 0.96)'
+                            }
+                            strokeWidth={isActive ? 4.4 : 3.2}
+                            opacity={1}
+                            className={
+                              isActive
+                                ? 'morpho-vault-pie-slice morpho-vault-pie-slice-active'
+                                : 'morpho-vault-pie-slice'
+                            }
+                            onMouseEnter={() => previewMarket(item.marketId)}
+                            onClick={() => pinMarket(item.marketId, true)}
+                          />
+                        );
+                      })}
                     </Pie>
                   </PieChart>
                 </ResponsiveContainer>
@@ -792,37 +876,6 @@ function MorphoVaultAllocationChart({
                   ) : null}
                 </div>
               </div>
-              <div className="morpho-vault-allocation-list">
-                {legendItems.map((item, index) => (
-                  <button
-                    type="button"
-                    key={item.marketId}
-                    className={
-                      item.marketId === selectedMarketId
-                        ? 'morpho-vault-allocation-item morpho-vault-allocation-item-active morpho-vault-allocation-item-selected'
-                        : activeAllocationIndex === index
-                          ? 'morpho-vault-allocation-item morpho-vault-allocation-item-active'
-                          : 'morpho-vault-allocation-item'
-                    }
-                    onClick={() => onMarketSelect(item.marketId)}
-                    onMouseEnter={() => setHoveredAllocationIndex(index)}
-                    onMouseLeave={() => setHoveredAllocationIndex(null)}
-                    title={item.marketId}
-                  >
-                    <span
-                      className="morpho-vault-allocation-swatch"
-                      style={{ background: item.color }}
-                    />
-                    <span className="morpho-vault-allocation-name">{item.label}</span>
-                    <span className="morpho-vault-allocation-value">
-                      {formatCompactUsd(String(item.supplyUsd))}
-                    </span>
-                    <span className="morpho-vault-allocation-share">
-                      {percentFormatter.format(item.share * 100)}%
-                    </span>
-                  </button>
-                ))}
-              </div>
             </div>
           ) : (
             <div className="morpho-vault-empty-chart">
@@ -833,44 +886,43 @@ function MorphoVaultAllocationChart({
         </div>
 
         <div className="morpho-vault-allocation-chart">
-          <div className="morpho-vault-chart-legend">
-            <span>
-              <i
-                className="morpho-vault-legend-allocation"
-                style={{ background: activeAllocationColor }}
-              />
-              Allocation
-            </span>
-            <span>
-              <i
-                className="morpho-vault-legend-liquidity"
-                style={{ background: activeLiquidityColor }}
-              />
-              Liquidity
-            </span>
-          </div>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={legendItems}
               barGap={0}
-              margin={{ top: 12, right: 10, bottom: 84, left: 6 }}
+              margin={{ top: 12, right: 10, bottom: 40, left: 6 }}
               className="morpho-vault-clickable-chart"
               onMouseMove={(event) => {
                 const activeEvent = event as unknown as {
+                  activeTooltipIndex?: number;
                   activePayload?: Array<{ payload?: AllocationHistogramItem }>;
                 };
-                const payload = activeEvent.activePayload?.[0]?.payload;
-                if (!payload?.marketId) return;
-                const index = legendItems.findIndex((item) => item.marketId === payload.marketId);
-                if (index >= 0) setHoveredAllocationIndex(index);
+                const payload = activeEvent.activePayload?.find(
+                  (entry) => entry.payload?.marketId,
+                )?.payload;
+                if (payload?.marketId) {
+                  previewMarket(payload.marketId);
+                  return;
+                }
+                if (typeof activeEvent.activeTooltipIndex === 'number') {
+                  previewMarket(legendItems[activeEvent.activeTooltipIndex]?.marketId ?? null);
+                }
               }}
-              onMouseLeave={() => setHoveredAllocationIndex(null)}
+              onMouseLeave={() => previewMarket(null)}
               onClick={(event) => {
                 const activeEvent = event as unknown as {
+                  activeTooltipIndex?: number;
                   activePayload?: Array<{ payload?: AllocationHistogramItem }>;
                 };
-                const payload = activeEvent.activePayload?.[0]?.payload;
-                if (payload?.marketId) onMarketSelect(payload.marketId);
+                const payload = activeEvent.activePayload?.find(
+                  (entry) => entry.payload?.marketId,
+                )?.payload;
+                const marketId =
+                  payload?.marketId ??
+                  (typeof activeEvent.activeTooltipIndex === 'number'
+                    ? legendItems[activeEvent.activeTooltipIndex]?.marketId
+                    : null);
+                if (marketId) pinMarket(marketId, true);
               }}
             >
               <CartesianGrid
@@ -889,6 +941,7 @@ function MorphoVaultAllocationChart({
                     items={legendItems}
                     selectedMarketId={highlightedMarketId}
                     onMarketSelect={onMarketSelect}
+                    onMarketPin={(marketId) => pinMarket(marketId)}
                   />
                 )}
                 stroke="rgba(148, 163, 184, 0.42)"
@@ -905,13 +958,13 @@ function MorphoVaultAllocationChart({
               />
               <Tooltip
                 content={<AllocationBarTooltip />}
-                cursor={{ fill: 'rgba(15, 23, 42, 0.42)' }}
+                cursor={{ fill: 'rgba(55, 69, 103, 0.42)' }}
               />
               <Bar
                 dataKey="allocation"
-                barSize={24}
+                barSize={30}
                 stackId="quota-stack"
-                radius={[2, 2, 0, 0]}
+                radius={[5, 5, 0, 0]}
                 isAnimationActive={false}
               >
                 {legendItems.map((item) => (
@@ -920,36 +973,46 @@ function MorphoVaultAllocationChart({
                     fill={item.color}
                     fillOpacity={1}
                     stroke={
-                      item.marketId === highlightedMarketId ? hexToRgba(item.color, 0.95) : 'none'
+                      item.marketId === highlightedMarketId
+                        ? createPieActiveStroke(item.color)
+                        : hexToRgba(item.color, 0.74)
                     }
-                    strokeWidth={item.marketId === highlightedMarketId ? 2 : 0}
+                    strokeWidth={item.marketId === highlightedMarketId ? 3.5 : 1}
                     className={
                       item.marketId === highlightedMarketId
                         ? 'morpho-vault-bar-cell morpho-vault-bar-cell-active'
                         : 'morpho-vault-bar-cell'
                     }
+                    onMouseEnter={() => previewMarket(item.marketId)}
+                    onClick={() => pinMarket(item.marketId, true)}
                   />
                 ))}
               </Bar>
               <Bar
                 dataKey="liquidity"
-                barSize={24}
-                radius={[2, 2, 0, 0]}
-                shape={<AllocationLiquidityShape />}
+                barSize={30}
+                radius={[5, 5, 0, 0]}
+                shape={<AllocationLiquidityShape radius={LIQUIDITY_BAR_RADIUS} />}
                 isAnimationActive={false}
               >
                 {legendItems.map((item) => (
                   <Cell
                     key={`liquidity-${item.marketId}`}
                     fill={createLiquidityColor(item.color)}
-                    fillOpacity={1}
-                    stroke={createLiquidityStrokeColor(item.color)}
-                    strokeWidth={item.marketId === highlightedMarketId ? 2 : 1}
+                    fillOpacity={item.marketId === highlightedMarketId ? 0.9 : 0.72}
+                    stroke={
+                      item.marketId === highlightedMarketId
+                        ? createPieActiveStroke(item.color)
+                        : 'none'
+                    }
+                    strokeWidth={item.marketId === highlightedMarketId ? 2.5 : 0}
                     className={
                       item.marketId === highlightedMarketId
                         ? 'morpho-vault-bar-cell morpho-vault-bar-cell-active'
                         : 'morpho-vault-bar-cell'
                     }
+                    onMouseEnter={() => previewMarket(item.marketId)}
+                    onClick={() => pinMarket(item.marketId, true)}
                   />
                 ))}
               </Bar>
@@ -958,7 +1021,44 @@ function MorphoVaultAllocationChart({
         </div>
       </div>
       {marketQuerySection ? (
-        <div className="morpho-vault-allocation-market-section">{marketQuerySection}</div>
+        <div className="morpho-vault-allocation-market-section">
+          <aside className="morpho-vault-market-directory" aria-label="Vault allocation markets">
+            <div className="morpho-vault-market-directory-head">
+              <strong>市场目录</strong>
+              <span>{legendItems.length} markets</span>
+            </div>
+            <div className="morpho-vault-market-directory-list">
+              {legendItems.map((item) => (
+                <button
+                  type="button"
+                  key={item.marketId}
+                  className={
+                    item.marketId === selectedMarketId
+                      ? 'morpho-vault-market-directory-item morpho-vault-market-directory-item-active'
+                      : 'morpho-vault-market-directory-item'
+                  }
+                  onClick={() => {
+                    pinMarket(item.marketId, true);
+                  }}
+                  title={item.marketId}
+                >
+                  <span
+                    className="morpho-vault-market-directory-swatch"
+                    style={{ background: item.color }}
+                  />
+                  <span className="morpho-vault-market-directory-main">
+                    <strong>{item.displayName}</strong>
+                    <small>{percentFormatter.format(item.share * 100)}%</small>
+                  </span>
+                  <span className="morpho-vault-market-directory-value">
+                    {formatCompactUsd(String(item.supplyUsd))}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <div className="morpho-vault-market-query-result">{marketQuerySection}</div>
+        </div>
       ) : null}
     </section>
   );
@@ -988,8 +1088,36 @@ export function MorphoVaultPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [vaultFetchedAt, setVaultFetchedAt] = useState<number | null>(null);
-  const [vaultFromCache, setVaultFromCache] = useState(false);
+  const [showVaultHistory, setShowVaultHistory] = useState(false);
+  const [vaultSearchHistoryByVersion, setVaultSearchHistoryByVersion] = useState(() =>
+    loadMorphoVaultSearchHistory(),
+  );
   const activeVaultAddress = vaultAddressByVersion[vaultVersion];
+  const vaultSearchHistory = vaultSearchHistoryByVersion[vaultVersion];
+  const rememberVaultAddress = useCallback((address: string, version: MorphoVaultVersion) => {
+    const normalizedAddress = address.trim();
+    if (!normalizedAddress) return;
+    setVaultSearchHistoryByVersion((current) => {
+      const next = {
+        ...current,
+        [version]: [
+          normalizedAddress,
+          ...current[version].filter(
+            (item) => item.toLowerCase() !== normalizedAddress.toLowerCase(),
+          ),
+        ].slice(0, MORPHO_VAULT_HISTORY_LIMIT),
+      };
+      saveMorphoVaultSearchHistory(next);
+      return next;
+    });
+  }, []);
+  const clearVaultSearchHistory = useCallback((version: MorphoVaultVersion) => {
+    setVaultSearchHistoryByVersion((current) => {
+      const next = { ...current, [version]: [] };
+      saveMorphoVaultSearchHistory(next);
+      return next;
+    });
+  }, []);
 
   const loadVaultForAddress = useCallback(
     async (address: string, force = false, version: MorphoVaultVersion = vaultVersion) => {
@@ -1013,13 +1141,13 @@ export function MorphoVaultPage({
           const result = await fetchMorphoVaultV2WithMeta(normalizedAddress, { force });
           setVaultV2(result.data);
           setVaultFetchedAt(result.meta.fetchedAt);
-          setVaultFromCache(result.meta.fromCache);
+          rememberVaultAddress(normalizedAddress, version);
         } else {
           setVaultV2(null);
           const result = await fetchMorphoVaultWithMeta(normalizedAddress, { force });
           setVault(result.data);
           setVaultFetchedAt(result.meta.fetchedAt);
-          setVaultFromCache(result.meta.fromCache);
+          rememberVaultAddress(normalizedAddress, version);
           const firstMarketId = result.data.allocations.find(
             (allocation) => allocation.market_id,
           )?.market_id;
@@ -1033,7 +1161,7 @@ export function MorphoVaultPage({
         setLoading(false);
       }
     },
-    [onMarketSelect, vaultVersion],
+    [onMarketSelect, rememberVaultAddress, vaultVersion],
   );
 
   const loadVault = useCallback(
@@ -1077,44 +1205,77 @@ export function MorphoVaultPage({
           </div>
         </div>
         <div className="morpho-vault-search-row">
-          <input
-            className="address-input"
-            value={vaultAddress}
-            onChange={(event) => {
-              setVaultAddress(event.target.value);
-              setError('');
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void loadVault(true);
-            }}
-            placeholder="输入 Morpho vault 地址"
-          />
-          <button type="button" className="switch-btn" onClick={() => void loadVault(true)}>
+          <div className="input-wrapper">
+            <input
+              className="address-input"
+              value={vaultAddress}
+              onFocus={() => setShowVaultHistory(true)}
+              onBlur={() => window.setTimeout(() => setShowVaultHistory(false), 120)}
+              onChange={(event) => {
+                setVaultAddress(event.target.value);
+                setError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void loadVault(false);
+              }}
+              placeholder="输入 Morpho vault 地址"
+            />
+            {showVaultHistory && vaultSearchHistory.length > 0 ? (
+              <div className="history-dropdown morpho-vault-search-history-dropdown">
+                <div className="history-header">
+                  <span>{vaultVersion.toUpperCase()} Vault 搜索记录</span>
+                  <button
+                    type="button"
+                    className="clear-history-btn"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      clearVaultSearchHistory(vaultVersion);
+                    }}
+                  >
+                    清除记录
+                  </button>
+                </div>
+                <ul className="history-list">
+                  {vaultSearchHistory.map((address) => (
+                    <li
+                      key={address}
+                      className="history-item"
+                      title={address}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        setVaultAddress(address);
+                        setShowVaultHistory(false);
+                      }}
+                    >
+                      {address}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="search-btn morpho-vault-query-btn"
+            onClick={() => void loadVault(false)}
+          >
             查询
           </button>
         </div>
+        {(vaultVersion === 'v1' ? vault !== null : vaultV2 !== null) ? (
+          <div className="morpho-vault-search-status">
+            <span>更新 {refreshedAtText}</span>
+            <button type="button" onClick={() => void loadVault(true)}>
+              刷新
+            </button>
+          </div>
+        ) : null}
         {error ? <div className="protocol-banner protocol-banner-warn">{error}</div> : null}
       </section>
 
       {loading ? (
         <div className="card morpho-market-loading-card">
           <div className="spinner"></div>
-        </div>
-      ) : null}
-
-      {(vaultVersion === 'v1' ? vault !== null : vaultV2 !== null) ? (
-        <div className="card morpho-detail-card morpho-market-toolbar">
-          <div className="morpho-market-toolbar-copy">
-            <strong>数据状态</strong>
-            <span>
-              最近更新 {refreshedAtText} {vaultFromCache ? '· 缓存命中' : '· 实时拉取'}
-            </span>
-          </div>
-          <div className="morpho-market-toolbar-actions">
-            <button type="button" className="switch-btn" onClick={() => void loadVault(true)}>
-              刷新数据
-            </button>
-          </div>
         </div>
       ) : null}
 
@@ -1146,6 +1307,8 @@ export function MorphoVaultPage({
                   onPageChange={() => undefined}
                   showSorting={false}
                   showPagination={false}
+                  showColumnHeaders={false}
+                  showSummaryRows={false}
                   showTableHeaderWhenEmpty={false}
                   emptyText="正在等待该市场的 state 详情。"
                   embedded

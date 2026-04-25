@@ -2,6 +2,7 @@ import { apiFetch, apiFetchRaw } from './client';
 import type { DataWithMeta } from './requestMeta';
 
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
+const MORPHO_PERSISTED_CACHE_PREFIX = 'morpho:data-cache:';
 export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
 export const MORPHO_VAULT_V2_SAMPLE_ADDRESS = '0x9a1D6bd5b8642C41F25e0958129B85f8E1176F3e';
 
@@ -501,6 +502,41 @@ const morphoVaultReallocationsInflight = new Map<
   string,
   Promise<MorphoVaultReallocationResponse>
 >();
+
+type MorphoCachedData<T> = { fetchedAt: number; data: T };
+
+function buildMorphoPersistedCacheKey(namespace: string, key: string): string {
+  return `${MORPHO_PERSISTED_CACHE_PREFIX}${namespace}:${key}`;
+}
+
+function readMorphoPersistedCache<T>(namespace: string, key: string): MorphoCachedData<T> | null {
+  try {
+    const stored = sessionStorage.getItem(buildMorphoPersistedCacheKey(namespace, key));
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<MorphoCachedData<T>>;
+    if (!parsed || typeof parsed.fetchedAt !== 'number' || parsed.data === undefined) return null;
+    if (Date.now() - parsed.fetchedAt >= MORPHO_CACHE_TTL_MS) {
+      sessionStorage.removeItem(buildMorphoPersistedCacheKey(namespace, key));
+      return null;
+    }
+    return { fetchedAt: parsed.fetchedAt, data: parsed.data as T };
+  } catch {
+    return null;
+  }
+}
+
+function writeMorphoPersistedCache<T>(namespace: string, key: string, data: T): number {
+  const fetchedAt = Date.now();
+  try {
+    sessionStorage.setItem(
+      buildMorphoPersistedCacheKey(namespace, key),
+      JSON.stringify({ fetchedAt, data }),
+    );
+  } catch {
+    // sessionStorage may be disabled or full; in-memory cache still works.
+  }
+  return fetchedAt;
+}
 
 function normalizePairSymbol(pair: string | null | undefined, index: number): string | null {
   if (!pair) return null;
@@ -1251,6 +1287,20 @@ export async function fetchMorphoMarketsWithMeta(
     };
   }
 
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoMarketsResponse>('markets', cacheKey);
+    if (persisted) {
+      morphoMarketsCache.set(cacheKey, persisted);
+      return {
+        data: persisted.data,
+        meta: {
+          fetchedAt: persisted.fetchedAt,
+          fromCache: true,
+        },
+      };
+    }
+  }
+
   const inflight = morphoMarketsInflight.get(cacheKey);
   if (!force && inflight) {
     return inflight.then((data) => ({
@@ -1284,7 +1334,8 @@ export async function fetchMorphoMarketsWithMeta(
     )
     .then((payload) => normalizeMorphoMarketsResponse(payload, page, pageSize))
     .then((data) => {
-      morphoMarketsCache.set(cacheKey, { fetchedAt: Date.now(), data });
+      const fetchedAt = writeMorphoPersistedCache('markets', cacheKey, data);
+      morphoMarketsCache.set(cacheKey, { fetchedAt, data });
       return data;
     })
     .finally(() => {
@@ -1328,6 +1379,23 @@ export async function fetchMorphoMarketStateWithMeta(
     };
   }
 
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoMarketState>(
+      'market-state',
+      normalizedMarketId,
+    );
+    if (persisted) {
+      morphoMarketStateCache.set(normalizedMarketId, persisted);
+      return {
+        data: persisted.data,
+        meta: {
+          fetchedAt: persisted.fetchedAt,
+          fromCache: true,
+        },
+      };
+    }
+  }
+
   const inflight = morphoMarketStateInflight.get(normalizedMarketId);
   if (!force && inflight) {
     return inflight.then((data) => ({
@@ -1346,7 +1414,8 @@ export async function fetchMorphoMarketStateWithMeta(
   ])
     .then(normalizeMorphoMarketState)
     .then((data) => {
-      morphoMarketStateCache.set(normalizedMarketId, { fetchedAt: Date.now(), data });
+      const fetchedAt = writeMorphoPersistedCache('market-state', normalizedMarketId, data);
+      morphoMarketStateCache.set(normalizedMarketId, { fetchedAt, data });
       return data;
     })
     .finally(() => {
@@ -1390,6 +1459,20 @@ export async function fetchMorphoVaultWithMeta(
     };
   }
 
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoVaultResponse>('vault-v1', normalizedAddress);
+    if (persisted) {
+      morphoVaultCache.set(normalizedAddress, persisted);
+      return {
+        data: persisted.data,
+        meta: {
+          fetchedAt: persisted.fetchedAt,
+          fromCache: true,
+        },
+      };
+    }
+  }
+
   const inflight = morphoVaultInflight.get(normalizedAddress);
   if (!force && inflight) {
     return inflight.then((data) => ({
@@ -1407,7 +1490,8 @@ export async function fetchMorphoVaultWithMeta(
   ])
     .then((payload) => normalizeMorphoVaultResponse(payload, 'api'))
     .then((data) => {
-      morphoVaultCache.set(normalizedAddress, { fetchedAt: Date.now(), data });
+      const fetchedAt = writeMorphoPersistedCache('vault-v1', normalizedAddress, data);
+      morphoVaultCache.set(normalizedAddress, { fetchedAt, data });
       return data;
     })
     .finally(() => {
@@ -1495,6 +1579,23 @@ export async function fetchMorphoVaultV2WithMeta(
     };
   }
 
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoVaultV2Response>(
+      'vault-v2',
+      normalizedAddress,
+    );
+    if (persisted) {
+      morphoVaultV2Cache.set(normalizedAddress, persisted);
+      return {
+        data: persisted.data,
+        meta: {
+          fetchedAt: persisted.fetchedAt,
+          fromCache: true,
+        },
+      };
+    }
+  }
+
   const inflight = morphoVaultV2Inflight.get(normalizedAddress);
   if (!force && inflight) {
     return inflight.then((data) => ({
@@ -1512,7 +1613,8 @@ export async function fetchMorphoVaultV2WithMeta(
   ])
     .then((payload) => normalizeMorphoVaultV2Response(payload, 'api'))
     .then((data) => {
-      morphoVaultV2Cache.set(normalizedAddress, { fetchedAt: Date.now(), data });
+      const fetchedAt = writeMorphoPersistedCache('vault-v2', normalizedAddress, data);
+      morphoVaultV2Cache.set(normalizedAddress, { fetchedAt, data });
       return data;
     })
     .finally(() => {
