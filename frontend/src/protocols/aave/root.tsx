@@ -4,6 +4,7 @@ import type { BorrowPosition, UserPosition } from '../../api';
 import type { ProtocolRootProps } from '../../shared/types/app';
 import { AaveMarketPage } from './pages/AaveMarketPage';
 import { AavePersonalPage } from './pages/AavePersonalPage';
+import './styles.css';
 
 interface VersionState {
   data: UserPosition | BorrowPosition | null;

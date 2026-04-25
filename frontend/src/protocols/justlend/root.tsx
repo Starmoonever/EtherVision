@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ProtocolRootProps } from '../../shared/types/app';
 import { JustLendMarketPage } from './pages/JustLendMarketPage';
 import { JustLendPersonalPage } from './pages/JustLendPersonalPage';
+import './styles.css';
 
 export function JustLendProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   const [error, setError] = useState('');

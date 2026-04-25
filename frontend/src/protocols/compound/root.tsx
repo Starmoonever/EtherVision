@@ -4,6 +4,7 @@ import type { CompoundMarket, CompoundUserPositionItem } from '../../api/compoun
 import type { ProtocolRootProps } from '../../shared/types/app';
 import { CompoundMarketPage } from './pages/CompoundMarketPage';
 import { CompoundPersonalPage } from './pages/CompoundPersonalPage';
+import './styles.css';
 
 interface CompoundVersionState {
   data: CompoundUserPositionItem[] | null;

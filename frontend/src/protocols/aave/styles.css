@@ -1,0 +1,38 @@
+/* Aave protocol styles. Kept separate from App.css to reduce global coupling. */
+
+.aave-summary-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.aave-summary-grid .metric-box {
+  padding: 0.75rem 0.8rem;
+}
+
+.aave-summary-grid .metric-label {
+  font-size: 0.68rem;
+}
+
+.aave-summary-grid .metric-value {
+  font-size: 1.05rem;
+}
+
+@media (max-width: 1300px) {
+  .aave-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .aave-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Migrated legacy protocol patterns from shared protocol styles. */
+
+@media (max-width: 640px) {
+  .aave-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
