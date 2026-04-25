@@ -942,9 +942,6 @@
   text-align: right;
 }
 @media (max-width: 760px) {
-  .morpho-market-toolbar-actions {
-    justify-content: stretch;
-  }
   .morpho-market-search {
     min-width: 100%;
   }
@@ -956,6 +953,7 @@
   }
   .morpho-market-detail-band-primary,
   .morpho-market-detail-band-secondary,
+  .morpho-market-detail-charts,
   .morpho-market-address-row {
     grid-template-columns: 1fr;
   }
@@ -3042,40 +3040,6 @@
   justify-content: center;
 }
 
-.morpho-market-toolbar {
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.morpho-market-toolbar-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  color: #cbd5e1;
-}
-
-.morpho-market-toolbar-copy strong {
-  color: #f8fafc;
-  font-size: 0.95rem;
-}
-
-.morpho-market-toolbar-copy span {
-  color: #94a3b8;
-  font-size: 0.84rem;
-}
-
-.morpho-market-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.9rem;
-  flex-wrap: wrap;
-}
-
 .morpho-market-search {
   min-width: min(100%, 320px);
   display: flex;
@@ -3099,6 +3063,40 @@
   justify-content: flex-end;
   gap: 0.7rem;
   flex-wrap: wrap;
+}
+
+.morpho-market-search-stack {
+  display: grid;
+  gap: 0.42rem;
+  justify-items: end;
+}
+
+.morpho-market-table-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.morpho-market-table-status button {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(148, 163, 184, 0.28);
+  text-underline-offset: 0.18rem;
+}
+
+.morpho-market-table-status button:hover {
+  color: #cbd5e1;
+  text-decoration-color: rgba(203, 213, 225, 0.55);
 }
 
 .morpho-market-pagination {
@@ -3362,6 +3360,85 @@
   gap: 0.85rem;
 }
 
+.morpho-market-detail-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.morpho-market-detail-chart-card {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0.55rem;
+  min-width: 0;
+  min-height: 15.5rem;
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(14, 165, 233, 0.07), transparent 48%), rgba(8, 15, 29, 0.56);
+  padding: 0.75rem;
+}
+
+.morpho-market-detail-chart {
+  min-width: 0;
+  min-height: 12rem;
+}
+
+.morpho-market-chart-tooltip {
+  min-width: 9rem;
+  border: 1px solid rgba(30, 41, 59, 0.96);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.97);
+  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.42);
+  color: #e2e8f0;
+  padding: 0.65rem 0.72rem;
+}
+
+.morpho-market-chart-tooltip-title,
+.morpho-market-chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.morpho-market-chart-tooltip-title {
+  justify-content: flex-start;
+  margin-bottom: 0.45rem;
+}
+
+.morpho-market-chart-tooltip-title span {
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 3px;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.62);
+}
+
+.morpho-market-chart-tooltip-title strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.morpho-market-chart-tooltip-row span,
+.morpho-market-chart-tooltip-note {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.morpho-market-chart-tooltip-row strong {
+  color: #bae6fd;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.morpho-market-chart-tooltip-note {
+  margin-top: 0.36rem;
+  color: #64748b;
+}
+
 .morpho-market-detail-band {
   display: grid;
   gap: 0.75rem;
@@ -3413,18 +3490,6 @@
   min-height: 5.4rem;
 }
 
-.morpho-market-price-box {
-  position: relative;
-}
-
-.morpho-market-price-copy-btn {
-  position: absolute;
-  top: 0.65rem;
-  right: 0.65rem;
-  width: 1.35rem;
-  height: 1.35rem;
-}
-
 .morpho-market-progress-box {
   gap: 0.45rem;
 }
@@ -3456,11 +3521,12 @@
 
 .morpho-market-address-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.75rem;
 }
 
 .morpho-market-address-item {
+  grid-column: span 2;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -3470,6 +3536,10 @@
   border-radius: 8px;
   padding: 0.65rem 0.75rem;
   min-width: 0;
+}
+
+.morpho-market-address-item-token {
+  grid-column: span 3;
 }
 
 .morpho-market-address-item span {
@@ -3485,42 +3555,74 @@
   white-space: nowrap;
 }
 
+.morpho-market-address-copy-action {
+  width: 1.5rem;
+  min-width: 0;
+  height: 1.5rem;
+  padding: 0;
+}
+
+.morpho-market-address-copy-action .morpho-market-copy-icon {
+  width: 0.72rem;
+  height: 0.72rem;
+}
+
 .morpho-market-table-compact {
-  min-width: 1080px;
+  min-width: 1240px;
   table-layout: fixed;
 }
 
+.morpho-market-table-embedded {
+  min-width: 0;
+  width: 100%;
+}
+
 .morpho-market-col-id {
-  width: 20%;
+  width: 18%;
 }
 
 .morpho-market-col-asset {
-  width: 26%;
+  width: 24%;
 }
 
 .morpho-market-col-size {
-  width: 16%;
+  width: 20%;
 }
 
 .morpho-market-col-utilization {
-  width: 12%;
+  width: 14%;
+}
+
+.morpho-market-table-embedded .morpho-market-col-id {
+  width: 18%;
+}
+
+.morpho-market-table-embedded .morpho-market-col-asset {
+  width: 22%;
+}
+
+.morpho-market-table-embedded .morpho-market-col-size {
+  width: 20%;
+}
+
+.morpho-market-table-embedded .morpho-market-col-utilization {
+  width: 18%;
 }
 
 .morpho-market-table-compact thead th {
   color: #dbeafe;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 800;
-  padding: 0.62rem 0.55rem;
+  padding: 0.7rem 0.75rem;
 }
 
-.morpho-market-table-compact th,
-.morpho-market-table-compact td {
-  border-right: 1px solid rgba(148, 163, 184, 0.13);
-}
-
-.morpho-market-table-compact th:last-child,
-.morpho-market-table-compact td:last-child {
+.morpho-market-table-compact:not(.morpho-market-table-embedded) th,
+.morpho-market-table-compact:not(.morpho-market-table-embedded) td {
   border-right: none;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded) tbody tr {
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
 }
 
 .morpho-market-sort-header {
@@ -3559,6 +3661,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.48rem;
+  flex-wrap: wrap;
   min-width: 0;
   width: 100%;
 }
@@ -3568,8 +3671,8 @@
 }
 
 .morpho-market-asset-header .morpho-market-header-filter-control {
-  flex: 1 1 8.6rem;
-  max-width: 11.6rem;
+  flex: 1 1 100%;
+  max-width: 100%;
 }
 
 .morpho-market-header-filter-control {
@@ -3585,6 +3688,17 @@
   display: flex;
   align-items: center;
   min-width: 0;
+}
+
+.morpho-market-filter-history-dropdown {
+  min-width: 12rem;
+  text-align: left;
+}
+
+.morpho-market-filter-history-dropdown .history-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .morpho-market-header-search-icon {
@@ -3613,7 +3727,7 @@
 .morpho-market-header-filter-input {
   width: 100%;
   min-width: 0;
-  height: 1.95rem;
+  height: 1.82rem;
   border: 1px solid rgba(148, 163, 184, 0.34);
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.72);
@@ -3749,8 +3863,65 @@
 
 .morpho-market-table-compact td {
   font-size: 0.92rem;
-  padding: 0.68rem 0.64rem;
+  padding: 0.86rem 0.75rem;
   vertical-align: middle;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded) .morpho-market-asset-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  row-gap: 0.38rem;
+  column-gap: 0.46rem;
+  width: 100%;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded)
+  .morpho-market-asset-cell
+  .token-symbol {
+  grid-column: 1 / -1;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded) .morpho-market-token-address-text {
+  max-width: 100%;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded) .morpho-market-copy-btn {
+  opacity: 0.72;
+}
+
+.morpho-market-table-compact:not(.morpho-market-table-embedded)
+  .morpho-market-row:hover
+  .morpho-market-copy-btn {
+  opacity: 1;
+}
+
+.morpho-market-table-embedded td,
+.morpho-market-table-embedded thead th {
+  padding-right: 0.42rem;
+  padding-left: 0.42rem;
+}
+
+.morpho-market-table-embedded td {
+  font-size: 0.82rem;
+}
+
+.morpho-market-table-embedded .morpho-market-id {
+  font-size: 0.7rem;
+}
+
+.morpho-market-table-embedded .token-symbol,
+.morpho-market-table-embedded .morpho-compact-metric {
+  font-size: 0.82rem;
+}
+
+.morpho-market-table-embedded .morpho-market-token-address-text {
+  display: none;
+}
+
+.morpho-market-table-embedded .morpho-market-copy-btn {
+  width: 1.35rem;
+  height: 1.35rem;
 }
 
 .morpho-market-id {
@@ -3890,7 +4061,77 @@
 
 .morpho-market-table-shell-embedded {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.morpho-market-table-shell:not(.morpho-market-table-shell-embedded) {
+  display: grid;
+  gap: 1.05rem;
+  padding: 1.05rem;
+}
+
+.morpho-market-table-shell:not(.morpho-market-table-shell-embedded) .card-header {
+  padding-bottom: 0.2rem;
+}
+
+.morpho-market-table-shell:not(.morpho-market-table-shell-embedded) .table-wrap {
+  border: 1px solid rgba(96, 165, 250, 0.1);
+  border-radius: 12px;
+  background: rgba(8, 15, 29, 0.22);
+}
+
+.morpho-market-table-shell-embedded .table-wrap {
+  overflow-x: visible;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-charts {
+  gap: 0.55rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-chart-card {
+  gap: 0.38rem;
+  min-height: 12rem;
+  padding: 0.55rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-chart {
+  min-height: 9.5rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-band {
+  gap: 0.48rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-band-primary .metric-box,
+.morpho-market-table-shell-embedded .morpho-market-detail-band-secondary .metric-box {
+  gap: 0.28rem;
+  min-height: 4.9rem;
+  padding: 0.48rem;
+}
+
+.morpho-market-table-shell-embedded .metric-label {
+  font-size: 0.85rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-detail-band-primary .morpho-metric-strong,
+.morpho-market-table-shell-embedded .morpho-market-feature-metric .morpho-metric-strong,
+.morpho-market-table-shell-embedded .morpho-market-detail-band-secondary .morpho-metric-strong {
+  font-size: 0.85rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-address-row {
+  gap: 0.48rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-address-item {
+  gap: 0.35rem;
+  padding: 0.48rem 0.55rem;
+}
+
+.morpho-market-table-shell-embedded .morpho-market-address-item span,
+.morpho-market-table-shell-embedded .morpho-market-address-item strong {
+  font-size: 0.66rem;
 }
 
 .morpho-vault-search-row {
@@ -3898,6 +4139,38 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: center;
+}
+
+.morpho-vault-query-btn,
+.morpho-market-query-btn {
+  min-height: 2.9rem;
+}
+
+.morpho-vault-search-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.morpho-vault-search-status button {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(148, 163, 184, 0.28);
+  text-underline-offset: 0.18rem;
+}
+
+.morpho-vault-search-status button:hover {
+  color: #cbd5e1;
+  text-decoration-color: rgba(203, 213, 225, 0.55);
 }
 
 .morpho-vault-hero-band {
@@ -4307,14 +4580,16 @@
 }
 
 .morpho-vault-allocation-layout {
-  display: flex;
+  display: grid;
+  grid-template-columns: calc(32% - 0.5rem) minmax(0, 1fr);
   gap: 1rem;
   align-items: stretch;
-  min-height: 40.625rem;
+  min-height: 0;
 }
 
 .morpho-vault-pie-panel {
-  flex: 0 0 calc(32% - 0.5rem);
+  box-sizing: border-box;
+  height: 40.625rem;
   border: 1px solid rgba(96, 165, 250, 0.12);
   border-radius: 8px;
   background: rgba(8, 15, 29, 0.38);
@@ -4324,21 +4599,21 @@
 
 .morpho-vault-pie-layout {
   display: grid;
-  grid-template-rows: minmax(12rem, 1fr) auto;
+  grid-template-rows: minmax(12rem, 1fr);
   gap: 0.85rem;
   height: 100%;
-  min-height: 40.625rem;
+  min-height: 0;
 }
 
 .morpho-vault-pie {
   position: relative;
   width: 100%;
-  min-height: 20rem;
+  min-height: 0;
 }
 
 .morpho-vault-allocation-chart {
   position: relative;
-  flex: 1 1 calc(68% - 0.5rem);
+  box-sizing: border-box;
   min-width: 0;
   height: 40.625rem;
   border: 1px solid rgba(96, 165, 250, 0.12);
@@ -4374,21 +4649,6 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.morpho-vault-chart-tooltip-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 0.38rem;
-  color: #cbd5e1;
-  font-size: 0.8rem;
-}
-
-.morpho-vault-chart-tooltip-row strong {
-  color: #f8fafc;
-  font-weight: 700;
-}
-
 .morpho-vault-pie-center {
   position: absolute;
   inset: 0;
@@ -4419,69 +4679,14 @@
   margin-top: 0.22rem;
 }
 
-.morpho-vault-allocation-list {
-  display: grid;
-  gap: 0.45rem;
-  max-height: 10rem;
-  overflow-y: auto;
-  padding-right: 0.15rem;
-  scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
-}
-
-.morpho-vault-allocation-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.morpho-vault-allocation-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.morpho-vault-allocation-list::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 999px;
-}
-
-.morpho-vault-allocation-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.45rem;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 7px;
-  background: rgba(15, 23, 42, 0.48);
-  color: #cbd5e1;
-  cursor: pointer;
-  font: inherit;
-  min-height: 2.35rem;
-  padding: 0.45rem 0.55rem;
-  text-align: left;
-  transition:
-    border-color 140ms ease,
-    background 140ms ease,
-    transform 140ms ease;
-}
-
-.morpho-vault-allocation-item:hover,
-.morpho-vault-allocation-item-active {
-  border-color: rgba(125, 211, 252, 0.38);
-  background: rgba(14, 165, 233, 0.12);
-}
-
-.morpho-vault-allocation-item-active {
-  transform: translateY(-1px);
-}
-
-.morpho-vault-allocation-item-selected {
-  border-color: rgba(125, 211, 252, 0.7);
-  box-shadow:
-    inset 3px 0 0 #38bdf8,
-    0 0 18px rgba(56, 189, 248, 0.12);
-}
-
 .morpho-vault-pie-slice {
   cursor: pointer;
   filter: drop-shadow(0 8px 18px rgba(2, 6, 23, 0.18));
+  transition:
+    filter 180ms ease,
+    opacity 180ms ease,
+    stroke 180ms ease,
+    stroke-width 180ms ease;
 }
 
 .morpho-vault-pie-slice-active {
@@ -4493,7 +4698,9 @@
   cursor: pointer;
   transition:
     filter 140ms ease,
-    opacity 140ms ease;
+    opacity 140ms ease,
+    stroke 160ms ease,
+    stroke-width 160ms ease;
 }
 
 .morpho-vault-bar-cell-active {
@@ -4505,46 +4712,6 @@
 .morpho-vault-allocation-chart .recharts-tooltip-wrapper {
   z-index: 30 !important;
   pointer-events: none;
-}
-
-.morpho-vault-allocation-swatch {
-  width: 0.68rem;
-  height: 0.68rem;
-  border-radius: 3px;
-  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.52);
-}
-
-.morpho-vault-allocation-name {
-  overflow: hidden;
-  color: #e2e8f0;
-  font-size: 0.78rem;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.morpho-vault-allocation-value,
-.morpho-vault-allocation-share {
-  color: #94a3b8;
-  font-size: 0.72rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.morpho-vault-allocation-share {
-  color: #bae6fd;
-}
-
-.morpho-vault-chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem 0.8rem;
-  color: #94a3b8;
-  font-size: 0.74rem;
-  font-weight: 700;
-  min-height: 1.4rem;
-  padding: 0 0.3rem 0.25rem 3.25rem;
 }
 
 .morpho-vault-insight-strip {
@@ -4564,36 +4731,6 @@
   padding: 0.34rem 0.6rem;
 }
 
-.morpho-vault-chart-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.morpho-vault-chart-legend i {
-  width: 0.7rem;
-  height: 0.7rem;
-  border-radius: 0;
-}
-
-.morpho-vault-legend-cap {
-  height: 2px;
-  border-radius: 999px;
-  background: #334155;
-}
-
-.morpho-vault-legend-allocation {
-  background: #3b82f6;
-  border-radius: 2px;
-}
-
-.morpho-vault-legend-liquidity {
-  width: 0.18rem;
-  height: 0.82rem;
-  background: #10b981;
-  border-radius: 999px;
-}
-
 .morpho-vault-axis-tick {
   cursor: pointer;
   fill: #94a3b8;
@@ -4604,6 +4741,152 @@
 .morpho-vault-axis-tick:hover,
 .morpho-vault-axis-tick-selected {
   fill: #bae6fd;
+}
+
+.morpho-vault-allocation-market-section {
+  display: grid;
+  grid-template-columns: calc(32% - 0.5rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+  margin-top: 1rem;
+  min-height: 0;
+}
+
+.morpho-vault-market-directory {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: stretch;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  height: 0;
+  min-height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(14, 165, 233, 0.08), transparent 42%), rgba(8, 15, 29, 0.5);
+  padding: 0.72rem;
+}
+
+.morpho-vault-market-directory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.morpho-vault-market-directory-head strong {
+  color: #f8fafc;
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.morpho-vault-market-directory-head span {
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.morpho-vault-market-directory-list {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 0.12rem;
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+.morpho-vault-market-directory-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.morpho-vault-market-directory-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.morpho-vault-market-directory-list::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+}
+
+.morpho-vault-market-directory-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.82rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #cbd5e1;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.46rem 0.55rem;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.morpho-vault-market-directory-item:hover,
+.morpho-vault-market-directory-item-active {
+  border-color: rgba(186, 230, 253, 0.48);
+  background: rgba(14, 165, 233, 0.13);
+  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.18);
+  transform: translateY(-1px);
+}
+
+.morpho-vault-market-directory-swatch {
+  width: 0.78rem;
+  height: 0.78rem;
+  border-radius: 3px;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.62);
+}
+
+.morpho-vault-market-directory-main {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.morpho-vault-market-directory-main strong {
+  overflow: hidden;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-market-directory-main small,
+.morpho-vault-market-directory-value {
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.morpho-vault-market-directory-value {
+  color: #bae6fd;
+  white-space: nowrap;
+}
+
+.morpho-vault-market-query-result {
+  display: grid;
+  align-self: stretch;
+  min-width: 0;
+  height: auto;
+}
+
+.morpho-vault-market-query-result > .morpho-market-table-shell-embedded {
+  align-self: stretch;
 }
 
 .morpho-vault-market-placeholder,
@@ -4850,7 +5133,16 @@
   }
 
   .morpho-vault-allocation-layout {
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-allocation-market-section {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-market-directory {
+    height: auto;
+    min-height: 16rem;
   }
 
   .morpho-vault-hero-meta {
@@ -4888,25 +5180,17 @@
   }
 
   .morpho-vault-pie-panel {
-    flex-basis: auto;
+    height: 16rem;
   }
 
   .morpho-vault-pie-layout {
-    grid-template-columns: minmax(12rem, 0.9fr) minmax(0, 1.1fr);
+    grid-template-columns: 1fr;
     grid-template-rows: 1fr;
     min-height: 16rem;
   }
 
-  .morpho-vault-allocation-list {
-    max-height: 16rem;
-  }
-
   .morpho-vault-insight-strip {
     justify-content: flex-start;
-  }
-
-  .morpho-vault-chart-legend {
-    padding-left: 0;
   }
 
   .justlend-summary-grid,
@@ -4932,15 +5216,7 @@
 
   .morpho-vault-pie-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(12rem, 1fr) auto;
-  }
-
-  .morpho-vault-allocation-item {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-  }
-
-  .morpho-vault-allocation-value {
-    display: none;
+    grid-template-rows: minmax(12rem, 1fr);
   }
 
   .morpho-vault-hero-stats {
@@ -5002,6 +5278,18 @@
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
   max-height: 300px;
   overflow-y: auto;
+}
+
+.morpho-market-search-history-dropdown,
+.morpho-vault-search-history-dropdown {
+  text-align: left;
+}
+
+.morpho-market-search-history-dropdown .history-item,
+.morpho-vault-search-history-dropdown .history-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-header {
