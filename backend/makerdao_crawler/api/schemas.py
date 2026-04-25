@@ -13,7 +13,23 @@ class MakerDaoScaffoldStatusResponse(BaseModel):
     message: str = Field(description="当前骨架说明。")
 
 
-class MakerDaoIlkListItem(BaseModel):
+class MakerDaoIlkOverviewItem(BaseModel):
+    ilk: str = Field(description="MakerDAO ilk 名称。")
+    vault_type: str = Field(description="仓位类型。")
+    gem_symbol: str | None = Field(description="抵押资产符号。")
+    gem_address: str | None = Field(description="抵押资产地址。")
+    updated_at: str = Field(description="最近更新时间。")
+
+
+class MakerDaoIlkListResponse(BaseModel):
+    chain: str = Field(description="链标识。")
+    protocol: str = Field(description="协议标识。")
+    ilks: list[MakerDaoIlkOverviewItem] = Field(description="可用 ilk 概览列表。")
+
+
+class MakerDaoIlkDetailResponse(BaseModel):
+    chain: str = Field(description="链标识。")
+    protocol: str = Field(description="协议标识。")
     ilk: str = Field(description="MakerDAO ilk 名称。")
     vault_type: str = Field(description="仓位类型。")
     gem_symbol: str | None = Field(description="抵押资产符号。")
@@ -24,12 +40,6 @@ class MakerDaoIlkListItem(BaseModel):
     stability_fee: str | None = Field(description="稳定费。")
     dust: str | None = Field(description="最小债务规模。")
     updated_at: str = Field(description="最近更新时间。")
-
-
-class MakerDaoIlkListResponse(BaseModel):
-    chain: str = Field(description="链标识。")
-    protocol: str = Field(description="协议标识。")
-    ilks: list[MakerDaoIlkListItem] = Field(description="可用 ilk 列表。")
 
 
 class MakerDaoPositionAssetResponse(BaseModel):

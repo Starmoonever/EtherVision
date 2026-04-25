@@ -261,8 +261,12 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
 
 - `GET /api/makerdao/status`
 - `GET /api/makerdao/ilks`
-  - 优先读取 `loan.makerdao_ilks_current`
-  - 若表为空，则链上读取 `ILK_REGISTRY`、`Vat`、`Spotter`、`Dog`，返回 ilk、抵押资产、债务上限、清算比率、清算罚金、dust 等字段，并回写缓存表
+  - 返回 ilk 概览列表，优先读取 `loan.makerdao_ilks_current`
+  - 若表为空，则链上读取 `ILK_REGISTRY`、`Vat`、`Spotter`、`Dog` 并回写缓存表
+- `GET /api/makerdao/ilk`
+  - 必填 `ilk`，例如 `ETH-A`
+  - 返回单个 ilk 详细参数，包括抵押资产、债务上限、清算比率、清算罚金、dust 等字段
+  - 优先读缓存；缓存未命中时链上读取该 ilk 并回写缓存表
 - `GET /api/makerdao/position`
   - 必填 `address`，可传 owner / proxy / urn 地址
   - 可选 `vault_id`、`ilk`、`include_empty`

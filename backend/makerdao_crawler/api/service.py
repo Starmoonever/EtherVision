@@ -25,8 +25,9 @@ from ..constants import (
 )
 from ..db import fetch_current_vault_positions, fetch_ilks, upsert_ilk
 from .schemas import (
-    MakerDaoIlkListItem,
+    MakerDaoIlkDetailResponse,
     MakerDaoIlkListResponse,
+    MakerDaoIlkOverviewItem,
     MakerDaoPositionAssetResponse,
     MakerDaoScaffoldStatusResponse,
     MakerDaoVaultPositionItemResponse,
@@ -167,35 +168,48 @@ def get_scaffold_status() -> MakerDaoScaffoldStatusResponse:
 async def get_ilks(pool: Any, *, w3: Any = None) -> MakerDaoIlkListResponse:
     rows = await fetch_ilks(pool)
     if rows:
-        return _build_ilks_response_from_rows(rows)
+        return _build_ilk_overview_response_from_rows(rows)
 
-    response = await _fetch_live_ilks(w3=w3)
-    for item in response.ilks:
+    items = await _fetch_live_ilks(w3=w3)
+    for item in items:
         await upsert_ilk(pool, _ilk_item_to_payload(item))
-    return response
+    return _build_ilk_overview_response_from_details(items)
 
 
-def _build_ilks_response_from_rows(rows: list[Any]) -> MakerDaoIlkListResponse:
+async def get_ilk_detail(
+    pool: Any,
+    *,
+    ilk: str,
+    w3: Any = None,
+) -> MakerDaoIlkDetailResponse:
+    normalized_ilk = _normalize_ilk(ilk)
+    if not normalized_ilk:
+        raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+
+    rows = await fetch_ilks(pool)
+    for row in rows:
+        if str(_row_get(row, "ilk") or "").upper() == normalized_ilk:
+            return _build_ilk_detail_from_row(row)
+
+    item = await _fetch_live_ilk(normalized_ilk, w3=w3)
+    if item is None:
+        raise HTTPException(status_code=404, detail="MakerDAO ilk not found")
+    await upsert_ilk(pool, _ilk_item_to_payload(item))
+    return item
+
+
+def _build_ilk_overview_response_from_rows(rows: list[Any]) -> MakerDaoIlkListResponse:
     return MakerDaoIlkListResponse(
         chain=MAKERDAO_CHAIN,
         protocol=MAKERDAO_PROTOCOL,
         ilks=[
-            MakerDaoIlkListItem(
+            MakerDaoIlkOverviewItem(
                 ilk=str(_row_get(row, "ilk") or ""),
                 vault_type=str(
                     _row_get(row, "vault_type") or MAKERDAO_DEFAULT_VAULT_TYPE
                 ),
                 gem_symbol=_row_get(row, "gem_symbol"),
                 gem_address=_row_get(row, "gem_address"),
-                debt_ceiling=_fmt_optional_decimal(_row_get(row, "debt_ceiling")),
-                liquidation_ratio=_fmt_optional_decimal(
-                    _row_get(row, "liquidation_ratio")
-                ),
-                liquidation_penalty=_fmt_optional_decimal(
-                    _row_get(row, "liquidation_penalty")
-                ),
-                stability_fee=_fmt_optional_decimal(_row_get(row, "stability_fee")),
-                dust=_fmt_optional_decimal(_row_get(row, "dust")),
                 updated_at=_record_ts(_row_get(row, "updated_at")),
             )
             for row in rows
@@ -203,7 +217,43 @@ def _build_ilks_response_from_rows(rows: list[Any]) -> MakerDaoIlkListResponse:
     )
 
 
-def _ilk_item_to_payload(item: MakerDaoIlkListItem) -> dict[str, Any]:
+def _build_ilk_overview_response_from_details(
+    items: list[MakerDaoIlkDetailResponse],
+) -> MakerDaoIlkListResponse:
+    return MakerDaoIlkListResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
+        ilks=[
+            MakerDaoIlkOverviewItem(
+                ilk=item.ilk,
+                vault_type=item.vault_type,
+                gem_symbol=item.gem_symbol,
+                gem_address=item.gem_address,
+                updated_at=item.updated_at,
+            )
+            for item in items
+        ],
+    )
+
+
+def _build_ilk_detail_from_row(row: Any) -> MakerDaoIlkDetailResponse:
+    return MakerDaoIlkDetailResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
+        ilk=str(_row_get(row, "ilk") or ""),
+        vault_type=str(_row_get(row, "vault_type") or MAKERDAO_DEFAULT_VAULT_TYPE),
+        gem_symbol=_row_get(row, "gem_symbol"),
+        gem_address=_row_get(row, "gem_address"),
+        debt_ceiling=_fmt_optional_decimal(_row_get(row, "debt_ceiling")),
+        liquidation_ratio=_fmt_optional_decimal(_row_get(row, "liquidation_ratio")),
+        liquidation_penalty=_fmt_optional_decimal(_row_get(row, "liquidation_penalty")),
+        stability_fee=_fmt_optional_decimal(_row_get(row, "stability_fee")),
+        dust=_fmt_optional_decimal(_row_get(row, "dust")),
+        updated_at=_record_ts(_row_get(row, "updated_at")),
+    )
+
+
+def _ilk_item_to_payload(item: MakerDaoIlkDetailResponse) -> dict[str, Any]:
     return {
         "ilk": item.ilk,
         "chain": MAKERDAO_CHAIN,
@@ -223,7 +273,7 @@ def _ilk_item_to_payload(item: MakerDaoIlkListItem) -> dict[str, Any]:
     }
 
 
-async def _fetch_live_ilks(*, w3: Any = None) -> MakerDaoIlkListResponse:
+async def _fetch_live_ilks(*, w3: Any = None) -> list[MakerDaoIlkDetailResponse]:
     own_w3 = False
     active_w3 = w3
     try:
@@ -234,7 +284,7 @@ async def _fetch_live_ilks(*, w3: Any = None) -> MakerDaoIlkListResponse:
 
         contracts = _load_contract_addresses()
         updated_at = datetime.now(timezone.utc)
-        items: list[MakerDaoIlkListItem] = []
+        items: list[MakerDaoIlkDetailResponse] = []
         for ilk_name in await _load_ilk_names(active_w3, contracts):
             item = await _build_live_ilk_item(
                 active_w3,
@@ -244,10 +294,34 @@ async def _fetch_live_ilks(*, w3: Any = None) -> MakerDaoIlkListResponse:
             )
             if item is not None:
                 items.append(item)
-        return MakerDaoIlkListResponse(
-            chain=MAKERDAO_CHAIN,
-            protocol=MAKERDAO_PROTOCOL,
-            ilks=sorted(items, key=lambda item: item.ilk),
+        return sorted(items, key=lambda item: item.ilk)
+    finally:
+        if own_w3 and isinstance(active_w3, AsyncWeb3):
+            try:
+                await active_w3.provider.disconnect()
+            except Exception:
+                pass
+
+
+async def _fetch_live_ilk(
+    ilk_name: str,
+    *,
+    w3: Any = None,
+) -> MakerDaoIlkDetailResponse | None:
+    own_w3 = False
+    active_w3 = w3
+    try:
+        if active_w3 is None:
+            cfg = load_config()
+            active_w3 = await build_web3(cast(Any, cfg))
+            own_w3 = True
+
+        contracts = _load_contract_addresses()
+        return await _build_live_ilk_item(
+            active_w3,
+            contracts,
+            ilk_name,
+            datetime.now(timezone.utc),
         )
     finally:
         if own_w3 and isinstance(active_w3, AsyncWeb3):
@@ -262,7 +336,7 @@ async def _build_live_ilk_item(
     contracts: _MakerDaoContracts,
     ilk_name: str,
     updated_at: datetime,
-) -> MakerDaoIlkListItem | None:
+) -> MakerDaoIlkDetailResponse | None:
     ilk_bytes = _text_to_bytes32(ilk_name)
     vat = w3.eth.contract(
         address=AsyncWeb3.to_checksum_address(contracts.vat),
@@ -301,7 +375,9 @@ async def _build_live_ilk_item(
     if chop_raw is not None and int(chop_raw) > 0:
         liquidation_penalty = Decimal(int(chop_raw)) / Decimal(WAD) - Decimal(1)
 
-    return MakerDaoIlkListItem(
+    return MakerDaoIlkDetailResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
         ilk=ilk_name,
         vault_type=MAKERDAO_DEFAULT_VAULT_TYPE,
         gem_symbol=metadata.get("symbol") or ilk_name.split("-")[0],
@@ -682,6 +758,17 @@ def _normalize_evm_address(value: str) -> str | None:
     if not all(char in "0123456789abcdefABCDEF" for char in hex_part):
         return None
     return "0x" + hex_part.lower()
+
+
+def _normalize_ilk(value: str) -> str | None:
+    candidate = value.strip().upper()
+    if not candidate:
+        return None
+    try:
+        _text_to_bytes32(candidate)
+    except (HTTPException, UnicodeEncodeError):
+        return None
+    return candidate
 
 
 def _load_contract_addresses() -> _MakerDaoContracts:

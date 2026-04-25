@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, Request
 from ..database import AsyncpgPool
 from . import service
 from .schemas import (
+    MakerDaoIlkDetailResponse,
     MakerDaoIlkListResponse,
     MakerDaoScaffoldStatusResponse,
     MakerDaoVaultPositionResponse,
@@ -31,6 +32,23 @@ async def status() -> MakerDaoScaffoldStatusResponse:
 )
 async def ilks(request: Request, pool: AsyncpgPool) -> MakerDaoIlkListResponse:
     return await service.get_ilks(pool, w3=getattr(request.app.state, "w3", None))
+
+
+@router.get(
+    "/ilk",
+    response_model=MakerDaoIlkDetailResponse,
+    summary="Get MakerDAO ilk detail from cache with live backfill",
+)
+async def ilk(
+    request: Request,
+    pool: AsyncpgPool,
+    ilk: str = Query(..., description="MakerDAO ilk 名称，例如 ETH-A"),
+) -> MakerDaoIlkDetailResponse:
+    return await service.get_ilk_detail(
+        pool,
+        ilk=ilk,
+        w3=getattr(request.app.state, "w3", None),
+    )
 
 
 @router.get(
