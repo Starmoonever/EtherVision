@@ -362,7 +362,7 @@ async def _resolve_direct_urn_refs(
         abi=VAT_ABI,
     )
     refs: list[dict[str, Any]] = []
-    for ilk_name in await _load_ilk_names(w3, contracts):
+    for ilk_name in await _load_ilk_names(w3, contracts, include_registry=False):
         ink_raw, art_raw = await vat.functions.urns(
             _text_to_bytes32(ilk_name),
             urn_address,
@@ -585,13 +585,20 @@ def _load_contract_addresses() -> _MakerDaoContracts:
     )
 
 
-async def _load_ilk_names(w3: Any, contracts: _MakerDaoContracts) -> list[str]:
+async def _load_ilk_names(
+    w3: Any,
+    contracts: _MakerDaoContracts,
+    *,
+    include_registry: bool = True,
+) -> list[str]:
     try:
         cfg = load_config()
         if cfg.makerdao.ilk_names:
             return list(dict.fromkeys(cfg.makerdao.ilk_names))
     except FileNotFoundError:
         pass
+    if not include_registry:
+        return MAKERDAO_DEFAULT_ILK_NAMES
     try:
         registry = w3.eth.contract(
             address=AsyncWeb3.to_checksum_address(contracts.ilk_registry),

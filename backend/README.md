@@ -265,6 +265,8 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
   - 必填 `address`，可传 owner / proxy / urn 地址
   - 可选 `vault_id`、`ilk`、`include_empty`
   - 当前读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY`
+  - owner / proxy 查询优先走 `CDP_MANAGER` 与 `GET_CDPS`，可返回带 `vault_id` 的标准 Vault
+  - 只有未找到标准 Vault 时才把 `address` 作为裸 urn 兜底查询；该兜底默认只扫描代码内维护的用户型 ilk，避免把 `ALLOCATOR-*` 等 Maker/Sky 系统 urn 当成个人仓位。若确实需要查询额外 ilk，可在 `config.yaml` 的 `makerdao.ilk_names` 中显式配置
   - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
 

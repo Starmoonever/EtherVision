@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
+import pytest
+
+from makerdao_crawler.constants import MAKERDAO_DEFAULT_CONTRACTS
 from makerdao_crawler.api import service as makerdao_service
 from makerdao_crawler.api.routes import router as makerdao_router
 from makerdao_crawler.api.schemas import (
@@ -202,3 +206,45 @@ def test_fmt_decimal_handles_values_larger_than_default_decimal_precision() -> N
         makerdao_service._fmt_decimal(value)
         == "123456789012345678901234567890.123456789012345678"
     )
+
+
+@pytest.mark.asyncio
+async def test_direct_urn_ilk_scan_uses_user_vault_defaults_by_default(
+    monkeypatch,
+) -> None:
+    def _missing_config():
+        raise FileNotFoundError
+
+    monkeypatch.setattr(makerdao_service, "load_config", _missing_config)
+    contracts = makerdao_service._MakerDaoContracts(**MAKERDAO_DEFAULT_CONTRACTS)
+
+    ilks = await makerdao_service._load_ilk_names(
+        None,
+        contracts,
+        include_registry=False,
+    )
+
+    assert "ETH-A" in ilks
+    assert "ALLOCATOR-SPARK-A" not in ilks
+
+
+@pytest.mark.asyncio
+async def test_direct_urn_ilk_scan_honors_explicit_config(monkeypatch) -> None:
+    monkeypatch.setattr(
+        makerdao_service,
+        "load_config",
+        lambda: SimpleNamespace(
+            makerdao=SimpleNamespace(
+                ilk_names=["ETH-A", "ALLOCATOR-SPARK-A", "ETH-A"],
+            )
+        ),
+    )
+    contracts = makerdao_service._MakerDaoContracts(**MAKERDAO_DEFAULT_CONTRACTS)
+
+    ilks = await makerdao_service._load_ilk_names(
+        None,
+        contracts,
+        include_registry=False,
+    )
+
+    assert ilks == ["ETH-A", "ALLOCATOR-SPARK-A"]
