@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   fetchMakerDaoPositionWithMeta,
+  fetchMakerDaoSystemPositionWithMeta,
   type MakerDaoPositionAsset,
   type MakerDaoPositionResponse,
+  type MakerDaoSystemPositionResponse,
   type MakerDaoVaultPosition,
 } from '../../../api/makerdao';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../../../api/requestMeta';
@@ -11,6 +13,16 @@ import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 
 interface MakerDaoPersonalDashboardProps {
   address: string;
+}
+
+interface MakerDaoSystemPositionDashboardProps {
+  urn: string;
+}
+
+interface MakerDaoRiskPositionLike {
+  debt_value_usd: string | number | null | undefined;
+  health_factor: string | number | null | undefined;
+  is_healthy: boolean;
 }
 
 function toNum(value: string | number | null | undefined): number {
@@ -24,6 +36,13 @@ function formatUsd(value: string | number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function formatScientificUsd(value: string | number | null | undefined): string {
+  const num = toNum(value);
+  if (!Number.isFinite(num)) return '$--';
+  if (num === 0) return '$0.00e+0';
+  return `$${num.toExponential(2)}`;
 }
 
 function formatTokenAmount(value: string | number | null | undefined): string {
@@ -175,7 +194,7 @@ function findWorstVault(positions: MakerDaoVaultPosition[]): MakerDaoVaultPositi
   }, null);
 }
 
-function riskLabel(vault: MakerDaoVaultPosition | null): string {
+function riskLabel(vault: MakerDaoRiskPositionLike | null): string {
   if (!vault) return '空仓位';
   if (toNum(vault.debt_value_usd) <= 0) return '无活跃债务';
   if (!vault.is_healthy) return '高风险';
@@ -186,7 +205,7 @@ function riskLabel(vault: MakerDaoVaultPosition | null): string {
   return '相对稳健';
 }
 
-function riskToneClass(vault: MakerDaoVaultPosition | null): string {
+function riskToneClass(vault: MakerDaoRiskPositionLike | null): string {
   const label = riskLabel(vault);
   if (label === '高风险') return 'makerdao-risk-danger';
   if (label === '需重点观察') return 'makerdao-risk-watch';
@@ -673,6 +692,270 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+export function MakerDaoSystemPositionDashboard({ urn }: MakerDaoSystemPositionDashboardProps) {
+  const [data, setData] = useState<MakerDaoSystemPositionResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copiedKey, setCopiedKey] = useState('');
+  const [meta, setMeta] = useState<AggregatedRequestMeta>({
+    lastUpdatedAt: null,
+    cacheStatus: 'none',
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        const result = await fetchMakerDaoSystemPositionWithMeta({ urn });
+        if (cancelled) return;
+        setData(result.data);
+        setMeta(mergeRequestMetas([result.meta]));
+      } catch (loadError) {
+        if (cancelled) return;
+        setData(null);
+        setError(loadError instanceof Error ? loadError.message : '无法加载 MakerDAO 系统仓位');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    if (urn) {
+      void load();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [urn]);
+
+  const handleCopy = async (value: string | null | undefined, key: string) => {
+    const text = value?.trim();
+    if (!text) return;
+
+    const copied = await copyToClipboard(text);
+    if (!copied) return;
+
+    setCopiedKey(key);
+    window.setTimeout(() => {
+      setCopiedKey((current) => (current === key ? '' : current));
+    }, 1400);
+  };
+
+  const renderCopyButton = (value: string | null | undefined, key: string, label = '复制') => {
+    if (!value?.trim()) return null;
+    return (
+      <button
+        type="button"
+        className="makerdao-copy-btn"
+        onClick={() => void handleCopy(value, key)}
+        title={`复制 ${value}`}
+      >
+        {copiedKey === key ? '已复制' : label}
+      </button>
+    );
+  };
+
+  const renderAddressDetail = (label: string, value: string | null | undefined, key: string) => (
+    <div className="makerdao-detail-item">
+      <span className="makerdao-detail-label">{label}</span>
+      <div className="makerdao-detail-value-row">
+        <span className="makerdao-full-address mono" title={value || undefined}>
+          {value || '--'}
+        </span>
+        {renderCopyButton(value, key)}
+      </div>
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="card makerdao-loading-card">
+        <div className="spinner"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div className="card-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span className="card-title">MakerDAO 系统仓位</span>
+            <span className="badge green-badge">Ethereum</span>
+            <span className="badge badge-brand-soft">System Position</span>
+          </div>
+          <span className="address-badge">{shortAddress(urn)}</span>
+        </div>
+        <div className="makerdao-notice makerdao-notice-warn">
+          <strong>后端暂未返回可用 MakerDAO 系统仓位数据</strong>
+          <span>{error}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="card makerdao-loading-card">
+        <span className="empty-text">暂无 MakerDAO 系统仓位数据</span>
+      </div>
+    );
+  }
+
+  const healthFactorDisplay = formatMakerHealthFactor(data.health_factor, data.debt_value_usd);
+  const healthFactorValue = getMakerHealthFactorValue(data.health_factor, data.debt_value_usd);
+  const healthFactorTone = getMakerHealthFactorTone(healthFactorValue, healthFactorDisplay);
+  const refreshedAtText = meta.lastUpdatedAt
+    ? new Date(meta.lastUpdatedAt).toLocaleString('zh-CN', { hour12: false })
+    : formatDateTime(data.snapshot_at);
+  const riskBadgeClass = riskToneClass(data);
+  return (
+    <div className="makerdao-dashboard">
+      <div className="card makerdao-account-card">
+        <div className="card-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span className="card-title">系统仓位概览</span>
+            <span className="badge green-badge">{data.chain || 'Ethereum'}</span>
+            <span className="badge badge-brand-soft">{data.protocol || 'MakerDAO'}</span>
+            <span className="badge badge-brand-soft">{data.position_type || 'system_urn'}</span>
+            <span className={`badge ${riskBadgeClass}`}>{riskLabel(data)}</span>
+          </div>
+          <ChartDataStatus meta={meta} />
+        </div>
+
+        <div className="makerdao-overview-grid">
+          <div className="makerdao-overview-copy">
+            <div className="makerdao-market-kicker">System Position</div>
+            <h2 className="makerdao-market-title">
+              {data.ilk || '系统 urn'} · {data.collateral_symbol || '系统 urn'}
+            </h2>
+            <p className="makerdao-market-copy">
+              MakerDAO 系统仓位用于查看 ALLOCATOR、DIRECT 等系统 urn
+              的抵押、债务、健康因子与清算价格。
+            </p>
+          </div>
+
+          <div className="makerdao-overview-side">
+            <div className="makerdao-overview-pills">
+              <div className="makerdao-overview-pill">
+                <span className="makerdao-overview-pill-label">URN</span>
+                <span className="makerdao-overview-pill-value mono" title={data.urn_address}>
+                  {data.urn_address}
+                </span>
+              </div>
+              <div className="makerdao-overview-pill">
+                <span className="makerdao-overview-pill-label">最近更新</span>
+                <span className="makerdao-overview-pill-value">{refreshedAtText}</span>
+              </div>
+              <div className="makerdao-overview-pill">
+                <span className="makerdao-overview-pill-label">数据状态</span>
+                <span className="makerdao-overview-pill-value">
+                  {meta.cacheStatus === 'hit' ? '缓存命中' : '实时拉取'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="summary-grid makerdao-summary-grid">
+          <div className="metric-box">
+            <span className="metric-label">抵押资产</span>
+            <span className="metric-value blue">{data.collateral_symbol || '--'}</span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">抵押价值</span>
+            <span className="metric-value green">
+              {formatScientificUsd(data.collateral_value_usd)}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">债务价值</span>
+            <span className="metric-value red">{formatScientificUsd(data.debt_value_usd)}</span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">健康因子</span>
+            <span
+              className="metric-value"
+              style={{ color: healthFactorTone.color, fontWeight: healthFactorTone.fontWeight }}
+            >
+              {healthFactorDisplay}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">是否健康</span>
+            <span className={`metric-value ${data.is_healthy ? 'green' : 'red'}`}>
+              {data.is_healthy ? '健康' : '高风险'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">系统仓位明细</span>
+          <span className="badge badge-brand-soft">{data.ilk || 'System Position'}</span>
+        </div>
+
+        <div className="makerdao-detail-panel">
+          <div className="makerdao-detail-grid">
+            {renderAddressDetail('URN 地址', data.urn_address, 'system:urn')}
+            {renderAddressDetail(
+              '抵押 Token',
+              data.collateral_token_address,
+              'system:collateral-token',
+            )}
+            {renderAddressDetail('债务 Token', data.debt_token_address, 'system:debt-token')}
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">仓位 UID</span>
+              <span className="makerdao-detail-value mono">{data.position_uid || '--'}</span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">抵押数量</span>
+              <span className="makerdao-detail-value">
+                {formatTokenAmount(data.collateral_amount)} {data.collateral_symbol || ''}
+              </span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">债务数量</span>
+              <span className="makerdao-detail-value">
+                {formatTokenAmount(data.debt_amount)} {data.debt_symbol || ''}
+              </span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">清算率</span>
+              <span className="makerdao-detail-value">
+                {formatPercentRatio(data.liquidation_ratio)}
+              </span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">清算价格</span>
+              <span className="makerdao-detail-value">{formatUsd(data.liquidation_price_usd)}</span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">数据来源</span>
+              <span className="makerdao-detail-value">{compactDataSource(data.data_source)}</span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">快照时间</span>
+              <span className="makerdao-detail-value">{formatDateTime(data.snapshot_at)}</span>
+            </div>
+            <div className="makerdao-detail-item">
+              <span className="makerdao-detail-label">链上区块</span>
+              <span className="makerdao-detail-value">
+                {formatDateTime(data.block_timestamp)} · #{data.block_number || '--'}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

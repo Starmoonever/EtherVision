@@ -28,6 +28,7 @@ const EMPTY_META: AggregatedRequestMeta = {
   lastUpdatedAt: null,
   cacheStatus: 'none',
 };
+const METADATA_PAGE_SIZE = 10;
 
 const GROUP_LABELS: Record<Exclude<IlkGroup, 'all'>, string> = {
   native: 'Native Crypto',
@@ -176,6 +177,8 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
   const [sortMode, setSortMode] = useState<SortMode>('alpha');
   const [groupFilter, setGroupFilter] = useState<IlkGroup>('all');
   const [contractStatusFilter, setContractStatusFilter] = useState<ContractStatusFilter>('all');
+  const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState('1');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [meta, setMeta] = useState<AggregatedRequestMeta>(EMPTY_META);
 
@@ -245,7 +248,29 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
       .sort((a, b) => compareIlks(a, b, sortMode));
   }, [contractStatusFilter, groupFilter, searchTerm, sortMode, views]);
 
-  const visibleCards = filteredViews.slice(0, 10);
+  useEffect(() => {
+    setPage(1);
+  }, [contractStatusFilter, groupFilter, searchTerm, sortMode]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredViews.length / METADATA_PAGE_SIZE));
+  const normalizedPage = Math.min(page, totalPages);
+  const pageStart = (normalizedPage - 1) * METADATA_PAGE_SIZE;
+  const visibleCards = filteredViews.slice(pageStart, pageStart + METADATA_PAGE_SIZE);
+  const hasNextPage = normalizedPage < totalPages;
+  const hasPreviousPage = normalizedPage > 1;
+
+  useEffect(() => {
+    setPageInput(String(normalizedPage));
+  }, [normalizedPage]);
+
+  const goToPage = () => {
+    const parsed = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(parsed)) {
+      setPageInput(String(normalizedPage));
+      return;
+    }
+    setPage(Math.min(Math.max(parsed, 1), totalPages));
+  };
 
   return (
     <div className="makerdao-dashboard makerdao-market-dashboard">
@@ -436,9 +461,47 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
             </div>
 
             <div className="makerdao-parameter-footer">
-              正在展示 {visibleCards.length.toLocaleString()} /{' '}
-              {filteredViews.length.toLocaleString()} 个匹配资产，共 {views.length.toLocaleString()}{' '}
-              个 ilk。
+              <span>
+                正在展示 {visibleCards.length.toLocaleString()} /{' '}
+                {filteredViews.length.toLocaleString()} 个匹配资产，共{' '}
+                {views.length.toLocaleString()} 个 ilk。第 {normalizedPage} / {totalPages} 页
+              </span>
+              <div className="makerdao-pagination-controls">
+                <button
+                  type="button"
+                  className="makerdao-page-btn"
+                  disabled={!hasPreviousPage}
+                  onClick={() => setPage((current) => Math.max(current - 1, 1))}
+                >
+                  上一页
+                </button>
+                <label className="makerdao-page-jump">
+                  <span>页码</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={totalPages}
+                    value={pageInput}
+                    onChange={(event) => setPageInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        goToPage();
+                      }
+                    }}
+                  />
+                </label>
+                <button type="button" className="makerdao-page-btn" onClick={goToPage}>
+                  跳转
+                </button>
+                <button
+                  type="button"
+                  className="makerdao-page-btn"
+                  disabled={!hasNextPage}
+                  onClick={() => setPage((current) => Math.min(current + 1, totalPages))}
+                >
+                  下一页
+                </button>
+              </div>
             </div>
           </>
         ) : null}

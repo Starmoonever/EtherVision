@@ -46,6 +46,31 @@ export interface MakerDaoPositionResponse {
   positions: MakerDaoVaultPosition[];
 }
 
+export interface MakerDaoSystemPositionResponse {
+  chain: string;
+  protocol: string;
+  position_type: string;
+  position_uid: string;
+  ilk: string;
+  urn_address: string;
+  block_number: number | null;
+  block_timestamp: string;
+  snapshot_at: string;
+  collateral_symbol: string | null;
+  collateral_token_address: string | null;
+  collateral_amount: string;
+  collateral_value_usd: string | null;
+  debt_symbol: string;
+  debt_token_address: string | null;
+  debt_amount: string;
+  debt_value_usd: string | null;
+  liquidation_ratio: string | null;
+  liquidation_price_usd: string | null;
+  health_factor: string | null;
+  is_healthy: boolean;
+  data_source: string;
+}
+
 export interface MakerDaoIlkItem {
   ilk: string;
   vault_type: string;
@@ -72,6 +97,11 @@ export interface MakerDaoPositionParams {
   includeEmpty?: boolean;
 }
 
+export interface MakerDaoSystemPositionParams {
+  urn: string;
+  ilk?: string | null;
+}
+
 const MAKERDAO_ILKS_CACHE_KEY = 'makerdao_ilks';
 
 const makerDaoPositionCache = new Map<
@@ -79,6 +109,11 @@ const makerDaoPositionCache = new Map<
   { fetchedAt: number; data: MakerDaoPositionResponse }
 >();
 const makerDaoPositionInflight = new Map<string, Promise<MakerDaoPositionResponse>>();
+const makerDaoSystemPositionCache = new Map<
+  string,
+  { fetchedAt: number; data: MakerDaoSystemPositionResponse }
+>();
+const makerDaoSystemPositionInflight = new Map<string, Promise<MakerDaoSystemPositionResponse>>();
 const makerDaoIlksCache = new Map<string, { fetchedAt: number; data: MakerDaoIlkListResponse }>();
 const makerDaoIlksInflight = new Map<string, Promise<MakerDaoIlkListResponse>>();
 
@@ -93,6 +128,13 @@ function buildMakerDaoPositionKey({
     vaultId,
     ilk: ilk?.trim().toLowerCase() || null,
     includeEmpty,
+  });
+}
+
+function buildMakerDaoSystemPositionKey({ urn, ilk = null }: MakerDaoSystemPositionParams): string {
+  return JSON.stringify({
+    urn: urn.trim().toLowerCase(),
+    ilk: ilk?.trim().toUpperCase() || null,
   });
 }
 
@@ -152,6 +194,68 @@ export async function fetchMakerDaoPositionWithMeta(
     });
 
   makerDaoPositionInflight.set(key, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export async function fetchMakerDaoSystemPosition(
+  params: MakerDaoSystemPositionParams,
+): Promise<MakerDaoSystemPositionResponse> {
+  const result = await fetchMakerDaoSystemPositionWithMeta(params);
+  return result.data;
+}
+
+export async function fetchMakerDaoSystemPositionWithMeta(
+  params: MakerDaoSystemPositionParams,
+): Promise<DataWithMeta<MakerDaoSystemPositionResponse>> {
+  const key = buildMakerDaoSystemPositionKey(params);
+  const cached = makerDaoSystemPositionCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < MAKERDAO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = makerDaoSystemPositionInflight.get(key);
+  if (inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const searchParams = new URLSearchParams({
+    urn: params.urn,
+  });
+  if (params.ilk?.trim()) {
+    searchParams.set('ilk', params.ilk.trim());
+  }
+
+  const request = apiFetch<MakerDaoSystemPositionResponse>(
+    `/makerdao/system/position?${searchParams.toString()}`,
+  )
+    .then((data) => {
+      makerDaoSystemPositionCache.set(key, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      makerDaoSystemPositionInflight.delete(key);
+    });
+
+  makerDaoSystemPositionInflight.set(key, request);
   const data = await request;
   return {
     data,

@@ -241,6 +241,16 @@
   margin: -0.35rem 0 1rem;
 }
 
+.makerdao-position-mode-row {
+  display: flex;
+  justify-content: center;
+  margin: -0.2rem 0 1rem;
+}
+
+.makerdao-position-mode-switch {
+  width: fit-content;
+}
+
 .makerdao-inline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -843,9 +853,71 @@
 }
 
 .makerdao-parameter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   color: #64748b;
   font-size: 0.78rem;
   line-height: 1.6;
+}
+
+.makerdao-pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.makerdao-page-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 0.36rem 0.72rem;
+}
+
+.makerdao-page-btn:hover:not(:disabled) {
+  border-color: rgba(147, 197, 253, 0.48);
+  color: #dbeafe;
+}
+
+.makerdao-page-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.makerdao-page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.makerdao-page-jump input {
+  width: 4.2rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.76rem;
+  outline: none;
+  padding: 0.34rem 0.58rem;
+  text-align: center;
+}
+
+.makerdao-page-jump input:focus {
+  border-color: var(--accent-secondary);
 }
 
 .makerdao-asset-navigator {
@@ -965,13 +1037,18 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.75rem;
+  align-items: stretch;
 }
 
 .makerdao-metadata-card {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: minmax(2.9rem, auto) minmax(2rem, auto) minmax(2.35rem, auto) minmax(
+      2.8rem,
+      auto
+    );
   gap: 0.74rem;
   min-width: 0;
+  height: 100%;
   border: 1px solid rgba(51, 65, 85, 0.76);
   border-radius: 12px;
   background:
@@ -983,18 +1060,24 @@
 
 .makerdao-metadata-card-head {
   gap: 0.68rem;
+  align-self: start;
   min-width: 0;
+  min-height: 2.9rem;
 }
 
 .makerdao-metadata-group-row {
+  align-content: flex-start;
   flex-wrap: wrap;
   gap: 0.4rem;
+  min-height: 2rem;
 }
 
 .makerdao-metadata-address {
+  align-self: start;
   justify-content: space-between;
   gap: 0.65rem;
   min-width: 0;
+  min-height: 2.35rem;
   border: 1px solid rgba(51, 65, 85, 0.72);
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.5);
@@ -1030,7 +1113,9 @@
 }
 
 .makerdao-metadata-time {
+  align-self: end;
   gap: 0.5rem;
+  min-height: 2.8rem;
   border-top: 1px solid rgba(148, 163, 184, 0.1);
   padding-top: 0.68rem;
 }
@@ -1121,8 +1206,13 @@
   }
 
   .makerdao-debt-limit > div:first-child,
-  .makerdao-asset-actions {
+  .makerdao-asset-actions,
+  .makerdao-parameter-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .makerdao-pagination-controls {
+    justify-content: flex-start;
   }
 }

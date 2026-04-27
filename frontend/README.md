@@ -154,9 +154,10 @@ frontend/
 
 其中 MakerDAO 页面当前包含：
 
-- 个人账户分析：通过 `GET /api/makerdao/position` 查询 owner / proxy / urn 地址对应的 Vault 仓位
+- 个人账户分析：通过 `GET /api/makerdao/position` 查询 owner / proxy / urn 地址对应的普通 Vault 仓位，并通过独立“系统仓位”入口调用 `GET /api/makerdao/system/position?urn=...` 查询系统 urn 仓位
 - 请求固定带 `include_empty=true`，用于区分“后端请求失败 / 无数据”和“地址存在但为空仓位”
-- 页面展示 Vault 数量、总抵押、总债务、最差健康因子、健康 Vault 数量、抵押类型与 Vault 明细
+- 普通仓位与系统仓位使用独立缓存键，避免不同仓位类型复用搜索结果
+- 页面展示 Vault 数量、总抵押、总债务、最差健康因子、健康 Vault 数量、抵押类型与 Vault 明细；系统仓位保持同一视觉风格，但使用独立组件实现
 - Vault 明细展示 vault id、ilk、抵押品、抵押数量、抵押价值、债务、清算率、清算价格、健康因子与数据时间
 - 宏观市场评估：通过 `GET /api/makerdao/ilks` 展示一个轻量 MakerDAO 资产元数据导航组件，用于检索 ilk、按资产类别分组、区分已部署合约与系统内部账户，并追踪 `updated_at` 时效；当前接口只提供基础元数据，不展示利率、限额或清算参数
 

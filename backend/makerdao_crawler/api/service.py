@@ -496,15 +496,13 @@ async def get_system_urn_position(
     pool: Any,
     *,
     urn: str,
-    ilk: str,
+    ilk: str | None = None,
     w3: Any = None,
 ) -> MakerDaoSystemUrnPositionResponse:
     normalized_urn = _normalize_evm_address(urn)
     if not normalized_urn:
         raise HTTPException(status_code=400, detail="invalid EVM address")
-    normalized_ilk = _normalize_ilk(ilk)
-    if not normalized_ilk:
-        raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+    normalized_ilk = _normalize_ilk(ilk) if ilk else None
 
     row = await fetch_system_urn_position(
         pool,
@@ -513,6 +511,12 @@ async def get_system_urn_position(
     )
     if row is not None:
         return _build_system_urn_position_from_row(row)
+
+    if normalized_ilk is None:
+        raise HTTPException(
+            status_code=404,
+            detail="MakerDAO system urn position not found in cache",
+        )
 
     item = await _fetch_live_system_urn_position(
         urn=normalized_urn,
@@ -1044,7 +1048,7 @@ def _normalize_ilk(value: str) -> str | None:
         return None
     try:
         _text_to_bytes32(candidate)
-    except (HTTPException, UnicodeEncodeError):
+    except HTTPException, UnicodeEncodeError:
         return None
     return candidate
 
@@ -1181,7 +1185,7 @@ def _fmt_optional_decimal(value: Any, scale: int = 18) -> str | None:
         return None
     try:
         return _fmt_decimal(value, scale=scale)
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return None
 
 

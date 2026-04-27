@@ -78,13 +78,15 @@ async def position(
 @router.get(
     "/system/position",
     response_model=MakerDaoSystemUrnPositionResponse,
-    summary="Query MakerDAO system urn position by urn and ilk",
+    summary="Query MakerDAO system urn position by urn",
 )
 async def system_position(
     request: Request,
     pool: AsyncpgPool,
     urn: str = Query(..., description="MakerDAO 系统 urn 地址"),
-    ilk: str = Query(..., description="MakerDAO 系统 ilk，例如 ALLOCATOR-SPARK-A"),
+    ilk: str | None = Query(
+        None, description="可选 MakerDAO 系统 ilk，例如 ALLOCATOR-SPARK-A"
+    ),
 ) -> MakerDaoSystemUrnPositionResponse:
     return await service.get_system_urn_position(
         pool,
