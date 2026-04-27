@@ -459,6 +459,7 @@ async def get_user_vault_position(
                 if Decimal(position.collateral_amount) != 0
                 or Decimal(position.debt_amount) != 0
             ]
+        positions = _dedupe_vault_position_items(positions)
         if positions:
             return MakerDaoVaultPositionResponse(
                 chain=MAKERDAO_CHAIN,
@@ -548,6 +549,7 @@ async def get_cached_user_vault_position(
     if not rows:
         raise HTTPException(status_code=404, detail="MakerDAO vault position not found")
     positions = [_build_position_item(row) for row in rows]
+    positions = _dedupe_vault_position_items(positions)
     return MakerDaoVaultPositionResponse(
         chain=MAKERDAO_CHAIN,
         protocol=MAKERDAO_PROTOCOL,
@@ -856,6 +858,39 @@ def _build_position_item(row: Any) -> MakerDaoVaultPositionItemResponse:
                 value_usd=debt_value,
             ),
         ],
+    )
+
+
+def _dedupe_vault_position_items(
+    positions: list[MakerDaoVaultPositionItemResponse],
+) -> list[MakerDaoVaultPositionItemResponse]:
+    deduped: dict[tuple[str, str] | tuple[str], MakerDaoVaultPositionItemResponse] = {}
+    for position in positions:
+        key: tuple[str, str] | tuple[str]
+        if position.urn_address and position.ilk:
+            key = (position.urn_address.lower(), position.ilk.upper())
+        else:
+            key = (position.vault_uid,)
+        current = deduped.get(key)
+        if current is None or _prefer_vault_position(position, current):
+            deduped[key] = position
+    return sorted(
+        deduped.values(),
+        key=lambda item: _parse_record_ts(item.snapshot_at),
+        reverse=True,
+    )
+
+
+def _prefer_vault_position(
+    candidate: MakerDaoVaultPositionItemResponse,
+    current: MakerDaoVaultPositionItemResponse,
+) -> bool:
+    if candidate.vault_id is not None and current.vault_id is None:
+        return True
+    if candidate.vault_id is None and current.vault_id is not None:
+        return False
+    return _parse_record_ts(candidate.snapshot_at) > _parse_record_ts(
+        current.snapshot_at
     )
 
 

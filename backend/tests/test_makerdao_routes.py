@@ -596,6 +596,71 @@ async def test_get_ilk_detail_backfills_when_cache_misses(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_user_position_dedupes_cached_cdp_and_direct_urn_rows(
+    monkeypatch,
+) -> None:
+    urn = "0xf12eEAa52438f0ebf170EC258DDB34c70088a863"
+    older = datetime(2026, 4, 27, 3, 29, 45, tzinfo=timezone.utc)
+    newer = datetime(2026, 4, 27, 6, 41, 46, tzinfo=timezone.utc)
+    base_row = {
+        "chain": "ethereum",
+        "protocol": "makerdao",
+        "vault_type": "vault",
+        "ilk": "ETH-C",
+        "urn_address": urn,
+        "owner_address": None,
+        "proxy_address": None,
+        "block_timestamp": older,
+        "block_number": 24968691,
+        "collateral_symbol": "WETH",
+        "collateral_token_address": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+        "collateral_amount": "186.005196786302072154",
+        "collateral_value_usd": "442447.24429985",
+        "debt_symbol": "DAI",
+        "debt_token_address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "debt_amount": "213350.284330491339771128",
+        "debt_value_usd": "213350.28433049",
+        "liquidation_ratio": "1.7",
+        "liquidation_price_usd": "1949.92123676",
+        "health_factor": "1.219886280906473689",
+        "is_healthy": True,
+    }
+    direct_urn_row = {
+        **base_row,
+        "vault_uid": f"ethereum:makerdao:urn:{urn.lower()}:ETH-C",
+        "vault_id": None,
+        "snapshot_at": older,
+    }
+    cdp_row = {
+        **base_row,
+        "vault_uid": "ethereum:makerdao:31602",
+        "vault_id": 31602,
+        "snapshot_at": newer,
+        "block_timestamp": newer,
+    }
+    pool = _FakePool(_FakeConn(positions=[cdp_row, direct_urn_row]))
+
+    async def _unexpected_live_fetch(*_args, **_kwargs):
+        raise AssertionError("live fetch should not run when cache has rows")
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "_fetch_live_vault_positions",
+        _unexpected_live_fetch,
+    )
+
+    result = await makerdao_service.get_user_vault_position(
+        pool,
+        address="0xF12EEAA52438F0EBF170EC258DDB34C70088A863",
+        include_empty=True,
+    )
+
+    assert result.total_positions == 1
+    assert result.positions[0].vault_uid == "ethereum:makerdao:31602"
+    assert result.positions[0].vault_id == 31602
+
+
+@pytest.mark.asyncio
 async def test_get_user_position_backfills_missing_ilk_before_position(
     monkeypatch,
 ) -> None:
