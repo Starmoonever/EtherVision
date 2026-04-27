@@ -56,15 +56,15 @@ CREATE TABLE IF NOT EXISTS loan.makerdao_current_vault_positions (
     block_number BIGINT,
     collateral_symbol TEXT,
     collateral_token_address TEXT,
-    collateral_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    collateral_value_usd NUMERIC(30, 8),
+    collateral_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    collateral_value_usd NUMERIC(78, 8),
     debt_symbol TEXT NOT NULL DEFAULT 'DAI',
     debt_token_address TEXT,
-    debt_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    debt_value_usd NUMERIC(30, 8),
-    liquidation_ratio NUMERIC(40, 18),
-    liquidation_price_usd NUMERIC(30, 8),
-    health_factor NUMERIC(40, 18),
+    debt_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    debt_value_usd NUMERIC(78, 8),
+    liquidation_ratio NUMERIC(78, 18),
+    liquidation_price_usd NUMERIC(78, 8),
+    health_factor NUMERIC(78, 18),
     is_healthy BOOLEAN NOT NULL DEFAULT TRUE,
     extra_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -89,15 +89,15 @@ CREATE TABLE IF NOT EXISTS loan.makerdao_system_urn_positions_current (
     block_number BIGINT,
     collateral_symbol TEXT,
     collateral_token_address TEXT,
-    collateral_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    collateral_value_usd NUMERIC(30, 8),
+    collateral_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    collateral_value_usd NUMERIC(78, 8),
     debt_symbol TEXT NOT NULL DEFAULT 'DAI',
     debt_token_address TEXT,
-    debt_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    debt_value_usd NUMERIC(30, 8),
-    liquidation_ratio NUMERIC(40, 18),
-    liquidation_price_usd NUMERIC(30, 8),
-    health_factor NUMERIC(40, 18),
+    debt_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    debt_value_usd NUMERIC(78, 8),
+    liquidation_ratio NUMERIC(78, 18),
+    liquidation_price_usd NUMERIC(78, 8),
+    health_factor NUMERIC(78, 18),
     is_healthy BOOLEAN NOT NULL DEFAULT TRUE,
     extra_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -123,12 +123,12 @@ CREATE TABLE IF NOT EXISTS loan.makerdao_position_snapshots (
     block_number BIGINT NOT NULL,
     block_timestamp TIMESTAMPTZ NOT NULL,
     operation_type TEXT,
-    collateral_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    debt_amount NUMERIC(40, 18) NOT NULL DEFAULT 0,
-    collateral_value_usd NUMERIC(30, 8),
-    debt_value_usd NUMERIC(30, 8),
-    liquidation_price_usd NUMERIC(30, 8),
-    health_factor NUMERIC(40, 18),
+    collateral_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    debt_amount NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    collateral_value_usd NUMERIC(78, 8),
+    debt_value_usd NUMERIC(78, 8),
+    liquidation_price_usd NUMERIC(78, 8),
+    health_factor NUMERIC(78, 18),
     is_healthy BOOLEAN NOT NULL DEFAULT TRUE,
     assets_jsonb JSONB NOT NULL DEFAULT '[]'::jsonb,
     extra_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -171,6 +171,57 @@ ALTER TABLE loan.makerdao_position_snapshots
     ALTER COLUMN urn_address SET STORAGE PLAIN,
     ALTER COLUMN owner_address SET STORAGE PLAIN,
     ALTER COLUMN proxy_address SET STORAGE PLAIN;
+"""
+
+_DDL_WIDEN_POSITION_NUMERIC_COLUMNS = """
+DO $$
+DECLARE
+    item text[];
+BEGIN
+    FOREACH item SLICE 1 IN ARRAY ARRAY[
+        ARRAY['makerdao_current_vault_positions', 'collateral_amount', '78', '18'],
+        ARRAY['makerdao_current_vault_positions', 'collateral_value_usd', '78', '8'],
+        ARRAY['makerdao_current_vault_positions', 'debt_amount', '78', '18'],
+        ARRAY['makerdao_current_vault_positions', 'debt_value_usd', '78', '8'],
+        ARRAY['makerdao_current_vault_positions', 'liquidation_ratio', '78', '18'],
+        ARRAY['makerdao_current_vault_positions', 'liquidation_price_usd', '78', '8'],
+        ARRAY['makerdao_current_vault_positions', 'health_factor', '78', '18'],
+        ARRAY['makerdao_system_urn_positions_current', 'collateral_amount', '78', '18'],
+        ARRAY['makerdao_system_urn_positions_current', 'collateral_value_usd', '78', '8'],
+        ARRAY['makerdao_system_urn_positions_current', 'debt_amount', '78', '18'],
+        ARRAY['makerdao_system_urn_positions_current', 'debt_value_usd', '78', '8'],
+        ARRAY['makerdao_system_urn_positions_current', 'liquidation_ratio', '78', '18'],
+        ARRAY['makerdao_system_urn_positions_current', 'liquidation_price_usd', '78', '8'],
+        ARRAY['makerdao_system_urn_positions_current', 'health_factor', '78', '18'],
+        ARRAY['makerdao_position_snapshots', 'collateral_amount', '78', '18'],
+        ARRAY['makerdao_position_snapshots', 'debt_amount', '78', '18'],
+        ARRAY['makerdao_position_snapshots', 'collateral_value_usd', '78', '8'],
+        ARRAY['makerdao_position_snapshots', 'debt_value_usd', '78', '8'],
+        ARRAY['makerdao_position_snapshots', 'liquidation_price_usd', '78', '8'],
+        ARRAY['makerdao_position_snapshots', 'health_factor', '78', '18']
+    ]
+    LOOP
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'loan'
+              AND table_name = item[1]
+              AND column_name = item[2]
+              AND (
+                  numeric_precision IS DISTINCT FROM item[3]::integer
+                  OR numeric_scale IS DISTINCT FROM item[4]::integer
+              )
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE loan.%I ALTER COLUMN %I TYPE NUMERIC(%s, %s)',
+                item[1],
+                item[2],
+                item[3],
+                item[4]
+            );
+        END IF;
+    END LOOP;
+END $$;
 """
 
 _DDL_ILKS_INDEXES = """
@@ -226,6 +277,7 @@ async def ensure_makerdao_tables(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_POSITION_SNAPSHOTS)
             await conn.execute(_DDL_WATCHER_WATERMARKS)
             await conn.execute(_DDL_SET_STORAGE_PLAIN)
+            await conn.execute(_DDL_WIDEN_POSITION_NUMERIC_COLUMNS)
             await conn.execute(_DDL_ILKS_INDEXES)
             await conn.execute(_DDL_CURRENT_VAULT_POSITIONS_INDEXES)
             await conn.execute(_DDL_SYSTEM_URN_POSITIONS_INDEXES)

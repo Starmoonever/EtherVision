@@ -99,11 +99,11 @@ def _create_position_columns(*, include_vault_fields: bool) -> list[sa.Column]:
             sa.Column("collateral_token_address", sa.Text(), nullable=True),
             sa.Column(
                 "collateral_amount",
-                sa.Numeric(precision=40, scale=18),
+                sa.Numeric(precision=78, scale=18),
                 nullable=False,
                 server_default=sa.text("0"),
             ),
-            sa.Column("collateral_value_usd", sa.Numeric(30, 8), nullable=True),
+            sa.Column("collateral_value_usd", sa.Numeric(78, 8), nullable=True),
             sa.Column(
                 "debt_symbol",
                 sa.Text(),
@@ -113,14 +113,14 @@ def _create_position_columns(*, include_vault_fields: bool) -> list[sa.Column]:
             sa.Column("debt_token_address", sa.Text(), nullable=True),
             sa.Column(
                 "debt_amount",
-                sa.Numeric(precision=40, scale=18),
+                sa.Numeric(precision=78, scale=18),
                 nullable=False,
                 server_default=sa.text("0"),
             ),
-            sa.Column("debt_value_usd", sa.Numeric(30, 8), nullable=True),
-            sa.Column("liquidation_ratio", sa.Numeric(40, 18), nullable=True),
-            sa.Column("liquidation_price_usd", sa.Numeric(30, 8), nullable=True),
-            sa.Column("health_factor", sa.Numeric(40, 18), nullable=True),
+            sa.Column("debt_value_usd", sa.Numeric(78, 8), nullable=True),
+            sa.Column("liquidation_ratio", sa.Numeric(78, 18), nullable=True),
+            sa.Column("liquidation_price_usd", sa.Numeric(78, 8), nullable=True),
+            sa.Column("health_factor", sa.Numeric(78, 18), nullable=True),
             sa.Column(
                 "is_healthy",
                 sa.Boolean(),

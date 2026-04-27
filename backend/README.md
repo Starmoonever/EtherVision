@@ -255,9 +255,9 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
 - `loan.makerdao_ilks_current`
   - ilk 基础参数缓存，如抵押资产、债务上限、清算比率；当前 `/api/makerdao/ilks` 读表优先，空表时链上读取并回写
 - `loan.makerdao_current_vault_positions`
-  - 普通用户 Vault 当前仓位缓存；当前 `/api/makerdao/position` 读表优先，未命中时链上读取并回写
+  - 普通用户 Vault 当前仓位缓存；当前 `/api/makerdao/position` 读表优先，未命中时链上读取并回写；金额、价值、清算价与健康因子等数值列使用较高精度，兼容大额仓位
 - `loan.makerdao_system_urn_positions_current`
-  - Maker/Sky 系统 urn 当前仓位缓存，例如 `ALLOCATOR-*`、`DIRECT-*` 等非普通用户 Vault；当前 `/api/makerdao/system/position` 读表优先，未命中时链上读取并回写
+  - Maker/Sky 系统 urn 当前仓位缓存，例如 `ALLOCATOR-*`、`DIRECT-*` 等非普通用户 Vault；当前 `/api/makerdao/system/position` 读表优先，未命中时链上读取并回写；金额、价值、清算价与健康因子等数值列使用较高精度，避免大额仓位溢出
 - `loan.makerdao_position_snapshots`
   - 预留交易级或块级回放快照
 
@@ -284,6 +284,11 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
   - 优先读取 `loan.makerdao_system_urn_positions_current`；缓存未命中时按单个 `urn + ilk` 链上读取并回写缓存表
   - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
+- `uv run python scripts/makerdao/backfill_current_positions_from_actions.py`
+  - 从外部维护的 `makerdao.makerdao_vault_action` 读取 `vault_id`、`ilk` / `ilk_label`、`urn_address`、`owner_address`，链上读取当前仓位后分别写入 `loan.makerdao_current_vault_positions` 与 `loan.makerdao_system_urn_positions_current`
+  - `vault_id IS NULL` 的记录按 system urn 处理；`vault_id` 非空的记录按普通 Vault 处理
+  - 支持 `--dry-run`、`--skip-existing`、`--limit`、`--mode normal|system|all`、`--include-empty`、`--concurrency`、`--write-batch-size`
+  - 脚本在 SQL 层按 `vault_id` 或 `urn_address + ilk` 去重，并缓存 ilk 级链上参数，避免重复读取同一抵押品类型的 `Vat` / `Spotter` / registry 数据；仓位写入按批次执行
 
 当前未提供：
 
