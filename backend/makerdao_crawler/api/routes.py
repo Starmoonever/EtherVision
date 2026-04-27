@@ -10,6 +10,7 @@ from .schemas import (
     MakerDaoIlkDetailResponse,
     MakerDaoIlkListResponse,
     MakerDaoScaffoldStatusResponse,
+    MakerDaoSystemUrnPositionResponse,
     MakerDaoVaultPositionResponse,
 )
 
@@ -58,15 +59,36 @@ async def ilk(
 )
 async def position(
     request: Request,
+    pool: AsyncpgPool,
     address: str = Query(..., description="MakerDAO owner / proxy / urn address"),
     vault_id: int | None = Query(None, description="可选过滤：vault 编号"),
     ilk: str | None = Query(None, description="可选过滤：MakerDAO ilk"),
     include_empty: bool = Query(False, description="是否返回空仓位"),
 ) -> MakerDaoVaultPositionResponse:
     return await service.get_user_vault_position(
+        pool,
         address=address,
         w3=getattr(request.app.state, "w3", None),
         vault_id=vault_id,
         ilk=ilk,
         include_empty=include_empty,
+    )
+
+
+@router.get(
+    "/system/position",
+    response_model=MakerDaoSystemUrnPositionResponse,
+    summary="Query MakerDAO system urn position by urn and ilk",
+)
+async def system_position(
+    request: Request,
+    pool: AsyncpgPool,
+    urn: str = Query(..., description="MakerDAO 系统 urn 地址"),
+    ilk: str = Query(..., description="MakerDAO 系统 ilk，例如 ALLOCATOR-SPARK-A"),
+) -> MakerDaoSystemUrnPositionResponse:
+    return await service.get_system_urn_position(
+        pool,
+        urn=urn,
+        ilk=ilk,
+        w3=getattr(request.app.state, "w3", None),
     )

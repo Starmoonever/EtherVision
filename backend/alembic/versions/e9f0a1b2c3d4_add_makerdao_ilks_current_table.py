@@ -67,16 +67,16 @@ def upgrade() -> None:
             ),
             sa.Column(
                 "liquidation_ratio",
-                sa.Numeric(precision=20, scale=18),
+                sa.Numeric(precision=40, scale=18),
                 nullable=True,
             ),
             sa.Column(
                 "liquidation_penalty",
-                sa.Numeric(precision=20, scale=18),
+                sa.Numeric(precision=40, scale=18),
                 nullable=True,
             ),
             sa.Column(
-                "stability_fee", sa.Numeric(precision=20, scale=18), nullable=True
+                "stability_fee", sa.Numeric(precision=40, scale=18), nullable=True
             ),
             sa.Column("dust", sa.Numeric(precision=40, scale=18), nullable=True),
             sa.Column(

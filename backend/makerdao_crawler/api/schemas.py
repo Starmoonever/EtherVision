@@ -85,3 +85,28 @@ class MakerDaoVaultPositionResponse(BaseModel):
     positions: list[MakerDaoVaultPositionItemResponse] = Field(
         description="当前仓位列表。"
     )
+
+
+class MakerDaoSystemUrnPositionResponse(BaseModel):
+    chain: str = Field(description="链标识。")
+    protocol: str = Field(description="协议标识。")
+    position_type: str = Field(description="仓位类型：system_urn。")
+    position_uid: str = Field(description="系统 urn 仓位唯一标识。")
+    ilk: str = Field(description="MakerDAO ilk 名称。")
+    urn_address: str = Field(description="urn 地址。")
+    block_number: int | None = Field(description="快照区块号。")
+    block_timestamp: str = Field(description="快照区块时间。")
+    snapshot_at: str = Field(description="缓存写入时间。")
+    collateral_symbol: str | None = Field(description="抵押资产符号。")
+    collateral_token_address: str | None = Field(description="抵押资产地址。")
+    collateral_amount: str = Field(description="抵押数量。")
+    collateral_value_usd: str | None = Field(description="抵押价值（USD）。")
+    debt_symbol: str = Field(description="债务资产符号。")
+    debt_token_address: str | None = Field(description="债务资产地址。")
+    debt_amount: str = Field(description="债务数量。")
+    debt_value_usd: str | None = Field(description="债务价值（USD）。")
+    liquidation_ratio: str | None = Field(description="清算比率。")
+    liquidation_price_usd: str | None = Field(description="清算价格（USD）。")
+    health_factor: str | None = Field(description="健康因子。")
+    is_healthy: bool = Field(description="仓位是否健康。")
+    data_source: str = Field(description="数据来源。")

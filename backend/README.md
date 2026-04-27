@@ -253,7 +253,9 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
 - `loan.makerdao_ilks_current`
   - ilk 基础参数缓存，如抵押资产、债务上限、清算比率；当前 `/api/makerdao/ilks` 读表优先，空表时链上读取并回写
 - `loan.makerdao_current_vault_positions`
-  - 预留当前 Vault 仓位缓存；当前 `/api/makerdao/position` 优先走链上实时查询，不依赖该表
+  - 普通用户 Vault 当前仓位缓存；当前 `/api/makerdao/position` 读表优先，未命中时链上读取并回写
+- `loan.makerdao_system_urn_positions_current`
+  - Maker/Sky 系统 urn 当前仓位缓存，例如 `ALLOCATOR-*`、`DIRECT-*` 等非普通用户 Vault；当前 `/api/makerdao/system/position` 读表优先，未命中时链上读取并回写
 - `loan.makerdao_position_snapshots`
   - 预留交易级或块级回放快照
 
@@ -268,11 +270,16 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
   - 返回单个 ilk 详细参数，包括抵押资产、债务上限、清算比率、清算罚金、dust 等字段
   - 优先读缓存；缓存未命中时链上读取该 ilk 并回写缓存表
 - `GET /api/makerdao/position`
-  - 必填 `address`，可传 owner / proxy / urn 地址
+  - 必填 `address`，用于普通用户 owner / proxy 地址
   - 可选 `vault_id`、`ilk`、`include_empty`
-  - 当前读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY`
+  - 优先读取 `loan.makerdao_current_vault_positions`
+  - 缓存未命中时读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY` 并回写缓存表
   - owner / proxy 查询优先走 `CDP_MANAGER` 与 `GET_CDPS`，可返回带 `vault_id` 的标准 Vault
-  - 只有未找到标准 Vault 时才把 `address` 作为裸 urn 兜底查询；该兜底默认只扫描代码内维护的用户型 ilk，避免把 `ALLOCATOR-*` 等 Maker/Sky 系统 urn 当成个人仓位。若确实需要查询额外 ilk，可在 `config.yaml` 的 `makerdao.ilk_names` 中显式配置
+  - 不再默认把 `address` 当作裸 urn 兜底查询，避免 `ALLOCATOR-*` 等系统仓位混入普通用户仓位
+- `GET /api/makerdao/system/position`
+  - 必填 `urn` 与 `ilk`
+  - 用于查询 Maker/Sky 系统 urn 仓位，例如 `ALLOCATOR-SPARK-A`
+  - 优先读取 `loan.makerdao_system_urn_positions_current`；缓存未命中时按单个 `urn + ilk` 链上读取并回写缓存表
   - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
 
