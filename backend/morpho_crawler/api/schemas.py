@@ -206,3 +206,28 @@ class MorphoVaultStateGraphQLResponse(BaseModel):
     data: dict[str, Any] = Field(
         description="GraphQL data 字段，含 vaultByAddress（与 Morpho 官网响应一致）。"
     )
+
+
+# api/morpho/vaults相关：总表资产信息
+class MorphoVotesAsset(BaseModel):
+    asset: str = Field(description="资产名称（symbol）。")
+    token_address: str = Field(description="资产地址（EVM）。")
+
+
+# api/morpho/vaults相关：单条金库概览
+class MorphoVotesItem(BaseModel):
+    address: str = Field(description="金库地址。")
+    name: str = Field(description="金库名称。")
+    asset: MorphoVotesAsset = Field(description="资产信息。")
+    total_assets_usd: float = Field(description="总资产（USD）。")
+    liquidity: float = Field(description="流动性（USD）。")
+    apy: float = Field(description="APY。")
+    protocol: str = Field(description="协议版本：v1 或 v2。")
+
+
+# api/morpho/vaults相关：分页响应
+class MorphoVotesResponse(BaseModel):
+    page: int = Field(description="当前页。")
+    page_size: int = Field(description="每页条数。")
+    total: int = Field(description="总条数。")
+    items: list[MorphoVotesItem] = Field(description="分页数据。")

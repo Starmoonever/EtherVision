@@ -64,6 +64,11 @@ from .schemas import (
     MorphoScaffoldStatusResponse,
 )
 from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/v1/state相关
+from .schemas import (
+    MorphoVotesAsset,  # api/morpho/vaults相关
+    MorphoVotesItem,  # api/morpho/vaults相关
+    MorphoVotesResponse,  # api/morpho/vaults相关
+)
 
 BRIEF_LABELS = {
     "supply": "供给",
@@ -2462,4 +2467,142 @@ async def get_position_replay(
         total_tx_count=len(grouped),
         cache_hit_rate=format(Decimal(cached_count) / Decimal(len(grouped)), ".2f"),
         points=points,
+    )
+
+
+# api/morpho/vaults相关：分页读取 v1/v2 总表概览（仅查表，不请求 GraphQL）
+async def get_votes_page(
+    *,
+    pool: AsyncpgPool,
+    page: int,
+    page_size: int,
+    sort_by: str = "total_assets_usd",
+    sort_order: str = "desc",
+    asset: str | None = None,
+    asset_address: str | None = None,
+    protocol: str | None = None,
+) -> MorphoVotesResponse:
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page 必须从 1 开始")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="page_size 必须在 1~100 之间")
+    # api/morpho/vaults相关：排序字段与方向白名单，防止 SQL 注入
+    sort_key = sort_by.strip().lower()
+    sort_map = {
+        "total_assets_usd": "total_assets_usd",
+        "liquidity": "liquidity_usd",
+        "apy": "apy",
+    }
+    if sort_key not in sort_map:
+        raise HTTPException(
+            status_code=400,
+            detail="sort_by 仅支持 total_assets_usd / liquidity / apy",
+        )
+    order_key = sort_order.strip().lower()
+    if order_key not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="sort_order 仅支持 asc 或 desc")
+    order_sql = "ASC" if order_key == "asc" else "DESC"
+    protocol_value: str | None = None
+    if protocol is not None and protocol.strip():
+        protocol_value = protocol.strip().lower()
+        if protocol_value not in {"v1", "v2"}:
+            raise HTTPException(status_code=400, detail="protocol 仅支持 v1 或 v2")
+    asset_address_b: bytes | None = None
+    # api/morpho/vaults相关：货币筛选优先走 asset，支持 0x 地址或币名映射
+    if asset is not None and asset.strip():
+        asset_value = asset.strip()
+        if asset_value.lower().startswith("0x"):
+            asset_address_b = _evm_to_db_bytes(asset_value)
+        else:
+            mapped = _resolve_ethereum_token_address(asset_value)
+            if not mapped:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"不支持的资产筛选值: {asset_value}",
+                )
+            asset_address_b = _evm_to_db_bytes(mapped)
+    elif asset_address is not None and asset_address.strip():
+        asset_address_b = _evm_to_db_bytes(asset_address.strip())
+    offset = (page - 1) * page_size
+
+    count_sql = """
+        SELECT COUNT(1) AS total
+        FROM (
+            SELECT asset_address, 'v1'::text AS protocol
+            FROM loan.morpho_vault_v1_current
+            UNION ALL
+            SELECT asset_address, 'v2'::text AS protocol
+            FROM loan.morpho_vault_v2_current
+        ) t
+        WHERE ($1::bytea IS NULL OR asset_address = $1)
+          AND ($2::text IS NULL OR protocol = $2)
+    """
+    page_sql = f"""
+        SELECT
+            vault_address,
+            vault_name AS name,
+            asset_symbol,
+            asset_address,
+            total_assets_usd,
+            liquidity_usd,
+            apy,
+            protocol
+        FROM (
+            SELECT
+                vault_address,
+                vault_name,
+                asset_symbol,
+                asset_address,
+                total_assets_usd,
+                liquidity_usd,
+                apy,
+                'v1'::text AS protocol
+            FROM loan.morpho_vault_v1_current
+            UNION ALL
+            SELECT
+                vault_address,
+                vault_name,
+                asset_symbol,
+                asset_address,
+                total_assets_usd,
+                liquidity_usd,
+                apy,
+                'v2'::text AS protocol
+            FROM loan.morpho_vault_v2_current
+        ) merged
+        WHERE ($1::bytea IS NULL OR asset_address = $1)
+          AND ($2::text IS NULL OR protocol = $2)
+        ORDER BY {sort_map[sort_key]} {order_sql} NULLS LAST
+        OFFSET $3
+        LIMIT $4
+    """
+    async with pool.acquire() as conn:
+        total_row = await conn.fetchrow(count_sql, asset_address_b, protocol_value)
+        total = int(total_row["total"]) if total_row else 0
+        rows = await conn.fetch(
+            page_sql, asset_address_b, protocol_value, offset, page_size
+        )
+
+    items: list[MorphoVotesItem] = []
+    for row in rows:
+        items.append(
+            MorphoVotesItem(
+                address=_db_bytes_to_evm(row["vault_address"]),
+                name=str(row["name"] or ""),
+                asset=MorphoVotesAsset(
+                    asset=str(row["asset_symbol"] or ""),
+                    token_address=_db_bytes_to_evm(row["asset_address"]),
+                ),
+                total_assets_usd=float(row["total_assets_usd"] or 0),
+                liquidity=float(row["liquidity_usd"] or 0),
+                apy=float(row["apy"] or 0),
+                protocol=str(row["protocol"] or ""),
+            )
+        )
+
+    return MorphoVotesResponse(
+        page=page,
+        page_size=page_size,
+        total=total,
+        items=items,
     )
