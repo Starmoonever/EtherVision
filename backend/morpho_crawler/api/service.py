@@ -63,7 +63,8 @@ from .schemas import (
     MorphoPositionResponse,
     MorphoScaffoldStatusResponse,
 )
-from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/v1/state相关
+from .schemas import MorphoVaultV1StateGraphQLResponse  # api/morpho/vault/v1/state相关
+from .schemas import MorphoVaultV2StateGraphQLResponse  # api/morpho/vault/v2/state相关
 from .schemas import (
     MorphoVotesAsset,  # api/morpho/vaults相关
     MorphoVotesItem,  # api/morpho/vaults相关
@@ -280,7 +281,7 @@ async def get_vault_state_main_graphql(
     chain_id: int = 1,
     w3: AsyncWeb3 | None = None,
     pool: AsyncpgPool | None = None,
-) -> MorphoVaultStateGraphQLResponse:
+) -> MorphoVaultV1StateGraphQLResponse:
     raw = (address or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="address 不能为空")
@@ -304,7 +305,8 @@ async def get_vault_state_main_graphql(
                 )
             if isinstance(vault_table, dict):
                 vault_table["dataSource"] = "table"
-            return MorphoVaultStateGraphQLResponse(data=table_data.get("data") or {})
+            data_payload_v1 = cast(dict[str, Any], table_data.get("data") or {})
+            return MorphoVaultV1StateGraphQLResponse(data=cast(Any, data_payload_v1))
 
     payload = {
         "query": _VAULT_BY_ADDRESS_MAIN_GRAPHQL,
@@ -411,9 +413,11 @@ async def get_vault_state_main_graphql(
     if pool is not None and isinstance(vault, dict):
         await _upsert_vault_v1_state_to_table(pool, vault=vault)
 
-    return MorphoVaultStateGraphQLResponse(
-        data=data if isinstance(data, dict) else {"vaultByAddress": vault},
+    data_payload_v1 = cast(
+        dict[str, Any],
+        data if isinstance(data, dict) else {"vaultByAddress": vault},
     )
+    return MorphoVaultV1StateGraphQLResponse(data=cast(Any, data_payload_v1))
 
 
 # api/morpho/vault/v1/state相关：按地址查 vault 当前表并组装接口结构
@@ -679,7 +683,7 @@ async def get_vault_v2_state_main_graphql(
     address: str,
     chain_id: int = 1,
     pool: AsyncpgPool | None = None,
-) -> MorphoVaultStateGraphQLResponse:
+) -> MorphoVaultV2StateGraphQLResponse:
     raw = (address or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="address 不能为空")
@@ -707,7 +711,8 @@ async def get_vault_v2_state_main_graphql(
                         gate = gates.get(gate_type)
                         if isinstance(gate, dict):
                             gate["dataSource"] = "table"
-            return MorphoVaultStateGraphQLResponse(data=table_data.get("data") or {})
+            data_payload_v2 = cast(dict[str, Any], table_data.get("data") or {})
+            return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
 
     payload = {
         "query": _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL,
@@ -749,9 +754,11 @@ async def get_vault_v2_state_main_graphql(
     if pool is not None and isinstance(vault, dict):
         await _upsert_vault_v2_state_to_table(pool, vault=vault)
 
-    return MorphoVaultStateGraphQLResponse(
-        data=data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
+    data_payload_v2 = cast(
+        dict[str, Any],
+        data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
     )
+    return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
 
 
 # api/morpho/vault/v2/state相关：按地址查 V2 当前表并组装接口结构

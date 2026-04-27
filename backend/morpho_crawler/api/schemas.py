@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from typing import Any  # api/morpho/vault/v1/state相关
 from pydantic import ConfigDict  # api/morpho/vault/v1/state相关
 
 
@@ -199,13 +198,143 @@ class MorphoMarketStateResponse(BaseModel):
     )
 
 
-# api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（仅保留 data）
-class MorphoVaultStateGraphQLResponse(BaseModel):
+# api/morpho/vault/v1/state相关：文档结构（类型展示）
+class MorphoVaultTokenInfo(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    data: dict[str, Any] = Field(
-        description="GraphQL data 字段，含 vaultByAddress（与 Morpho 官网响应一致）。"
+    address: str = Field(description="EVM 地址。")
+    symbol: str | None = Field(default=None, description="代币符号。")
+    decimals: int | None = Field(default=None, description="代币精度。")
+
+
+class MorphoVaultV1AllocationMarket(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    market_id: str = Field(description="市场 id。")
+    loanAsset: MorphoVaultTokenInfo = Field(description="借贷侧资产。")
+    collateralAsset: MorphoVaultTokenInfo = Field(description="抵押侧资产。")
+    dataSource: str | None = Field(default=None, description="数据来源标记。")
+
+
+class MorphoVaultV1AllocationItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    market: MorphoVaultV1AllocationMarket = Field(description="关联市场信息。")
+    supplyAssetsUsd: float | None = Field(
+        default=None, description="该市场供应资产 USD。"
     )
+    supplyCapUsd: float | None = Field(default=None, description="该市场供应上限 USD。")
+    liquidityUsd: float | None = Field(
+        default=None, description="该市场可提取流动性 USD。"
+    )
+
+
+class MorphoVaultV1StatePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    totalAssetsUsd: float | None = Field(default=None, description="总资产 USD。")
+    apy: float | None = Field(default=None, description="APY。")
+    netApy: float | None = Field(default=None, description="净 APY。")
+    netApyExcludingRewards: float | None = Field(
+        default=None, description="剔除奖励后的净 APY。"
+    )
+    avgNetApy: float | None = Field(default=None, description="平均净 APY。")
+    avgNetApyExcludingRewards: float | None = Field(
+        default=None, description="平均净 APY（剔除奖励）。"
+    )
+    timelock: int | None = Field(default=None, description="时间锁秒数。")
+    fee: float | None = Field(default=None, description="费率。")
+    liquidityUsd: float | None = Field(default=None, description="流动性 USD。")
+    allocation: list[MorphoVaultV1AllocationItem] = Field(
+        default_factory=list, description="allocation 列表。"
+    )
+
+
+class MorphoVaultV1ByAddress(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    address: str = Field(description="金库地址。")
+    name: str | None = Field(default=None, description="金库名称。")
+    asset: MorphoVaultTokenInfo = Field(description="金库资产信息。")
+    state: MorphoVaultV1StatePayload = Field(description="金库状态。")
+    dataSource: str | None = Field(default=None, description="数据来源标记。")
+
+
+class MorphoVaultV1Data(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    vaultByAddress: MorphoVaultV1ByAddress = Field(description="V1 金库结果。")
+
+
+class MorphoVaultV1StateGraphQLResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    data: MorphoVaultV1Data = Field(description="GraphQL data 字段。")
+
+
+# api/morpho/vault/v2/state相关：文档结构（类型展示）
+class MorphoVaultV2Gate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    address: str | None = Field(default=None, description="Gate 地址。")
+    abdicated: bool | None = Field(default=None, description="是否已 abdicated。")
+    pendingAbdicationExecutableAt: int | None = Field(
+        default=None, description="pending abdication 可执行时间。"
+    )
+    pendingAddress: str | None = Field(default=None, description="pending 地址。")
+    pendingExecutableAt: int | None = Field(
+        default=None, description="pending 可执行时间。"
+    )
+    dataSource: str | None = Field(default=None, description="数据来源标记。")
+
+
+class MorphoVaultV2GatesConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    sendSharesGate: MorphoVaultV2Gate | None = Field(default=None)
+    receiveAssetsGate: MorphoVaultV2Gate | None = Field(default=None)
+    receiveSharesGate: MorphoVaultV2Gate | None = Field(default=None)
+    sendAssetsGate: MorphoVaultV2Gate | None = Field(default=None)
+
+
+class MorphoVaultV2ByAddress(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    address: str = Field(description="金库地址。")
+    name: str | None = Field(default=None, description="金库名称。")
+    totalAssetsUsd: float | None = Field(default=None, description="总资产 USD。")
+    idleAssetsUsd: float | None = Field(default=None, description="空闲资产 USD。")
+    liquidityUsd: float | None = Field(default=None, description="流动性 USD。")
+    apy: float | None = Field(default=None, description="APY。")
+    netApy: float | None = Field(default=None, description="净 APY。")
+    netApyExcludingRewards: float | None = Field(
+        default=None, description="剔除奖励净 APY。"
+    )
+    avgNetApy: float | None = Field(default=None, description="平均净 APY。")
+    avgNetApyExcludingRewards: float | None = Field(
+        default=None, description="平均净 APY（剔除奖励）。"
+    )
+    maxApy: float | None = Field(default=None, description="最大 APY。")
+    forceDeallocatableLiquidityUsd: float | None = Field(
+        default=None, description="可强制释放流动性 USD。"
+    )
+    performanceFee: float | None = Field(default=None, description="业绩费。")
+    managementFee: float | None = Field(default=None, description="管理费。")
+    asset: MorphoVaultTokenInfo = Field(description="金库资产信息。")
+    gatesConfig: MorphoVaultV2GatesConfig = Field(description="Gate 配置。")
+    dataSource: str | None = Field(default=None, description="数据来源标记。")
+
+
+class MorphoVaultV2Data(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    vaultV2ByAddress: MorphoVaultV2ByAddress = Field(description="V2 金库结果。")
+
+
+class MorphoVaultV2StateGraphQLResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    data: MorphoVaultV2Data = Field(description="GraphQL data 字段。")
 
 
 # api/morpho/vaults相关：总表资产信息

@@ -11,7 +11,12 @@ from .schemas import (
     MorphoPositionReplayResponse,
     MorphoPositionResponse,
 )
-from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/v1/state相关
+from .schemas import (
+    MorphoVaultV1StateGraphQLResponse,  # api/morpho/vault/v1/state相关
+)
+from .schemas import (
+    MorphoVaultV2StateGraphQLResponse,  # api/morpho/vault/v2/state相关
+)
 from .schemas import MorphoVotesResponse  # api/morpho/vaults相关
 from .service import (
     get_market_state,  # api/morpho/market/state相关
@@ -163,14 +168,14 @@ async def market_state(
 # api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（Morpho 主站 GraphQL vaultByAddress）
 @router.get(
     "/vault/v1/state",
-    response_model=MorphoVaultStateGraphQLResponse,
+    response_model=MorphoVaultV1StateGraphQLResponse,
     summary="Morpho Vault V1 状态（主站 GraphQL）",
 )
 async def vault_state(
     request: Request,
     pool: AsyncpgPool,
     address: str = Query(..., description="Vault 合约地址（EVM）"),
-) -> MorphoVaultStateGraphQLResponse:
+) -> MorphoVaultV1StateGraphQLResponse:
     # api/morpho/vault/v1/state相关：固定主网查询，不暴露 chain_id
     return await get_vault_state_main_graphql(
         address=address,
@@ -182,13 +187,13 @@ async def vault_state(
 # api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state（Morpho 主站 GraphQL vaultV2ByAddress）
 @router.get(
     "/vault/v2/state",
-    response_model=MorphoVaultStateGraphQLResponse,
+    response_model=MorphoVaultV2StateGraphQLResponse,
     summary="Morpho Vault V2 状态（主站 GraphQL）",
 )
 async def vault_v2_state(
     pool: AsyncpgPool,
     address: str = Query(..., description="Vault V2 合约地址（EVM）"),
-) -> MorphoVaultStateGraphQLResponse:
+) -> MorphoVaultV2StateGraphQLResponse:
     # api/morpho/vault/v2/state相关：固定主网查询，不暴露 chain_id
     return await get_vault_v2_state_main_graphql(address=address, pool=pool)
 
