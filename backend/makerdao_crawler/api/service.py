@@ -281,6 +281,39 @@ def _ilk_item_to_payload(item: MakerDaoIlkDetailResponse) -> dict[str, Any]:
     }
 
 
+async def _ensure_ilk_cached(pool: Any, ilk: str, *, w3: Any = None) -> None:
+    normalized_ilk = _normalize_ilk(ilk)
+    if not normalized_ilk:
+        raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+
+    rows = await fetch_ilks(pool)
+    if any(str(_row_get(row, "ilk") or "").upper() == normalized_ilk for row in rows):
+        return
+
+    item = await _fetch_live_ilk(normalized_ilk, w3=w3)
+    if item is None:
+        item = _build_minimal_ilk_detail(normalized_ilk)
+    await upsert_ilk(pool, _ilk_item_to_payload(item))
+
+
+def _build_minimal_ilk_detail(ilk: str) -> MakerDaoIlkDetailResponse:
+    metadata = MAKERDAO_DEFAULT_ILK_METADATA.get(ilk, {})
+    return MakerDaoIlkDetailResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
+        ilk=ilk,
+        vault_type=MAKERDAO_DEFAULT_VAULT_TYPE,
+        gem_symbol=metadata.get("symbol") or ilk.split("-")[0],
+        gem_address=metadata.get("token_address"),
+        debt_ceiling=None,
+        liquidation_ratio=None,
+        liquidation_penalty=None,
+        stability_fee=None,
+        dust=None,
+        updated_at=_record_ts(datetime.now(timezone.utc)),
+    )
+
+
 async def _fetch_live_ilks(*, w3: Any = None) -> list[MakerDaoIlkDetailResponse]:
     own_w3 = False
     active_w3 = w3
@@ -445,6 +478,7 @@ async def get_user_vault_position(
     if not positions:
         raise HTTPException(status_code=404, detail="MakerDAO vault position not found")
     for item in positions:
+        await _ensure_ilk_cached(pool, item.ilk, w3=w3)
         await upsert_current_vault_position(
             pool,
             _vault_position_item_to_payload(item),
@@ -490,6 +524,7 @@ async def get_system_urn_position(
             status_code=404,
             detail="MakerDAO system urn position not found",
         )
+    await _ensure_ilk_cached(pool, item.ilk, w3=w3)
     await upsert_system_urn_position(pool, _system_urn_position_to_payload(item))
     return item
 
@@ -549,6 +584,8 @@ async def _fetch_live_vault_positions(
         snapshot_at = datetime.now(timezone.utc)
 
         cdp_refs = await _resolve_cdp_refs(active_w3, contracts, address)
+        if not cdp_refs:
+            cdp_refs = await _resolve_direct_urn_refs(active_w3, contracts, address)
         if vault_id is not None:
             cdp_refs = [ref for ref in cdp_refs if ref["vault_id"] == vault_id]
         if ilk is not None:

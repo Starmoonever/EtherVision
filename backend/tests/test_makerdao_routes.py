@@ -395,6 +395,99 @@ async def test_direct_urn_ilk_scan_honors_explicit_config(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_position_falls_back_to_direct_urn_when_cdp_refs_are_empty(
+    monkeypatch,
+) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    urn = "0x1111111111111111111111111111111111111111"
+    direct_ref = {
+        "vault_id": None,
+        "owner_address": None,
+        "proxy_address": None,
+        "urn_address": urn,
+        "ilk": "ETH-A",
+    }
+    calls: list[str] = []
+
+    class _EthWithBlock:
+        async def get_block(self, _tag):
+            return {"number": 22334455, "timestamp": int(ts.timestamp())}
+
+    async def _fake_resolve_cdp_refs(_w3, _contracts, address):
+        assert address == urn
+        calls.append("cdp")
+        return []
+
+    async def _fake_resolve_direct_urn_refs(_w3, _contracts, address):
+        assert address == urn
+        calls.append("urn")
+        return [direct_ref]
+
+    async def _fake_build_live_position_item(
+        _w3,
+        _contracts,
+        ref,
+        *,
+        block_number,
+        block_timestamp,
+        snapshot_at,
+    ):
+        assert ref == direct_ref
+        assert block_number == 22334455
+        assert block_timestamp == ts
+        assert snapshot_at.tzinfo is not None
+        return MakerDaoVaultPositionItemResponse(
+            vault_uid=f"ethereum:makerdao:urn:{urn}:ETH-A",
+            vault_id=None,
+            vault_type="vault",
+            ilk="ETH-A",
+            urn_address=urn,
+            owner_address=None,
+            proxy_address=None,
+            block_number=block_number,
+            block_timestamp=ts.isoformat().replace("+00:00", "Z"),
+            snapshot_at=snapshot_at.isoformat().replace("+00:00", "Z"),
+            collateral_symbol="WETH",
+            collateral_token_address="0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+            collateral_amount="1",
+            collateral_value_usd="3000",
+            debt_symbol="DAI",
+            debt_token_address="0x6B175474E89094C44Da98b954EedeAC495271d0F",
+            debt_amount="1000",
+            debt_value_usd="1000",
+            liquidation_ratio="1.45",
+            liquidation_price_usd="1450",
+            health_factor="2.06896551724137931",
+            is_healthy=True,
+            data_source="onchain-live",
+            assets=[],
+        )
+
+    monkeypatch.setattr(makerdao_service, "_resolve_cdp_refs", _fake_resolve_cdp_refs)
+    monkeypatch.setattr(
+        makerdao_service,
+        "_resolve_direct_urn_refs",
+        _fake_resolve_direct_urn_refs,
+    )
+    monkeypatch.setattr(
+        makerdao_service,
+        "_build_live_position_item",
+        _fake_build_live_position_item,
+    )
+
+    items = await makerdao_service._fetch_live_vault_positions(
+        urn,
+        w3=SimpleNamespace(eth=_EthWithBlock()),
+        vault_id=None,
+        ilk=None,
+        include_empty=False,
+    )
+
+    assert calls == ["cdp", "urn"]
+    assert items[0].vault_uid == f"ethereum:makerdao:urn:{urn}:ETH-A"
+
+
+@pytest.mark.asyncio
 async def test_get_ilks_returns_cached_rows_without_live_fetch(monkeypatch) -> None:
     ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
     pool = _FakePool(
@@ -500,6 +593,78 @@ async def test_get_ilk_detail_backfills_when_cache_misses(monkeypatch) -> None:
 
     assert result.ilk == "ETH-A"
     assert persisted[0]["ilk"] == "ETH-A"
+
+
+@pytest.mark.asyncio
+async def test_get_user_position_backfills_missing_ilk_before_position(
+    monkeypatch,
+) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    pool = _FakePool(_FakeConn(ilks=[], positions=[]))
+    events: list[tuple[str, str]] = []
+
+    live_position = MakerDaoVaultPositionItemResponse(
+        vault_uid="ethereum:makerdao:12345",
+        vault_id=12345,
+        vault_type="vault",
+        ilk="LINK-A",
+        urn_address="0x1111111111111111111111111111111111111111",
+        owner_address="0x2222222222222222222222222222222222222222",
+        proxy_address=None,
+        block_number=22334455,
+        block_timestamp=ts.isoformat().replace("+00:00", "Z"),
+        snapshot_at=ts.isoformat().replace("+00:00", "Z"),
+        collateral_symbol="LINK",
+        collateral_token_address="0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        collateral_amount="100",
+        collateral_value_usd="1500",
+        debt_symbol="DAI",
+        debt_token_address="0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        debt_amount="500",
+        debt_value_usd="500",
+        liquidation_ratio="1.65",
+        liquidation_price_usd="8.25",
+        health_factor="1.818181818181818182",
+        is_healthy=True,
+        data_source="onchain-live",
+        assets=[],
+    )
+
+    async def _fake_fetch_live_vault_positions(*_args, **_kwargs):
+        return [live_position]
+
+    async def _fake_fetch_live_ilk(ilk_name, *, w3):
+        assert ilk_name == "LINK-A"
+        assert w3 == "fake-w3"
+        return None
+
+    async def _fake_upsert_ilk(_pool, payload):
+        events.append(("ilk", payload["ilk"]))
+
+    async def _fake_upsert_current_vault_position(_pool, payload):
+        events.append(("position", payload["ilk"]))
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "_fetch_live_vault_positions",
+        _fake_fetch_live_vault_positions,
+    )
+    monkeypatch.setattr(makerdao_service, "_fetch_live_ilk", _fake_fetch_live_ilk)
+    monkeypatch.setattr(makerdao_service, "upsert_ilk", _fake_upsert_ilk)
+    monkeypatch.setattr(
+        makerdao_service,
+        "upsert_current_vault_position",
+        _fake_upsert_current_vault_position,
+    )
+
+    result = await makerdao_service.get_user_vault_position(
+        pool,
+        address="0x2222222222222222222222222222222222222222",
+        w3="fake-w3",
+    )
+
+    assert result.positions[0].ilk == "LINK-A"
+    assert events == [("ilk", "LINK-A"), ("position", "LINK-A")]
 
 
 @pytest.mark.asyncio
