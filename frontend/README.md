@@ -144,7 +144,7 @@ frontend/
 - Morpho 市场静态配置与实时状态
 - Morpho 搜索历史
 - Compound 与 JustLend 的专用接口
-- MakerDAO Vault 个人仓位接口
+- MakerDAO Vault 个人仓位与 ilk 市场参数接口
 
 其中 JustLend 页面当前包含：
 
@@ -158,7 +158,7 @@ frontend/
 - 请求固定带 `include_empty=true`，用于区分“后端请求失败 / 无数据”和“地址存在但为空仓位”
 - 页面展示 Vault 数量、总抵押、总债务、最差健康因子、健康 Vault 数量、抵押类型与 Vault 明细
 - Vault 明细展示 vault id、ilk、抵押品、抵押数量、抵押价值、债务、清算率、清算价格、健康因子与数据时间
-- MakerDAO 宏观市场页当前为占位页，等待后端市场接口后再接入
+- 宏观市场评估：通过 `GET /api/makerdao/ilks` 展示一个轻量 MakerDAO 资产元数据导航组件，用于检索 ilk、按资产类别分组、区分已部署合约与系统内部账户，并追踪 `updated_at` 时效；当前接口只提供基础元数据，不展示利率、限额或清算参数
 
 其中 Morpho 市场页当前依赖以下接口：
 

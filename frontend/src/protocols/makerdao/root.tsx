@@ -20,6 +20,6 @@ export function MakerDaoProtocolRoot({ active, activeTab }: ProtocolRootProps) {
       }}
     />
   ) : (
-    <MakerDaoMarketPage />
+    <MakerDaoMarketPage active={active} />
   );
 }
