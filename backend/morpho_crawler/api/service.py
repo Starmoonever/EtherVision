@@ -673,6 +673,7 @@ async def get_vault_v2_state_main_graphql(
     *,
     address: str,
     chain_id: int = 1,
+    pool: AsyncpgPool | None = None,
 ) -> MorphoVaultStateGraphQLResponse:
     raw = (address or "").strip()
     if not raw:
@@ -681,6 +682,27 @@ async def get_vault_v2_state_main_graphql(
         checksum = AsyncWeb3.to_checksum_address(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"无效 EVM 地址: {exc}") from exc
+    # api/morpho/vault/v2/state相关：优先查表命中，减少 GraphQL 请求
+    if pool is not None:
+        table_data = await _fetch_vault_v2_state_from_table(
+            pool, vault_address=checksum
+        )
+        if table_data is not None:
+            vault_table = (table_data.get("data") or {}).get("vaultV2ByAddress") or {}
+            if isinstance(vault_table, dict):
+                vault_table["dataSource"] = "table"
+                gates = vault_table.get("gatesConfig") or {}
+                if isinstance(gates, dict):
+                    for gate_type in (
+                        "sendSharesGate",
+                        "receiveAssetsGate",
+                        "receiveSharesGate",
+                        "sendAssetsGate",
+                    ):
+                        gate = gates.get(gate_type)
+                        if isinstance(gate, dict):
+                            gate["dataSource"] = "table"
+            return MorphoVaultStateGraphQLResponse(data=table_data.get("data") or {})
 
     payload = {
         "query": _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL,
@@ -705,10 +727,229 @@ async def get_vault_v2_state_main_graphql(
         if errs and isinstance(errs[0], dict):
             detail = str(errs[0].get("message") or detail)
         raise HTTPException(status_code=404, detail=detail)
+    if isinstance(vault, dict):
+        vault["dataSource"] = "graphql"
+        gates = vault.get("gatesConfig") or {}
+        if isinstance(gates, dict):
+            for gate_type in (
+                "sendSharesGate",
+                "receiveAssetsGate",
+                "receiveSharesGate",
+                "sendAssetsGate",
+            ):
+                gate = gates.get(gate_type)
+                if isinstance(gate, dict):
+                    gate["dataSource"] = "graphql"
+    # api/morpho/vault/v2/state相关：GraphQL 命中后回写 V2 当前表
+    if pool is not None and isinstance(vault, dict):
+        await _upsert_vault_v2_state_to_table(pool, vault=vault)
 
     return MorphoVaultStateGraphQLResponse(
         data=data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
     )
+
+
+# api/morpho/vault/v2/state相关：按地址查 V2 当前表并组装接口结构
+async def _fetch_vault_v2_state_from_table(
+    pool: AsyncpgPool, *, vault_address: str
+) -> dict[str, Any] | None:
+    vault_addr_b = _evm_to_db_bytes(vault_address)
+    async with pool.acquire() as conn:
+        head = await conn.fetchrow(
+            """
+            SELECT
+                vault_address,
+                vault_name,
+                asset_address,
+                asset_symbol,
+                asset_decimals,
+                total_assets_usd,
+                idle_assets_usd,
+                liquidity_usd,
+                apy,
+                net_apy,
+                net_apy_excluding_rewards,
+                avg_net_apy,
+                avg_net_apy_excluding_rewards,
+                max_apy,
+                force_deallocatable_liquidity_usd,
+                performance_fee,
+                management_fee
+            FROM loan.morpho_vault_v2_current
+            WHERE vault_address = $1
+            LIMIT 1
+            """,
+            vault_addr_b,
+        )
+        if head is None:
+            return None
+        gate_rows = await conn.fetch(
+            """
+            SELECT
+                gate_type,
+                gate_address,
+                abdicated,
+                pending_abdication_executable_at,
+                pending_address,
+                pending_executable_at
+            FROM loan.morpho_vault_v2_gates_current
+            WHERE vault_address = $1
+            """,
+            vault_addr_b,
+        )
+    gates_config: dict[str, Any] = {}
+    for row in gate_rows:
+        gate_type = str(row["gate_type"])
+        gates_config[gate_type] = {
+            "address": _db_bytes_to_evm(row["gate_address"])
+            if row["gate_address"]
+            else None,
+            "abdicated": bool(row["abdicated"]),
+            "pendingAbdicationExecutableAt": row["pending_abdication_executable_at"],
+            "pendingAddress": _db_bytes_to_evm(row["pending_address"])
+            if row["pending_address"]
+            else None,
+            "pendingExecutableAt": row["pending_executable_at"],
+        }
+    return {
+        "data": {
+            "vaultV2ByAddress": {
+                "address": _db_bytes_to_evm(head["vault_address"]),
+                "name": head["vault_name"],
+                "totalAssetsUsd": float(head["total_assets_usd"] or 0),
+                "idleAssetsUsd": float(head["idle_assets_usd"] or 0),
+                "liquidityUsd": float(head["liquidity_usd"] or 0),
+                "apy": float(head["apy"] or 0),
+                "netApy": float(head["net_apy"] or 0),
+                "netApyExcludingRewards": float(head["net_apy_excluding_rewards"] or 0),
+                "avgNetApy": float(head["avg_net_apy"] or 0),
+                "avgNetApyExcludingRewards": float(
+                    head["avg_net_apy_excluding_rewards"] or 0
+                ),
+                "maxApy": float(head["max_apy"] or 0),
+                "forceDeallocatableLiquidityUsd": float(
+                    head["force_deallocatable_liquidity_usd"] or 0
+                ),
+                "performanceFee": float(head["performance_fee"] or 0),
+                "managementFee": float(head["management_fee"] or 0),
+                "asset": {
+                    "address": _db_bytes_to_evm(head["asset_address"]),
+                    "symbol": head["asset_symbol"],
+                    "decimals": head["asset_decimals"],
+                },
+                "gatesConfig": gates_config,
+            }
+        }
+    }
+
+
+# api/morpho/vault/v2/state相关：回写 V2 当前表
+async def _upsert_vault_v2_state_to_table(
+    pool: AsyncpgPool, *, vault: dict[str, Any]
+) -> None:
+    vault_addr = str(vault.get("address") or "").strip()
+    if not vault_addr:
+        return
+    asset = vault.get("asset") or {}
+    gates = vault.get("gatesConfig") or {}
+    vault_addr_b = _evm_to_db_bytes(vault_addr)
+    asset_addr_b = _evm_to_db_bytes(str(asset.get("address") or ZERO_ADDRESS))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO loan.morpho_vault_v2_current (
+                    vault_address, vault_name, asset_address, asset_symbol, asset_decimals,
+                    total_assets_usd, idle_assets_usd, liquidity_usd, apy, net_apy,
+                    net_apy_excluding_rewards, avg_net_apy, avg_net_apy_excluding_rewards,
+                    max_apy, force_deallocatable_liquidity_usd, performance_fee, management_fee,
+                    source_ts, updated_at
+                )
+                VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW()
+                )
+                ON CONFLICT (vault_address) DO UPDATE SET
+                    vault_name = EXCLUDED.vault_name,
+                    asset_address = EXCLUDED.asset_address,
+                    asset_symbol = EXCLUDED.asset_symbol,
+                    asset_decimals = EXCLUDED.asset_decimals,
+                    total_assets_usd = EXCLUDED.total_assets_usd,
+                    idle_assets_usd = EXCLUDED.idle_assets_usd,
+                    liquidity_usd = EXCLUDED.liquidity_usd,
+                    apy = EXCLUDED.apy,
+                    net_apy = EXCLUDED.net_apy,
+                    net_apy_excluding_rewards = EXCLUDED.net_apy_excluding_rewards,
+                    avg_net_apy = EXCLUDED.avg_net_apy,
+                    avg_net_apy_excluding_rewards = EXCLUDED.avg_net_apy_excluding_rewards,
+                    max_apy = EXCLUDED.max_apy,
+                    force_deallocatable_liquidity_usd = EXCLUDED.force_deallocatable_liquidity_usd,
+                    performance_fee = EXCLUDED.performance_fee,
+                    management_fee = EXCLUDED.management_fee,
+                    source_ts = NOW(),
+                    updated_at = NOW()
+                """,
+                vault_addr_b,
+                vault.get("name"),
+                asset_addr_b,
+                asset.get("symbol"),
+                asset.get("decimals"),
+                vault.get("totalAssetsUsd"),
+                vault.get("idleAssetsUsd"),
+                vault.get("liquidityUsd"),
+                vault.get("apy"),
+                vault.get("netApy"),
+                vault.get("netApyExcludingRewards"),
+                vault.get("avgNetApy"),
+                vault.get("avgNetApyExcludingRewards"),
+                vault.get("maxApy"),
+                vault.get("forceDeallocatableLiquidityUsd"),
+                vault.get("performanceFee"),
+                vault.get("managementFee"),
+            )
+            await conn.execute(
+                """
+                DELETE FROM loan.morpho_vault_v2_gates_current
+                WHERE vault_address = $1
+                """,
+                vault_addr_b,
+            )
+            rows: list[tuple[Any, ...]] = []
+            for gate_type in (
+                "sendSharesGate",
+                "receiveAssetsGate",
+                "receiveSharesGate",
+                "sendAssetsGate",
+            ):
+                gate = gates.get(gate_type) if isinstance(gates, dict) else None
+                if not isinstance(gate, dict):
+                    continue
+                rows.append(
+                    (
+                        vault_addr_b,
+                        gate_type,
+                        _evm_to_db_bytes(str(gate.get("address")))
+                        if gate.get("address")
+                        else None,
+                        bool(gate.get("abdicated") or False),
+                        gate.get("pendingAbdicationExecutableAt"),
+                        _evm_to_db_bytes(str(gate.get("pendingAddress")))
+                        if gate.get("pendingAddress")
+                        else None,
+                        gate.get("pendingExecutableAt"),
+                    )
+                )
+            if rows:
+                await conn.executemany(
+                    """
+                    INSERT INTO loan.morpho_vault_v2_gates_current (
+                        vault_address, gate_type, gate_address, abdicated,
+                        pending_abdication_executable_at, pending_address, pending_executable_at,
+                        source_ts, updated_at
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),NOW())
+                    """,
+                    rows,
+                )
 
 
 # api/morpho/markets相关：当链上查询失败时，从硬编码 pair 文本回退构造 assets

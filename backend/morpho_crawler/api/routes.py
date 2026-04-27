@@ -184,7 +184,8 @@ async def vault_state(
     summary="Morpho Vault V2 状态（主站 GraphQL）",
 )
 async def vault_v2_state(
+    pool: AsyncpgPool,
     address: str = Query(..., description="Vault V2 合约地址（EVM）"),
 ) -> MorphoVaultStateGraphQLResponse:
     # api/morpho/vault/v2/state相关：固定主网查询，不暴露 chain_id
-    return await get_vault_v2_state_main_graphql(address=address)
+    return await get_vault_v2_state_main_graphql(address=address, pool=pool)
