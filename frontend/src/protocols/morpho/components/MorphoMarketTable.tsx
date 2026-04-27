@@ -1189,9 +1189,9 @@ export function MorphoMarketTable({
                               <div className="spinner"></div>
                             </div>
                           ) : detailError ? (
-                            <div className="protocol-banner protocol-banner-warn">
-                              <div className="protocol-banner-title">市场详情加载失败</div>
-                              <div className="protocol-banner-copy">{detailError}</div>
+                            <div className="morpho-banner morpho-banner-warn">
+                              <div className="morpho-banner-title">市场详情加载失败</div>
+                              <div className="morpho-banner-copy">{detailError}</div>
                             </div>
                           ) : market.state_loaded ? (
                             <div className="morpho-market-inline-detail">

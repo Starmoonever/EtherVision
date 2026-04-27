@@ -137,12 +137,12 @@ export function MorphoPersonalDashboard({
   const risk = buildRiskTone(data);
   const riskToneClass =
     risk.tone === 'safe'
-      ? 'risk-status-safe'
+      ? 'morpho-risk-status-safe'
       : risk.tone === 'watch'
-        ? 'risk-status-watch'
+        ? 'morpho-risk-status-watch'
         : risk.tone === 'danger'
-          ? 'risk-status-danger'
-          : 'risk-status-neutral';
+          ? 'morpho-risk-status-danger'
+          : 'morpho-risk-status-neutral';
 
   useEffect(() => {
     if (!data?.loan_token) {
@@ -178,7 +178,7 @@ export function MorphoPersonalDashboard({
 
   if (notFound) {
     return (
-      <div className="card protocol-overview-card" style={{ marginBottom: 0 }}>
+      <div className="card morpho-overview-card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span className="card-title">Morpho 个人账户分析</span>
@@ -188,9 +188,9 @@ export function MorphoPersonalDashboard({
             </span>
           </div>
         </div>
-        <div className="protocol-banner protocol-banner-soft">
-          <div className="protocol-banner-title">没有找到可用仓位</div>
-          <div className="protocol-banner-copy">
+        <div className="morpho-banner morpho-banner-soft">
+          <div className="morpho-banner-title">没有找到可用仓位</div>
+          <div className="morpho-banner-copy">
             当前地址在这个 market id 下没有返回可展示的 Morpho Blue 仓位数据。
           </div>
         </div>
@@ -226,8 +226,8 @@ export function MorphoPersonalDashboard({
     `${quoteLooksUsd ? '$' : ''}${formatNumberCompact(price, 4)}`;
 
   return (
-    <div className="protocol-dashboard">
-      <div className="card protocol-overview-card" style={{ marginBottom: 0 }}>
+    <div className="morpho-dashboard">
+      <div className="card morpho-overview-card" style={{ marginBottom: 0 }}>
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span className="card-title">Morpho 个人账户分析</span>
@@ -239,39 +239,39 @@ export function MorphoPersonalDashboard({
           </div>
         </div>
 
-        <div className="protocol-overview-grid">
-          <div className="protocol-overview-copy">
-            <div className="protocol-kicker">Single Market (Morpho Blue)</div>
-            <h2 className="protocol-title">{risk.headline}</h2>
-            <p className="protocol-copy">{risk.description}</p>
+        <div className="morpho-overview-grid">
+          <div className="morpho-overview-copy">
+            <div className="morpho-kicker">Single Market (Morpho Blue)</div>
+            <h2 className="morpho-title">{risk.headline}</h2>
+            <p className="morpho-copy">{risk.description}</p>
           </div>
 
-          <div className="protocol-overview-side">
-            <div className="protocol-overview-pills">
-              <div className="protocol-overview-pill">
-                <span className="protocol-overview-pill-label">数据源</span>
-                <span className="protocol-overview-pill-value">
+          <div className="morpho-overview-side">
+            <div className="morpho-overview-pills">
+              <div className="morpho-overview-pill">
+                <span className="morpho-overview-pill-label">数据源</span>
+                <span className="morpho-overview-pill-value">
                   {data.data_source ? data.data_source.toUpperCase() : 'RPC'}
                 </span>
               </div>
-              <div className="protocol-overview-pill">
-                <span className="protocol-overview-pill-label">快照时间</span>
-                <span className="protocol-overview-pill-value" title={data.block_timestamp}>
+              <div className="morpho-overview-pill">
+                <span className="morpho-overview-pill-label">快照时间</span>
+                <span className="morpho-overview-pill-value" title={data.block_timestamp}>
                   {data.block_timestamp ? formatDateTime(data.block_timestamp) : '--'}
                 </span>
               </div>
             </div>
 
-            <div className="protocol-overview-tags">
-              <div className="protocol-overview-tag">
-                <span className="protocol-overview-tag-label">抵押资产</span>
-                <span className="protocol-overview-tag-value">
+            <div className="morpho-overview-tags">
+              <div className="morpho-overview-tag">
+                <span className="morpho-overview-tag-label">抵押资产</span>
+                <span className="morpho-overview-tag-value">
                   {data.collateral_token_symbol} · {formatNumberCompact(collateralAssets, 6)}
                 </span>
               </div>
-              <div className="protocol-overview-tag">
-                <span className="protocol-overview-tag-label">借款资产</span>
-                <span className="protocol-overview-tag-value">
+              <div className="morpho-overview-tag">
+                <span className="morpho-overview-tag-label">借款资产</span>
+                <span className="morpho-overview-tag-value">
                   {data.loan_token_symbol} · {formatNumberCompact(borrowAssets, 6)}
                 </span>
               </div>
@@ -280,18 +280,18 @@ export function MorphoPersonalDashboard({
         </div>
       </div>
 
-      <div className="protocol-risk-layout protocol-risk-layout-focused">
-        <div className="card protocol-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
+      <div className="morpho-risk-layout morpho-risk-layout-focused">
+        <div className="card morpho-risk-hero morpho-panel-card" style={{ marginBottom: 0 }}>
           <div className="card-header">
             <span className="card-title">风险判断</span>
             <span className={`badge ${riskToneClass}`}>{risk.label}</span>
           </div>
 
-          <div className="protocol-risk-hero-top">
+          <div className="morpho-risk-hero-top">
             <div>
-              <div className="protocol-kicker">Health Factor</div>
+              <div className="morpho-kicker">Health Factor</div>
               <AutoFitText
-                className="protocol-risk-health"
+                className="morpho-risk-health"
                 text={formatHealthFactorText(data)}
                 maxFontSizePx={64}
                 minFontSizePx={28}
@@ -301,7 +301,7 @@ export function MorphoPersonalDashboard({
                 scientificIntegerDigitsThreshold={6}
               />
             </div>
-            <div className="protocol-risk-health-copy morpho-risk-health-copy">
+            <div className="morpho-risk-health-copy">
               当前抵押折算价值约为{' '}
               <strong>{formatNumberCompact(collateralValueInLoanAsset, 6)}</strong>{' '}
               {data.loan_token_symbol}，借款规模为{' '}

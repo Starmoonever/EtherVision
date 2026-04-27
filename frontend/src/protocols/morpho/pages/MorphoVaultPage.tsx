@@ -1270,7 +1270,7 @@ export function MorphoVaultPage({
             </button>
           </div>
         ) : null}
-        {error ? <div className="protocol-banner protocol-banner-warn">{error}</div> : null}
+        {error ? <div className="morpho-banner morpho-banner-warn">{error}</div> : null}
       </section>
 
       {loading ? (

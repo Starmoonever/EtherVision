@@ -127,7 +127,7 @@ function getMakerHealthFactorTone(value: number, display: string) {
     return { color: '#22c55e', className: '', fontWeight: 800 };
   }
   if (value <= 1.1) {
-    return { color: '#FFBB28', className: 'justlend-hf-pulse', fontWeight: 900 };
+    return { color: '#FFBB28', className: 'makerdao-hf-pulse', fontWeight: 900 };
   }
   if (value <= 1.5) {
     return { color: '#f59e0b', className: '', fontWeight: 800 };
@@ -188,10 +188,10 @@ function riskLabel(vault: MakerDaoVaultPosition | null): string {
 
 function riskToneClass(vault: MakerDaoVaultPosition | null): string {
   const label = riskLabel(vault);
-  if (label === '高风险') return 'justlend-risk-danger';
-  if (label === '需重点观察') return 'justlend-risk-watch';
-  if (label === '空仓位' || label === '无活跃债务') return 'justlend-risk-neutral';
-  return 'justlend-risk-safe';
+  if (label === '高风险') return 'makerdao-risk-danger';
+  if (label === '需重点观察') return 'makerdao-risk-watch';
+  if (label === '空仓位' || label === '无活跃债务') return 'makerdao-risk-neutral';
+  return 'makerdao-risk-safe';
 }
 
 export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboardProps) {
@@ -414,25 +414,25 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
           <ChartDataStatus meta={meta} />
         </div>
 
-        <div className="justlend-overview-grid makerdao-overview-grid">
-          <div className="justlend-overview-copy">
-            <div className="justlend-market-kicker">Vault Overview</div>
-            <h2 className="justlend-market-title">
+        <div className="makerdao-overview-grid">
+          <div className="makerdao-overview-copy">
+            <div className="makerdao-market-kicker">Vault Overview</div>
+            <h2 className="makerdao-market-title">
               {worstVault ? `当前重点关注 ${riskFocusText}` : '当前地址没有 MakerDAO Vault 仓位'}
             </h2>
-            <p className="justlend-market-copy">
+            <p className="makerdao-market-copy">
               MakerDAO 个人账户分析会按 Vault 汇总抵押价值、DAI 债务、健康因子与清算价格，
               用来快速判断该地址是否存在需要优先排查的 Vault。
             </p>
           </div>
 
-          <div className="justlend-overview-side makerdao-overview-side">
-            <div className="justlend-overview-pills makerdao-overview-pills">
+          <div className="makerdao-overview-side">
+            <div className="makerdao-overview-pills">
               {overviewMetaItems.map((item) => (
-                <div key={item.label} className="justlend-overview-pill makerdao-overview-pill">
-                  <span className="justlend-overview-pill-label">{item.label}</span>
+                <div key={item.label} className="makerdao-overview-pill">
+                  <span className="makerdao-overview-pill-label">{item.label}</span>
                   <span
-                    className={`justlend-overview-pill-value ${item.mono ? 'mono' : ''}`}
+                    className={`makerdao-overview-pill-value ${item.mono ? 'mono' : ''}`}
                     title={item.value}
                   >
                     {item.value}
@@ -540,9 +540,9 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
                   const healthFactorClassName = [
                     healthFactorTone.className,
                     healthFactorDisplay === '无风险' && shouldBlinkMakerHealthFactorInfinity(item)
-                      ? 'justlend-hf-pulse-safe'
+                      ? 'makerdao-hf-pulse-safe'
                       : '',
-                    isNativeMakerHealthFactorInfinity(item) ? 'justlend-hf-native-infinity' : '',
+                    isNativeMakerHealthFactorInfinity(item) ? 'makerdao-hf-native-infinity' : '',
                   ]
                     .filter(Boolean)
                     .join(' ');
