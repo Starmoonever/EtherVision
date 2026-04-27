@@ -1,0 +1,412 @@
+/* Personal dashboard, overview, and risk summary surfaces. */
+
+.morpho-dashboard,
+.morpho-market-board {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.morpho-overview-card,
+.morpho-market-hero {
+  background:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 32%), #151c2c;
+}
+
+.morpho-overview-grid,
+.morpho-market-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.morpho-overview-copy,
+.morpho-copy-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.morpho-overview-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.morpho-overview-pills {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.morpho-overview-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.morpho-overview-pill-label {
+  color: #64748b;
+}
+
+.morpho-overview-pill-value {
+  color: #cbd5e1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-overview-tags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.morpho-overview-tag {
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.morpho-overview-tag-label {
+  color: #64748b;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.morpho-overview-tag-value {
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-risk-status-safe {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.morpho-risk-status-watch {
+  background: #3f2d0d;
+  color: #fde68a;
+}
+
+.morpho-risk-status-danger {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.morpho-risk-status-neutral {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.morpho-risk-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.morpho-risk-layout-focused {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.morpho-risk-layout-focused .morpho-risk-hero {
+  gap: 0.75rem;
+}
+
+.morpho-risk-hero,
+.morpho-risk-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.morpho-risk-side {
+  height: 100%;
+}
+
+.morpho-risk-hero-top {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.morpho-risk-hero-top > div:first-child {
+  min-width: 0;
+}
+
+.morpho-risk-health {
+  font-size: clamp(2.5rem, 4vw, 4rem);
+  line-height: 1;
+  font-weight: 800;
+  color: #f8fafc;
+  max-width: 100%;
+}
+
+.morpho-risk-health-copy {
+  color: #a8b3c7;
+  font-size: 1rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .morpho-risk-hero-top {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
+
+.morpho-risk-bullet-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.morpho-risk-bullet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+}
+
+.morpho-risk-bullet-title {
+  position: relative;
+  top: -0.7rem;
+}
+
+.morpho-risk-bullet-track {
+  position: relative;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(34, 197, 94, 0.94) 0%,
+    rgba(74, 222, 128, 0.92) 40%,
+    rgba(245, 158, 11, 0.92) 72%,
+    rgba(239, 68, 68, 0.94) 100%
+  );
+}
+
+.morpho-risk-bullet-marker {
+  position: absolute;
+  top: -0.2rem;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.morpho-risk-bullet-marker::before {
+  content: '';
+  display: block;
+  width: 2px;
+  height: 22px;
+  margin: 0 auto;
+  border-radius: 999px;
+}
+
+.morpho-risk-bullet-marker span {
+  position: absolute;
+  top: -1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.morpho-risk-bullet-marker-current::before {
+  background: #e0f2fe;
+}
+
+.morpho-risk-bullet-marker-current span {
+  color: #bae6fd;
+}
+
+.morpho-risk-bullet-marker-threshold::before {
+  background: #fecaca;
+}
+
+.morpho-risk-bullet-marker-threshold span {
+  color: #fca5a5;
+}
+
+.morpho-risk-bullet-marker-stagger-left span {
+  transform: translateX(-118%);
+}
+
+.morpho-risk-bullet-marker-stagger-right span {
+  transform: translateX(18%);
+}
+
+.morpho-risk-bullet-footer {
+  display: grid;
+  grid-template-columns: 55fr 25fr 20fr;
+  gap: 0.5rem;
+  color: #64748b;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+.morpho-insight-grid,
+.morpho-market-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.morpho-insight-grid {
+  flex: 1;
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.morpho-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.morpho-kicker {
+  color: #7dd3fc;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+.morpho-title {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  line-height: 1.2;
+}
+
+.morpho-copy {
+  color: #94a3b8;
+  font-size: 0.92rem;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.morpho-banner {
+  border-radius: 12px;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid #1e293b;
+}
+
+.morpho-banner-warn {
+  background: linear-gradient(180deg, rgba(55, 22, 8, 0.7), rgba(30, 41, 59, 0.72));
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.morpho-banner-soft {
+  background: rgba(15, 23, 42, 0.76);
+}
+
+.morpho-banner-title {
+  color: #fde68a;
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+
+.morpho-banner-copy {
+  color: #94a3b8;
+  font-size: 0.88rem;
+  line-height: 1.75;
+}
+
+.morpho-risk-markers {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.morpho-risk-marker {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.morpho-risk-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1300px) {
+  .morpho-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .morpho-overview-grid,
+  .morpho-market-hero-grid,
+  .morpho-risk-layout,
+  .morpho-risk-hero-top {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-overview-tags,
+  .morpho-insight-grid,
+  .morpho-market-summary-grid,
+  .morpho-keyline,
+  .morpho-summary-layout,
+  .morpho-summary-group-grid,
+  .morpho-vault-search-row,
+  .morpho-vault-detail-layout,
+  .morpho-vault-metric-grid,
+  .morpho-vault-v2-detail-grid,
+  .morpho-vault-v2-detail-grid-wide,
+  .morpho-vault-v2-gates-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .morpho-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .morpho-risk-bullet-footer {
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+  }
+}

@@ -1,0 +1,362 @@
+.justlend-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.justlend-score-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.justlend-score-ring {
+  width: 138px;
+  height: 138px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+}
+
+.justlend-score-ring-inner {
+  width: 102px;
+  height: 102px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+}
+
+.justlend-score-ring-inner strong {
+  color: #f8fafc;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.justlend-score-ring-inner span {
+  color: #64748b;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.justlend-score-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-width: 420px;
+}
+
+.justlend-score-headline {
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.justlend-score-copy .justlend-market-kicker {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+}
+
+.justlend-score-copy .justlend-market-copy {
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: #7c8aa5;
+}
+
+.justlend-capacity-layout,
+.justlend-concentration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.justlend-capacity-bar {
+  height: 16px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #1e293b;
+  display: flex;
+}
+
+.justlend-capacity-segment {
+  height: 100%;
+}
+
+.justlend-capacity-used {
+  background: #ef4444;
+}
+
+.justlend-capacity-available {
+  background: #94a3b8;
+}
+
+.justlend-capacity-legend {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+}
+
+.justlend-capacity-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: #cbd5e1;
+  font-size: 0.88rem;
+}
+
+.justlend-capacity-item strong {
+  margin-left: auto;
+  color: #f8fafc;
+}
+
+.justlend-concentration-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.justlend-concentration-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #cbd5e1;
+  font-size: 0.88rem;
+}
+
+.justlend-concentration-bar {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #1e293b;
+}
+
+.justlend-concentration-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.justlend-concentration-fill-green {
+  background: #22c55e;
+}
+
+.justlend-concentration-fill-red {
+  background: #ef4444;
+}
+
+.justlend-concentration-fill-blue {
+  background: #38bdf8;
+}
+
+.justlend-structure-grid,
+.justlend-market-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.justlend-market-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.justlend-market-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.justlend-market-placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.justlend-placeholder-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.justlend-placeholder-shell {
+  min-height: 150px;
+  border-radius: 14px;
+  border: 1px dashed #334155;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.88)), #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.35rem 0 0.85rem;
+}
+
+.justlend-placeholder-icon {
+  color: #64748b;
+  font-size: 0.88rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.justlend-history-range-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1 1 420px;
+  color: #cbd5e1;
+}
+
+.justlend-history-range-summary-label {
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+}
+
+.justlend-history-range-summary-value {
+  min-width: 0;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.justlend-caption {
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  margin-top: 0.35rem;
+}
+
+.justlend-risk-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-height: 320px;
+}
+
+.justlend-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.justlend-progress-track {
+  height: 12px;
+  border-radius: 999px;
+  background: #1e293b;
+  overflow: hidden;
+}
+
+.justlend-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8, #f59e0b, #ef4444);
+}
+
+.justlend-progress-note {
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.justlend-empty-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.justlend-allocation-layout {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.justlend-allocation-chart {
+  min-width: 0;
+  height: 100%;
+}
+
+.justlend-allocation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+.justlend-allocation-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.justlend-allocation-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.justlend-allocation-list::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+}
+
+.justlend-allocation-item {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.justlend-allocation-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #e2e8f0;
+}
+
+.justlend-allocation-share {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.justlend-allocation-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 900px) {
+  .justlend-allocation-layout {
+    grid-template-columns: 1fr;
+  }
+}
