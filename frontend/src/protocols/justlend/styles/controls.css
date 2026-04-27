@@ -1,0 +1,248 @@
+/* Justlend protocol styles. Kept separate from App.css to reduce global coupling. */
+
+.justlend-metric-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.justlend-rate-note-badge {
+  appearance: none;
+  flex-shrink: 0;
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde68a;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.justlend-rate-note-badge:hover {
+  background: rgba(250, 204, 21, 0.2);
+  border-color: rgba(250, 204, 21, 0.5);
+}
+
+.justlend-rate-note-badge:focus-visible {
+  outline: 2px solid rgba(250, 204, 21, 0.45);
+  outline-offset: 2px;
+}
+
+.justlend-position-table-wrap {
+  max-height: 620px;
+  overflow: auto;
+}
+
+.justlend-position-table-wrap .pos-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #161b22;
+}
+
+.justlend-quick-view-btn {
+  border: 1px solid #30363d;
+}
+
+.justlend-quick-view-btn.active {
+  border-color: #60a5fa;
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.16),
+    0 0 16px rgba(96, 165, 250, 0.18);
+}
+
+.justlend-current-view-value {
+  color: #38bdf8;
+  font-size: 1rem;
+  white-space: nowrap;
+}
+
+.justlend-page-size-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+}
+
+.justlend-page-size-control select {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 0 1.1rem 0 0;
+  outline: none;
+}
+
+.justlend-page-size-control select:focus-visible {
+  color: #93c5fd;
+}
+
+.justlend-page-size-arrow {
+  position: absolute;
+  right: 0;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.justlend-position-table-wrap .pos-table tr.justlend-risk-row td {
+  color: #ffbb28;
+}
+
+.justlend-hf-pulse {
+  animation: justlend-hf-pulse 1.15s ease-in-out infinite;
+}
+
+.justlend-hf-pulse-safe {
+  animation: justlend-hf-pulse-safe 1.15s ease-in-out infinite;
+}
+
+.justlend-hf-native-infinity {
+  font-size: 1.12rem;
+  color: #86efac !important;
+  text-shadow:
+    0 0 12px rgba(34, 197, 94, 0.42),
+    0 0 22px rgba(134, 239, 172, 0.28);
+}
+
+.justlend-risk-button-active {
+  background: rgba(185, 28, 28, 0.88);
+  color: #fff7ed;
+  border: 1px solid rgba(248, 113, 113, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.18),
+    0 0 18px rgba(248, 113, 113, 0.28);
+  animation: justlend-risk-button-breathe 1.8s ease-in-out infinite;
+}
+
+.justlend-parameter-gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.justlend-parameter-gauge-card {
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.62);
+  padding: 0.95rem;
+}
+
+.justlend-parameter-gauge-chart {
+  position: relative;
+  height: 190px;
+}
+
+.justlend-parameter-gauge-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  text-align: center;
+}
+
+.justlend-parameter-gauge-center strong {
+  color: #f8fafc;
+  font-size: 1.24rem;
+  line-height: 1.1;
+}
+
+.justlend-parameter-gauge-center span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  margin-top: 0.28rem;
+}
+
+.justlend-parameter-gauge-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.justlend-parameter-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.95rem;
+}
+
+.justlend-parameter-metric-grid .metric-box {
+  margin: 0;
+  padding: 0.72rem 0.8rem;
+}
+
+.justlend-parameter-metric-grid .metric-label {
+  font-size: 0.68rem;
+}
+
+.justlend-parameter-metric-grid .metric-value {
+  font-size: 1rem;
+}
+
+@media (max-width: 900px) {
+  .justlend-parameter-gauge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .justlend-parameter-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes justlend-hf-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 0 rgba(248, 113, 113, 0);
+  }
+  50% {
+    opacity: 0.62;
+    text-shadow: 0 0 12px rgba(248, 113, 113, 0.75);
+  }
+}
+
+@keyframes justlend-hf-pulse-safe {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 0 rgba(34, 197, 94, 0);
+  }
+  50% {
+    opacity: 0.62;
+    text-shadow: 0 0 12px rgba(34, 197, 94, 0.75);
+  }
+}
+
+@keyframes justlend-risk-button-breathe {
+  0%,
+  100% {
+    border-color: rgba(248, 113, 113, 0.46);
+    box-shadow:
+      0 0 0 1px rgba(248, 113, 113, 0.12),
+      0 0 12px rgba(248, 113, 113, 0.2);
+  }
+  50% {
+    border-color: rgba(254, 202, 202, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(254, 202, 202, 0.28),
+      0 0 24px rgba(248, 113, 113, 0.46);
+  }
+}

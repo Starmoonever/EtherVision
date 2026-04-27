@@ -1,0 +1,663 @@
+.price-gauge {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.price-gauge-top-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.18rem;
+  margin: 0.02rem 0 -0.36rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.price-gauge-top-readout strong {
+  color: #34d399;
+  font-size: 1.28rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+}
+
+.price-gauge-low-buffer {
+  animation: price-gauge-alert 1.5s ease-in-out infinite;
+}
+
+.price-gauge-svg {
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  overflow: visible;
+}
+
+.price-gauge-track {
+  fill: none;
+  stroke: rgba(30, 41, 59, 0.95);
+  stroke-width: 24;
+  stroke-linecap: round;
+}
+
+.price-gauge-risk-arc {
+  fill: none;
+  stroke: url('#price-gauge-risk-gradient');
+  stroke-width: 20;
+  stroke-linecap: round;
+}
+
+.price-gauge-buffer-arc {
+  fill: none;
+  stroke: url('#price-gauge-buffer-gradient');
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.price-gauge-predicted-delta {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.58);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 3 7;
+}
+
+.price-gauge-predicted-delta-danger {
+  stroke: rgba(248, 113, 113, 0.78);
+}
+
+.price-gauge-liquidation-tick line {
+  stroke: #fecaca;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.price-gauge-liquidation-tick circle {
+  fill: #ef4444;
+  stroke: #fecaca;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.5));
+}
+
+.price-gauge-liquidation-tick text:not(.price-gauge-liquidation-label) {
+  fill: #fff1f2;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.price-gauge-liquidation-label {
+  fill: #fca5a5;
+  font-size: 10px;
+  font-weight: 800;
+  text-shadow: 0 2px 10px rgba(15, 23, 42, 0.82);
+}
+
+.price-gauge-needle line {
+  stroke: #e0f2fe;
+  stroke-width: 2.6;
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.38));
+}
+
+.price-gauge-predicted-needle line {
+  stroke: rgba(203, 213, 225, 0.54);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+  stroke-dasharray: 4 7;
+}
+
+.price-gauge-predicted-needle.price-gauge-predicted-danger line {
+  stroke: rgba(248, 113, 113, 0.82);
+}
+
+.price-gauge-current-point {
+  fill: #e0f2fe;
+  stroke: #38bdf8;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.42));
+}
+
+.price-gauge-predicted-point {
+  fill: rgba(226, 232, 240, 0.72);
+  stroke: rgba(148, 163, 184, 0.88);
+  stroke-width: 1.5;
+}
+
+.price-gauge-predicted-point.price-gauge-predicted-danger {
+  fill: rgba(248, 113, 113, 0.82);
+  stroke: #fecaca;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.45));
+}
+
+.price-gauge-hub {
+  fill: #0f172a;
+  stroke: #7dd3fc;
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.32));
+}
+
+.price-gauge-side-label {
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+  text-shadow: 0 2px 10px rgba(15, 23, 42, 0.82);
+}
+
+.price-gauge-side-label-left {
+  fill: #fca5a5;
+}
+
+.price-gauge-side-label-mid {
+  fill: #fde68a;
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.price-gauge-side-label-right {
+  fill: #86efac;
+}
+
+.price-gauge-no-stats {
+  margin-top: -0.25rem;
+  margin-bottom: 0;
+}
+
+.price-gauge-no-stats .price-gauge-side-label {
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+.price-gauge-no-stats .price-gauge-side-label-left {
+  display: none;
+}
+
+.price-gauge-no-stats .price-gauge-side-label-mid {
+  display: none;
+}
+
+.price-gauge-bottom-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.42rem;
+  width: 100%;
+  margin-top: -3rem;
+  padding-top: 0.18rem;
+}
+
+.price-gauge-bottom-card {
+  display: flex;
+  min-width: 0;
+  min-height: 2.96rem;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.26rem 0.42rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.66);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.price-gauge-bottom-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.22);
+}
+
+.price-gauge-bottom-card span {
+  color: #94a3b8;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.price-gauge-bottom-card strong {
+  color: #f8fafc;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.price-gauge-bottom-value-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.26rem;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.price-gauge-bottom-card small {
+  color: #94a3b8;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.price-gauge-bottom-card-buffer strong {
+  white-space: nowrap;
+}
+
+.price-gauge-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
+
+.price-gauge-stats div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.58rem;
+  border: 1px solid rgba(51, 65, 85, 0.78);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.price-gauge-stats span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.price-gauge-stats strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.price-gauge-stats small {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.morpho-ltv-risk {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.44rem;
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.morpho-ltv-risk-warning {
+  border-color: rgba(245, 158, 11, 0.42);
+  box-shadow: 0 14px 34px rgba(245, 158, 11, 0.12);
+  animation: morpho-ltv-warning-alert 1.9s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-danger {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 14px 34px rgba(239, 68, 68, 0.14);
+  animation: morpho-ltv-danger-alert 1.45s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.58rem;
+}
+
+.morpho-ltv-risk-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.morpho-ltv-risk-kicker {
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.morpho-ltv-risk-kicker-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  width: fit-content;
+  position: relative;
+}
+
+.morpho-ltv-risk-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.72);
+  font-size: 0.6rem;
+  font-weight: 900;
+  cursor: help;
+}
+
+.morpho-ltv-risk-help::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.45rem);
+  z-index: 5;
+  width: min(320px, 76vw);
+  padding: 0.58rem 0.68rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  color: #dbeafe;
+  background: rgba(2, 6, 23, 0.96);
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.38);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.55;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.morpho-ltv-risk-help:hover::after,
+.morpho-ltv-risk-help:focus::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.morpho-ltv-risk-header strong {
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  line-height: 1.28;
+}
+
+.morpho-ltv-risk-header small {
+  color: #94a3b8;
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.32;
+}
+
+.morpho-ltv-risk-warning .morpho-ltv-risk-header strong {
+  color: #fde68a;
+}
+
+.morpho-ltv-risk-danger .morpho-ltv-risk-header strong {
+  color: #fecaca;
+}
+
+.morpho-ltv-risk-badge {
+  flex: 0 0 auto;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.78);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.morpho-ltv-risk-warning .morpho-ltv-risk-badge {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+  animation: morpho-ltv-warning-badge 1.9s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-danger .morpho-ltv-risk-badge {
+  border-color: rgba(239, 68, 68, 0.52);
+  color: #fecaca;
+  animation: morpho-ltv-danger-badge 1.45s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-svg {
+  width: 100%;
+  max-height: 128px;
+  height: auto;
+  overflow: visible;
+}
+
+.morpho-ltv-risk-track {
+  stroke-width: 16;
+  stroke-linecap: round;
+}
+
+.morpho-ltv-risk-fill {
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.morpho-ltv-risk-marker line {
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.morpho-ltv-risk-marker text,
+.morpho-ltv-risk-current text,
+.morpho-ltv-risk-axis-label {
+  font-size: 11px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(15, 23, 42, 0.8);
+  stroke-width: 3px;
+}
+
+.morpho-ltv-risk-marker-lltv line {
+  stroke: #60a5fa;
+}
+
+.morpho-ltv-risk-marker-lltv text {
+  fill: #bfdbfe;
+}
+
+.morpho-ltv-risk-marker-threshold line {
+  stroke: #ef4444;
+}
+
+.morpho-ltv-risk-marker-threshold text {
+  fill: #fecaca;
+}
+
+.morpho-ltv-risk-current line {
+  stroke: #f8fafc;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.morpho-ltv-risk-current circle {
+  fill: #f8fafc;
+  stroke: #38bdf8;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.36));
+  animation: morpho-ltv-current-safe 2.2s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-warning .morpho-ltv-risk-current circle {
+  animation: morpho-ltv-current-warning 1.9s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-danger .morpho-ltv-risk-current circle {
+  animation: morpho-ltv-current-danger 1.45s ease-in-out infinite;
+}
+
+.morpho-ltv-risk-current text {
+  fill: #f8fafc;
+}
+
+.morpho-ltv-risk-axis-label {
+  fill: #64748b;
+}
+
+.morpho-ltv-risk-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.42rem;
+  margin-top: auto;
+  padding-top: 0.18rem;
+}
+
+.morpho-ltv-risk-values div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  min-height: 2.96rem;
+  padding: 0.26rem 0.42rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.66);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.morpho-ltv-risk-values div:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.22);
+}
+
+.morpho-ltv-risk-values span {
+  color: #94a3b8;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.morpho-ltv-risk-values strong {
+  color: #f8fafc;
+  font-size: 0.82rem;
+}
+
+@keyframes price-gauge-alert {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(239, 68, 68, 0.42));
+  }
+}
+
+@keyframes morpho-ltv-current-safe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.28));
+  }
+  50% {
+    filter: drop-shadow(0 0 13px rgba(56, 189, 248, 0.52));
+  }
+}
+
+@keyframes morpho-ltv-warning-alert {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(245, 158, 11, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.28));
+  }
+}
+
+@keyframes morpho-ltv-danger-alert {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(239, 68, 68, 0.4));
+  }
+}
+
+@keyframes morpho-ltv-warning-badge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.32);
+  }
+}
+
+@keyframes morpho-ltv-danger-badge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(239, 68, 68, 0);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.38);
+  }
+}
+
+@keyframes morpho-ltv-current-warning {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.28));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.58));
+  }
+}
+
+@keyframes morpho-ltv-current-danger {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(239, 68, 68, 0.66));
+  }
+}
+
+@media (max-width: 640px) {
+  .morpho-risk-gauge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-history-header {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-history-controls {
+    align-items: stretch;
+  }
+
+  .morpho-history-range {
+    justify-content: stretch;
+  }
+
+  .morpho-history-range input {
+    width: 100%;
+  }
+
+  .morpho-history-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .price-gauge-bottom-cards,
+  .price-gauge-stats,
+  .morpho-ltv-risk-values {
+    grid-template-columns: 1fr;
+  }
+}

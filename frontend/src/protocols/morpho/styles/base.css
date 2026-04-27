@@ -1,0 +1,233 @@
+/* Morpho protocol styles. Kept separate from App.css to reduce global coupling. */
+
+.morpho-section-title {
+  display: block;
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: var(--text-strong);
+  letter-spacing: 0.01em;
+}
+
+.morpho-section-subtitle {
+  margin: 0.35rem 0 0;
+  color: #93a4bf;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.morpho-metric-strong {
+  font-size: 1.38rem;
+  color: #eef6ff;
+}
+
+.morpho-metric-hero {
+  font-size: 1.95rem;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 760px) {
+  .morpho-market-search {
+    min-width: 100%;
+  }
+
+  .morpho-summary-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-summary-group-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-market-detail-band-primary,
+  .morpho-market-detail-band-secondary,
+  .morpho-market-detail-charts,
+  .morpho-market-address-row {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-market-table {
+    min-width: 720px;
+  }
+}
+
+.morpho-panel-card,
+.morpho-emphasis-card,
+.morpho-detail-card {
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(21, 28, 44, 0.98));
+  border-color: #243247;
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.24);
+}
+
+.morpho-overview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.morpho-overview-title {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.morpho-overview-subtitle {
+  margin: 0;
+  max-width: 620px;
+  color: #93a4bf;
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.morpho-overview-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+}
+
+.morpho-overview-fact {
+  background: rgba(8, 15, 29, 0.78);
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: 14px;
+  padding: 1rem 1.05rem;
+}
+
+.morpho-overview-fact-label {
+  display: block;
+  color: #7f90ab;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.4rem;
+}
+
+.morpho-overview-fact strong {
+  font-size: 1.45rem;
+  line-height: 1.15;
+  color: #f8fafc;
+}
+
+.morpho-keyline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.7);
+}
+
+.morpho-keyline-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.morpho-keyline-item span {
+  color: #7f90ab;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.morpho-keyline-item strong {
+  color: #f8fafc;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.morpho-full-address {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.morpho-risk-brief {
+  margin-bottom: 0;
+}
+
+.morpho-risk-health-copy strong {
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.morpho-risk-gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.68rem;
+  align-items: stretch;
+}
+
+.morpho-risk-gauge-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.72rem 0.78rem;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.42)), rgba(2, 6, 23, 0.28);
+}
+
+.morpho-risk-gauge-card-price,
+.morpho-risk-gauge-card-ltv {
+  justify-content: stretch;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.morpho-risk-gauge-card-ltv .morpho-ltv-risk {
+  flex: 1;
+  box-shadow: none;
+}
+
+.morpho-risk-gauge-card-price:hover,
+.morpho-risk-gauge-card-ltv:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.42);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.46)), rgba(2, 6, 23, 0.32);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.28);
+}
+
+.morpho-risk-gauge-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.58rem;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.morpho-risk-gauge-heading strong {
+  color: #fbbf24;
+  font-size: 0.92rem;
+}
+
+.morpho-risk-gauge-tag {
+  padding: 0.18rem 0.44rem;
+  border: 1px solid rgba(251, 191, 36, 0.26);
+  border-radius: 999px;
+  color: #fbbf24;
+  background: rgba(120, 53, 15, 0.18);
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.morpho-risk-gauge-note {
+  margin: 0.22rem 0 0;
+  max-width: 28rem;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.36;
+}
