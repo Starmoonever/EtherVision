@@ -5,6 +5,8 @@
 }
 
 .morpho-vault-search-card,
+.morpho-vault-mode-card,
+.morpho-vaults-table-shell,
 .morpho-vault-overview-card,
 .morpho-vault-v2-info-card,
 .morpho-vault-v2-fee-card,
@@ -13,6 +15,228 @@
 .morpho-vault-reallocation-card {
   display: grid;
   gap: 0.8rem;
+}
+
+.morpho-vault-mode-card {
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.morpho-vault-mode-card .switch-group {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.morpho-vault-mode-card .switch-btn.active {
+  background: var(--accent-primary);
+  color: #eff6ff;
+}
+
+.morpho-vaults-table-shell {
+  padding: 1.05rem;
+}
+
+.morpho-vaults-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.morpho-vaults-asset-filter {
+  width: min(100%, 18rem);
+}
+
+.morpho-vaults-header-filter-control {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.morpho-vaults-version-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.morpho-vaults-version-header .switch-group {
+  max-width: 120%;
+}
+
+.morpho-vaults-version-header .switch-btn {
+  padding-inline: 0.4rem;
+  white-space: nowrap;
+}
+
+.morpho-vaults-table th:last-child,
+.morpho-vaults-table td:last-child {
+  text-align: center;
+}
+
+.morpho-vaults-table td:last-child .morpho-vault-version {
+  margin-inline: auto;
+}
+
+.morpho-vaults-table-shell .table-wrap {
+  border: 1px solid rgba(96, 165, 250, 0.1);
+  border-radius: 12px;
+  background: rgba(8, 15, 29, 0.22);
+}
+
+.morpho-vaults-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.morpho-vaults-col-vault {
+  width: 28%;
+}
+
+.morpho-vaults-col-asset {
+  width: 24%;
+}
+
+.morpho-vaults-col-metric {
+  width: 16%;
+}
+
+.morpho-vaults-col-apy {
+  width: 11%;
+}
+
+.morpho-vaults-col-version {
+  width: 9%;
+}
+
+.morpho-vaults-table th {
+  color: #dbeafe;
+  font-family: var(--font-sans);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0.7rem 0.75rem;
+}
+
+.morpho-vaults-table th .morpho-market-sort-header,
+.morpho-vaults-table th .morpho-vaults-sort-header,
+.morpho-vaults-version-header .switch-btn {
+  font-family: var(--font-sans);
+  font-weight: 800;
+}
+
+.morpho-vaults-table td {
+  font-size: 0.92rem;
+  padding: 0.86rem 0.75rem;
+  vertical-align: middle;
+}
+
+.morpho-vaults-row {
+  cursor: pointer;
+}
+
+.morpho-vaults-detail-row td {
+  background: rgba(8, 15, 29, 0.5);
+  padding: 0.8rem;
+}
+
+.morpho-vaults-inline-detail {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.morpho-vaults-inline-detail > .card {
+  margin-bottom: 0;
+}
+
+.morpho-vaults-detail-band-primary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.morpho-vaults-detail-band-primary .metric-box {
+  min-height: 6.2rem;
+}
+
+.morpho-vaults-query-detail-btn {
+  align-self: stretch;
+  grid-column: span 2;
+  min-height: 3.1rem;
+}
+
+.morpho-vaults-name-cell {
+  display: grid;
+  gap: 0.36rem;
+  min-width: 0;
+}
+
+.morpho-vaults-name-cell strong {
+  color: #f8fafc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vaults-address-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.morpho-vaults-address-line > span {
+  color: rgba(203, 213, 225, 0.68);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vaults-sort-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  color: #f8fafc;
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.morpho-vaults-sort-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0;
+}
+
+.morpho-vaults-sort-btn:hover,
+.morpho-vaults-sort-btn-active {
+  background: rgba(125, 211, 252, 0.1);
+  color: #7dd3fc;
+}
+
+.morpho-vaults-sort-btn span {
+  position: relative;
+  width: 0;
+  height: 0;
+  border-top: 0.34rem solid currentColor;
+  border-right: 0.29rem solid transparent;
+  border-left: 0.29rem solid transparent;
+  opacity: 0.78;
+}
+
+.morpho-vaults-sort-up span {
+  border-top: 0;
+  border-bottom: 0.34rem solid currentColor;
 }
 
 .morpho-vault-version-switch {
@@ -424,6 +648,41 @@
   min-height: 6.5rem;
 }
 
+.morpho-vault-gate-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.morpho-vault-gate-summary-item {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 15, 29, 0.58);
+  padding: 0.72rem 0.78rem;
+}
+
+.morpho-vault-gate-summary-item span {
+  color: #93c5fd;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.morpho-vault-gate-summary-item strong {
+  color: #f8fafc;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-gate-summary-item .morpho-vault-gate-badge {
+  justify-self: start;
+}
+
 .morpho-vault-v2-gates-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -449,6 +708,15 @@
 .morpho-vault-gate-card-head strong {
   color: #f8fafc;
   font-size: 1rem;
+  font-weight: 800;
+}
+
+.morpho-vault-gate-flow {
+  display: block;
+  margin-top: 0.2rem;
+  color: #bae6fd;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
   font-weight: 800;
 }
 
@@ -482,21 +750,27 @@
 }
 
 .morpho-vault-gate-badge-guarded {
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.morpho-vault-gate-badge-pending {
   background: rgba(245, 158, 11, 0.14);
   color: #fcd34d;
   border-color: rgba(245, 158, 11, 0.22);
 }
 
-.morpho-vault-gate-badge-locked {
-  background: rgba(22, 163, 74, 0.9);
-  color: #f8fafc;
+.morpho-vault-gate-badge-abdicated {
+  background: rgba(34, 197, 94, 0.1);
+  color: #bbf7d0;
   border-color: rgba(34, 197, 94, 0.2);
 }
 
 .morpho-vault-gate-badge-admin {
-  background: rgba(59, 130, 246, 0.14);
-  color: #93c5fd;
-  border-color: rgba(59, 130, 246, 0.22);
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.2);
 }
 
 .morpho-vault-gate-pending-banner {
@@ -527,6 +801,11 @@
   gap: 0.75rem;
   padding-top: 0.7rem;
   border-top: 1px solid rgba(30, 41, 59, 0.9);
+}
+
+.morpho-vault-gate-footer-secondary {
+  padding-top: 0.2rem;
+  border-top: 0;
 }
 
 .morpho-vault-gate-footer > span {
