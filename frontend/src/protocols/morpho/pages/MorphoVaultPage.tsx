@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { isAddress } from 'viem';
 import {
   Bar,
@@ -13,10 +21,15 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  fetchMorphoVaultsWithMeta,
   fetchMorphoVaultWithMeta,
   fetchMorphoVaultV2WithMeta,
   MORPHO_VAULT_SAMPLE_ADDRESS,
   MORPHO_VAULT_V2_SAMPLE_ADDRESS,
+  type MorphoVaultsItem,
+  type MorphoVaultsProtocol,
+  type MorphoVaultsSortField,
+  type MorphoVaultsSortOrder,
   type MorphoVaultAllocation,
   type MorphoVaultResponse,
   type MorphoVaultV2Gate,
@@ -40,6 +53,16 @@ interface MorphoVaultPageProps {
 }
 
 type MorphoVaultVersion = 'v1' | 'v2';
+type MorphoVaultProtocolFilter = 'all' | MorphoVaultsProtocol;
+type MorphoVaultViewMode = 'list' | 'query';
+
+interface ExpandedVaultDetailState {
+  key: string;
+  loading: boolean;
+  error: string;
+  vault: MorphoVaultResponse | null;
+  vaultV2: MorphoVaultV2Response | null;
+}
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
@@ -72,6 +95,7 @@ const LIQUIDITY_BAR_RADIUS = 5;
 const MORPHO_VAULT_HISTORY_STORAGE_KEY = 'morpho_vault_search_history_by_version';
 const MORPHO_VAULT_LEGACY_HISTORY_STORAGE_KEY = 'morpho_vault_search_history';
 const MORPHO_VAULT_HISTORY_LIMIT = 30;
+const MORPHO_VAULTS_PAGE_SIZE = 10;
 
 type MorphoVaultSearchHistoryByVersion = Record<MorphoVaultVersion, string[]>;
 
@@ -471,6 +495,361 @@ function MorphoVaultCopyLine({
   );
 }
 
+function MorphoVaultsSortButton({
+  field,
+  sortBy,
+  sortOrder,
+  onSortChange,
+}: {
+  field: MorphoVaultsSortField;
+  sortBy: MorphoVaultsSortField;
+  sortOrder: MorphoVaultsSortOrder;
+  onSortChange: (field: MorphoVaultsSortField) => void;
+}) {
+  const active = field === sortBy;
+  const directionClass = active && sortOrder === 'asc' ? 'morpho-vaults-sort-up' : '';
+  return (
+    <button
+      type="button"
+      className={
+        active
+          ? `morpho-vaults-sort-btn morpho-vaults-sort-btn-active ${directionClass}`
+          : 'morpho-vaults-sort-btn'
+      }
+      onClick={() => onSortChange(field)}
+      aria-label={`按 ${field} 排序`}
+      aria-pressed={active}
+    >
+      <span aria-hidden="true" />
+    </button>
+  );
+}
+
+function MorphoVaultsAssetHeader({
+  assetInput,
+  onAssetInputChange,
+  onAssetCommit,
+}: {
+  assetInput: string;
+  onAssetInputChange: (value: string) => void;
+  onAssetCommit: () => void;
+}) {
+  return (
+    <div className="morpho-market-asset-header">
+      <span className="morpho-market-sort-header">底层资产</span>
+      <div className="morpho-market-header-filter-control morpho-vaults-header-filter-control">
+        <label className="morpho-market-header-search-field">
+          <span className="morpho-market-header-search-icon" aria-hidden="true" />
+          <input
+            className="morpho-market-header-filter-input"
+            type="text"
+            value={assetInput}
+            onChange={(event) => onAssetInputChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                onAssetCommit();
+              }
+            }}
+            placeholder="symbol / 地址"
+            aria-label="按底层资产筛选 Vault"
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function MorphoVaultsTable({
+  vaults,
+  loading,
+  error,
+  assetInput,
+  protocolFilter,
+  sortBy,
+  sortOrder,
+  total,
+  page,
+  totalPages,
+  fetchedAt,
+  onAssetInputChange,
+  onAssetCommit,
+  onProtocolFilterChange,
+  onSortChange,
+  onPageChange,
+  onRefresh,
+  expandedVaultKey,
+  expandedVaultContent,
+  onToggleVault,
+}: {
+  vaults: MorphoVaultsItem[];
+  loading: boolean;
+  error: string;
+  assetInput: string;
+  protocolFilter: MorphoVaultProtocolFilter;
+  sortBy: MorphoVaultsSortField;
+  sortOrder: MorphoVaultsSortOrder;
+  total: number;
+  page: number;
+  totalPages: number;
+  fetchedAt: number | null;
+  onAssetInputChange: (value: string) => void;
+  onAssetCommit: () => void;
+  onProtocolFilterChange: (value: MorphoVaultProtocolFilter) => void;
+  onSortChange: (field: MorphoVaultsSortField) => void;
+  onPageChange: (page: number) => void;
+  onRefresh: () => void;
+  expandedVaultKey: string;
+  expandedVaultContent: ReactNode;
+  onToggleVault: (vault: MorphoVaultsItem) => void;
+}) {
+  const { copied, copy } = useCopiedValue();
+  const pageStart = total === 0 ? 0 : (page - 1) * MORPHO_VAULTS_PAGE_SIZE + 1;
+  const pageEnd = Math.min(page * MORPHO_VAULTS_PAGE_SIZE, total);
+  const refreshedAtText = fetchedAt
+    ? new Date(fetchedAt).toLocaleString('zh-CN', { hour12: false })
+    : 'N/A';
+
+  return (
+    <section className="card morpho-detail-card morpho-vaults-table-shell">
+      <div className="card-header">
+        <div>
+          <span className="card-title morpho-section-title">Vault 列表</span>
+          <p className="morpho-section-subtitle">
+            按资产与版本筛选 Morpho vaults，并按流动性、资产总美元值或 APY 排序。
+          </p>
+        </div>
+        <div className="morpho-vaults-controls">
+          <div className="morpho-market-table-status">
+            <span>更新 {refreshedAtText}</span>
+            <button type="button" onClick={onRefresh}>
+              刷新
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="pos-table morpho-table morpho-vaults-table">
+          <colgroup>
+            <col className="morpho-vaults-col-vault" />
+            <col className="morpho-vaults-col-asset" />
+            <col className="morpho-vaults-col-metric" />
+            <col className="morpho-vaults-col-metric" />
+            <col className="morpho-vaults-col-apy" />
+            <col className="morpho-vaults-col-version" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>
+                <span className="morpho-market-sort-header">Vault</span>
+              </th>
+              <th>
+                <MorphoVaultsAssetHeader
+                  assetInput={assetInput}
+                  onAssetInputChange={onAssetInputChange}
+                  onAssetCommit={onAssetCommit}
+                />
+              </th>
+              <th className="right">
+                <span className="morpho-vaults-sort-header">
+                  资产总美元值
+                  <MorphoVaultsSortButton
+                    field="total_assets_usd"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSortChange={onSortChange}
+                  />
+                </span>
+              </th>
+              <th className="right">
+                <span className="morpho-vaults-sort-header">
+                  流动性
+                  <MorphoVaultsSortButton
+                    field="liquidity"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSortChange={onSortChange}
+                  />
+                </span>
+              </th>
+              <th className="right">
+                <span className="morpho-vaults-sort-header">
+                  APY
+                  <MorphoVaultsSortButton
+                    field="apy"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSortChange={onSortChange}
+                  />
+                </span>
+              </th>
+              <th>
+                <div className="morpho-vaults-version-header">
+                  <SegmentedControl
+                    ariaLabel="Morpho vault 列表版本"
+                    value={protocolFilter}
+                    onChange={(value) => onProtocolFilterChange(value as MorphoVaultProtocolFilter)}
+                    options={[
+                      { value: 'all', label: 'All', activeClassName: 'active-purple' },
+                      { value: 'v1', label: 'V1', activeClassName: 'active-purple' },
+                      { value: 'v2', label: 'V2', activeClassName: 'active-purple' },
+                    ]}
+                  />
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {error ? (
+              <tr>
+                <td colSpan={6}>
+                  <div className="morpho-market-table-error-row">{error}</div>
+                </td>
+              </tr>
+            ) : null}
+            {loading ? (
+              <tr>
+                <td colSpan={6}>
+                  <div className="morpho-market-inline-state">
+                    <div className="spinner"></div>
+                  </div>
+                </td>
+              </tr>
+            ) : vaults.length === 0 ? (
+              <tr>
+                <td colSpan={6}>
+                  <div className="morpho-market-inline-state">
+                    <span className="empty-text">当前筛选条件下没有可展示的 Morpho vault。</span>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              vaults.map((vault) => {
+                const vaultKey = `${vault.protocol}:${vault.address.toLowerCase()}`;
+                const isExpanded = vaultKey === expandedVaultKey;
+
+                return (
+                  <Fragment key={vaultKey}>
+                    <tr
+                      className={
+                        isExpanded
+                          ? 'morpho-market-row morpho-market-row-active morpho-vaults-row'
+                          : 'morpho-market-row morpho-vaults-row'
+                      }
+                      onClick={() => onToggleVault(vault)}
+                    >
+                      <td>
+                        <div className="morpho-vaults-name-cell">
+                          <strong title={vault.name}>{vault.name || 'Morpho Vault'}</strong>
+                          <div className="morpho-vaults-address-line">
+                            <span className="mono" title={vault.address}>
+                              {compactAddress(vault.address)}
+                            </span>
+                            <button
+                              type="button"
+                              className={
+                                copied === vault.address
+                                  ? 'morpho-market-copy-btn morpho-market-copy-btn-copied'
+                                  : 'morpho-market-copy-btn'
+                              }
+                              onClick={(event) => void copy(event, vault.address)}
+                              title="复制 Vault 地址"
+                              aria-label="复制 Vault 地址"
+                            >
+                              <span className="morpho-market-copy-icon" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="morpho-market-asset-cell">
+                          <span className="token-symbol">{vault.asset.asset || 'N/A'}</span>
+                          <span
+                            className="mono morpho-market-token-address-text"
+                            title={vault.asset.token_address}
+                          >
+                            {compactAddress(vault.asset.token_address)}
+                          </span>
+                          <button
+                            type="button"
+                            className={
+                              copied === vault.asset.token_address
+                                ? 'morpho-market-copy-btn morpho-market-copy-btn-copied morpho-market-address-copy-btn'
+                                : 'morpho-market-copy-btn morpho-market-address-copy-btn'
+                            }
+                            onClick={(event) => void copy(event, vault.asset.token_address)}
+                            title="复制底层资产地址"
+                            aria-label="复制底层资产地址"
+                          >
+                            <span className="morpho-market-copy-icon" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="right">
+                        <span className="morpho-compact-metric">
+                          {formatCompactUsd(String(vault.total_assets_usd))}
+                        </span>
+                      </td>
+                      <td className="right">
+                        <span className="morpho-compact-metric">
+                          {formatCompactUsd(String(vault.liquidity))}
+                        </span>
+                      </td>
+                      <td className="right">
+                        <span className="morpho-compact-metric morpho-rate-line-supply">
+                          {formatPercent(String(vault.apy))}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="morpho-vault-version">
+                          {String(vault.protocol).toUpperCase()}
+                        </span>
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr className="morpho-vaults-detail-row">
+                        <td colSpan={6}>
+                          <div className="morpho-vaults-inline-detail">{expandedVaultContent}</div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="morpho-market-pagination">
+        <span>
+          显示 {pageStart.toLocaleString()}-{pageEnd.toLocaleString()} / {total.toLocaleString()}
+          ，第 {page} / {totalPages} 页
+        </span>
+        <div className="morpho-market-pagination-actions">
+          <button
+            type="button"
+            className="switch-btn"
+            disabled={page <= 1}
+            onClick={() => onPageChange(Math.max(1, page - 1))}
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            className="switch-btn"
+            disabled={page >= totalPages}
+            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
   const { copied, copy } = useCopiedValue();
   const netApyTooltip = buildVaultNetApyTooltip(vault);
@@ -552,34 +931,31 @@ function MorphoVaultV2Overview({ vault }: { vault: MorphoVaultV2Response }) {
   const gateCards: Array<{
     key: string;
     label: string;
-    desc: string;
     gate: MorphoVaultV2Gate | null;
   }> = [
     {
       key: 'receive_assets_gate',
       label: '资金存入',
-      desc: '任何人是否可以直接存入资产，以及管理员是否仍保留拦截能力。',
       gate: vault.gates_config.receive_assets_gate,
     },
     {
-      key: 'send_shares_gate',
-      label: '份额赎回',
-      desc: '赎回相关指令的门控状态，决定退出路径是否保持开放。',
-      gate: vault.gates_config.send_shares_gate,
+      key: 'send_assets_gate',
+      label: '资产取出',
+      gate: vault.gates_config.send_assets_gate,
     },
     {
       key: 'receive_shares_gate',
-      label: '份额转让',
-      desc: '份额接收与流转是否保持开放，是否仍受管理员门控影响。',
+      label: '份额接收',
       gate: vault.gates_config.receive_shares_gate,
     },
     {
-      key: 'send_assets_gate',
-      label: '资产出库',
-      desc: '资产发出流程的最后一道门控，常用于极端情况下的合规审计。',
-      gate: vault.gates_config.send_assets_gate,
+      key: 'send_shares_gate',
+      label: '份额转出',
+      gate: vault.gates_config.send_shares_gate,
     },
   ];
+  const abdicatedCount = gateCards.filter((item) => item.gate?.abdicated === true).length;
+  const hasFullAbdication = abdicatedCount === gateCards.length;
 
   return (
     <>
@@ -673,80 +1049,51 @@ function MorphoVaultV2Overview({ vault }: { vault: MorphoVaultV2Response }) {
       <section className="card morpho-detail-card morpho-vault-v2-gates-card">
         <div className="card-header">
           <div>
-            <span className="card-title morpho-section-title">Gate Config</span>
+            <span className="card-title morpho-section-title">管理权废弃状态</span>
             <p className="morpho-section-subtitle">
-              展示 V2 vault 四类门控的开放状态、治理保留权与待生效变更。
+              仅展示 V2 vault 四类 gate 是否已经 abdicated。
             </p>
           </div>
         </div>
-        <div className="morpho-vault-v2-gates-grid">
-          {gateCards.map((item) => {
-            const gate = item.gate;
-            const isOpen = gate?.address === null;
-            const isLocked = gate?.abdicated === true;
-            const hasPending = Boolean(
-              gate?.pending_address ||
-              gate?.pending_executable_at ||
-              gate?.pending_abdication_executable_at,
-            );
-
-            return (
-              <div className="morpho-vault-gate-card" key={item.key}>
-                <div className="morpho-vault-gate-card-head">
-                  <div>
-                    <strong>{item.label}</strong>
-                    <p>{item.desc}</p>
-                  </div>
-                  <div className="morpho-vault-gate-badges">
-                    <span
-                      className={
-                        isOpen
-                          ? 'morpho-vault-gate-badge morpho-vault-gate-badge-open'
-                          : 'morpho-vault-gate-badge morpho-vault-gate-badge-guarded'
-                      }
-                    >
-                      {isOpen ? 'Open' : 'Guarded'}
-                    </span>
-                    <span
-                      className={
-                        isLocked
-                          ? 'morpho-vault-gate-badge morpho-vault-gate-badge-locked'
-                          : 'morpho-vault-gate-badge morpho-vault-gate-badge-admin'
-                      }
-                    >
-                      {isLocked ? 'Locked' : 'Admin'}
-                    </span>
-                  </div>
-                </div>
-                {hasPending ? (
-                  <div className="morpho-vault-gate-pending-banner">
-                    <strong>检测到待处理门控变更</strong>
-                    <span>
-                      {gate?.pending_address ? compactAddress(gate.pending_address) : '地址待定'}
-                      {gate?.pending_executable_at
-                        ? ` · 可执行于 ${formatDateTime(gate.pending_executable_at)}`
-                        : gate?.pending_abdication_executable_at
-                          ? ` · 待废弃于 ${formatDateTime(gate.pending_abdication_executable_at)}`
-                          : ''}
-                    </span>
-                  </div>
-                ) : null}
-                <div className="morpho-vault-gate-footer">
-                  <span>当前门控地址</span>
-                  {gate?.address ? (
-                    <MorphoVaultCopyLine
-                      label={`${item.label} Gate`}
-                      value={gate.address}
-                      copied={copied}
-                      onCopy={copy}
-                    />
-                  ) : (
-                    <strong>None (Permissionless)</strong>
-                  )}
-                </div>
+        <div
+          className={
+            hasFullAbdication
+              ? 'morpho-vault-admin-summary morpho-vault-admin-summary-abdicated'
+              : 'morpho-vault-admin-summary morpho-vault-admin-summary-retained'
+          }
+        >
+          <span>Vault 管理权</span>
+          <strong>{hasFullAbdication ? '已全部废弃' : '仍保留部分管理权'}</strong>
+          <small>
+            {abdicatedCount} / {gateCards.length} 个 gate 已 abdicated
+          </small>
+        </div>
+        <div className="morpho-vault-admin-gate-grid">
+          {gateCards.map((item) => (
+            <div className="morpho-vault-admin-gate-card" key={item.key}>
+              <span>{item.label}</span>
+              <strong
+                className={
+                  item.gate?.abdicated
+                    ? 'morpho-vault-admin-state-abdicated'
+                    : 'morpho-vault-admin-state-retained'
+                }
+              >
+                {item.gate?.abdicated ? '已废弃管理权' : '未废弃管理权'}
+              </strong>
+              <div className="morpho-vault-gate-badges">
+                <span
+                  className={
+                    item.gate?.abdicated
+                      ? 'morpho-vault-gate-badge morpho-vault-gate-badge-abdicated'
+                      : 'morpho-vault-gate-badge morpho-vault-gate-badge-admin'
+                  }
+                >
+                  {item.gate?.abdicated ? 'Abdicated' : 'Admin retained'}
+                </span>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </section>
     </>
@@ -1075,6 +1422,7 @@ export function MorphoVaultPage({
   sortMode,
   onSortModeChange,
 }: MorphoVaultPageProps) {
+  const [activeVaultView, setActiveVaultView] = useState<MorphoVaultViewMode>('list');
   const [vaultVersion, setVaultVersion] = useState<MorphoVaultVersion>('v1');
   const [vaultAddressByVersion, setVaultAddressByVersion] = useState<
     Record<MorphoVaultVersion, string>
@@ -1092,8 +1440,29 @@ export function MorphoVaultPage({
   const [vaultSearchHistoryByVersion, setVaultSearchHistoryByVersion] = useState(() =>
     loadMorphoVaultSearchHistory(),
   );
+  const [vaultsPage, setVaultsPage] = useState(1);
+  const [vaultsAssetInput, setVaultsAssetInput] = useState('');
+  const [vaultsAssetFilter, setVaultsAssetFilter] = useState('');
+  const [vaultsProtocolFilter, setVaultsProtocolFilter] =
+    useState<MorphoVaultProtocolFilter>('all');
+  const [vaultsSortBy, setVaultsSortBy] = useState<MorphoVaultsSortField>('total_assets_usd');
+  const [vaultsSortOrder, setVaultsSortOrder] = useState<MorphoVaultsSortOrder>('desc');
+  const [vaults, setVaults] = useState<MorphoVaultsItem[]>([]);
+  const [vaultsTotal, setVaultsTotal] = useState(0);
+  const [vaultsLoading, setVaultsLoading] = useState(false);
+  const [vaultsError, setVaultsError] = useState('');
+  const [vaultsFetchedAt, setVaultsFetchedAt] = useState<number | null>(null);
+  const [expandedVaultKey, setExpandedVaultKey] = useState('');
+  const [expandedVaultDetail, setExpandedVaultDetail] = useState<ExpandedVaultDetailState>({
+    key: '',
+    loading: false,
+    error: '',
+    vault: null,
+    vaultV2: null,
+  });
   const activeVaultAddress = vaultAddressByVersion[vaultVersion];
   const vaultSearchHistory = vaultSearchHistoryByVersion[vaultVersion];
+  const vaultsTotalPages = Math.max(1, Math.ceil(vaultsTotal / MORPHO_VAULTS_PAGE_SIZE));
   const rememberVaultAddress = useCallback((address: string, version: MorphoVaultVersion) => {
     const normalizedAddress = address.trim();
     if (!normalizedAddress) return;
@@ -1171,6 +1540,153 @@ export function MorphoVaultPage({
     [loadVaultForAddress, vaultAddress, vaultVersion],
   );
 
+  const loadVaults = useCallback(
+    async (force = false) => {
+      const assetKeyword = vaultsAssetFilter.trim();
+      const assetAddress = isAddress(assetKeyword, { strict: false }) ? assetKeyword : undefined;
+      const asset = assetAddress ? undefined : assetKeyword || undefined;
+      const protocol =
+        vaultsProtocolFilter === 'all' ? undefined : (vaultsProtocolFilter as MorphoVaultsProtocol);
+
+      setVaultsError('');
+      setVaultsLoading(true);
+      try {
+        const result = await fetchMorphoVaultsWithMeta({
+          force,
+          page: vaultsPage,
+          pageSize: MORPHO_VAULTS_PAGE_SIZE,
+          sortBy: vaultsSortBy,
+          sortOrder: vaultsSortOrder,
+          asset,
+          assetAddress,
+          protocol,
+        });
+        setVaults(result.data.items);
+        setVaultsTotal(result.data.total);
+        setVaultsFetchedAt(result.meta.fetchedAt);
+      } catch (listError) {
+        setVaultsError(
+          listError instanceof Error ? listError.message : '无法加载 Morpho vault 列表',
+        );
+      } finally {
+        setVaultsLoading(false);
+      }
+    },
+    [vaultsAssetFilter, vaultsPage, vaultsProtocolFilter, vaultsSortBy, vaultsSortOrder],
+  );
+
+  const commitVaultsAssetFilter = useCallback(() => {
+    setVaultsAssetFilter(vaultsAssetInput.trim());
+    setVaultsPage(1);
+  }, [vaultsAssetInput]);
+
+  const handleVaultsProtocolFilterChange = useCallback((value: MorphoVaultProtocolFilter) => {
+    setVaultsProtocolFilter(value);
+    setVaultsPage(1);
+  }, []);
+
+  const handleVaultsSortChange = useCallback(
+    (field: MorphoVaultsSortField) => {
+      setVaultsPage(1);
+      if (field === vaultsSortBy) {
+        setVaultsSortOrder((current) => (current === 'desc' ? 'asc' : 'desc'));
+        return;
+      }
+      setVaultsSortBy(field);
+      setVaultsSortOrder('desc');
+    },
+    [vaultsSortBy],
+  );
+
+  const handleVaultsPageChange = useCallback(
+    (nextPage: number) => {
+      setVaultsPage(Math.min(vaultsTotalPages, Math.max(1, nextPage)));
+    },
+    [vaultsTotalPages],
+  );
+
+  const handleVaultListToggle = useCallback(
+    (item: MorphoVaultsItem) => {
+      const key = `${item.protocol}:${item.address.toLowerCase()}`;
+      if (expandedVaultKey === key) {
+        setExpandedVaultKey('');
+        setExpandedVaultDetail({
+          key: '',
+          loading: false,
+          error: '',
+          vault: null,
+          vaultV2: null,
+        });
+        return;
+      }
+
+      const version = item.protocol === 'v2' ? 'v2' : 'v1';
+      setExpandedVaultKey(key);
+      setExpandedVaultDetail({
+        key,
+        loading: true,
+        error: '',
+        vault: null,
+        vaultV2: null,
+      });
+
+      void (async () => {
+        try {
+          if (version === 'v2') {
+            const result = await fetchMorphoVaultV2WithMeta(item.address);
+            setExpandedVaultDetail((current) =>
+              current.key === key
+                ? {
+                    key,
+                    loading: false,
+                    error: '',
+                    vault: null,
+                    vaultV2: result.data,
+                  }
+                : current,
+            );
+            return;
+          }
+
+          const result = await fetchMorphoVaultWithMeta(item.address);
+          setExpandedVaultDetail((current) =>
+            current.key === key
+              ? {
+                  key,
+                  loading: false,
+                  error: '',
+                  vault: result.data,
+                  vaultV2: null,
+                }
+              : current,
+          );
+          const firstMarketId = result.data.allocations.find(
+            (allocation) => allocation.market_id,
+          )?.market_id;
+          if (firstMarketId) {
+            onMarketSelect(firstMarketId);
+          }
+        } catch (detailError) {
+          setExpandedVaultDetail((current) =>
+            current.key === key
+              ? {
+                  key,
+                  loading: false,
+                  error:
+                    detailError instanceof Error
+                      ? detailError.message
+                      : '无法加载 Morpho vault 数据',
+                  vault: null,
+                  vaultV2: null,
+                }
+              : current,
+          );
+        }
+      })();
+    },
+    [expandedVaultKey, onMarketSelect],
+  );
+
   const refreshedAtText = vaultFetchedAt
     ? new Date(vaultFetchedAt).toLocaleString('zh-CN', {
         hour12: false,
@@ -1178,152 +1694,232 @@ export function MorphoVaultPage({
     : 'N/A';
 
   useEffect(() => {
+    if (activeVaultView !== 'query') return;
     setVaultAddress(activeVaultAddress);
     void loadVaultForAddress(activeVaultAddress, false, vaultVersion);
-  }, [activeVaultAddress, loadVaultForAddress, vaultVersion]);
+  }, [activeVaultAddress, activeVaultView, loadVaultForAddress, vaultVersion]);
+
+  useEffect(() => {
+    void loadVaults(false);
+  }, [loadVaults]);
+
+  useEffect(() => {
+    setExpandedVaultKey('');
+    setExpandedVaultDetail({
+      key: '',
+      loading: false,
+      error: '',
+      vault: null,
+      vaultV2: null,
+    });
+  }, [vaultsAssetFilter, vaultsPage, vaultsProtocolFilter, vaultsSortBy, vaultsSortOrder]);
+
+  const vaultMarketQuerySection = selectedMarketId ? (
+    <MorphoMarketTable
+      markets={queryMarkets}
+      expandedMarketId={expandedMarketId}
+      onToggleMarket={onToggleMarket}
+      marketStateLoadingById={marketStateLoadingById}
+      marketStateErrorById={marketStateErrorById}
+      title="市场查询结果"
+      subtitle={`来自 Vault allocation: ${compactMarketId(selectedMarketId)}`}
+      sortMode={sortMode}
+      onSortModeChange={onSortModeChange}
+      totalMarkets={queryMarkets.length}
+      page={1}
+      totalPages={1}
+      pageSize={Math.max(queryMarkets.length, 1)}
+      onPageChange={() => undefined}
+      showSorting={false}
+      showPagination={false}
+      showColumnHeaders={false}
+      showSummaryRows={false}
+      showTableHeaderWhenEmpty={false}
+      emptyText="正在等待该市场的 state 详情。"
+      embedded
+      forceExpanded
+    />
+  ) : (
+    <section className="morpho-vault-market-placeholder morpho-vault-market-placeholder-embedded">
+      <strong>市场查询结果</strong>
+      <span>点击 allocation 图表中的市场后，会在这里直接展示对应 market state。</span>
+    </section>
+  );
+
+  const expandedVaultContent =
+    expandedVaultDetail.loading || expandedVaultDetail.key !== expandedVaultKey ? (
+      <div className="morpho-market-inline-state">
+        <div className="spinner"></div>
+      </div>
+    ) : expandedVaultDetail.error ? (
+      <div className="morpho-market-table-error-row">{expandedVaultDetail.error}</div>
+    ) : expandedVaultDetail.vaultV2 ? (
+      <MorphoVaultV2Overview vault={expandedVaultDetail.vaultV2} />
+    ) : expandedVaultDetail.vault ? (
+      <>
+        <MorphoVaultOverview vault={expandedVaultDetail.vault} />
+        <MorphoVaultAllocationChart
+          vault={expandedVaultDetail.vault}
+          selectedMarketId={selectedMarketId}
+          onMarketSelect={onMarketSelect}
+          marketQuerySection={vaultMarketQuerySection}
+        />
+      </>
+    ) : (
+      <div className="morpho-market-inline-state">
+        <span className="empty-text">暂无可展示的 Morpho vault 详情。</span>
+      </div>
+    );
 
   return (
     <div className="morpho-vault-page">
-      <section className="card morpho-detail-card morpho-vault-search-card">
-        <div className="card-header">
-          <div>
-            <span className="card-title morpho-section-title">Vault 搜索</span>
-            <p className="morpho-section-subtitle">
-              输入 Morpho vault 地址查询实时详情，并在 V1 / V2 间切换查看不同接口。
-            </p>
-          </div>
-          <div className="morpho-vault-version-switch">
-            <SegmentedControl
-              ariaLabel="Morpho vault 版本"
-              value={vaultVersion}
-              onChange={(value) => setVaultVersion(value as MorphoVaultVersion)}
-              options={[
-                { value: 'v1', label: 'Vault V1', activeClassName: 'active-purple' },
-                { value: 'v2', label: 'Vault V2', activeClassName: 'active-purple' },
-              ]}
-            />
-          </div>
-        </div>
-        <div className="morpho-vault-search-row">
-          <div className="input-wrapper">
-            <input
-              className="address-input"
-              value={vaultAddress}
-              onFocus={() => setShowVaultHistory(true)}
-              onBlur={() => window.setTimeout(() => setShowVaultHistory(false), 120)}
-              onChange={(event) => {
-                setVaultAddress(event.target.value);
-                setError('');
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void loadVault(false);
-              }}
-              placeholder="输入 Morpho vault 地址"
-            />
-            {showVaultHistory && vaultSearchHistory.length > 0 ? (
-              <div className="history-dropdown morpho-vault-search-history-dropdown">
-                <div className="history-header">
-                  <span>{vaultVersion.toUpperCase()} Vault 搜索记录</span>
-                  <button
-                    type="button"
-                    className="clear-history-btn"
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      clearVaultSearchHistory(vaultVersion);
-                    }}
-                  >
-                    清除记录
-                  </button>
-                </div>
-                <ul className="history-list">
-                  {vaultSearchHistory.map((address) => (
-                    <li
-                      key={address}
-                      className="history-item"
-                      title={address}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        setVaultAddress(address);
-                        setShowVaultHistory(false);
-                      }}
-                    >
-                      {address}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            className="search-btn morpho-vault-query-btn"
-            onClick={() => void loadVault(false)}
-          >
-            查询
-          </button>
-        </div>
-        {(vaultVersion === 'v1' ? vault !== null : vaultV2 !== null) ? (
-          <div className="morpho-vault-search-status">
-            <span>更新 {refreshedAtText}</span>
-            <button type="button" onClick={() => void loadVault(true)}>
-              刷新
-            </button>
-          </div>
-        ) : null}
-        {error ? <div className="morpho-banner morpho-banner-warn">{error}</div> : null}
+      <section className="card morpho-detail-card morpho-vault-mode-card">
+        <SegmentedControl
+          ariaLabel="Morpho vault 页面视图"
+          value={activeVaultView}
+          onChange={(value) => setActiveVaultView(value as MorphoVaultViewMode)}
+          options={[
+            { value: 'list', label: 'Vaults 列表' },
+            { value: 'query', label: 'Vault 查询' },
+          ]}
+        />
       </section>
 
-      {loading ? (
-        <div className="card morpho-market-loading-card">
-          <div className="spinner"></div>
-        </div>
-      ) : null}
-
-      {vaultVersion === 'v2' && vaultV2 ? <MorphoVaultV2Overview vault={vaultV2} /> : null}
-
-      {vaultVersion === 'v1' && vault ? (
+      {activeVaultView === 'list' ? (
+        <MorphoVaultsTable
+          vaults={vaults}
+          loading={vaultsLoading}
+          error={vaultsError}
+          assetInput={vaultsAssetInput}
+          protocolFilter={vaultsProtocolFilter}
+          sortBy={vaultsSortBy}
+          sortOrder={vaultsSortOrder}
+          total={vaultsTotal}
+          page={vaultsPage}
+          totalPages={vaultsTotalPages}
+          fetchedAt={vaultsFetchedAt}
+          expandedVaultKey={expandedVaultKey}
+          expandedVaultContent={expandedVaultContent}
+          onAssetInputChange={setVaultsAssetInput}
+          onAssetCommit={commitVaultsAssetFilter}
+          onProtocolFilterChange={handleVaultsProtocolFilterChange}
+          onSortChange={handleVaultsSortChange}
+          onPageChange={handleVaultsPageChange}
+          onRefresh={() => void loadVaults(true)}
+          onToggleVault={handleVaultListToggle}
+        />
+      ) : (
         <>
-          <MorphoVaultOverview vault={vault} />
-          <MorphoVaultAllocationChart
-            vault={vault}
-            selectedMarketId={selectedMarketId}
-            onMarketSelect={onMarketSelect}
-            marketQuerySection={
-              selectedMarketId ? (
-                <MorphoMarketTable
-                  markets={queryMarkets}
-                  expandedMarketId={expandedMarketId}
-                  onToggleMarket={onToggleMarket}
-                  marketStateLoadingById={marketStateLoadingById}
-                  marketStateErrorById={marketStateErrorById}
-                  title="市场查询结果"
-                  subtitle={`来自 Vault allocation: ${compactMarketId(selectedMarketId)}`}
-                  sortMode={sortMode}
-                  onSortModeChange={onSortModeChange}
-                  totalMarkets={queryMarkets.length}
-                  page={1}
-                  totalPages={1}
-                  pageSize={Math.max(queryMarkets.length, 1)}
-                  onPageChange={() => undefined}
-                  showSorting={false}
-                  showPagination={false}
-                  showColumnHeaders={false}
-                  showSummaryRows={false}
-                  showTableHeaderWhenEmpty={false}
-                  emptyText="正在等待该市场的 state 详情。"
-                  embedded
-                  forceExpanded
+          <section className="card morpho-detail-card morpho-vault-search-card">
+            <div className="card-header">
+              <div>
+                <span className="card-title morpho-section-title">Vault 搜索</span>
+                <p className="morpho-section-subtitle">
+                  输入 Morpho vault 地址查询实时详情，并在 V1 / V2 间切换查看不同接口。
+                </p>
+              </div>
+              <div className="morpho-vault-version-switch">
+                <SegmentedControl
+                  ariaLabel="Morpho vault 版本"
+                  value={vaultVersion}
+                  onChange={(value) => setVaultVersion(value as MorphoVaultVersion)}
+                  options={[
+                    { value: 'v1', label: 'Vault V1', activeClassName: 'active-purple' },
+                    { value: 'v2', label: 'Vault V2', activeClassName: 'active-purple' },
+                  ]}
                 />
-              ) : (
-                <section className="morpho-vault-market-placeholder morpho-vault-market-placeholder-embedded">
-                  <strong>市场查询结果</strong>
-                  <span>点击 allocation 图表中的市场后，会在这里直接展示对应 market state。</span>
-                </section>
-              )
-            }
-          />
+              </div>
+            </div>
+            <div className="morpho-vault-search-row">
+              <div className="input-wrapper">
+                <input
+                  className="address-input"
+                  value={vaultAddress}
+                  onFocus={() => setShowVaultHistory(true)}
+                  onBlur={() => window.setTimeout(() => setShowVaultHistory(false), 120)}
+                  onChange={(event) => {
+                    setVaultAddress(event.target.value);
+                    setError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void loadVault(false);
+                  }}
+                  placeholder="输入 Morpho vault 地址"
+                />
+                {showVaultHistory && vaultSearchHistory.length > 0 ? (
+                  <div className="history-dropdown morpho-vault-search-history-dropdown">
+                    <div className="history-header">
+                      <span>{vaultVersion.toUpperCase()} Vault 搜索记录</span>
+                      <button
+                        type="button"
+                        className="clear-history-btn"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          clearVaultSearchHistory(vaultVersion);
+                        }}
+                      >
+                        清除记录
+                      </button>
+                    </div>
+                    <ul className="history-list">
+                      {vaultSearchHistory.map((address) => (
+                        <li
+                          key={address}
+                          className="history-item"
+                          title={address}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            setVaultAddress(address);
+                            setShowVaultHistory(false);
+                          }}
+                        >
+                          {address}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="search-btn morpho-vault-query-btn"
+                onClick={() => void loadVault(false)}
+              >
+                查询
+              </button>
+            </div>
+            {(vaultVersion === 'v1' ? vault !== null : vaultV2 !== null) ? (
+              <div className="morpho-vault-search-status">
+                <span>更新 {refreshedAtText}</span>
+                <button type="button" onClick={() => void loadVault(true)}>
+                  刷新
+                </button>
+              </div>
+            ) : null}
+            {error ? <div className="morpho-banner morpho-banner-warn">{error}</div> : null}
+          </section>
+
+          {loading ? (
+            <div className="card morpho-market-loading-card">
+              <div className="spinner"></div>
+            </div>
+          ) : null}
+
+          {vaultVersion === 'v2' && vaultV2 ? <MorphoVaultV2Overview vault={vaultV2} /> : null}
+
+          {vaultVersion === 'v1' && vault ? (
+            <>
+              <MorphoVaultOverview vault={vault} />
+              <MorphoVaultAllocationChart
+                vault={vault}
+                selectedMarketId={selectedMarketId}
+                onMarketSelect={onMarketSelect}
+                marketQuerySection={vaultMarketQuerySection}
+              />
+            </>
+          ) : null}
         </>
-      ) : null}
+      )}
     </div>
   );
 }

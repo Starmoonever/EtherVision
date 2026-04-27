@@ -6,6 +6,25 @@
   justify-content: center;
 }
 
+.morpho-market-mode-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.morpho-market-mode-card .switch-group {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.morpho-market-mode-card .switch-btn.active {
+  background: var(--accent-primary);
+  color: #eff6ff;
+}
+
 .morpho-market-search {
   min-width: min(100%, 320px);
   display: flex;
