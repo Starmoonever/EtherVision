@@ -13,6 +13,9 @@ export type MorphoMarketSortField =
   | 'loan_symbol'
   | 'collateral_symbol';
 export type MorphoMarketSortOrder = 'asc' | 'desc';
+export type MorphoVaultsSortField = 'total_assets_usd' | 'liquidity' | 'apy';
+export type MorphoVaultsSortOrder = 'asc' | 'desc';
+export type MorphoVaultsProtocol = 'v1' | 'v2';
 
 export interface MorphoPositionAsset {
   role: 'loan' | 'collateral' | string;
@@ -186,6 +189,28 @@ export interface MorphoVaultResponse {
   fee: string | null;
   allocations: MorphoVaultAllocation[];
   data_source: 'api';
+}
+
+export interface MorphoVaultsAsset {
+  asset: string;
+  token_address: string;
+}
+
+export interface MorphoVaultsItem {
+  address: string;
+  name: string;
+  asset: MorphoVaultsAsset;
+  total_assets_usd: number;
+  liquidity: number;
+  apy: number;
+  protocol: MorphoVaultsProtocol | string;
+}
+
+export interface MorphoVaultsResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: MorphoVaultsItem[];
 }
 
 export interface MorphoVaultV2Asset {
@@ -492,6 +517,8 @@ const morphoMarketStateCache = new Map<string, { fetchedAt: number; data: Morpho
 const morphoMarketStateInflight = new Map<string, Promise<MorphoMarketState>>();
 const morphoVaultCache = new Map<string, { fetchedAt: number; data: MorphoVaultResponse }>();
 const morphoVaultInflight = new Map<string, Promise<MorphoVaultResponse>>();
+const morphoVaultsCache = new Map<string, { fetchedAt: number; data: MorphoVaultsResponse }>();
+const morphoVaultsInflight = new Map<string, Promise<MorphoVaultsResponse>>();
 const morphoVaultV2Cache = new Map<string, { fetchedAt: number; data: MorphoVaultV2Response }>();
 const morphoVaultV2Inflight = new Map<string, Promise<MorphoVaultV2Response>>();
 const morphoVaultReallocationsCache = new Map<
@@ -1239,6 +1266,151 @@ function buildMorphoMarketsCacheKey(
     `loan:${loan ?? 'default'}`,
     `collateral:${collateral ?? 'default'}`,
   ].join(':');
+}
+
+function buildMorphoVaultsCacheKey(
+  page: number,
+  pageSize: number,
+  sortBy: MorphoVaultsSortField,
+  sortOrder: MorphoVaultsSortOrder,
+  asset?: string,
+  assetAddress?: string,
+  protocol?: MorphoVaultsProtocol,
+): string {
+  return [
+    `page:${page}`,
+    `pageSize:${pageSize}`,
+    `sortBy:${sortBy}`,
+    `sortOrder:${sortOrder}`,
+    `asset:${asset ?? 'default'}`,
+    `assetAddress:${assetAddress ?? 'default'}`,
+    `protocol:${protocol ?? 'default'}`,
+  ].join(':');
+}
+
+function normalizeMorphoVaultsResponse(
+  payload: Partial<MorphoVaultsResponse>,
+): MorphoVaultsResponse {
+  const items = Array.isArray(payload.items)
+    ? payload.items.filter((item): item is MorphoVaultsItem => {
+        if (!item || typeof item !== 'object') return false;
+        const candidate = item as Partial<MorphoVaultsItem>;
+        return (
+          typeof candidate.address === 'string' &&
+          typeof candidate.name === 'string' &&
+          typeof candidate.asset?.asset === 'string' &&
+          typeof candidate.asset?.token_address === 'string'
+        );
+      })
+    : [];
+
+  return {
+    page: parsePositiveInteger(payload.page) ?? 1,
+    page_size: parsePositiveInteger(payload.page_size) ?? Math.max(items.length, 1),
+    total: parsePositiveInteger(payload.total) ?? items.length,
+    items,
+  };
+}
+
+export async function fetchMorphoVaults(
+  options: {
+    force?: boolean;
+    page?: number;
+    pageSize?: number;
+    sortBy?: MorphoVaultsSortField;
+    sortOrder?: MorphoVaultsSortOrder;
+    asset?: string;
+    assetAddress?: string;
+    protocol?: MorphoVaultsProtocol;
+  } = {},
+): Promise<MorphoVaultsResponse> {
+  const result = await fetchMorphoVaultsWithMeta(options);
+  return result.data;
+}
+
+export async function fetchMorphoVaultsWithMeta(
+  options: {
+    force?: boolean;
+    page?: number;
+    pageSize?: number;
+    sortBy?: MorphoVaultsSortField;
+    sortOrder?: MorphoVaultsSortOrder;
+    asset?: string;
+    assetAddress?: string;
+    protocol?: MorphoVaultsProtocol;
+  } = {},
+): Promise<DataWithMeta<MorphoVaultsResponse>> {
+  const force = options.force === true;
+  const page = parsePositiveInteger(options.page) ?? 1;
+  const pageSize = parsePositiveInteger(options.pageSize) ?? 10;
+  const sortBy = options.sortBy ?? 'total_assets_usd';
+  const sortOrder = options.sortOrder ?? 'desc';
+  const asset = options.asset?.trim() || undefined;
+  const assetAddress = options.assetAddress?.trim() || undefined;
+  const protocol = options.protocol;
+  const cacheKey = buildMorphoVaultsCacheKey(
+    page,
+    pageSize,
+    sortBy,
+    sortOrder,
+    asset,
+    assetAddress,
+    protocol,
+  );
+  const cached = morphoVaultsCache.get(cacheKey);
+
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: { fetchedAt: cached.fetchedAt, fromCache: true },
+    };
+  }
+
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoVaultsResponse>('vaults', cacheKey);
+    if (persisted) {
+      morphoVaultsCache.set(cacheKey, persisted);
+      return {
+        data: persisted.data,
+        meta: { fetchedAt: persisted.fetchedAt, fromCache: true },
+      };
+    }
+  }
+
+  const inflight = morphoVaultsInflight.get(cacheKey);
+  if (!force && inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: { fetchedAt: Date.now(), fromCache: false },
+    }));
+  }
+
+  const path = appendQueryParams('/morpho/vaults', {
+    page,
+    page_size: pageSize,
+    sort_by: sortBy,
+    sort_order: sortOrder,
+    ...(asset ? { asset } : {}),
+    ...(assetAddress ? { asset_address: assetAddress } : {}),
+    ...(protocol ? { protocol } : {}),
+  });
+  const request = fetchMorphoWithFallback<Partial<MorphoVaultsResponse>>([path])
+    .then(normalizeMorphoVaultsResponse)
+    .then((data) => {
+      const fetchedAt = writeMorphoPersistedCache('vaults', cacheKey, data);
+      morphoVaultsCache.set(cacheKey, { fetchedAt, data });
+      return data;
+    })
+    .finally(() => {
+      morphoVaultsInflight.delete(cacheKey);
+    });
+
+  morphoVaultsInflight.set(cacheKey, request);
+  const data = await request;
+  return {
+    data,
+    meta: { fetchedAt: Date.now(), fromCache: false },
+  };
 }
 
 export async function fetchMorphoMarkets(

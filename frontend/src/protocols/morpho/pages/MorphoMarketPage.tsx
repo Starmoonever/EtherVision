@@ -19,7 +19,8 @@ import { MorphoVaultPage } from './MorphoVaultPage';
 const MORPHO_MARKETS_PAGE_SIZE = 10;
 const MORPHO_MARKET_QUERY_HISTORY_STORAGE_KEY = 'morpho_market_query_search_history';
 const MORPHO_MARKET_QUERY_HISTORY_LIMIT = 50;
-type MorphoMarketViewMode = 'mainstream' | 'query' | 'vaults';
+type MorphoMarketSection = 'markets' | 'vaults';
+type MorphoMarketsViewMode = 'list' | 'query';
 
 function loadMorphoMarketQueryHistory(): string[] {
   try {
@@ -115,7 +116,8 @@ function resolveMarketSortParams(sortMode: MorphoSortMode): {
 }
 
 export function MorphoMarketPage() {
-  const [activeView, setActiveView] = useState<MorphoMarketViewMode>('mainstream');
+  const [activeSection, setActiveSection] = useState<MorphoMarketSection>('markets');
+  const [activeMarketsView, setActiveMarketsView] = useState<MorphoMarketsViewMode>('list');
   const [marketPage, setMarketPage] = useState(1);
   const [sortMode, setSortMode] = useState<MorphoSortMode>('default');
   const [marketFilters, setMarketFilters] = useState({ loan: '', collateral: '' });
@@ -144,6 +146,7 @@ export function MorphoMarketPage() {
     const keyword = querySearch.trim();
     return isMorphoMarketId(keyword) ? keyword.toLowerCase() : '';
   }, [querySearch]);
+  const [vaultSelectedMarketId, setVaultSelectedMarketId] = useState('');
   const [expandedMarketId, setExpandedMarketId] = useState('');
   const [marketStateById, setMarketStateById] = useState<Record<string, MorphoMarketView>>({});
   const [marketStateLoadingById, setMarketStateLoadingById] = useState<Record<string, boolean>>({});
@@ -168,8 +171,20 @@ export function MorphoMarketPage() {
     );
   }, [marketStateById, queriedMarketId]);
 
+  const vaultSelectedMarket = useMemo(() => {
+    if (!vaultSelectedMarketId) return null;
+    return (
+      marketStateById[vaultSelectedMarketId] ??
+      mergeMorphoMarketData(createMarketConfigFromId(vaultSelectedMarketId), null)
+    );
+  }, [marketStateById, vaultSelectedMarketId]);
+
   const visibleMarkets = marketsWithLazyState;
   const queryMarkets = useMemo(() => (queriedMarket ? [queriedMarket] : []), [queriedMarket]);
+  const vaultQueryMarkets = useMemo(
+    () => (vaultSelectedMarket ? [vaultSelectedMarket] : []),
+    [vaultSelectedMarket],
+  );
 
   useEffect(() => {
     setMarketPage((current) => Math.min(Math.max(current, 1), totalMarketPages));
@@ -229,12 +244,10 @@ export function MorphoMarketPage() {
   }, []);
 
   useEffect(() => {
-    if ((activeView !== 'query' && activeView !== 'vaults') || !queriedMarketId) return;
+    if (activeSection !== 'markets' || activeMarketsView !== 'query' || !queriedMarketId) return;
 
     setExpandedMarketId(queriedMarketId);
-    if (activeView === 'query') {
-      rememberMarketQuery(queriedMarketId);
-    }
+    rememberMarketQuery(queriedMarketId);
     if (
       marketStateById[queriedMarketId] ||
       marketStateLoadingById[queriedMarketId] ||
@@ -245,7 +258,8 @@ export function MorphoMarketPage() {
 
     void loadMarketState(mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null));
   }, [
-    activeView,
+    activeMarketsView,
+    activeSection,
     loadMarketState,
     marketStateById,
     marketStateErrorById,
@@ -255,7 +269,12 @@ export function MorphoMarketPage() {
   ]);
 
   useEffect(() => {
-    const activeMarkets = activeView === 'query' ? queryMarkets : visibleMarkets;
+    const activeMarkets =
+      activeSection === 'vaults'
+        ? vaultQueryMarkets
+        : activeMarketsView === 'query'
+          ? queryMarkets
+          : visibleMarkets;
     const expandedMarketKey = expandedMarketId.toLowerCase();
     if (
       expandedMarketId &&
@@ -263,7 +282,14 @@ export function MorphoMarketPage() {
     ) {
       setExpandedMarketId('');
     }
-  }, [activeView, expandedMarketId, queryMarkets, visibleMarkets]);
+  }, [
+    activeMarketsView,
+    activeSection,
+    expandedMarketId,
+    queryMarkets,
+    vaultQueryMarkets,
+    visibleMarkets,
+  ]);
 
   const handleToggleMarket = useCallback(
     (market: MorphoMarketView) => {
@@ -291,7 +317,8 @@ export function MorphoMarketPage() {
   const handleVaultMarketSelect = useCallback(
     (marketId: string) => {
       const normalizedMarketId = marketId.toLowerCase();
-      setQuerySearch(normalizedMarketId);
+      if (!isMorphoMarketId(normalizedMarketId)) return;
+      setVaultSelectedMarketId(normalizedMarketId);
       setExpandedMarketId(normalizedMarketId);
       if (
         marketStateById[normalizedMarketId] ||
@@ -335,21 +362,16 @@ export function MorphoMarketPage() {
     <>
       <PageHero
         title="Morpho 市场页面"
-        subtitle="浏览 Morpho 协议的市场数据，支持按分页查看和按 market id 查询两种模式。"
+        subtitle="浏览 Morpho Markets 与 Vaults 数据，市场区内支持列表浏览与 market id 查询。"
         controls={
           <SegmentedControl
-            ariaLabel="Morpho 市场视图"
-            value={activeView}
-            onChange={setActiveView}
+            ariaLabel="Morpho 数据视图"
+            value={activeSection}
+            onChange={setActiveSection}
             options={[
               {
-                value: 'mainstream',
-                label: '市场列表',
-                activeClassName: 'active-purple',
-              },
-              {
-                value: 'query',
-                label: '市场查询',
+                value: 'markets',
+                label: 'Morpho Markets',
                 activeClassName: 'active-purple',
               },
               {
@@ -362,102 +384,118 @@ export function MorphoMarketPage() {
         }
       />
 
-      {activeView === 'mainstream' && loading ? (
-        <div className="card morpho-market-loading-card">
-          <div className="spinner"></div>
-        </div>
-      ) : activeView === 'mainstream' ? (
-        <MorphoMarketTable
-          markets={visibleMarkets}
+      {activeSection === 'vaults' ? (
+        <MorphoVaultPage
+          selectedMarketId={vaultSelectedMarketId}
+          onMarketSelect={handleVaultMarketSelect}
+          queryMarkets={vaultQueryMarkets}
           expandedMarketId={expandedMarketId}
           onToggleMarket={handleToggleMarket}
           marketStateLoadingById={marketStateLoadingById}
           marketStateErrorById={marketStateErrorById}
-          title="市场列表"
-          subtitle="分页展示市场核心指标，展开单个市场后再加载实时详情。"
-          marketFilters={marketFilters}
-          onMarketFilterCommit={(filters) => {
-            setMarketFilters(filters);
-            setMarketPage(1);
-          }}
-          sortMode={sortMode}
-          onSortModeChange={(value) => {
-            setSortMode(value);
-            setMarketPage(1);
-          }}
-          totalMarkets={marketCount}
-          page={marketPage}
-          totalPages={totalMarketPages}
-          pageSize={MORPHO_MARKETS_PAGE_SIZE}
-          onPageChange={setMarketPage}
-          tableError={error}
-          statusMeta={
-            <div className="morpho-market-table-status">
-              <span>更新 {refreshedAtText}</span>
-              <button type="button" onClick={() => void handleReload()}>
-                刷新
-              </button>
-            </div>
-          }
-        />
-      ) : activeView === 'query' ? (
-        <MorphoMarketTable
-          markets={queryMarkets}
-          expandedMarketId={expandedMarketId}
-          onToggleMarket={handleToggleMarket}
-          marketStateLoadingById={marketStateLoadingById}
-          marketStateErrorById={marketStateErrorById}
-          title="市场查询"
-          subtitle="输入完整 market id 后直接请求 state 接口，并返回这一个市场的详情。"
-          search={querySearch}
-          onSearchChange={setQuerySearch}
-          onSearchSubmit={submitMarketQuery}
-          searchPlaceholder="输入完整 Morpho market id"
-          searchHistoryItems={marketQueryHistory}
-          onSearchHistorySelect={setQuerySearch}
-          onClearSearchHistory={clearMarketQueryHistory}
           sortMode={sortMode}
           onSortModeChange={setSortMode}
-          totalMarkets={queryMarkets.length}
-          page={1}
-          totalPages={1}
-          pageSize={Math.max(queryMarkets.length, 1)}
-          onPageChange={() => undefined}
-          showSorting={false}
-          showPagination={false}
-          showTableHeaderWhenEmpty={false}
-          emptyText={queryEmptyText}
-          statusMeta={
-            <div className="morpho-market-table-status">
-              <span>查询默认使用缓存</span>
-              {queriedMarketId ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    void loadMarketState(
-                      mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null),
-                      true,
-                    )
-                  }
-                >
-                  刷新
-                </button>
-              ) : null}
-            </div>
-          }
         />
       ) : (
-        <MorphoVaultPage
-          selectedMarketId={queriedMarketId}
-          onMarketSelect={handleVaultMarketSelect}
-          queryMarkets={queryMarkets}
-          expandedMarketId={expandedMarketId}
-          onToggleMarket={handleToggleMarket}
-          marketStateLoadingById={marketStateLoadingById}
-          marketStateErrorById={marketStateErrorById}
-          sortMode={sortMode}
-          onSortModeChange={setSortMode}
-        />
+        <>
+          <section className="card morpho-detail-card morpho-market-mode-card">
+            <SegmentedControl
+              ariaLabel="Morpho markets 视图"
+              value={activeMarketsView}
+              onChange={(value) => setActiveMarketsView(value as MorphoMarketsViewMode)}
+              options={[
+                { value: 'list', label: 'Markets 列表' },
+                { value: 'query', label: 'Market 查询' },
+              ]}
+            />
+          </section>
+
+          {activeMarketsView === 'list' && loading ? (
+            <div className="card morpho-market-loading-card">
+              <div className="spinner"></div>
+            </div>
+          ) : activeMarketsView === 'list' ? (
+            <MorphoMarketTable
+              markets={visibleMarkets}
+              expandedMarketId={expandedMarketId}
+              onToggleMarket={handleToggleMarket}
+              marketStateLoadingById={marketStateLoadingById}
+              marketStateErrorById={marketStateErrorById}
+              title="Markets 列表"
+              subtitle="分页展示 market 核心指标，展开单个 market 后再加载实时详情。"
+              marketFilters={marketFilters}
+              onMarketFilterCommit={(filters) => {
+                setMarketFilters(filters);
+                setMarketPage(1);
+              }}
+              sortMode={sortMode}
+              onSortModeChange={(value) => {
+                setSortMode(value);
+                setMarketPage(1);
+              }}
+              totalMarkets={marketCount}
+              page={marketPage}
+              totalPages={totalMarketPages}
+              pageSize={MORPHO_MARKETS_PAGE_SIZE}
+              onPageChange={setMarketPage}
+              tableError={error}
+              statusMeta={
+                <div className="morpho-market-table-status">
+                  <span>更新 {refreshedAtText}</span>
+                  <button type="button" onClick={() => void handleReload()}>
+                    刷新
+                  </button>
+                </div>
+              }
+            />
+          ) : (
+            <MorphoMarketTable
+              markets={queryMarkets}
+              expandedMarketId={expandedMarketId}
+              onToggleMarket={handleToggleMarket}
+              marketStateLoadingById={marketStateLoadingById}
+              marketStateErrorById={marketStateErrorById}
+              title="Market 查询"
+              subtitle="输入完整 market id 后直接请求 state 接口，并返回这一个 market 的详情。"
+              search={querySearch}
+              onSearchChange={setQuerySearch}
+              onSearchSubmit={submitMarketQuery}
+              searchPlaceholder="输入完整 Morpho market id"
+              searchHistoryItems={marketQueryHistory}
+              onSearchHistorySelect={setQuerySearch}
+              onClearSearchHistory={clearMarketQueryHistory}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+              totalMarkets={queryMarkets.length}
+              page={1}
+              totalPages={1}
+              pageSize={Math.max(queryMarkets.length, 1)}
+              onPageChange={() => undefined}
+              showSorting={false}
+              showPagination={false}
+              showTableHeaderWhenEmpty={false}
+              emptyText={queryEmptyText}
+              statusMeta={
+                <div className="morpho-market-table-status">
+                  <span>查询默认使用缓存</span>
+                  {queriedMarketId ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void loadMarketState(
+                          mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null),
+                          true,
+                        )
+                      }
+                    >
+                      刷新
+                    </button>
+                  ) : null}
+                </div>
+              }
+            />
+          )}
+        </>
       )}
     </>
   );

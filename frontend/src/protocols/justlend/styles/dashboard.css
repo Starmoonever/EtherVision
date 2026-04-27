@@ -1,0 +1,399 @@
+/* Dashboard, overview, and market summary surfaces. */
+
+.justlend-dashboard,
+.justlend-market-board {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.justlend-overview-card,
+.justlend-market-hero {
+  background:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 32%), #151c2c;
+}
+
+.justlend-overview-grid,
+.justlend-market-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.justlend-overview-copy,
+.justlend-market-copy-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.justlend-overview-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.justlend-overview-pills {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.justlend-overview-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.justlend-overview-pill-label {
+  color: #64748b;
+}
+
+.justlend-overview-pill-value {
+  color: #cbd5e1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.justlend-overview-tags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.justlend-overview-tag {
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.justlend-overview-tag-label {
+  color: #64748b;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.justlend-overview-tag-value {
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.justlend-risk-safe {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.justlend-risk-watch {
+  background: #3f2d0d;
+  color: #fde68a;
+}
+
+.justlend-risk-danger {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.justlend-risk-neutral {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.justlend-risk-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.justlend-risk-hero,
+.justlend-risk-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.justlend-risk-side {
+  height: 100%;
+}
+
+.justlend-risk-hero-top {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.justlend-risk-hero-top > div:first-child {
+  min-width: 0;
+}
+
+.justlend-risk-health {
+  font-size: clamp(2.5rem, 4vw, 4rem);
+  line-height: 1;
+  font-weight: 800;
+  color: #f8fafc;
+  max-width: 100%;
+}
+
+.justlend-risk-health-copy {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .justlend-risk-hero-top {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
+
+.justlend-bullet-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.justlend-bullet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+}
+
+.justlend-bullet-title {
+  position: relative;
+  top: -0.7rem;
+}
+
+.justlend-bullet-track {
+  position: relative;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(34, 197, 94, 0.94) 0%,
+    rgba(74, 222, 128, 0.92) 40%,
+    rgba(245, 158, 11, 0.92) 72%,
+    rgba(239, 68, 68, 0.94) 100%
+  );
+}
+
+.justlend-bullet-marker {
+  position: absolute;
+  top: -0.2rem;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.justlend-bullet-marker::before {
+  content: '';
+  display: block;
+  width: 2px;
+  height: 22px;
+  margin: 0 auto;
+  border-radius: 999px;
+}
+
+.justlend-bullet-marker span {
+  position: absolute;
+  top: -1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.justlend-bullet-marker-current::before {
+  background: #e0f2fe;
+}
+
+.justlend-bullet-marker-current span {
+  color: #bae6fd;
+}
+
+.justlend-bullet-marker-threshold::before {
+  background: #fecaca;
+}
+
+.justlend-bullet-marker-threshold span {
+  color: #fca5a5;
+}
+
+.justlend-bullet-marker-stagger-left span {
+  transform: translateX(-118%);
+}
+
+.justlend-bullet-marker-stagger-right span {
+  transform: translateX(18%);
+}
+
+.justlend-bullet-footer {
+  display: grid;
+  grid-template-columns: 55fr 25fr 20fr;
+  gap: 0.5rem;
+  color: #64748b;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+.justlend-insight-grid,
+.justlend-market-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.justlend-insight-grid {
+  flex: 1;
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.justlend-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.justlend-market-kicker {
+  color: #7dd3fc;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+.justlend-market-title {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  line-height: 1.2;
+}
+
+.justlend-market-copy {
+  color: #94a3b8;
+  font-size: 0.92rem;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.justlend-banner {
+  border-radius: 12px;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid #1e293b;
+}
+
+.justlend-banner-warn {
+  background: linear-gradient(180deg, rgba(55, 22, 8, 0.7), rgba(30, 41, 59, 0.72));
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.justlend-banner-soft {
+  background: rgba(15, 23, 42, 0.76);
+}
+
+.justlend-banner-title {
+  color: #fde68a;
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+
+.justlend-banner-copy {
+  color: #94a3b8;
+  font-size: 0.88rem;
+  line-height: 1.75;
+}
+
+.justlend-risk-markers {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.justlend-risk-marker {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.justlend-risk-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1300px) {
+  .justlend-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .justlend-overview-grid,
+  .justlend-market-hero-grid,
+  .justlend-analytics-grid,
+  .justlend-risk-layout,
+  .justlend-risk-hero-top,
+  .justlend-structure-grid,
+  .justlend-market-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .justlend-score-layout,
+  .justlend-overview-tags,
+  .justlend-insight-grid,
+  .justlend-market-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .justlend-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .justlend-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .justlend-bullet-footer {
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+  }
+}
