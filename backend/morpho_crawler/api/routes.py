@@ -11,7 +11,13 @@ from .schemas import (
     MorphoPositionReplayResponse,
     MorphoPositionResponse,
 )
-from .schemas import MorphoVaultStateGraphQLResponse  # api/morpho/vault/v1/state相关
+from .schemas import (
+    MorphoVaultV1StateGraphQLResponse,  # api/morpho/vault/v1/state相关
+)
+from .schemas import (
+    MorphoVaultV2StateGraphQLResponse,  # api/morpho/vault/v2/state相关
+)
+from .schemas import MorphoVotesResponse  # api/morpho/vaults相关
 from .service import (
     get_market_state,  # api/morpho/market/state相关
     get_position_replay,
@@ -19,6 +25,8 @@ from .service import (
     get_user_position,
 )
 from .service import get_vault_state_main_graphql  # api/morpho/vault/v1/state相关
+from .service import get_vault_v2_state_main_graphql  # api/morpho/vault/v2/state相关
+from .service import get_votes_page  # api/morpho/vaults相关
 
 router = APIRouter(prefix="/api/morpho")
 
@@ -160,11 +168,67 @@ async def market_state(
 # api/morpho/vault/v1/state相关：GET /api/morpho/vault/v1/state（Morpho 主站 GraphQL vaultByAddress）
 @router.get(
     "/vault/v1/state",
-    response_model=MorphoVaultStateGraphQLResponse,
+    response_model=MorphoVaultV1StateGraphQLResponse,
     summary="Morpho Vault V1 状态（主站 GraphQL）",
 )
 async def vault_state(
+    request: Request,
+    pool: AsyncpgPool,
     address: str = Query(..., description="Vault 合约地址（EVM）"),
-    chain_id: int = Query(1, ge=1, description="链 ID，默认 1（Ethereum）"),
-) -> MorphoVaultStateGraphQLResponse:
-    return await get_vault_state_main_graphql(address=address, chain_id=chain_id)
+) -> MorphoVaultV1StateGraphQLResponse:
+    # api/morpho/vault/v1/state相关：固定主网查询，不暴露 chain_id
+    return await get_vault_state_main_graphql(
+        address=address,
+        w3=_w3(request),
+        pool=pool,
+    )
+
+
+# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state（Morpho 主站 GraphQL vaultV2ByAddress）
+@router.get(
+    "/vault/v2/state",
+    response_model=MorphoVaultV2StateGraphQLResponse,
+    summary="Morpho Vault V2 状态（主站 GraphQL）",
+)
+async def vault_v2_state(
+    pool: AsyncpgPool,
+    address: str = Query(..., description="Vault V2 合约地址（EVM）"),
+) -> MorphoVaultV2StateGraphQLResponse:
+    # api/morpho/vault/v2/state相关：固定主网查询，不暴露 chain_id
+    return await get_vault_v2_state_main_graphql(address=address, pool=pool)
+
+
+# api/morpho/vaults相关：GET /api/morpho/vaults（v1/v2 金库总表概览，分页）
+@router.get(
+    "/vaults",
+    response_model=MorphoVotesResponse,
+    summary="List Morpho vault overview from v1/v2 tables",
+)
+async def votes(
+    pool: AsyncpgPool,
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(10, ge=1, le=100, description="每页条数，默认 10"),
+    sort_by: str = Query(
+        "total_assets_usd",
+        description="可选排序字段：total_assets_usd / liquidity / apy",
+    ),
+    sort_order: str = Query(
+        "desc",
+        description="可选排序方向：asc / desc，默认 desc",
+    ),
+    asset: str | None = Query(None, description="可选：货币筛选（0x地址或币名映射）"),
+    asset_address: str | None = Query(
+        None, description="可选：按资产地址过滤（EVM 地址）"
+    ),
+    protocol: str | None = Query(None, description="可选：按协议过滤（v1 或 v2）"),
+) -> MorphoVotesResponse:
+    return await get_votes_page(
+        pool=pool,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        asset=asset,
+        asset_address=asset_address,
+        protocol=protocol,
+    )

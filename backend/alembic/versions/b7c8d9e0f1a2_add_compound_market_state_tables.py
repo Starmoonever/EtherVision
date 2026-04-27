@@ -1,7 +1,7 @@
 """add compound market_state and reserve snapshot tables
 
 Revision ID: b7c8d9e0f1a2
-Revises: a1b2c3d4e5f6
+Revises: f1b2c3d4e5f6
 Create Date: 2026-03-19 00:00:00.000000
 
 """
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "b7c8d9e0f1a2"
-down_revision: Union[str, Sequence[str], None] = "a1b2c3d4e5f6"
+down_revision: Union[str, Sequence[str], None] = "f1b2c3d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
