@@ -16,19 +16,25 @@ type AaveCacheEntry = { kind: 'data'; data: UserPosition | BorrowPosition } | { 
 
 const emptyState = (): VersionState => ({ data: null, loading: false, notFound: false });
 const aavePositionCache = new Map<string, AaveCacheEntry>();
+const emptyAddressByVersion = (): Record<'v2' | 'v3', string> => ({ v2: '', v3: '' });
 
 export function AaveProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   const [error, setError] = useState('');
   const [marketVersion, setMarketVersion] = useState<'v2' | 'v3'>('v3');
   const [personalVersion, setPersonalVersion] = useState<'v2' | 'v3'>('v3');
-  const [queriedAddress, setQueriedAddress] = useState('');
+  const [queriedAddressByVersion, setQueriedAddressByVersion] = useState(emptyAddressByVersion);
   const [v2State, setV2State] = useState<VersionState>(emptyState());
   const [v3State, setV3State] = useState<VersionState>(emptyState());
 
+  const queriedAddress = queriedAddressByVersion[personalVersion];
+
   useEffect(() => {
-    setV2State(emptyState());
-    setV3State(emptyState());
-  }, [queriedAddress]);
+    if (personalVersion === 'v2') {
+      setV2State(emptyState());
+    } else {
+      setV3State(emptyState());
+    }
+  }, [personalVersion, queriedAddress]);
 
   useEffect(() => {
     if (!active || !queriedAddress || activeTab !== 'personal') return;
@@ -81,7 +87,7 @@ export function AaveProtocolRoot({ active, activeTab }: ProtocolRootProps) {
       v3State={v3State}
       onSearch={(address) => {
         setError('');
-        setQueriedAddress(address);
+        setQueriedAddressByVersion((prev) => ({ ...prev, [personalVersion]: address }));
       }}
       onVersionChange={setPersonalVersion}
     />

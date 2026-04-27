@@ -66,7 +66,7 @@ export function AavePersonalPage({
       <AddressInput
         onSearch={onSearch}
         loading={false}
-        historyKey="search_history_aave"
+        historyKey={`search_history_aave_${personalVersion}`}
         placeholder="输入 Aave 钱包地址 (0x...)"
       />
       <ErrorNotice message={error} />
