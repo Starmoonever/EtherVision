@@ -83,7 +83,7 @@ export function CompoundPersonalPage({
       <AddressInput
         onSearch={onSearch}
         loading={false}
-        historyKey="search_history_compound"
+        historyKey={`search_history_compound_${personalVersion}`}
         placeholder="输入 Compound 钱包地址 (0x...)"
       />
       <ErrorNotice message={error} />

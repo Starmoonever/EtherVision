@@ -5,6 +5,7 @@ import type { MorphoPositionResponse } from '../../api/morpho';
 import type { ProtocolRootProps } from '../../shared/types/app';
 import { MorphoMarketPage } from './pages/MorphoMarketPage';
 import { MorphoPersonalPage } from './pages/MorphoPersonalPage';
+import './styles.css';
 
 interface MorphoState {
   data: MorphoPositionResponse | null;

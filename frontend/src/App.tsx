@@ -1,8 +1,8 @@
 import { useState } from 'react';
+import './App.css';
 import { AppHeader } from './shared/components/AppHeader';
 import { protocolRegistry } from './protocols/registry';
 import type { AppTab, ProtocolId } from './shared/types/app';
-import './App.css';
 
 export default function App() {
   const [protocol, setProtocol] = useState<ProtocolId>('aave');

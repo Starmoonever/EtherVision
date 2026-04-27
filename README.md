@@ -4,8 +4,8 @@
 
 当前仓库同时承载：
 
-- 后端采集与 API：Aave、Compound、Morpho、JustLend、MakerDAO
-- 前端看板：个人仓位分析、历史回放、市场风险图表
+- 后端采集与 API：Aave、Compound、Morpho、JustLend，以及当前前端已对接的 MakerDAO 仓位 API
+- 前端看板：个人仓位分析、历史回放、市场风险图表与 MakerDAO Vault 查询
 - PostgreSQL / ClickHouse 相关数据处理脚本与迁移
 
 如果你是第一次接手这个仓库，建议先看本文件，再进入 [backend/README.md](backend/README.md) 和 [frontend/README.md](frontend/README.md)。
@@ -54,13 +54,17 @@ aave_liquidation/
 ### JustLend
 
 - 当前仓位与个人风险视图
+- 宏观市场评估、市场状态与历史趋势
+- 大户 / 风险仓位分页分析
 - 交易回放与趋势分析
 - 说明文案与 effect 解析
 
 ### MakerDAO
 
-- Vault 当前仓位链上实时查询
-- ilk 缓存、Vault 快照与后续回放预留
+- 当前前端已接入 `GET /api/makerdao/position`
+- 支持按 owner / proxy / urn 地址查询 Vault 个人仓位
+- 展示 Vault 数量、总抵押、总债务、健康因子、清算比例与清算价格
+- 当前 MakerDAO 市场页仍是占位，后续拿到市场接口后再扩展宏观看板
 
 ## 运行前提
 

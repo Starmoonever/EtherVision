@@ -4,6 +4,7 @@ import type { CompoundMarket, CompoundUserPositionItem } from '../../api/compoun
 import type { ProtocolRootProps } from '../../shared/types/app';
 import { CompoundMarketPage } from './pages/CompoundMarketPage';
 import { CompoundPersonalPage } from './pages/CompoundPersonalPage';
+import './styles.css';
 
 interface CompoundVersionState {
   data: CompoundUserPositionItem[] | null;
@@ -21,6 +22,7 @@ const emptyCompoundState = (): CompoundVersionState => ({
   loading: false,
   notFound: false,
 });
+const emptyAddressByVersion = (): Record<'v2' | 'v3', string> => ({ v2: '', v3: '' });
 
 const compoundPositionCache = new Map<string, CompoundCacheEntry>();
 
@@ -47,10 +49,11 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
   const [compoundMarkets, setCompoundMarkets] = useState<CompoundMarket[]>([]);
   const [compoundMarketsVersion, setCompoundMarketsVersion] = useState<'v2' | 'v3' | null>(null);
   const [compoundMarket, setCompoundMarket] = useState<string>('all');
-  const [compoundAddress, setCompoundAddress] = useState('');
+  const [compoundAddressByVersion, setCompoundAddressByVersion] = useState(emptyAddressByVersion);
   const [compoundState, setCompoundState] = useState<CompoundVersionState>(emptyCompoundState());
 
   const activeCompoundMarketsVersion = activeTab === 'personal' ? personalVersion : marketVersion;
+  const compoundAddress = compoundAddressByVersion[personalVersion];
   const visibleMarkets = useMemo(
     () =>
       getVisibleCompoundMarkets(
@@ -73,7 +76,7 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
 
   useEffect(() => {
     setCompoundState(emptyCompoundState());
-  }, [compoundAddress, compoundMarket]);
+  }, [compoundAddress, compoundMarket, personalVersion]);
 
   useEffect(() => {
     if (!active) return;
@@ -212,7 +215,7 @@ export function CompoundProtocolRoot({ active, activeTab }: ProtocolRootProps) {
       error={error}
       onSearch={(address) => {
         setError('');
-        setCompoundAddress(address);
+        setCompoundAddressByVersion((prev) => ({ ...prev, [personalVersion]: address }));
       }}
       onVersionChange={setPersonalVersion}
       onMarketChange={setCompoundMarket}

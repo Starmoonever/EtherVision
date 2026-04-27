@@ -17,7 +17,36 @@ import { MorphoMarketTable, type MorphoSortMode } from '../components/MorphoMark
 import { MorphoVaultPage } from './MorphoVaultPage';
 
 const MORPHO_MARKETS_PAGE_SIZE = 10;
+const MORPHO_MARKET_QUERY_HISTORY_STORAGE_KEY = 'morpho_market_query_search_history';
+const MORPHO_MARKET_QUERY_HISTORY_LIMIT = 50;
 type MorphoMarketViewMode = 'mainstream' | 'query' | 'vaults';
+
+function loadMorphoMarketQueryHistory(): string[] {
+  try {
+    const stored = localStorage.getItem(MORPHO_MARKET_QUERY_HISTORY_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+      .slice(0, MORPHO_MARKET_QUERY_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveMorphoMarketQueryHistory(items: string[]): void {
+  try {
+    localStorage.setItem(
+      MORPHO_MARKET_QUERY_HISTORY_STORAGE_KEY,
+      JSON.stringify(items.slice(0, MORPHO_MARKET_QUERY_HISTORY_LIMIT)),
+    );
+  } catch {
+    // localStorage may be unavailable or full; market query should still work.
+  }
+}
 
 function isMorphoMarketId(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
@@ -97,7 +126,6 @@ export function MorphoMarketPage() {
     loading,
     error,
     fetchedAt,
-    fromCache,
     reload,
     totalPages: totalMarketPages,
   } = useMorphoData({
@@ -109,6 +137,9 @@ export function MorphoMarketPage() {
     collateral: marketFilters.collateral,
   });
   const [querySearch, setQuerySearch] = useState('');
+  const [marketQueryHistory, setMarketQueryHistory] = useState<string[]>(() =>
+    loadMorphoMarketQueryHistory(),
+  );
   const queriedMarketId = useMemo(() => {
     const keyword = querySearch.trim();
     return isMorphoMarketId(keyword) ? keyword.toLowerCase() : '';
@@ -184,10 +215,26 @@ export function MorphoMarketPage() {
     }
   }, []);
 
+  const rememberMarketQuery = useCallback((marketId: string) => {
+    const normalizedMarketId = marketId.trim().toLowerCase();
+    if (!normalizedMarketId || !isMorphoMarketId(normalizedMarketId)) return;
+    setMarketQueryHistory((current) => {
+      const next = [
+        normalizedMarketId,
+        ...current.filter((item) => item.toLowerCase() !== normalizedMarketId),
+      ].slice(0, MORPHO_MARKET_QUERY_HISTORY_LIMIT);
+      saveMorphoMarketQueryHistory(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if ((activeView !== 'query' && activeView !== 'vaults') || !queriedMarketId) return;
 
     setExpandedMarketId(queriedMarketId);
+    if (activeView === 'query') {
+      rememberMarketQuery(queriedMarketId);
+    }
     if (
       marketStateById[queriedMarketId] ||
       marketStateLoadingById[queriedMarketId] ||
@@ -204,6 +251,7 @@ export function MorphoMarketPage() {
     marketStateErrorById,
     marketStateLoadingById,
     queriedMarketId,
+    rememberMarketQuery,
   ]);
 
   useEffect(() => {
@@ -245,13 +293,31 @@ export function MorphoMarketPage() {
       const normalizedMarketId = marketId.toLowerCase();
       setQuerySearch(normalizedMarketId);
       setExpandedMarketId(normalizedMarketId);
+      if (
+        marketStateById[normalizedMarketId] ||
+        marketStateLoadingById[normalizedMarketId] ||
+        marketStateErrorById[normalizedMarketId]
+      ) {
+        return;
+      }
       void loadMarketState(
         mergeMorphoMarketData(createMarketConfigFromId(normalizedMarketId), null),
-        true,
       );
     },
-    [loadMarketState],
+    [loadMarketState, marketStateById, marketStateErrorById, marketStateLoadingById],
   );
+  const clearMarketQueryHistory = useCallback(() => {
+    setMarketQueryHistory([]);
+    saveMorphoMarketQueryHistory([]);
+  }, []);
+  const submitMarketQuery = useCallback(() => {
+    const normalizedMarketId = querySearch.trim().toLowerCase();
+    if (!isMorphoMarketId(normalizedMarketId)) return;
+    setQuerySearch(normalizedMarketId);
+    setExpandedMarketId(normalizedMarketId);
+    rememberMarketQuery(normalizedMarketId);
+    void loadMarketState(mergeMorphoMarketData(createMarketConfigFromId(normalizedMarketId), null));
+  }, [loadMarketState, querySearch, rememberMarketQuery]);
 
   const refreshedAtText = fetchedAt
     ? new Date(fetchedAt).toLocaleString('zh-CN', {
@@ -325,6 +391,14 @@ export function MorphoMarketPage() {
           pageSize={MORPHO_MARKETS_PAGE_SIZE}
           onPageChange={setMarketPage}
           tableError={error}
+          statusMeta={
+            <div className="morpho-market-table-status">
+              <span>更新 {refreshedAtText}</span>
+              <button type="button" onClick={() => void handleReload()}>
+                刷新
+              </button>
+            </div>
+          }
         />
       ) : activeView === 'query' ? (
         <MorphoMarketTable
@@ -337,7 +411,11 @@ export function MorphoMarketPage() {
           subtitle="输入完整 market id 后直接请求 state 接口，并返回这一个市场的详情。"
           search={querySearch}
           onSearchChange={setQuerySearch}
+          onSearchSubmit={submitMarketQuery}
           searchPlaceholder="输入完整 Morpho market id"
+          searchHistoryItems={marketQueryHistory}
+          onSearchHistorySelect={setQuerySearch}
+          onClearSearchHistory={clearMarketQueryHistory}
           sortMode={sortMode}
           onSortModeChange={setSortMode}
           totalMarkets={queryMarkets.length}
@@ -349,6 +427,24 @@ export function MorphoMarketPage() {
           showPagination={false}
           showTableHeaderWhenEmpty={false}
           emptyText={queryEmptyText}
+          statusMeta={
+            <div className="morpho-market-table-status">
+              <span>查询默认使用缓存</span>
+              {queriedMarketId ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void loadMarketState(
+                      mergeMorphoMarketData(createMarketConfigFromId(queriedMarketId), null),
+                      true,
+                    )
+                  }
+                >
+                  刷新
+                </button>
+              ) : null}
+            </div>
+          }
         />
       ) : (
         <MorphoVaultPage
@@ -363,22 +459,6 @@ export function MorphoMarketPage() {
           onSortModeChange={setSortMode}
         />
       )}
-
-      {activeView === 'mainstream' ? (
-        <div className="card morpho-detail-card morpho-market-toolbar">
-          <div className="morpho-market-toolbar-copy">
-            <strong>数据状态</strong>
-            <span>
-              最近更新 {refreshedAtText} {fromCache ? '· 缓存命中' : '· 实时拉取'}
-            </span>
-          </div>
-          <div className="morpho-market-toolbar-actions">
-            <button type="button" className="switch-btn" onClick={() => void handleReload()}>
-              刷新数据
-            </button>
-          </div>
-        </div>
-      ) : null}
     </>
   );
 }
