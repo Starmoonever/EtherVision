@@ -46,6 +46,25 @@ export interface MakerDaoPositionResponse {
   positions: MakerDaoVaultPosition[];
 }
 
+export interface MakerDaoIlkItem {
+  ilk: string;
+  vault_type: string;
+  gem_symbol: string | null;
+  gem_address: string | null;
+  debt_ceiling?: string | null;
+  liquidation_ratio?: string | null;
+  liquidation_penalty?: string | null;
+  stability_fee?: string | null;
+  dust?: string | null;
+  updated_at: string;
+}
+
+export interface MakerDaoIlkListResponse {
+  chain: string;
+  protocol: string;
+  ilks: MakerDaoIlkItem[];
+}
+
 export interface MakerDaoPositionParams {
   address: string;
   vaultId?: number | null;
@@ -53,11 +72,15 @@ export interface MakerDaoPositionParams {
   includeEmpty?: boolean;
 }
 
+const MAKERDAO_ILKS_CACHE_KEY = 'makerdao_ilks';
+
 const makerDaoPositionCache = new Map<
   string,
   { fetchedAt: number; data: MakerDaoPositionResponse }
 >();
 const makerDaoPositionInflight = new Map<string, Promise<MakerDaoPositionResponse>>();
+const makerDaoIlksCache = new Map<string, { fetchedAt: number; data: MakerDaoIlkListResponse }>();
+const makerDaoIlksInflight = new Map<string, Promise<MakerDaoIlkListResponse>>();
 
 function buildMakerDaoPositionKey({
   address,
@@ -129,6 +152,54 @@ export async function fetchMakerDaoPositionWithMeta(
     });
 
   makerDaoPositionInflight.set(key, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export async function fetchMakerDaoIlks(): Promise<MakerDaoIlkListResponse> {
+  const result = await fetchMakerDaoIlksWithMeta();
+  return result.data;
+}
+
+export async function fetchMakerDaoIlksWithMeta(): Promise<DataWithMeta<MakerDaoIlkListResponse>> {
+  const cached = makerDaoIlksCache.get(MAKERDAO_ILKS_CACHE_KEY);
+  if (cached && Date.now() - cached.fetchedAt < MAKERDAO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  const inflight = makerDaoIlksInflight.get(MAKERDAO_ILKS_CACHE_KEY);
+  if (inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const request = apiFetch<MakerDaoIlkListResponse>('/makerdao/ilks')
+    .then((data) => {
+      makerDaoIlksCache.set(MAKERDAO_ILKS_CACHE_KEY, { fetchedAt: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      makerDaoIlksInflight.delete(MAKERDAO_ILKS_CACHE_KEY);
+    });
+
+  makerDaoIlksInflight.set(MAKERDAO_ILKS_CACHE_KEY, request);
   const data = await request;
   return {
     data,
