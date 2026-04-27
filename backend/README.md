@@ -257,7 +257,7 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
 - `loan.makerdao_current_vault_positions`
   - 普通用户 Vault 当前仓位缓存；当前 `/api/makerdao/position` 读表优先，未命中时链上读取并回写
 - `loan.makerdao_system_urn_positions_current`
-  - Maker/Sky 系统 urn 当前仓位缓存，例如 `ALLOCATOR-*`、`DIRECT-*` 等非普通用户 Vault；当前 `/api/makerdao/system/position` 读表优先，未命中时链上读取并回写
+  - Maker/Sky 系统 urn 当前仓位缓存，例如 `ALLOCATOR-*`、`DIRECT-*` 等非普通用户 Vault；当前 `/api/makerdao/system/position` 可仅按 `urn` 读表，传入 `ilk` 时缓存未命中可链上读取并回写
 - `loan.makerdao_position_snapshots`
   - 预留交易级或块级回放快照
 
@@ -279,9 +279,9 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
   - owner / proxy 查询优先走 `CDP_MANAGER` 与 `GET_CDPS`，可返回带 `vault_id` 的标准 Vault
   - 不再默认把 `address` 当作裸 urn 兜底查询，避免 `ALLOCATOR-*` 等系统仓位混入普通用户仓位
 - `GET /api/makerdao/system/position`
-  - 必填 `urn` 与 `ilk`
+  - 必填 `urn`；`ilk` 可选，主要用于兼容旧调用或缓存未命中时链上兜底
   - 用于查询 Maker/Sky 系统 urn 仓位，例如 `ALLOCATOR-SPARK-A`
-  - 优先读取 `loan.makerdao_system_urn_positions_current`；缓存未命中时按单个 `urn + ilk` 链上读取并回写缓存表
+  - 优先读取 `loan.makerdao_system_urn_positions_current`；仅传 `urn` 时按该 urn 返回最新系统仓位缓存；若同时传入 `ilk`，缓存未命中时按单个 `urn + ilk` 链上读取并回写缓存表
   - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
 

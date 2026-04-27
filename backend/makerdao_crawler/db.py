@@ -323,11 +323,17 @@ async def fetch_system_urn_position(
     pool: asyncpg.Pool,
     *,
     urn: str,
-    ilk: str,
+    ilk: str | None = None,
 ) -> asyncpg.Record | None:
+    params: list[Any] = [urn]
+    ilk_filter = ""
+    if ilk:
+        params.append(ilk)
+        ilk_filter = "AND ilk = $2"
+
     async with pool.acquire() as conn:
         return await conn.fetchrow(
-            """
+            f"""
             SELECT
                 position_uid,
                 chain,
@@ -355,12 +361,11 @@ async def fetch_system_urn_position(
                 updated_at
             FROM loan.makerdao_system_urn_positions_current
             WHERE lower(urn_address) = lower($1)
-              AND ilk = $2
+              {ilk_filter}
             ORDER BY snapshot_at DESC
             LIMIT 1
             """,
-            urn,
-            ilk,
+            *params,
         )
 
 
