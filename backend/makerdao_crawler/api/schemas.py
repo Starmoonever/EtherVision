@@ -110,3 +110,70 @@ class MakerDaoSystemUrnPositionResponse(BaseModel):
     health_factor: str | None = Field(description="健康因子。")
     is_healthy: bool = Field(description="仓位是否健康。")
     data_source: str = Field(description="数据来源。")
+
+
+class MakerDaoSystemUrnPositionsResponse(BaseModel):
+    chain: str = Field(description="链标识。")
+    protocol: str = Field(description="协议标识。")
+    urn_address: str = Field(description="查询的系统 urn 地址。")
+    total_positions: int = Field(description="命中的系统仓位数量。")
+    ilks: list[str] = Field(description="命中的 MakerDAO ilk 列表。")
+    positions: list[MakerDaoSystemUrnPositionResponse] = Field(
+        description="系统 urn 当前仓位列表。"
+    )
+
+
+class MakerDaoPositionListItemResponse(BaseModel):
+    position_uid: str = Field(description="仓位唯一标识。")
+    position_scope: str = Field(description="仓位范围：user 或 system。")
+    vault_id: int | None = Field(description="Vault 编号；系统 urn 仓位为空。")
+    vault_type: str = Field(description="仓位类型。")
+    ilk: str = Field(description="MakerDAO ilk 名称。")
+    urn_address: str = Field(description="urn 地址。")
+    owner_address: str | None = Field(description="owner 地址；系统 urn 仓位为空。")
+    proxy_address: str | None = Field(description="proxy 地址；系统 urn 仓位为空。")
+    block_number: int | None = Field(description="快照区块号。")
+    block_timestamp: str = Field(description="快照区块时间。")
+    snapshot_at: str = Field(description="缓存写入时间。")
+    collateral_symbol: str | None = Field(description="抵押资产符号。")
+    collateral_token_address: str | None = Field(description="抵押资产地址。")
+    collateral_amount: str = Field(description="抵押数量。")
+    collateral_value_usd: str | None = Field(description="抵押价值（USD）。")
+    debt_symbol: str = Field(description="债务资产符号。")
+    debt_token_address: str | None = Field(description="债务资产地址。")
+    debt_amount: str = Field(description="债务数量。")
+    debt_value_usd: str | None = Field(description="债务价值（USD）。")
+    liquidation_ratio: str | None = Field(description="清算比率。")
+    liquidation_price_usd: str | None = Field(description="清算价格（USD）。")
+    health_factor: str | None = Field(description="健康因子。")
+    is_healthy: bool = Field(description="仓位是否健康。")
+    data_source: str = Field(description="数据来源。")
+
+
+class MakerDaoPositionsAggregatesResponse(BaseModel):
+    total_positions: int = Field(description="过滤后仓位总数。")
+    user_positions: int = Field(description="过滤后普通用户 Vault 数量。")
+    system_positions: int = Field(description="过滤后系统 urn 仓位数量。")
+    unhealthy_positions: int = Field(description="过滤后非健康仓位数量。")
+    total_collateral_value_usd: str = Field(description="过滤后抵押总价值（USD）。")
+    total_debt_value_usd: str = Field(description="过滤后债务总价值（USD）。")
+    min_health_factor: str | None = Field(description="过滤后最小健康因子。")
+    max_health_factor: str | None = Field(description="过滤后最大健康因子。")
+
+
+class MakerDaoPositionsResponse(BaseModel):
+    chain: str = Field(description="链标识。")
+    protocol: str = Field(description="协议标识。")
+    items: list[MakerDaoPositionListItemResponse] = Field(
+        description="当前仓位概览列表。"
+    )
+    page: int = Field(description="当前页码，从 1 开始。")
+    page_size: int = Field(description="分页大小。")
+    total: int = Field(description="命中的总仓位数。")
+    sort_by: str = Field(description="排序字段。")
+    order: str = Field(description="排序方向。")
+    position_scope: str = Field(description="仓位范围过滤：all、user 或 system。")
+    include_empty: bool = Field(description="是否包含空仓位。")
+    aggregates: MakerDaoPositionsAggregatesResponse = Field(
+        description="基于过滤后全集的聚合指标。"
+    )

@@ -25,8 +25,9 @@ from ..constants import (
 )
 from ..db import (
     fetch_current_vault_positions,
+    fetch_current_positions_page,
     fetch_ilks,
-    fetch_system_urn_position,
+    fetch_system_urn_positions,
     upsert_current_vault_position,
     upsert_ilk,
     upsert_system_urn_position,
@@ -36,8 +37,12 @@ from .schemas import (
     MakerDaoIlkListResponse,
     MakerDaoIlkOverviewItem,
     MakerDaoPositionAssetResponse,
+    MakerDaoPositionListItemResponse,
+    MakerDaoPositionsAggregatesResponse,
+    MakerDaoPositionsResponse,
     MakerDaoScaffoldStatusResponse,
     MakerDaoSystemUrnPositionResponse,
+    MakerDaoSystemUrnPositionsResponse,
     MakerDaoVaultPositionItemResponse,
     MakerDaoVaultPositionResponse,
 )
@@ -151,6 +156,15 @@ ILK_REGISTRY_ABI = [
 ]
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+_POSITIONS_SORT_FIELDS = {
+    "health_factor",
+    "collateral_value_usd",
+    "debt_value_usd",
+    "liquidation_price_usd",
+    "snapshot_at",
+    "ilk",
+}
+_POSITIONS_SCOPES = {"all", "user", "system"}
 
 
 class _MakerDaoContracts(NamedTuple):
@@ -493,41 +507,37 @@ async def get_user_vault_position(
     )
 
 
-async def get_system_urn_position(
+async def get_system_urn_positions(
     pool: Any,
     *,
     urn: str,
-    ilk: str,
     w3: Any = None,
-) -> MakerDaoSystemUrnPositionResponse:
+) -> MakerDaoSystemUrnPositionsResponse:
     normalized_urn = _normalize_evm_address(urn)
     if not normalized_urn:
         raise HTTPException(status_code=400, detail="invalid EVM address")
-    normalized_ilk = _normalize_ilk(ilk)
-    if not normalized_ilk:
-        raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
 
-    row = await fetch_system_urn_position(
+    rows = await fetch_system_urn_positions(
         pool,
         urn=normalized_urn,
-        ilk=normalized_ilk,
     )
-    if row is not None:
-        return _build_system_urn_position_from_row(row)
+    if rows:
+        positions = [_build_system_urn_position_from_row(row) for row in rows]
+        return _build_system_urn_positions_response(normalized_urn, positions)
 
-    item = await _fetch_live_system_urn_position(
+    positions = await _fetch_live_system_urn_positions(
         urn=normalized_urn,
-        ilk=normalized_ilk,
         w3=w3,
     )
-    if item is None:
+    if not positions:
         raise HTTPException(
             status_code=404,
             detail="MakerDAO system urn position not found",
         )
-    await _ensure_ilk_cached(pool, item.ilk, w3=w3)
-    await upsert_system_urn_position(pool, _system_urn_position_to_payload(item))
-    return item
+    for item in positions:
+        await _ensure_ilk_cached(pool, item.ilk, w3=w3)
+        await upsert_system_urn_position(pool, _system_urn_position_to_payload(item))
+    return _build_system_urn_positions_response(normalized_urn, positions)
 
 
 async def get_cached_user_vault_position(
@@ -556,6 +566,63 @@ async def get_cached_user_vault_position(
         address=normalized_address,
         total_positions=len(positions),
         positions=positions,
+    )
+
+
+async def get_positions(
+    pool: Any,
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str,
+    order: str,
+    position_scope: str = "all",
+    ilk: str | None = None,
+    is_healthy: bool | None = None,
+    include_empty: bool = False,
+) -> MakerDaoPositionsResponse:
+    normalized_sort_by = sort_by.lower()
+    if normalized_sort_by not in _POSITIONS_SORT_FIELDS:
+        raise HTTPException(status_code=400, detail="invalid sort_by")
+
+    normalized_order = order.lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="invalid order")
+
+    normalized_scope = position_scope.lower()
+    if normalized_scope not in _POSITIONS_SCOPES:
+        raise HTTPException(status_code=400, detail="invalid position_scope")
+
+    normalized_ilk = None
+    if ilk is not None:
+        normalized_ilk = _normalize_ilk(ilk)
+        if not normalized_ilk:
+            raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+
+    rows, summary = await fetch_current_positions_page(
+        pool,
+        page_size=page_size,
+        offset=(page - 1) * page_size,
+        sort_by=normalized_sort_by,
+        order=normalized_order,
+        position_scope=normalized_scope,
+        ilk=normalized_ilk,
+        is_healthy=is_healthy,
+        include_empty=include_empty,
+    )
+    aggregates = _build_positions_aggregates(summary)
+    return MakerDaoPositionsResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
+        items=[_build_position_list_item(row) for row in rows],
+        page=page,
+        page_size=page_size,
+        total=aggregates.total_positions,
+        sort_by=normalized_sort_by,
+        order=normalized_order,
+        position_scope=normalized_scope,
+        include_empty=include_empty,
+        aggregates=aggregates,
     )
 
 
@@ -861,6 +928,55 @@ def _build_position_item(row: Any) -> MakerDaoVaultPositionItemResponse:
     )
 
 
+def _build_position_list_item(row: Any) -> MakerDaoPositionListItemResponse:
+    return MakerDaoPositionListItemResponse(
+        position_uid=str(_row_get(row, "position_uid") or ""),
+        position_scope=str(_row_get(row, "position_scope") or "user"),
+        vault_id=_row_get(row, "vault_id"),
+        vault_type=str(_row_get(row, "vault_type") or MAKERDAO_DEFAULT_VAULT_TYPE),
+        ilk=str(_row_get(row, "ilk") or ""),
+        urn_address=str(_row_get(row, "urn_address") or ""),
+        owner_address=_row_get(row, "owner_address"),
+        proxy_address=_row_get(row, "proxy_address"),
+        block_number=_row_get(row, "block_number"),
+        block_timestamp=_record_ts(_row_get(row, "block_timestamp")),
+        snapshot_at=_record_ts(_row_get(row, "snapshot_at")),
+        collateral_symbol=_row_get(row, "collateral_symbol"),
+        collateral_token_address=_row_get(row, "collateral_token_address"),
+        collateral_amount=_fmt_decimal(_row_get(row, "collateral_amount")),
+        collateral_value_usd=_fmt_optional_decimal(
+            _row_get(row, "collateral_value_usd")
+        ),
+        debt_symbol=str(_row_get(row, "debt_symbol") or "DAI"),
+        debt_token_address=_row_get(row, "debt_token_address"),
+        debt_amount=_fmt_decimal(_row_get(row, "debt_amount")),
+        debt_value_usd=_fmt_optional_decimal(_row_get(row, "debt_value_usd")),
+        liquidation_ratio=_fmt_optional_decimal(_row_get(row, "liquidation_ratio")),
+        liquidation_price_usd=_fmt_optional_decimal(
+            _row_get(row, "liquidation_price_usd")
+        ),
+        health_factor=_fmt_optional_decimal(_row_get(row, "health_factor")),
+        is_healthy=bool(_row_get(row, "is_healthy")),
+        data_source="cache",
+    )
+
+
+def _build_positions_aggregates(row: Any) -> MakerDaoPositionsAggregatesResponse:
+    row = row or {}
+    return MakerDaoPositionsAggregatesResponse(
+        total_positions=int(_row_get(row, "total_count") or 0),
+        user_positions=int(_row_get(row, "user_positions") or 0),
+        system_positions=int(_row_get(row, "system_positions") or 0),
+        unhealthy_positions=int(_row_get(row, "unhealthy_positions") or 0),
+        total_collateral_value_usd=_fmt_decimal(
+            _row_get(row, "total_collateral_value_usd") or 0
+        ),
+        total_debt_value_usd=_fmt_decimal(_row_get(row, "total_debt_value_usd") or 0),
+        min_health_factor=_fmt_optional_decimal(_row_get(row, "min_health_factor")),
+        max_health_factor=_fmt_optional_decimal(_row_get(row, "max_health_factor")),
+    )
+
+
 def _dedupe_vault_position_items(
     positions: list[MakerDaoVaultPositionItemResponse],
 ) -> list[MakerDaoVaultPositionItemResponse]:
@@ -926,12 +1042,11 @@ def _vault_position_item_to_payload(
     }
 
 
-async def _fetch_live_system_urn_position(
+async def _fetch_live_system_urn_positions(
     *,
     urn: str,
-    ilk: str,
     w3: Any,
-) -> MakerDaoSystemUrnPositionResponse | None:
+) -> list[MakerDaoSystemUrnPositionResponse]:
     own_w3 = False
     active_w3 = w3
     try:
@@ -946,26 +1061,31 @@ async def _fetch_live_system_urn_position(
         latest_timestamp = latest_block.get("timestamp")
         if latest_number is None or latest_timestamp is None:
             raise RuntimeError("latest block missing timestamp or number")
-        item = await _build_live_position_item(
-            active_w3,
-            contracts,
-            {
-                "vault_id": None,
-                "owner_address": None,
-                "proxy_address": None,
-                "urn_address": AsyncWeb3.to_checksum_address(urn),
-                "ilk": ilk,
-            },
-            block_number=int(latest_number),
-            block_timestamp=datetime.fromtimestamp(
-                int(latest_timestamp),
-                tz=timezone.utc,
-            ),
-            snapshot_at=datetime.now(timezone.utc),
+        block_timestamp = datetime.fromtimestamp(
+            int(latest_timestamp),
+            tz=timezone.utc,
         )
-        if Decimal(item.collateral_amount) == 0 and Decimal(item.debt_amount) == 0:
-            return None
-        return _system_urn_position_from_vault_item(item)
+        snapshot_at = datetime.now(timezone.utc)
+        positions: list[MakerDaoSystemUrnPositionResponse] = []
+        for ilk in await _load_ilk_names(active_w3, contracts):
+            item = await _build_live_position_item(
+                active_w3,
+                contracts,
+                {
+                    "vault_id": None,
+                    "owner_address": None,
+                    "proxy_address": None,
+                    "urn_address": AsyncWeb3.to_checksum_address(urn),
+                    "ilk": ilk,
+                },
+                block_number=int(latest_number),
+                block_timestamp=block_timestamp,
+                snapshot_at=snapshot_at,
+            )
+            if Decimal(item.collateral_amount) == 0 and Decimal(item.debt_amount) == 0:
+                continue
+            positions.append(_system_urn_position_from_vault_item(item))
+        return positions
     finally:
         if own_w3 and isinstance(active_w3, AsyncWeb3):
             try:
@@ -1000,6 +1120,25 @@ def _system_urn_position_from_vault_item(
         health_factor=item.health_factor,
         is_healthy=item.is_healthy,
         data_source=item.data_source,
+    )
+
+
+def _build_system_urn_positions_response(
+    urn: str,
+    positions: list[MakerDaoSystemUrnPositionResponse],
+) -> MakerDaoSystemUrnPositionsResponse:
+    positions = sorted(
+        positions,
+        key=lambda item: _parse_record_ts(item.snapshot_at),
+        reverse=True,
+    )
+    return MakerDaoSystemUrnPositionsResponse(
+        chain=MAKERDAO_CHAIN,
+        protocol=MAKERDAO_PROTOCOL,
+        urn_address=urn,
+        total_positions=len(positions),
+        ilks=[position.ilk for position in positions],
+        positions=positions,
     )
 
 

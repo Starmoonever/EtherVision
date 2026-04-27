@@ -278,10 +278,18 @@ MakerDAO 模块已接入统一 API 与 CLI。当前第一阶段支持 Vault 当�
   - 缓存未命中时读取 Ethereum 主网 `CDP_MANAGER`、`GET_CDPS`、`PROXY_REGISTRY`、`Vat`、`Spotter`、`Dog`、`ILK_REGISTRY` 并回写缓存表
   - owner / proxy 查询优先走 `CDP_MANAGER` 与 `GET_CDPS`，可返回带 `vault_id` 的标准 Vault
   - 不再默认把 `address` 当作裸 urn 兜底查询，避免 `ALLOCATOR-*` 等系统仓位混入普通用户仓位
+- `GET /api/makerdao/positions`
+  - 返回当前 MakerDAO 仓位概览，数据来自 `loan.makerdao_current_vault_positions` 与 `loan.makerdao_system_urn_positions_current`
+  - 支持分页参数 `page`、`page_size`
+  - 支持 `position_scope=all|user|system` 区分普通用户 Vault 与系统 urn 仓位
+  - 支持按 `ilk`、`is_healthy`、`include_empty` 过滤；该接口不支持按单个地址过滤
+  - 支持按 `health_factor`、`collateral_value_usd`、`debt_value_usd`、`liquidation_price_usd`、`snapshot_at`、`ilk` 排序
+  - 返回基于过滤后全集的聚合指标，包括仓位数量、用户/系统仓位数量、非健康仓位数量、抵押总价值、债务总价值与健康因子范围
 - `GET /api/makerdao/system/position`
-  - 必填 `urn` 与 `ilk`
-  - 用于查询 Maker/Sky 系统 urn 仓位，例如 `ALLOCATOR-SPARK-A`
-  - 优先读取 `loan.makerdao_system_urn_positions_current`；缓存未命中时按单个 `urn + ilk` 链上读取并回写缓存表
+  - 必填 `urn`，不再要求调用方传 `ilk`
+  - 用于查询 Maker/Sky 系统 urn 仓位，例如 `ALLOCATOR-*`、`DIRECT-*`
+  - 响应按同一个 `urn` 返回全部命中的系统 ilk，字段包含 `ilks` 与 `positions`
+  - 优先读取 `loan.makerdao_system_urn_positions_current`；缓存未命中时按该 urn 扫描链上 ilk，读取非空仓位并回写缓存表
   - 主流合约地址和 ilk 元数据在代码中有默认值；`config.yaml` 中的 `vat_address`、`spotter_address`、`dog_address` 仅作为覆盖
 - `uv run makerdao-crawler init-db`
 - `uv run python scripts/makerdao/backfill_current_positions_from_actions.py`

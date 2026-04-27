@@ -13,7 +13,11 @@ from makerdao_crawler.api.schemas import (
     MakerDaoIlkListResponse,
     MakerDaoIlkOverviewItem,
     MakerDaoPositionAssetResponse,
+    MakerDaoPositionListItemResponse,
+    MakerDaoPositionsAggregatesResponse,
+    MakerDaoPositionsResponse,
     MakerDaoSystemUrnPositionResponse,
+    MakerDaoSystemUrnPositionsResponse,
     MakerDaoVaultPositionItemResponse,
     MakerDaoVaultPositionResponse,
 )
@@ -35,15 +39,18 @@ class _AcquireCtx:
 
 
 class _FakeConn:
-    def __init__(self, ilks=None, positions=None):
+    def __init__(self, ilks=None, positions=None, system_positions=None):
         self._ilks = ilks or []
         self._positions = positions or []
+        self._system_positions = system_positions or []
 
     async def fetch(self, sql, *_args):
         if "FROM loan.makerdao_ilks_current" in sql:
             return self._ilks
         if "FROM loan.makerdao_current_vault_positions" in sql:
             return self._positions
+        if "FROM loan.makerdao_system_urn_positions_current" in sql:
+            return self._system_positions
         return []
 
 
@@ -89,8 +96,10 @@ class _FakeWeb3:
         self.eth = _FakeEth(contracts)
 
 
-def _build_client(*, ilks=None, positions=None):
-    fake_pool = _FakePool(_FakeConn(ilks=ilks, positions=positions))
+def _build_client(*, ilks=None, positions=None, system_positions=None):
+    fake_pool = _FakePool(
+        _FakeConn(ilks=ilks, positions=positions, system_positions=system_positions)
+    )
 
     async def _override_pool():
         return fake_pool
@@ -288,12 +297,11 @@ def test_position_route_returns_live_vault_positions(monkeypatch) -> None:
 def test_system_position_route_returns_system_urn_position(monkeypatch) -> None:
     ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
 
-    async def _fake_get_system_urn_position(pool, **kwargs):
+    async def _fake_get_system_urn_positions(pool, **kwargs):
         assert pool is not None
         assert kwargs["urn"] == "0x691a6c29e9e96dd897718305427ad5d534db16ba"
-        assert kwargs["ilk"] == "ALLOCATOR-SPARK-A"
         assert "w3" in kwargs
-        return MakerDaoSystemUrnPositionResponse(
+        item = MakerDaoSystemUrnPositionResponse(
             chain="ethereum",
             protocol="makerdao",
             position_type="system_urn",
@@ -320,11 +328,19 @@ def test_system_position_route_returns_system_urn_position(monkeypatch) -> None:
             is_healthy=True,
             data_source="cache",
         )
+        return MakerDaoSystemUrnPositionsResponse(
+            chain="ethereum",
+            protocol="makerdao",
+            urn_address="0x691a6c29e9e96dd897718305427Ad5D534db16BA",
+            total_positions=1,
+            ilks=["ALLOCATOR-SPARK-A"],
+            positions=[item],
+        )
 
     monkeypatch.setattr(
         makerdao_service,
-        "get_system_urn_position",
-        _fake_get_system_urn_position,
+        "get_system_urn_positions",
+        _fake_get_system_urn_positions,
     )
 
     with _build_client() as client:
@@ -332,15 +348,194 @@ def test_system_position_route_returns_system_urn_position(monkeypatch) -> None:
             "/api/makerdao/system/position",
             params={
                 "urn": "0x691a6c29e9e96dd897718305427ad5d534db16ba",
-                "ilk": "ALLOCATOR-SPARK-A",
             },
         )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["position_type"] == "system_urn"
-    assert payload["ilk"] == "ALLOCATOR-SPARK-A"
-    assert "vault_id" not in payload
+    assert payload["total_positions"] == 1
+    assert payload["ilks"] == ["ALLOCATOR-SPARK-A"]
+    assert payload["positions"][0]["position_type"] == "system_urn"
+    assert payload["positions"][0]["ilk"] == "ALLOCATOR-SPARK-A"
+    assert "vault_id" not in payload["positions"][0]
+
+
+def test_positions_route_returns_filtered_overview(monkeypatch) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_positions(pool, **kwargs):
+        assert pool is not None
+        assert kwargs == {
+            "page": 2,
+            "page_size": 10,
+            "sort_by": "debt_value_usd",
+            "order": "desc",
+            "position_scope": "system",
+            "ilk": "ALLOCATOR-SPARK-A",
+            "is_healthy": True,
+            "include_empty": False,
+        }
+        return MakerDaoPositionsResponse(
+            chain="ethereum",
+            protocol="makerdao",
+            items=[
+                MakerDaoPositionListItemResponse(
+                    position_uid=(
+                        "ethereum:makerdao:system_urn:"
+                        "0x691a6c29e9e96dd897718305427ad5d534db16ba:"
+                        "ALLOCATOR-SPARK-A"
+                    ),
+                    position_scope="system",
+                    vault_id=None,
+                    vault_type="system_urn",
+                    ilk="ALLOCATOR-SPARK-A",
+                    urn_address="0x691a6c29e9e96dd897718305427Ad5D534db16BA",
+                    owner_address=None,
+                    proxy_address=None,
+                    block_number=22334455,
+                    block_timestamp=ts.isoformat().replace("+00:00", "Z"),
+                    snapshot_at=ts.isoformat().replace("+00:00", "Z"),
+                    collateral_symbol="ALLOCATOR-SPARK-A",
+                    collateral_token_address=None,
+                    collateral_amount="1000000000000",
+                    collateral_value_usd="1000000000000",
+                    debt_symbol="DAI",
+                    debt_token_address="0x6B175474E89094C44Da98b954EedeAC495271d0F",
+                    debt_amount="3995880969.538352758976778164",
+                    debt_value_usd="3995880969.53835276",
+                    liquidation_ratio="1",
+                    liquidation_price_usd="0.00399588",
+                    health_factor="250.257704777309915454",
+                    is_healthy=True,
+                    data_source="cache",
+                )
+            ],
+            page=2,
+            page_size=10,
+            total=1,
+            sort_by="debt_value_usd",
+            order="desc",
+            position_scope="system",
+            include_empty=False,
+            aggregates=MakerDaoPositionsAggregatesResponse(
+                total_positions=1,
+                user_positions=0,
+                system_positions=1,
+                unhealthy_positions=0,
+                total_collateral_value_usd="1000000000000",
+                total_debt_value_usd="3995880969.53835276",
+                min_health_factor="250.257704777309915454",
+                max_health_factor="250.257704777309915454",
+            ),
+        )
+
+    monkeypatch.setattr(makerdao_service, "get_positions", _fake_get_positions)
+
+    with _build_client() as client:
+        response = client.get(
+            "/api/makerdao/positions",
+            params={
+                "page": 2,
+                "page_size": 10,
+                "sort_by": "debt_value_usd",
+                "order": "desc",
+                "position_scope": "system",
+                "ilk": "ALLOCATOR-SPARK-A",
+                "is_healthy": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["position_scope"] == "system"
+    assert payload["items"][0]["position_scope"] == "system"
+    assert payload["items"][0]["vault_id"] is None
+    assert payload["aggregates"]["system_positions"] == 1
+    assert payload["aggregates"]["total_debt_value_usd"] == "3995880969.53835276"
+
+
+@pytest.mark.asyncio
+async def test_get_positions_normalizes_filters_and_builds_aggregates(
+    monkeypatch,
+) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+
+    async def _fake_fetch_current_positions_page(pool, **kwargs):
+        assert pool == "pool"
+        assert kwargs == {
+            "page_size": 25,
+            "offset": 25,
+            "sort_by": "health_factor",
+            "order": "asc",
+            "position_scope": "user",
+            "ilk": "ETH-A",
+            "is_healthy": False,
+            "include_empty": False,
+        }
+        return (
+            [
+                {
+                    "position_uid": "ethereum:makerdao:12345",
+                    "position_scope": "user",
+                    "vault_id": 12345,
+                    "chain": "ethereum",
+                    "protocol": "makerdao",
+                    "vault_type": "vault",
+                    "ilk": "ETH-A",
+                    "urn_address": "0x1111111111111111111111111111111111111111",
+                    "owner_address": "0x2222222222222222222222222222222222222222",
+                    "proxy_address": None,
+                    "snapshot_at": ts,
+                    "block_timestamp": ts,
+                    "block_number": 22334455,
+                    "collateral_symbol": "WETH",
+                    "collateral_token_address": None,
+                    "collateral_amount": Decimal("1.5"),
+                    "collateral_value_usd": Decimal("4500"),
+                    "debt_symbol": "DAI",
+                    "debt_token_address": None,
+                    "debt_amount": Decimal("5000"),
+                    "debt_value_usd": Decimal("5000"),
+                    "liquidation_ratio": Decimal("1.45"),
+                    "liquidation_price_usd": Decimal("4833.33333333"),
+                    "health_factor": Decimal("0.9"),
+                    "is_healthy": False,
+                }
+            ],
+            {
+                "total_count": 3,
+                "user_positions": 3,
+                "system_positions": 0,
+                "unhealthy_positions": 1,
+                "total_collateral_value_usd": Decimal("12000"),
+                "total_debt_value_usd": Decimal("9000"),
+                "min_health_factor": Decimal("0.9"),
+                "max_health_factor": Decimal("2.1"),
+            },
+        )
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "fetch_current_positions_page",
+        _fake_fetch_current_positions_page,
+    )
+
+    result = await makerdao_service.get_positions(
+        "pool",
+        page=2,
+        page_size=25,
+        sort_by="health_factor",
+        order="asc",
+        position_scope="user",
+        ilk="eth-a",
+        is_healthy=False,
+    )
+
+    assert result.total == 3
+    assert result.items[0].position_uid == "ethereum:makerdao:12345"
+    assert result.items[0].is_healthy is False
+    assert result.aggregates.unhealthy_positions == 1
+    assert result.aggregates.total_collateral_value_usd == "12000"
 
 
 def test_fmt_decimal_handles_values_larger_than_default_decimal_precision() -> None:
@@ -658,6 +853,75 @@ async def test_get_user_position_dedupes_cached_cdp_and_direct_urn_rows(
     assert result.total_positions == 1
     assert result.positions[0].vault_uid == "ethereum:makerdao:31602"
     assert result.positions[0].vault_id == 31602
+
+
+@pytest.mark.asyncio
+async def test_get_system_urn_positions_returns_all_cached_ilks_without_live_fetch(
+    monkeypatch,
+) -> None:
+    urn = "0x691a6c29e9e96dd897718305427Ad5D534db16BA"
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    base_row = {
+        "chain": "ethereum",
+        "protocol": "makerdao",
+        "position_type": "system_urn",
+        "urn_address": urn,
+        "snapshot_at": ts,
+        "block_timestamp": ts,
+        "block_number": 22334455,
+        "collateral_symbol": "ALLOCATOR-SPARK-A",
+        "collateral_token_address": None,
+        "collateral_amount": "1000000000000",
+        "collateral_value_usd": "1000000000000",
+        "debt_symbol": "DAI",
+        "debt_token_address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "debt_amount": "3995880969.538352758976778164",
+        "debt_value_usd": "3995880969.53835276",
+        "liquidation_ratio": "1",
+        "liquidation_price_usd": "0.00399588",
+        "health_factor": "250.257704777309915454",
+        "is_healthy": True,
+    }
+    pool = _FakePool(
+        _FakeConn(
+            system_positions=[
+                {
+                    **base_row,
+                    "position_uid": (
+                        f"ethereum:makerdao:system_urn:{urn.lower()}:ALLOCATOR-SPARK-A"
+                    ),
+                    "ilk": "ALLOCATOR-SPARK-A",
+                },
+                {
+                    **base_row,
+                    "position_uid": (
+                        f"ethereum:makerdao:system_urn:{urn.lower()}:ALLOCATOR-BLOOM-A"
+                    ),
+                    "ilk": "ALLOCATOR-BLOOM-A",
+                    "collateral_symbol": "ALLOCATOR-BLOOM-A",
+                },
+            ]
+        )
+    )
+
+    async def _unexpected_live_fetch(*_args, **_kwargs):
+        raise AssertionError("live fetch should not run when cache has rows")
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "_fetch_live_system_urn_positions",
+        _unexpected_live_fetch,
+    )
+
+    result = await makerdao_service.get_system_urn_positions(
+        pool,
+        urn=urn.lower(),
+        w3="fake-w3",
+    )
+
+    assert result.total_positions == 2
+    assert result.ilks == ["ALLOCATOR-SPARK-A", "ALLOCATOR-BLOOM-A"]
+    assert [position.ilk for position in result.positions] == result.ilks
 
 
 @pytest.mark.asyncio

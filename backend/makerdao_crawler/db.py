@@ -371,14 +371,13 @@ async def fetch_current_vault_positions(
         )
 
 
-async def fetch_system_urn_position(
+async def fetch_system_urn_positions(
     pool: asyncpg.Pool,
     *,
     urn: str,
-    ilk: str,
-) -> asyncpg.Record | None:
+) -> list[asyncpg.Record]:
     async with pool.acquire() as conn:
-        return await conn.fetchrow(
+        return await conn.fetch(
             """
             SELECT
                 position_uid,
@@ -407,13 +406,184 @@ async def fetch_system_urn_position(
                 updated_at
             FROM loan.makerdao_system_urn_positions_current
             WHERE lower(urn_address) = lower($1)
-              AND ilk = $2
-            ORDER BY snapshot_at DESC
-            LIMIT 1
+            ORDER BY snapshot_at DESC, ilk
             """,
             urn,
-            ilk,
         )
+
+
+def _makerdao_positions_union_sql() -> str:
+    return """
+        SELECT
+            vault_uid AS position_uid,
+            'user'::text AS position_scope,
+            vault_id,
+            chain,
+            protocol,
+            vault_type,
+            ilk,
+            urn_address,
+            owner_address,
+            proxy_address,
+            snapshot_at,
+            block_timestamp,
+            block_number,
+            collateral_symbol,
+            collateral_token_address,
+            collateral_amount,
+            collateral_value_usd,
+            debt_symbol,
+            debt_token_address,
+            debt_amount,
+            debt_value_usd,
+            liquidation_ratio,
+            liquidation_price_usd,
+            health_factor,
+            is_healthy,
+            extra_jsonb,
+            created_at,
+            updated_at
+        FROM loan.makerdao_current_vault_positions
+        UNION ALL
+        SELECT
+            position_uid,
+            'system'::text AS position_scope,
+            NULL::bigint AS vault_id,
+            chain,
+            protocol,
+            'system_urn'::text AS vault_type,
+            ilk,
+            urn_address,
+            NULL::text AS owner_address,
+            NULL::text AS proxy_address,
+            snapshot_at,
+            block_timestamp,
+            block_number,
+            collateral_symbol,
+            collateral_token_address,
+            collateral_amount,
+            collateral_value_usd,
+            debt_symbol,
+            debt_token_address,
+            debt_amount,
+            debt_value_usd,
+            liquidation_ratio,
+            liquidation_price_usd,
+            health_factor,
+            is_healthy,
+            extra_jsonb,
+            created_at,
+            updated_at
+        FROM loan.makerdao_system_urn_positions_current
+    """
+
+
+async def fetch_current_positions_page(
+    pool: asyncpg.Pool,
+    *,
+    page_size: int,
+    offset: int,
+    sort_by: str,
+    order: str,
+    position_scope: str = "all",
+    ilk: str | None = None,
+    is_healthy: bool | None = None,
+    include_empty: bool = False,
+) -> tuple[list[asyncpg.Record], asyncpg.Record | None]:
+    sort_expr_map = {
+        "health_factor": "p.health_factor",
+        "collateral_value_usd": "p.collateral_value_usd",
+        "debt_value_usd": "p.debt_value_usd",
+        "liquidation_price_usd": "p.liquidation_price_usd",
+        "snapshot_at": "p.snapshot_at",
+        "ilk": "p.ilk",
+    }
+    sort_expr = sort_expr_map.get(sort_by, "p.health_factor")
+    order_sql = "ASC" if order.lower() == "asc" else "DESC"
+
+    params: list[Any] = []
+    filters: list[str] = []
+    if position_scope != "all":
+        params.append(position_scope)
+        filters.append(f"p.position_scope = ${len(params)}")
+    if ilk is not None:
+        params.append(ilk)
+        filters.append(f"p.ilk = ${len(params)}")
+    if is_healthy is not None:
+        params.append(is_healthy)
+        filters.append(f"p.is_healthy = ${len(params)}")
+    if not include_empty:
+        filters.append("(p.collateral_amount <> 0 OR p.debt_amount <> 0)")
+    where_sql = "WHERE " + " AND ".join(filters) if filters else ""
+
+    base_cte = f"""
+        WITH positions AS (
+            {_makerdao_positions_union_sql()}
+        ),
+        filtered AS (
+            SELECT *
+            FROM positions p
+            {where_sql}
+        )
+    """
+    summary_sql = f"""
+        {base_cte}
+        SELECT
+            COUNT(*)::bigint AS total_count,
+            COUNT(*) FILTER (WHERE position_scope = 'user')::bigint
+                AS user_positions,
+            COUNT(*) FILTER (WHERE position_scope = 'system')::bigint
+                AS system_positions,
+            COUNT(*) FILTER (WHERE NOT is_healthy)::bigint AS unhealthy_positions,
+            COALESCE(SUM(collateral_value_usd), 0) AS total_collateral_value_usd,
+            COALESCE(SUM(debt_value_usd), 0) AS total_debt_value_usd,
+            MIN(health_factor) AS min_health_factor,
+            MAX(health_factor) AS max_health_factor
+        FROM filtered
+    """
+    page_params = [*params, page_size, offset]
+    page_sql = f"""
+        {base_cte}
+        SELECT
+            position_uid,
+            position_scope,
+            vault_id,
+            chain,
+            protocol,
+            vault_type,
+            ilk,
+            urn_address,
+            owner_address,
+            proxy_address,
+            snapshot_at,
+            block_timestamp,
+            block_number,
+            collateral_symbol,
+            collateral_token_address,
+            collateral_amount,
+            collateral_value_usd,
+            debt_symbol,
+            debt_token_address,
+            debt_amount,
+            debt_value_usd,
+            liquidation_ratio,
+            liquidation_price_usd,
+            health_factor,
+            is_healthy,
+            extra_jsonb,
+            created_at,
+            updated_at
+        FROM filtered p
+        ORDER BY {sort_expr} {order_sql} NULLS LAST,
+            p.position_scope ASC,
+            p.position_uid ASC
+        LIMIT ${len(page_params) - 1}
+        OFFSET ${len(page_params)}
+    """
+    async with pool.acquire() as conn:
+        summary = await conn.fetchrow(summary_sql, *params)
+        rows = await conn.fetch(page_sql, *page_params)
+    return rows, summary
 
 
 async def upsert_ilk(pool: asyncpg.Pool, payload: dict[str, Any]) -> None:
