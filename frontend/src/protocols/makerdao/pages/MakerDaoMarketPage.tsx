@@ -1,4 +1,13 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import {
   fetchMakerDaoIlksWithMeta,
   fetchMakerDaoPositionsWithMeta,
@@ -6,9 +15,11 @@ import {
   type MakerDaoPositionListItem,
   type MakerDaoPositionsResponse,
 } from '../../../api/makerdao';
+import { fetchAssetPriceWithMeta } from '../../../api/price';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../../../api/requestMeta';
 import { ChartDataStatus } from '../../../components/ChartAssist';
 import { PageHero } from '../../../shared/components/PageHero';
+import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 
 interface MakerDaoMarketPageProps {
   active: boolean;
@@ -171,11 +182,13 @@ function MakerDaoSearchControl({
   value,
   placeholder,
   onChange,
+  onKeyDown,
 }: {
   label: string;
   value: string;
   placeholder: string;
   onChange: (value: string) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
 }) {
   return (
     <label className="makerdao-filter-control makerdao-filter-search-control">
@@ -183,6 +196,7 @@ function MakerDaoSearchControl({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
       />
     </label>
@@ -229,20 +243,33 @@ function toNumber(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatCompactNumber(value: string | number | null | undefined, digits = 2): string {
+function formatScientificNumber(value: string | number | null | undefined, digits = 2): string {
   const number = toNumber(value);
   if (!Number.isFinite(number)) return '--';
-  if (Math.abs(number) >= 1e12 || (Math.abs(number) > 0 && Math.abs(number) < 0.0001)) {
-    return number.toExponential(2);
-  }
-  return number.toLocaleString(undefined, {
-    maximumFractionDigits: digits,
-    notation: Math.abs(number) >= 1_000_000 ? 'compact' : 'standard',
-  });
+  if (number === 0) return '0';
+  return number.toExponential(digits);
 }
 
-function formatCompactUsd(value: string | number | null | undefined): string {
-  return `$${formatCompactNumber(value, 2)}`;
+function formatScientificUsd(value: string | number | null | undefined): string {
+  return `$${formatScientificNumber(value, 2)}`;
+}
+
+function getCollateralPriceKey(item: MakerDaoPositionListItem): string {
+  return (item.collateral_token_address || item.collateral_symbol || '').trim().toLowerCase();
+}
+
+function getCollateralPriceAsset(item: MakerDaoPositionListItem): string {
+  return (item.collateral_token_address || item.collateral_symbol || '').trim();
+}
+
+function formatLiquidationBuffer(
+  currentPrice: number | null | undefined,
+  liquidationPrice: string | number | null | undefined,
+): string {
+  const price = Number(currentPrice);
+  const liquidation = toNumber(liquidationPrice);
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(liquidation)) return '--';
+  return `${(((price - liquidation) / price) * 100).toFixed(2)}%`;
 }
 
 function formatHealthFactor(
@@ -292,20 +319,6 @@ function shouldBlinkHealthFactorInfinity(item: MakerDaoPositionListItem): boolea
   return true;
 }
 
-function isNativeHealthFactorInfinity(item: MakerDaoPositionListItem): boolean {
-  if (formatHealthFactor(item.health_factor, item.debt_value_usd) !== '无风险') return false;
-
-  const raw = String(item.health_factor ?? '')
-    .trim()
-    .toLowerCase();
-  if (raw === 'inf' || raw === 'infinity') return true;
-
-  const debt = toNumber(item.debt_value_usd);
-  const collateral = toNumber(item.collateral_value_usd);
-  const parsed = Number(item.health_factor);
-  return debt === 0 && parsed === 0 && collateral > 0;
-}
-
 function positionRiskClass(item: MakerDaoPositionListItem): string {
   if (!item.is_healthy) return 'makerdao-risk-danger';
   const healthFactor = getHealthFactorValue(item.health_factor, item.debt_value_usd);
@@ -351,7 +364,6 @@ function MakerDaoHealthFactorCell({ item }: { item: MakerDaoPositionListItem }) 
     'makerdao-health-factor-cell',
     tone.className,
     display === '无风险' && shouldBlinkHealthFactorInfinity(item) ? 'makerdao-hf-pulse-safe' : '',
-    isNativeHealthFactorInfinity(item) ? 'makerdao-hf-native-infinity' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -461,6 +473,7 @@ function MakerDaoHealthFactorInfoButton() {
 
 interface MakerDaoPositionsTableProps {
   items: MakerDaoPositionListItem[];
+  collateralPrices: Record<string, number>;
   page: number;
   pageSize: number;
   total: number;
@@ -477,6 +490,7 @@ interface MakerDaoPositionsTableProps {
 
 function MakerDaoPositionsTable({
   items,
+  collateralPrices,
   page,
   pageSize,
   total,
@@ -490,6 +504,26 @@ function MakerDaoPositionsTable({
   onPageInputChange,
   onPageJump,
 }: MakerDaoPositionsTableProps) {
+  const [copiedKey, setCopiedKey] = useState('');
+
+  const handleCopyAddress = async (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    value: string | null | undefined,
+    key: string,
+  ) => {
+    event.stopPropagation();
+    const text = value?.trim();
+    if (!text) return;
+
+    const copied = await copyToClipboard(text);
+    if (!copied) return;
+
+    setCopiedKey(key);
+    window.setTimeout(() => {
+      setCopiedKey((current) => (current === key ? '' : current));
+    }, 1400);
+  };
+
   return (
     <>
       <div className="table-wrap makerdao-position-table-wrap">
@@ -508,12 +542,18 @@ function MakerDaoPositionsTable({
                 </span>
               </th>
               <th className="right">清算价格</th>
+              <th className="right">价格缓冲</th>
               <th className="center">状态</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item, index) => {
               const isExpanded = expandedPositionUid === item.position_uid;
+              const currentPrice = collateralPrices[getCollateralPriceKey(item)];
+              const liquidationBuffer = formatLiquidationBuffer(
+                currentPrice,
+                item.liquidation_price_usd,
+              );
               const healthFactorValue = getHealthFactorValue(
                 item.health_factor,
                 item.debt_value_usd,
@@ -536,6 +576,18 @@ function MakerDaoPositionsTable({
                         <span className="mono" title={item.urn_address}>
                           {shortAddress(item.urn_address)}
                         </span>
+                        {item.urn_address ? (
+                          <button
+                            type="button"
+                            className="makerdao-address-copy-btn"
+                            onClick={(event) =>
+                              void handleCopyAddress(event, item.urn_address, item.position_uid)
+                            }
+                            title={`复制 ${item.urn_address}`}
+                          >
+                            {copiedKey === item.position_uid ? '已复制' : '复制'}
+                          </button>
+                        ) : null}
                         <span className="makerdao-position-scope">
                           {item.position_scope === 'system'
                             ? '系统仓位'
@@ -549,15 +601,24 @@ function MakerDaoPositionsTable({
                         <span>{item.collateral_symbol || item.vault_type || '--'}</span>
                       </div>
                     </td>
-                    <td className="right mono" title={formatCompactUsd(item.collateral_value_usd)}>
-                      {formatCompactUsd(item.collateral_value_usd)}
+                    <td
+                      className="right mono"
+                      title={formatScientificUsd(item.collateral_value_usd)}
+                    >
+                      {formatScientificUsd(item.collateral_value_usd)}
                     </td>
-                    <td className="right mono" title={formatCompactUsd(item.debt_value_usd)}>
-                      {formatCompactUsd(item.debt_value_usd)}
+                    <td className="right mono" title={formatScientificUsd(item.debt_value_usd)}>
+                      {formatScientificUsd(item.debt_value_usd)}
                     </td>
                     <MakerDaoHealthFactorCell item={item} />
-                    <td className="right mono" title={formatCompactUsd(item.liquidation_price_usd)}>
-                      {formatCompactUsd(item.liquidation_price_usd)}
+                    <td
+                      className="right mono"
+                      title={formatScientificUsd(item.liquidation_price_usd)}
+                    >
+                      {formatScientificUsd(item.liquidation_price_usd)}
+                    </td>
+                    <td className="right mono" title={liquidationBuffer}>
+                      {liquidationBuffer}
                     </td>
                     <td className="center">
                       <span className={`badge ${positionRiskClass(item)}`}>
@@ -567,7 +628,7 @@ function MakerDaoPositionsTable({
                   </tr>
                   {isExpanded ? (
                     <tr className="makerdao-detail-row">
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="makerdao-detail-panel">
                           <div className="makerdao-detail-grid">
                             <div className="makerdao-detail-item">
@@ -609,20 +670,20 @@ function MakerDaoPositionsTable({
                             <div className="makerdao-detail-item">
                               <span className="makerdao-detail-label">抵押数量</span>
                               <span className="makerdao-detail-value">
-                                {formatCompactNumber(item.collateral_amount, 4)}{' '}
+                                {formatScientificNumber(item.collateral_amount, 4)}{' '}
                                 {item.collateral_symbol || ''}
                               </span>
                             </div>
                             <div className="makerdao-detail-item">
                               <span className="makerdao-detail-label">债务数量</span>
                               <span className="makerdao-detail-value">
-                                {formatCompactNumber(item.debt_amount, 4)} {item.debt_symbol}
+                                {formatScientificNumber(item.debt_amount, 4)} {item.debt_symbol}
                               </span>
                             </div>
                             <div className="makerdao-detail-item">
                               <span className="makerdao-detail-label">清算率</span>
                               <span className="makerdao-detail-value">
-                                {formatCompactNumber(toNumber(item.liquidation_ratio) * 100, 2)}%
+                                {formatScientificNumber(toNumber(item.liquidation_ratio) * 100, 2)}%
                               </span>
                             </div>
                             <div className="makerdao-detail-item">
@@ -797,12 +858,15 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
   const [positionsPageInput, setPositionsPageInput] = useState('1');
   const [positionScope, setPositionScope] = useState<PositionScopeFilter>('all');
   const [positionHealth, setPositionHealth] = useState<PositionHealthFilter>('all');
+  const [positionIlkInput, setPositionIlkInput] = useState('');
+  const [positionIlk, setPositionIlk] = useState('');
   const [positionSortBy, setPositionSortBy] = useState<PositionSortBy>('collateral_value_usd');
-  const [positionOrder, setPositionOrder] = useState<PositionOrder>('asc');
+  const [positionOrder, setPositionOrder] = useState<PositionOrder>('desc');
   const [includeEmptyPositions, setIncludeEmptyPositions] = useState(false);
   const [positionsReloadNonce, setPositionsReloadNonce] = useState(0);
   const [positionsMeta, setPositionsMeta] = useState<AggregatedRequestMeta>(EMPTY_META);
   const [expandedPositionUid, setExpandedPositionUid] = useState<string | null>(null);
+  const [collateralPrices, setCollateralPrices] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!active) return;
@@ -851,6 +915,7 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
           sortBy: positionSortBy,
           order: positionOrder,
           positionScope,
+          ilk: positionIlk,
           isHealthy: positionHealth === 'all' ? null : positionHealth === 'healthy' ? true : false,
           includeEmpty: includeEmptyPositions,
         });
@@ -878,6 +943,7 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
     active,
     includeEmptyPositions,
     positionHealth,
+    positionIlk,
     positionOrder,
     positionScope,
     positionSortBy,
@@ -926,7 +992,14 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
   useEffect(() => {
     setPositionsPage(1);
     setExpandedPositionUid(null);
-  }, [includeEmptyPositions, positionHealth, positionOrder, positionScope, positionSortBy]);
+  }, [
+    includeEmptyPositions,
+    positionHealth,
+    positionIlk,
+    positionOrder,
+    positionScope,
+    positionSortBy,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredViews.length / METADATA_PAGE_SIZE));
   const normalizedPage = Math.min(page, totalPages);
@@ -969,8 +1042,65 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
     setPositionsPage(Math.min(Math.max(parsed, 1), positionsTotalPages));
   };
 
-  const positionItems = positionsData?.items ?? [];
+  const positionItems = useMemo(() => positionsData?.items ?? [], [positionsData]);
   const positionAggregates = positionsData?.aggregates;
+
+  useEffect(() => {
+    if (!active || !positionItems.length) {
+      setCollateralPrices({});
+      return;
+    }
+
+    let cancelled = false;
+    const priceTargets = Array.from(
+      new Map(
+        positionItems
+          .map((item) => {
+            const key = getCollateralPriceKey(item);
+            const asset = getCollateralPriceAsset(item);
+            return key && asset ? [key, asset] : null;
+          })
+          .filter((entry): entry is [string, string] => Boolean(entry)),
+      ).entries(),
+    );
+
+    if (!priceTargets.length) {
+      setCollateralPrices({});
+      return;
+    }
+
+    const loadPrices = async () => {
+      const entries = await Promise.all(
+        priceTargets.map(async ([key, asset]) => {
+          try {
+            const result = await fetchAssetPriceWithMeta(asset, { chain: 'ethereum' });
+            return [key, result.data] as const;
+          } catch {
+            return [key, null] as const;
+          }
+        }),
+      );
+
+      if (cancelled) return;
+      setCollateralPrices((current) => {
+        const next = { ...current };
+        for (const [key, price] of entries) {
+          if (price === null) {
+            delete next[key];
+          } else {
+            next[key] = price;
+          }
+        }
+        return next;
+      });
+    };
+
+    void loadPrices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [active, positionItems]);
 
   return (
     <div className="makerdao-dashboard makerdao-market-dashboard">
@@ -1241,31 +1371,31 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
           <div className="metric-box">
             <span className="metric-label">总抵押价值</span>
             <span className="metric-value green">
-              {formatCompactUsd(positionAggregates?.total_collateral_value_usd)}
+              {formatScientificUsd(positionAggregates?.total_collateral_value_usd)}
             </span>
           </div>
           <div className="metric-box">
             <span className="metric-label">总债务价值</span>
             <span className="metric-value red">
-              {formatCompactUsd(positionAggregates?.total_debt_value_usd)}
-            </span>
-          </div>
-          <div className="metric-box">
-            <span className="metric-label">最低健康因子</span>
-            <span className="metric-value">
-              {formatHealthFactor(positionAggregates?.min_health_factor, '1')}
-            </span>
-          </div>
-          <div className="metric-box">
-            <span className="metric-label">最高健康因子</span>
-            <span className="metric-value">
-              {formatHealthFactor(positionAggregates?.max_health_factor, '1')}
+              {formatScientificUsd(positionAggregates?.total_debt_value_usd)}
             </span>
           </div>
         </div>
 
         <div className="makerdao-positions-filters makerdao-positions-filter-stack">
           <div className="makerdao-positions-filter-row">
+            <MakerDaoSearchControl
+              label="ILK筛选"
+              value={positionIlkInput}
+              onChange={(value) => setPositionIlkInput(value.toUpperCase())}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setPositionIlk(event.currentTarget.value.trim().toUpperCase());
+                }
+              }}
+              placeholder="ETH-A / LITE-PSM... Enter"
+            />
+
             <MakerDaoSegmentedControl
               label="排序字段"
               value={positionSortBy}
@@ -1333,6 +1463,7 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
         {!positionsLoading && !positionsError && positionItems.length ? (
           <MakerDaoPositionsTable
             items={positionItems}
+            collateralPrices={collateralPrices}
             page={normalizedPositionsPage}
             pageSize={POSITIONS_PAGE_SIZE}
             total={positionsData?.total ?? 0}
