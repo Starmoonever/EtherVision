@@ -254,6 +254,12 @@ function formatScientificUsd(value: string | number | null | undefined): string 
   return `$${formatScientificNumber(value, 2)}`;
 }
 
+function formatUsdFixed(value: string | number | null | undefined): string {
+  const number = toNumber(value);
+  if (!Number.isFinite(number)) return '--';
+  return `$${number.toFixed(2)}`;
+}
+
 function getCollateralPriceKey(item: MakerDaoPositionListItem): string {
   return (item.collateral_token_address || item.collateral_symbol || '').trim().toLowerCase();
 }
@@ -617,11 +623,8 @@ function MakerDaoPositionsTable({
                       {formatScientificUsd(item.debt_value_usd)}
                     </td>
                     <MakerDaoHealthFactorCell item={item} />
-                    <td
-                      className="right mono"
-                      title={formatScientificUsd(item.liquidation_price_usd)}
-                    >
-                      {formatScientificUsd(item.liquidation_price_usd)}
+                    <td className="right mono" title={formatUsdFixed(item.liquidation_price_usd)}>
+                      {formatUsdFixed(item.liquidation_price_usd)}
                     </td>
                     <td className="right mono" title={liquidationBuffer}>
                       {liquidationBuffer}
