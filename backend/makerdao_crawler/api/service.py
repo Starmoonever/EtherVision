@@ -1218,7 +1218,7 @@ def _normalize_ilk(value: str) -> str | None:
         return None
     try:
         _text_to_bytes32(candidate)
-    except HTTPException, UnicodeEncodeError:
+    except (HTTPException, UnicodeEncodeError):
         return None
     return candidate
 
@@ -1355,7 +1355,7 @@ def _fmt_optional_decimal(value: Any, scale: int = 18) -> str | None:
         return None
     try:
         return _fmt_decimal(value, scale=scale)
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         return None
 
 
