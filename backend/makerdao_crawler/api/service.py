@@ -201,19 +201,43 @@ async def get_ilks(pool: Any, *, w3: Any = None) -> MakerDaoIlkListResponse:
 async def get_ilk_detail(
     pool: Any,
     *,
-    ilk: str,
+    ilk: str | None = None,
+    address: str | None = None,
     w3: Any = None,
 ) -> MakerDaoIlkDetailResponse:
-    normalized_ilk = _normalize_ilk(ilk)
-    if not normalized_ilk:
-        raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+    normalized_ilk = None
+    if ilk is not None:
+        normalized_ilk = _normalize_ilk(ilk)
+        if not normalized_ilk:
+            raise HTTPException(status_code=400, detail="invalid MakerDAO ilk")
+
+    normalized_address = None
+    if address is not None:
+        normalized_address = _normalize_evm_address(address)
+        if not normalized_address:
+            raise HTTPException(status_code=400, detail="invalid EVM address")
+
+    if (normalized_ilk is None) == (normalized_address is None):
+        raise HTTPException(
+            status_code=400,
+            detail="ilk 和 address 必须且只能提供其中一个",
+        )
 
     rows = await fetch_ilks(pool)
     for row in rows:
-        if str(_row_get(row, "ilk") or "").upper() == normalized_ilk:
+        row_ilk = str(_row_get(row, "ilk") or "").upper()
+        row_gem_address = _normalize_evm_address(
+            str(_row_get(row, "gem_address") or "")
+        )
+        if normalized_ilk is not None and row_ilk == normalized_ilk:
+            return _build_ilk_detail_from_row(row)
+        if normalized_address is not None and row_gem_address == normalized_address:
             return _build_ilk_detail_from_row(row)
 
-    item = await _fetch_live_ilk(normalized_ilk, w3=w3)
+    if normalized_ilk is not None:
+        item = await _fetch_live_ilk(normalized_ilk, w3=w3)
+    else:
+        item = await _fetch_live_ilk_by_address(cast(str, normalized_address), w3=w3)
     if item is None:
         raise HTTPException(status_code=404, detail="MakerDAO ilk not found")
     await upsert_ilk(pool, _ilk_item_to_payload(item))
@@ -384,6 +408,23 @@ async def _fetch_live_ilk(
                 await active_w3.provider.disconnect()
             except Exception:
                 pass
+
+
+async def _fetch_live_ilk_by_address(
+    token_address: str,
+    *,
+    w3: Any = None,
+) -> MakerDaoIlkDetailResponse | None:
+    normalized_address = _normalize_evm_address(token_address)
+    if not normalized_address:
+        raise HTTPException(status_code=400, detail="invalid EVM address")
+
+    items = await _fetch_live_ilks(w3=w3)
+    for item in items:
+        item_address = _normalize_evm_address(item.gem_address or "")
+        if item_address == normalized_address:
+            return item
+    return None
 
 
 async def _build_live_ilk_item(

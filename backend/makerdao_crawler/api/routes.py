@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database import AsyncpgPool
 from . import service
@@ -18,6 +18,25 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/makerdao")
+
+
+def _require_ilk_or_address(
+    *,
+    ilk: str | None,
+    address: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_ilk = ilk.strip() if ilk is not None else None
+    normalized_address = address.strip() if address is not None else None
+    if not normalized_ilk:
+        normalized_ilk = None
+    if not normalized_address:
+        normalized_address = None
+    if (normalized_ilk is None) == (normalized_address is None):
+        raise HTTPException(
+            status_code=400,
+            detail="ilk 和 address 必须且只能提供其中一个",
+        )
+    return normalized_ilk, normalized_address
 
 
 @router.get(
@@ -46,11 +65,14 @@ async def ilks(request: Request, pool: AsyncpgPool) -> MakerDaoIlkListResponse:
 async def ilk(
     request: Request,
     pool: AsyncpgPool,
-    ilk: str = Query(..., description="MakerDAO ilk 名称，例如 ETH-A"),
+    ilk: str | None = Query(None, description="MakerDAO ilk 名称，例如 ETH-A"),
+    address: str | None = Query(None, description="抵押品代币地址，例如 0x..."),
 ) -> MakerDaoIlkDetailResponse:
+    ilk, address = _require_ilk_or_address(ilk=ilk, address=address)
     return await service.get_ilk_detail(
         pool,
         ilk=ilk,
+        address=address,
         w3=getattr(request.app.state, "w3", None),
     )
 

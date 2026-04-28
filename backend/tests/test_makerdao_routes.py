@@ -209,6 +209,57 @@ def test_ilk_route_returns_ilk_detail(monkeypatch) -> None:
     }
 
 
+def test_ilk_route_accepts_collateral_address(monkeypatch) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    collateral_address = "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2"
+
+    async def _fake_get_ilk_detail(pool, **kwargs):
+        assert pool is not None
+        assert kwargs["ilk"] is None
+        assert kwargs["address"] == collateral_address
+        assert "w3" in kwargs
+        return MakerDaoIlkDetailResponse(
+            chain="ethereum",
+            protocol="makerdao",
+            ilk="ETH-A",
+            vault_type="vault",
+            gem_symbol="WETH",
+            gem_address=collateral_address,
+            debt_ceiling="100000000",
+            liquidation_ratio="1.45",
+            liquidation_penalty="0.13",
+            stability_fee=None,
+            dust="5000",
+            updated_at=ts.isoformat().replace("+00:00", "Z"),
+        )
+
+    monkeypatch.setattr(makerdao_service, "get_ilk_detail", _fake_get_ilk_detail)
+
+    with _build_client() as client:
+        response = client.get(
+            "/api/makerdao/ilk", params={"address": collateral_address}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ilk"] == "ETH-A"
+    assert response.json()["gem_address"] == collateral_address
+
+
+def test_ilk_route_requires_exactly_one_lookup_param() -> None:
+    with _build_client() as client:
+        missing_response = client.get("/api/makerdao/ilk")
+        duplicate_response = client.get(
+            "/api/makerdao/ilk",
+            params={
+                "ilk": "ETH-A",
+                "address": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+            },
+        )
+
+    assert missing_response.status_code == 400
+    assert duplicate_response.status_code == 400
+
+
 def test_position_route_returns_live_vault_positions(monkeypatch) -> None:
     ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
 
@@ -755,6 +806,49 @@ async def test_get_ilk_detail_returns_cached_row_without_live_fetch(
 
 
 @pytest.mark.asyncio
+async def test_get_ilk_detail_returns_cached_row_by_address_without_live_fetch(
+    monkeypatch,
+) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    pool = _FakePool(
+        _FakeConn(
+            ilks=[
+                {
+                    "ilk": "ETH-A",
+                    "vault_type": "vault",
+                    "gem_symbol": "WETH",
+                    "gem_address": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",
+                    "debt_ceiling": "100000000",
+                    "liquidation_ratio": "1.45",
+                    "liquidation_penalty": "0.13",
+                    "stability_fee": None,
+                    "dust": "5000",
+                    "updated_at": ts,
+                }
+            ]
+        )
+    )
+
+    async def _unexpected_live_fetch(*_args, **_kwargs):
+        raise AssertionError("live fetch should not run when cache has the address")
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "_fetch_live_ilk_by_address",
+        _unexpected_live_fetch,
+    )
+
+    result = await makerdao_service.get_ilk_detail(
+        pool,
+        address="0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        w3="fake-w3",
+    )
+
+    assert result.ilk == "ETH-A"
+    assert result.gem_symbol == "WETH"
+
+
+@pytest.mark.asyncio
 async def test_get_ilk_detail_backfills_when_cache_misses(monkeypatch) -> None:
     ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
     pool = _FakePool(_FakeConn(ilks=[]))
@@ -788,6 +882,53 @@ async def test_get_ilk_detail_backfills_when_cache_misses(monkeypatch) -> None:
 
     assert result.ilk == "ETH-A"
     assert persisted[0]["ilk"] == "ETH-A"
+
+
+@pytest.mark.asyncio
+async def test_get_ilk_detail_backfills_by_address_when_cache_misses(
+    monkeypatch,
+) -> None:
+    ts = datetime(2026, 4, 23, 10, 0, 0, tzinfo=timezone.utc)
+    collateral_address = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
+    pool = _FakePool(_FakeConn(ilks=[]))
+    persisted: list[dict] = []
+
+    async def _fake_fetch_live_ilk_by_address(token_address, *, w3):
+        assert token_address == collateral_address.lower()
+        assert w3 == "fake-w3"
+        return MakerDaoIlkDetailResponse(
+            chain="ethereum",
+            protocol="makerdao",
+            ilk="LINK-A",
+            vault_type="vault",
+            gem_symbol="LINK",
+            gem_address=collateral_address,
+            debt_ceiling="5000000",
+            liquidation_ratio="1.65",
+            liquidation_penalty="0.13",
+            stability_fee=None,
+            dust="5000",
+            updated_at=ts.isoformat().replace("+00:00", "Z"),
+        )
+
+    async def _fake_upsert_ilk(_pool, payload):
+        persisted.append(payload)
+
+    monkeypatch.setattr(
+        makerdao_service,
+        "_fetch_live_ilk_by_address",
+        _fake_fetch_live_ilk_by_address,
+    )
+    monkeypatch.setattr(makerdao_service, "upsert_ilk", _fake_upsert_ilk)
+
+    result = await makerdao_service.get_ilk_detail(
+        pool,
+        address=collateral_address,
+        w3="fake-w3",
+    )
+
+    assert result.ilk == "LINK-A"
+    assert persisted[0]["gem_address"] == collateral_address
 
 
 @pytest.mark.asyncio
