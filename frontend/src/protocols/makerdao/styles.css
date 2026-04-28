@@ -177,6 +177,92 @@
     0 0 22px rgba(134, 239, 172, 0.28);
 }
 
+.makerdao-hf-heading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.makerdao-info-button-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.makerdao-info-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #cbd5e1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.makerdao-info-button:hover,
+.makerdao-info-button.active {
+  background: #334155;
+}
+
+.makerdao-info-panel {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-width: calc(100vw - 32px);
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0b1220;
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.55);
+  padding: 0.9rem;
+  text-align: left;
+}
+
+.makerdao-info-panel-title {
+  color: #e2e8f0;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.makerdao-info-panel-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  border-top: 1px solid #1e293b;
+  padding-top: 0.75rem;
+}
+
+.makerdao-info-panel-term {
+  color: #f8fafc;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.makerdao-info-panel-meaning {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.makerdao-info-panel-risk {
+  color: #fbbf24;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
 @keyframes makerdao-hf-pulse {
   0%,
   100% {
@@ -933,9 +1019,24 @@
   padding: 1rem;
 }
 
+.makerdao-positions-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98));
+  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.24);
+  padding: 1rem;
+}
+
 .makerdao-asset-navigator-header,
 .makerdao-asset-navigator-meta,
 .makerdao-metadata-filters,
+.makerdao-positions-filters,
 .makerdao-metadata-card-head,
 .makerdao-metadata-group-row,
 .makerdao-metadata-address,
@@ -960,6 +1061,10 @@
 }
 
 .makerdao-metadata-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.makerdao-positions-summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -1026,11 +1131,245 @@
 
 .makerdao-metadata-filters {
   flex-wrap: wrap;
-  gap: 0.75rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
   padding: 0.8rem;
   border: 1px solid #1e293b;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.58);
+}
+
+.makerdao-positions-filters {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.makerdao-positions-filter-stack {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 0.45rem;
+  row-gap: 0.45rem;
+}
+
+.makerdao-positions-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  column-gap: 0.65rem;
+  row-gap: 0.45rem;
+}
+
+.makerdao-positions-filter-row:first-child {
+  margin-bottom: 0;
+}
+
+.makerdao-positions-filter-stack .makerdao-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: auto;
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.18);
+  padding: 0.36rem 0.45rem;
+}
+
+.makerdao-positions-filter-stack .metric-label {
+  margin: 0;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.makerdao-positions-filter-stack .makerdao-switch-group {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.makerdao-positions-filter-stack .makerdao-switch-btn {
+  padding: 0.34rem 0.7rem;
+}
+
+.makerdao-filter-control {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(220px, 100%);
+}
+
+.makerdao-filter-search-control {
+  min-width: min(260px, 100%);
+}
+
+.makerdao-filter-search-control input {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.84rem;
+  outline: none;
+  padding: 0.55rem 0.65rem;
+}
+
+.makerdao-filter-search-control input:focus {
+  border-color: #60a5fa;
+}
+
+.makerdao-switch-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  padding: 2px;
+}
+
+.makerdao-switch-btn {
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 0.4rem 0.85rem;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.makerdao-switch-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.makerdao-switch-btn.active {
+  background: var(--accent-primary);
+  color: var(--text-strong);
+}
+
+.makerdao-switch-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.makerdao-positions-table-wrap {
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.22);
+}
+
+.makerdao-position-table-wrap {
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid rgba(51, 65, 85, 0.76);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.22);
+}
+
+.makerdao-position-table-wrap .pos-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #161b22;
+}
+
+.makerdao-position-main-table th {
+  white-space: nowrap;
+}
+
+.makerdao-position-main-table td {
+  vertical-align: middle;
+}
+
+.makerdao-position-main-table td,
+.makerdao-position-main-table td .makerdao-vault-cell strong,
+.makerdao-position-main-table td .makerdao-vault-cell span,
+.makerdao-position-main-table td .makerdao-position-address-cell .mono {
+  color: #f8fafc;
+}
+
+.makerdao-position-main-table td .makerdao-position-scope {
+  color: #93c5fd;
+}
+
+.makerdao-position-main-table td.makerdao-health-factor-cell {
+  color: inherit;
+}
+
+.makerdao-position-main-table tr.makerdao-risk-row td.makerdao-health-factor-cell {
+  color: #ffbb28;
+}
+
+.makerdao-position-address-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.makerdao-position-address-cell .mono {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.makerdao-position-scope {
+  flex: 0 0 auto;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 0.18rem 0.46rem;
+}
+
+.makerdao-position-table-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  color: #94a3b8;
+  flex-wrap: wrap;
+}
+
+.makerdao-position-table-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.makerdao-positions-table th {
+  white-space: nowrap;
+}
+
+.makerdao-positions-table td {
+  vertical-align: middle;
+}
+
+.makerdao-position-row {
+  cursor: pointer;
+}
+
+.makerdao-position-row:hover td {
+  background: rgba(59, 130, 246, 0.06);
 }
 
 .makerdao-metadata-card-grid {
@@ -1201,7 +1540,8 @@
   .makerdao-asset-card-grid,
   .makerdao-asset-param-grid,
   .makerdao-metadata-card-grid,
-  .makerdao-metadata-summary-grid {
+  .makerdao-metadata-summary-grid,
+  .makerdao-positions-summary-grid {
     grid-template-columns: 1fr;
   }
 

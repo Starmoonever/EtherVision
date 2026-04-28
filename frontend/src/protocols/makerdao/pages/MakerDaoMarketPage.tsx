@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { fetchMakerDaoIlksWithMeta, type MakerDaoIlkItem } from '../../../api/makerdao';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  fetchMakerDaoIlksWithMeta,
+  fetchMakerDaoPositionsWithMeta,
+  type MakerDaoIlkItem,
+  type MakerDaoPositionListItem,
+  type MakerDaoPositionsResponse,
+} from '../../../api/makerdao';
 import { mergeRequestMetas, type AggregatedRequestMeta } from '../../../api/requestMeta';
 import { ChartDataStatus } from '../../../components/ChartAssist';
 import { PageHero } from '../../../shared/components/PageHero';
@@ -11,6 +17,15 @@ interface MakerDaoMarketPageProps {
 type SortMode = 'alpha' | 'updated_desc';
 type ContractStatusFilter = 'all' | 'deployed' | 'internal';
 type IlkGroup = 'all' | 'native' | 'rwa' | 'direct' | 'stable' | 'lp' | 'system' | 'other';
+type PositionScopeFilter = 'all' | 'user' | 'system';
+type PositionHealthFilter = 'all' | 'healthy' | 'unhealthy';
+type PositionSortBy =
+  | 'health_factor'
+  | 'collateral_value_usd'
+  | 'debt_value_usd'
+  | 'liquidation_price_usd'
+  | 'ilk';
+type PositionOrder = 'asc' | 'desc';
 
 interface MakerDaoIlkView extends MakerDaoIlkItem {
   key: string;
@@ -29,6 +44,7 @@ const EMPTY_META: AggregatedRequestMeta = {
   cacheStatus: 'none',
 };
 const METADATA_PAGE_SIZE = 10;
+const POSITIONS_PAGE_SIZE = 25;
 
 const GROUP_LABELS: Record<Exclude<IlkGroup, 'all'>, string> = {
   native: 'Native Crypto',
@@ -51,9 +67,126 @@ const GROUP_OPTIONS: Array<{ value: IlkGroup; label: string }> = [
   { value: 'other', label: GROUP_LABELS.other },
 ];
 
+const POSITION_SORT_OPTIONS: Array<{ value: PositionSortBy; label: string }> = [
+  { value: 'collateral_value_usd', label: '抵押价值' },
+  { value: 'debt_value_usd', label: '债务价值' },
+  { value: 'health_factor', label: '健康因子' },
+  { value: 'liquidation_price_usd', label: '清算价格' },
+  { value: 'ilk', label: 'Ilk' },
+];
+
+const CONTRACT_STATUS_OPTIONS: Array<{ value: ContractStatusFilter; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'deployed', label: '已部署合约' },
+  { value: 'internal', label: '系统内部账户' },
+];
+
+const METADATA_SORT_OPTIONS: Array<{ value: SortMode; label: string }> = [
+  { value: 'alpha', label: '字母顺序' },
+  { value: 'updated_desc', label: '最近更新' },
+];
+
+const POSITION_SCOPE_OPTIONS: Array<{ value: PositionScopeFilter; label: string }> = [
+  { value: 'all', label: '全部仓位' },
+  { value: 'user', label: '普通 Vault' },
+  { value: 'system', label: '系统仓位' },
+];
+
+const POSITION_HEALTH_OPTIONS: Array<{ value: PositionHealthFilter; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'healthy', label: '健康' },
+  { value: 'unhealthy', label: '非健康' },
+];
+
+const POSITION_ORDER_OPTIONS: Array<{ value: PositionOrder; label: string }> = [
+  { value: 'desc', label: '↓ 从高到低' },
+  { value: 'asc', label: '↑ 从低到高' },
+];
+
+const HEALTH_FACTOR_EXPLAIN_ITEMS = [
+  {
+    term: '黄色闪烁',
+    meaning: '表示健康因子低于 1.1，仓位已进入高风险区。',
+    riskHint: '表示接近清算边界的账户或系统仓位。',
+  },
+  {
+    term: '绿色闪烁无风险',
+    meaning: '表示∞健康因子，通常来自没有活跃债务但仍有抵押价值的仓位。',
+    riskHint: '这类仓位单独高亮为原生无风险状态。',
+  },
+  {
+    term: '绿色静态无风险',
+    meaning: '表示健康因子大于 5 且小于∞，当前风险极低。',
+    riskHint: '这类仓位作为高健康因子地址标识。',
+  },
+  {
+    term: '橙色',
+    meaning: '表示健康因子处于观察区间，需要关注抵押价值与清算价格变化。',
+    riskHint: '适合作为风险巡检时的次优先级观察对象。',
+  },
+];
+
 function normalizeProtocol(value: string): string {
   if (!value) return 'MakerDAO';
   return value.toLowerCase() === 'makerdao' ? 'MakerDAO' : value;
+}
+
+interface MakerDaoSegmentedControlProps<T extends string> {
+  label: string;
+  value: T;
+  options: Array<{ value: T; label: string; title?: string }>;
+  ariaLabel: string;
+  onChange: (value: T) => void;
+}
+
+function MakerDaoSegmentedControl<T extends string>({
+  label,
+  value,
+  options,
+  ariaLabel,
+  onChange,
+}: MakerDaoSegmentedControlProps<T>) {
+  return (
+    <div className="makerdao-filter-control">
+      <span className="metric-label">{label}</span>
+      <div className="makerdao-switch-group" aria-label={ariaLabel}>
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`makerdao-switch-btn ${value === option.value ? 'active' : ''}`}
+            onClick={() => onChange(option.value)}
+            title={option.title || option.label}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MakerDaoSearchControl({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="makerdao-filter-control makerdao-filter-search-control">
+      <span className="metric-label">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+      />
+    </label>
+  );
 }
 
 function normalizeChain(value: string): string {
@@ -88,6 +221,482 @@ function formatRelativeTime(value: string | null | undefined): { label: string; 
   if (absMs < hour) return { label: `${Math.round(absMs / minute)} 分钟前`, stale: false };
   if (absMs < day) return { label: `${Math.round(absMs / hour)} 小时前`, stale: false };
   return { label: `${Math.round(absMs / day)} 天前`, stale: diffMs > day };
+}
+
+function toNumber(value: string | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCompactNumber(value: string | number | null | undefined, digits = 2): string {
+  const number = toNumber(value);
+  if (!Number.isFinite(number)) return '--';
+  if (Math.abs(number) >= 1e12 || (Math.abs(number) > 0 && Math.abs(number) < 0.0001)) {
+    return number.toExponential(2);
+  }
+  return number.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+    notation: Math.abs(number) >= 1_000_000 ? 'compact' : 'standard',
+  });
+}
+
+function formatCompactUsd(value: string | number | null | undefined): string {
+  return `$${formatCompactNumber(value, 2)}`;
+}
+
+function formatHealthFactor(
+  healthFactor: string | number | null | undefined,
+  debtValue: string | number | null | undefined,
+): string {
+  const raw = String(healthFactor ?? '')
+    .trim()
+    .toLowerCase();
+  const debt = Number(debtValue);
+  const health = Number(healthFactor);
+  if (debt === 0 && (raw === '0' || health === 0)) return '无风险';
+  if (raw === 'inf' || raw === 'infinity') return '无风险';
+  const number = toNumber(healthFactor);
+  if (!Number.isFinite(number) || number > 5) return '无风险';
+  return number.toFixed(2);
+}
+
+function getHealthFactorValue(
+  healthFactor: string | number | null | undefined,
+  debtValue: string | number | null | undefined,
+): number {
+  const raw = String(healthFactor ?? '')
+    .trim()
+    .toLowerCase();
+  const debt = Number(debtValue);
+  const numericValue = Number(healthFactor);
+
+  if (raw === 'inf' || raw === 'infinity') return Infinity;
+  if (debt === 0 && numericValue === 0) return Infinity;
+  if (Number.isFinite(numericValue)) return numericValue;
+
+  const fallback = toNumber(healthFactor);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function shouldBlinkHealthFactorInfinity(item: MakerDaoPositionListItem): boolean {
+  if (formatHealthFactor(item.health_factor, item.debt_value_usd) !== '无风险') return false;
+
+  const debt = toNumber(item.debt_value_usd);
+  const collateral = toNumber(item.collateral_value_usd);
+  if (debt === 0 && collateral > 0) return true;
+
+  const parsed = Number(item.health_factor);
+  if (Number.isFinite(parsed) && parsed > 5) return false;
+
+  return true;
+}
+
+function isNativeHealthFactorInfinity(item: MakerDaoPositionListItem): boolean {
+  if (formatHealthFactor(item.health_factor, item.debt_value_usd) !== '无风险') return false;
+
+  const raw = String(item.health_factor ?? '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'inf' || raw === 'infinity') return true;
+
+  const debt = toNumber(item.debt_value_usd);
+  const collateral = toNumber(item.collateral_value_usd);
+  const parsed = Number(item.health_factor);
+  return debt === 0 && parsed === 0 && collateral > 0;
+}
+
+function positionRiskClass(item: MakerDaoPositionListItem): string {
+  if (!item.is_healthy) return 'makerdao-risk-danger';
+  const healthFactor = getHealthFactorValue(item.health_factor, item.debt_value_usd);
+  if (toNumber(item.debt_value_usd) <= 0) return 'makerdao-risk-neutral';
+  if (healthFactor <= 1.2) return 'makerdao-risk-watch';
+  return 'makerdao-risk-safe';
+}
+
+function positionRiskLabel(item: MakerDaoPositionListItem): string {
+  if (!item.is_healthy) return '高风险';
+  if (toNumber(item.debt_value_usd) <= 0) return '无活跃债务';
+  if (getHealthFactorValue(item.health_factor, item.debt_value_usd) <= 1.2) return '需观察';
+  return '健康';
+}
+
+function getMakerDaoHealthFactorTone(
+  value: number,
+  display: string,
+): {
+  color: string;
+  className: string;
+  fontWeight: number;
+} {
+  if (display === '无风险' || value > 2) {
+    return { color: '#22c55e', className: '', fontWeight: 800 };
+  }
+  if (value <= 1.1) {
+    return { color: '#FFBB28', className: 'makerdao-hf-pulse', fontWeight: 900 };
+  }
+  if (value <= 1.5) {
+    return { color: '#f59e0b', className: '', fontWeight: 800 };
+  }
+  return { color: '#e2e8f0', className: '', fontWeight: 700 };
+}
+
+function MakerDaoHealthFactorCell({ item }: { item: MakerDaoPositionListItem }) {
+  const display = formatHealthFactor(item.health_factor, item.debt_value_usd);
+  const value = getHealthFactorValue(item.health_factor, item.debt_value_usd);
+  const tone = getMakerDaoHealthFactorTone(value, display);
+  const className = [
+    'right',
+    'mono',
+    'makerdao-health-factor-cell',
+    tone.className,
+    display === '无风险' && shouldBlinkHealthFactorInfinity(item) ? 'makerdao-hf-pulse-safe' : '',
+    isNativeHealthFactorInfinity(item) ? 'makerdao-hf-native-infinity' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <td
+      className={className}
+      style={{
+        color: tone.color,
+        fontWeight: tone.fontWeight,
+      }}
+    >
+      {display}
+    </td>
+  );
+}
+
+function MakerDaoHealthFactorInfoButton() {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [panelStyle, setPanelStyle] = useState<{ top: number; left: number; width: number }>({
+    top: 0,
+    left: 16,
+    width: 360,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const triggerRect = wrapRef.current?.getBoundingClientRect();
+      if (!triggerRect) return;
+
+      const viewportPadding = 16;
+      const maxWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+      const panelWidth = Math.max(260, maxWidth);
+      const desiredLeft = triggerRect.left + triggerRect.width / 2 - panelWidth / 2;
+      const clampedLeft = Math.min(
+        Math.max(viewportPadding, desiredLeft),
+        window.innerWidth - panelWidth - viewportPadding,
+      );
+
+      setPanelStyle({
+        top: Math.min(triggerRect.bottom + 8, window.innerHeight - 24),
+        left: clampedLeft,
+        width: panelWidth,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="makerdao-info-button-wrap">
+      <button
+        type="button"
+        className={`makerdao-info-button ${open ? 'active' : ''}`}
+        onClick={() => setOpen((value) => !value)}
+        title="查看指标解释"
+        aria-label="查看健康因子显示说明"
+      >
+        ?
+      </button>
+
+      {open ? (
+        <div
+          className="makerdao-info-panel"
+          style={{
+            top: `${panelStyle.top}px`,
+            left: `${panelStyle.left}px`,
+            width: `${panelStyle.width}px`,
+          }}
+        >
+          <div className="makerdao-info-panel-title">健康因子显示说明</div>
+          {HEALTH_FACTOR_EXPLAIN_ITEMS.map((item) => (
+            <div key={item.term} className="makerdao-info-panel-item">
+              <div className="makerdao-info-panel-term">{item.term}</div>
+              <div className="makerdao-info-panel-meaning">含义：{item.meaning}</div>
+              <div className="makerdao-info-panel-risk">观察重点：{item.riskHint}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface MakerDaoPositionsTableProps {
+  items: MakerDaoPositionListItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  pageInput: string;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+  expandedPositionUid: string | null;
+  onExpandedPositionChange: (uid: string | null) => void;
+  onPageChange: (page: number) => void;
+  onPageInputChange: (value: string) => void;
+  onPageJump: () => void;
+}
+
+function MakerDaoPositionsTable({
+  items,
+  page,
+  pageSize,
+  total,
+  totalPages,
+  pageInput,
+  hasPreviousPage,
+  hasNextPage,
+  expandedPositionUid,
+  onExpandedPositionChange,
+  onPageChange,
+  onPageInputChange,
+  onPageJump,
+}: MakerDaoPositionsTableProps) {
+  return (
+    <>
+      <div className="table-wrap makerdao-position-table-wrap">
+        <table className="pos-table makerdao-position-main-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>URN</th>
+              <th>Ilk</th>
+              <th className="right">抵押价值</th>
+              <th className="right">债务价值</th>
+              <th className="right">
+                <span className="makerdao-hf-heading">
+                  <span>健康因子</span>
+                  <MakerDaoHealthFactorInfoButton />
+                </span>
+              </th>
+              <th className="right">清算价格</th>
+              <th className="center">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, index) => {
+              const isExpanded = expandedPositionUid === item.position_uid;
+              const healthFactorValue = getHealthFactorValue(
+                item.health_factor,
+                item.debt_value_usd,
+              );
+              const rowClassName = [
+                'makerdao-position-row',
+                !item.is_healthy || healthFactorValue <= 1.2 ? 'makerdao-risk-row' : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+              return (
+                <Fragment key={item.position_uid}>
+                  <tr
+                    className={rowClassName}
+                    onClick={() => onExpandedPositionChange(isExpanded ? null : item.position_uid)}
+                  >
+                    <td>{(page - 1) * pageSize + index + 1}</td>
+                    <td>
+                      <div className="makerdao-position-address-cell">
+                        <span className="mono" title={item.urn_address}>
+                          {shortAddress(item.urn_address)}
+                        </span>
+                        <span className="makerdao-position-scope">
+                          {item.position_scope === 'system'
+                            ? '系统仓位'
+                            : `Vault #${item.vault_id ?? '--'}`}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="makerdao-vault-cell">
+                        <strong>{item.ilk || '--'}</strong>
+                        <span>{item.collateral_symbol || item.vault_type || '--'}</span>
+                      </div>
+                    </td>
+                    <td className="right mono" title={formatCompactUsd(item.collateral_value_usd)}>
+                      {formatCompactUsd(item.collateral_value_usd)}
+                    </td>
+                    <td className="right mono" title={formatCompactUsd(item.debt_value_usd)}>
+                      {formatCompactUsd(item.debt_value_usd)}
+                    </td>
+                    <MakerDaoHealthFactorCell item={item} />
+                    <td className="right mono" title={formatCompactUsd(item.liquidation_price_usd)}>
+                      {formatCompactUsd(item.liquidation_price_usd)}
+                    </td>
+                    <td className="center">
+                      <span className={`badge ${positionRiskClass(item)}`}>
+                        {positionRiskLabel(item)}
+                      </span>
+                    </td>
+                  </tr>
+                  {isExpanded ? (
+                    <tr className="makerdao-detail-row">
+                      <td colSpan={8}>
+                        <div className="makerdao-detail-panel">
+                          <div className="makerdao-detail-grid">
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">Position UID</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.position_uid}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">URN 地址</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.urn_address || '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">Owner 地址</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.owner_address || '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">Proxy 地址</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.proxy_address || '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">抵押 Token</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.collateral_token_address || '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">债务 Token</span>
+                              <span className="makerdao-detail-value mono">
+                                {item.debt_token_address || '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">抵押数量</span>
+                              <span className="makerdao-detail-value">
+                                {formatCompactNumber(item.collateral_amount, 4)}{' '}
+                                {item.collateral_symbol || ''}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">债务数量</span>
+                              <span className="makerdao-detail-value">
+                                {formatCompactNumber(item.debt_amount, 4)} {item.debt_symbol}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">清算率</span>
+                              <span className="makerdao-detail-value">
+                                {formatCompactNumber(toNumber(item.liquidation_ratio) * 100, 2)}%
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">更新时间</span>
+                              <span className="makerdao-detail-value">
+                                {formatDateTime(item.snapshot_at)}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">区块时间</span>
+                              <span className="makerdao-detail-value">
+                                {formatDateTime(item.block_timestamp)} · #
+                                {item.block_number ?? '--'}
+                              </span>
+                            </div>
+                            <div className="makerdao-detail-item">
+                              <span className="makerdao-detail-label">数据来源</span>
+                              <span className="makerdao-detail-value">{item.data_source}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="makerdao-position-table-footer">
+        <span>
+          共 {total.toLocaleString()} 条，当前第 {page} / {totalPages} 页
+        </span>
+        <div className="makerdao-position-table-actions">
+          <label className="makerdao-page-jump">
+            <span>页码</span>
+            <input
+              type="number"
+              min="1"
+              max={totalPages}
+              value={pageInput}
+              onChange={(event) => onPageInputChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  onPageJump();
+                }
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="makerdao-switch-btn"
+            disabled={!hasPreviousPage}
+            onClick={() => onPageChange(Math.max(page - 1, 1))}
+          >
+            上一页
+          </button>
+          <button type="button" className="makerdao-switch-btn" onClick={onPageJump}>
+            跳转
+          </button>
+          <button
+            type="button"
+            className="makerdao-switch-btn"
+            disabled={!hasNextPage}
+            onClick={() => onPageChange(Math.min(page + 1, totalPages))}
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function resolveIlkGroup(item: MakerDaoIlkItem): Exclude<IlkGroup, 'all'> {
@@ -181,6 +790,19 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
   const [pageInput, setPageInput] = useState('1');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [meta, setMeta] = useState<AggregatedRequestMeta>(EMPTY_META);
+  const [positionsData, setPositionsData] = useState<MakerDaoPositionsResponse | null>(null);
+  const [positionsLoading, setPositionsLoading] = useState(false);
+  const [positionsError, setPositionsError] = useState('');
+  const [positionsPage, setPositionsPage] = useState(1);
+  const [positionsPageInput, setPositionsPageInput] = useState('1');
+  const [positionScope, setPositionScope] = useState<PositionScopeFilter>('all');
+  const [positionHealth, setPositionHealth] = useState<PositionHealthFilter>('all');
+  const [positionSortBy, setPositionSortBy] = useState<PositionSortBy>('collateral_value_usd');
+  const [positionOrder, setPositionOrder] = useState<PositionOrder>('asc');
+  const [includeEmptyPositions, setIncludeEmptyPositions] = useState(false);
+  const [positionsReloadNonce, setPositionsReloadNonce] = useState(0);
+  const [positionsMeta, setPositionsMeta] = useState<AggregatedRequestMeta>(EMPTY_META);
+  const [expandedPositionUid, setExpandedPositionUid] = useState<string | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -213,6 +835,55 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
       cancelled = true;
     };
   }, [active, reloadNonce]);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+
+    const loadPositions = async () => {
+      setPositionsLoading(true);
+      setPositionsError('');
+
+      try {
+        const result = await fetchMakerDaoPositionsWithMeta({
+          page: positionsPage,
+          pageSize: POSITIONS_PAGE_SIZE,
+          sortBy: positionSortBy,
+          order: positionOrder,
+          positionScope,
+          isHealthy: positionHealth === 'all' ? null : positionHealth === 'healthy' ? true : false,
+          includeEmpty: includeEmptyPositions,
+        });
+        if (cancelled) return;
+        setPositionsData(result.data);
+        setPositionsMeta(mergeRequestMetas([result.meta]));
+      } catch (loadError) {
+        if (cancelled) return;
+        setPositionsData(null);
+        setPositionsMeta(EMPTY_META);
+        setPositionsError(
+          loadError instanceof Error ? loadError.message : '无法加载 MakerDAO 仓位总览',
+        );
+      } finally {
+        if (!cancelled) setPositionsLoading(false);
+      }
+    };
+
+    void loadPositions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    active,
+    includeEmptyPositions,
+    positionHealth,
+    positionOrder,
+    positionScope,
+    positionSortBy,
+    positionsPage,
+    positionsReloadNonce,
+  ]);
 
   const views = useMemo(() => ilks.map((item) => normalizeIlk(item, chain)), [chain, ilks]);
   const deployedCount = views.filter((item) => item.contractStatus === 'deployed').length;
@@ -252,6 +923,11 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
     setPage(1);
   }, [contractStatusFilter, groupFilter, searchTerm, sortMode]);
 
+  useEffect(() => {
+    setPositionsPage(1);
+    setExpandedPositionUid(null);
+  }, [includeEmptyPositions, positionHealth, positionOrder, positionScope, positionSortBy]);
+
   const totalPages = Math.max(1, Math.ceil(filteredViews.length / METADATA_PAGE_SIZE));
   const normalizedPage = Math.min(page, totalPages);
   const pageStart = (normalizedPage - 1) * METADATA_PAGE_SIZE;
@@ -271,6 +947,30 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
     }
     setPage(Math.min(Math.max(parsed, 1), totalPages));
   };
+
+  const positionsTotalPages = Math.max(
+    1,
+    Math.ceil((positionsData?.total ?? 0) / POSITIONS_PAGE_SIZE),
+  );
+  const normalizedPositionsPage = Math.min(positionsPage, positionsTotalPages);
+  const hasPreviousPositionsPage = normalizedPositionsPage > 1;
+  const hasNextPositionsPage = normalizedPositionsPage < positionsTotalPages;
+
+  useEffect(() => {
+    setPositionsPageInput(String(normalizedPositionsPage));
+  }, [normalizedPositionsPage]);
+
+  const goToPositionsPage = () => {
+    const parsed = Number.parseInt(positionsPageInput, 10);
+    if (!Number.isFinite(parsed)) {
+      setPositionsPageInput(String(normalizedPositionsPage));
+      return;
+    }
+    setPositionsPage(Math.min(Math.max(parsed, 1), positionsTotalPages));
+  };
+
+  const positionItems = positionsData?.items ?? [];
+  const positionAggregates = positionsData?.aggregates;
 
   return (
     <div className="makerdao-dashboard makerdao-market-dashboard">
@@ -344,39 +1044,28 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
         </div>
 
         <div className="makerdao-metadata-filters">
-          <label className="makerdao-market-search">
-            <span>搜索 Ilk / Symbol</span>
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="ETH-A / RWA / WBTC..."
-            />
-          </label>
+          <MakerDaoSearchControl
+            label="搜索 Ilk / Symbol"
+            value={searchTerm}
+            onChange={setSearchTerm}
+            placeholder="ETH-A / RWA / WBTC..."
+          />
 
-          <label className="makerdao-market-select">
-            <span>合约状态</span>
-            <select
-              value={contractStatusFilter}
-              onChange={(event) =>
-                setContractStatusFilter(event.target.value as ContractStatusFilter)
-              }
-            >
-              <option value="all">全部状态</option>
-              <option value="deployed">已部署合约</option>
-              <option value="internal">系统内部账户</option>
-            </select>
-          </label>
+          <MakerDaoSegmentedControl
+            label="合约状态"
+            value={contractStatusFilter}
+            options={CONTRACT_STATUS_OPTIONS}
+            ariaLabel="MakerDAO ilk contract status filter"
+            onChange={setContractStatusFilter}
+          />
 
-          <label className="makerdao-market-select">
-            <span>排序</span>
-            <select
-              value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as SortMode)}
-            >
-              <option value="alpha">按字母顺序</option>
-              <option value="updated_desc">按最近更新时间</option>
-            </select>
-          </label>
+          <MakerDaoSegmentedControl
+            label="排序"
+            value={sortMode}
+            options={METADATA_SORT_OPTIONS}
+            ariaLabel="MakerDAO ilk sort mode"
+            onChange={setSortMode}
+          />
         </div>
 
         {loading ? (
@@ -494,6 +1183,169 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
               </div>
             </div>
           </>
+        ) : null}
+      </section>
+
+      <section className="makerdao-positions-overview">
+        <div className="makerdao-asset-navigator-header">
+          <div>
+            <span className="makerdao-market-kicker">Positions Overview</span>
+            <h2 className="makerdao-market-title">MakerDAO 仓位总览</h2>
+            <p className="makerdao-market-copy">
+              基于当前仓位缓存展示普通 Vault 与系统 urn 的抵押、债务、健康因子和清算风险。
+            </p>
+          </div>
+          <div className="makerdao-asset-navigator-meta">
+            <span className="badge green-badge">{positionsData?.chain || chain}</span>
+            <span className="badge badge-brand-soft">{positionsData?.protocol || protocol}</span>
+            <ChartDataStatus meta={positionsMeta} />
+            <button
+              type="button"
+              className="makerdao-refresh-btn"
+              onClick={() => setPositionsReloadNonce((value) => value + 1)}
+              disabled={positionsLoading}
+              title="刷新仓位总览"
+            >
+              ↻
+            </button>
+          </div>
+        </div>
+
+        <div className="summary-grid makerdao-positions-summary-grid">
+          <div className="metric-box">
+            <span className="metric-label">总仓位数</span>
+            <span className="metric-value blue">
+              {(positionAggregates?.total_positions ?? 0).toLocaleString()}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">普通 Vault</span>
+            <span className="metric-value">
+              {(positionAggregates?.user_positions ?? 0).toLocaleString()}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">系统仓位</span>
+            <span className="metric-value green">
+              {(positionAggregates?.system_positions ?? 0).toLocaleString()}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">非健康仓位</span>
+            <span
+              className={`metric-value ${(positionAggregates?.unhealthy_positions ?? 0) > 0 ? 'red' : 'green'}`}
+            >
+              {(positionAggregates?.unhealthy_positions ?? 0).toLocaleString()}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">总抵押价值</span>
+            <span className="metric-value green">
+              {formatCompactUsd(positionAggregates?.total_collateral_value_usd)}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">总债务价值</span>
+            <span className="metric-value red">
+              {formatCompactUsd(positionAggregates?.total_debt_value_usd)}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">最低健康因子</span>
+            <span className="metric-value">
+              {formatHealthFactor(positionAggregates?.min_health_factor, '1')}
+            </span>
+          </div>
+          <div className="metric-box">
+            <span className="metric-label">最高健康因子</span>
+            <span className="metric-value">
+              {formatHealthFactor(positionAggregates?.max_health_factor, '1')}
+            </span>
+          </div>
+        </div>
+
+        <div className="makerdao-positions-filters makerdao-positions-filter-stack">
+          <div className="makerdao-positions-filter-row">
+            <MakerDaoSegmentedControl
+              label="排序字段"
+              value={positionSortBy}
+              options={POSITION_SORT_OPTIONS}
+              ariaLabel="MakerDAO position sort field"
+              onChange={setPositionSortBy}
+            />
+
+            <MakerDaoSegmentedControl
+              label="排序方向"
+              value={positionOrder}
+              options={POSITION_ORDER_OPTIONS}
+              ariaLabel="MakerDAO position sort order"
+              onChange={setPositionOrder}
+            />
+          </div>
+
+          <div className="makerdao-positions-filter-row">
+            <MakerDaoSegmentedControl
+              label="仓位范围"
+              value={positionScope}
+              options={POSITION_SCOPE_OPTIONS}
+              ariaLabel="MakerDAO position scope filter"
+              onChange={setPositionScope}
+            />
+
+            <MakerDaoSegmentedControl
+              label="健康状态"
+              value={positionHealth}
+              options={POSITION_HEALTH_OPTIONS}
+              ariaLabel="MakerDAO position health filter"
+              onChange={setPositionHealth}
+            />
+
+            <MakerDaoSegmentedControl
+              label="空仓"
+              value={includeEmptyPositions ? 'include' : 'exclude'}
+              options={[
+                { value: 'exclude', label: '排除空仓' },
+                { value: 'include', label: '包含空仓' },
+              ]}
+              ariaLabel="MakerDAO include empty positions"
+              onChange={(value) => setIncludeEmptyPositions(value === 'include')}
+            />
+          </div>
+        </div>
+
+        {positionsLoading ? (
+          <div className="makerdao-parameter-empty">
+            <div className="spinner"></div>
+          </div>
+        ) : null}
+
+        {!positionsLoading && positionsError ? (
+          <div className="makerdao-notice makerdao-notice-warn">
+            <strong>无法加载 MakerDAO 仓位总览</strong>
+            <span>{positionsError}</span>
+          </div>
+        ) : null}
+
+        {!positionsLoading && !positionsError && !positionItems.length ? (
+          <div className="makerdao-parameter-empty">没有匹配当前筛选条件的 MakerDAO 仓位</div>
+        ) : null}
+
+        {!positionsLoading && !positionsError && positionItems.length ? (
+          <MakerDaoPositionsTable
+            items={positionItems}
+            page={normalizedPositionsPage}
+            pageSize={POSITIONS_PAGE_SIZE}
+            total={positionsData?.total ?? 0}
+            totalPages={positionsTotalPages}
+            pageInput={positionsPageInput}
+            hasPreviousPage={hasPreviousPositionsPage}
+            hasNextPage={hasNextPositionsPage}
+            expandedPositionUid={expandedPositionUid}
+            onExpandedPositionChange={setExpandedPositionUid}
+            onPageChange={setPositionsPage}
+            onPageInputChange={setPositionsPageInput}
+            onPageJump={goToPositionsPage}
+          />
         ) : null}
       </section>
     </div>
