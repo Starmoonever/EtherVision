@@ -43,6 +43,7 @@ query V2Vaults($first: Int!, $chainId: Int!) {
         symbol
       }
       totalAssetsUsd
+      liquidityUsd
     }
   }
 }
@@ -139,8 +140,9 @@ def main() -> None:
         rows.append(
             {
                 "address": item.get("address"),
-                "asset_type": ((item.get("asset") or {}).get("symbol")),
-                "total_assets_usd": usd,
+                "asset": ((item.get("asset") or {}).get("symbol")),
+                "tvl_usd": usd,
+                "liquidity_usd": None,
                 "protocol": "v1",
             }
         )
@@ -154,13 +156,14 @@ def main() -> None:
         rows.append(
             {
                 "address": item.get("address"),
-                "asset_type": ((item.get("asset") or {}).get("symbol")),
-                "total_assets_usd": usd,
+                "asset": ((item.get("asset") or {}).get("symbol")),
+                "tvl_usd": usd,
+                "liquidity_usd": _to_float(item.get("liquidityUsd")),
                 "protocol": "v2",
             }
         )
 
-    rows.sort(key=lambda x: x.get("total_assets_usd", 0.0), reverse=True)
+    rows.sort(key=lambda x: x.get("tvl_usd", 0.0), reverse=True)
 
     output = {
         "source": "https://app.morpho.org/vaults?v2=false",

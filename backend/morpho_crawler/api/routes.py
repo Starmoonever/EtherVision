@@ -17,6 +17,7 @@ from .schemas import (
 from .schemas import (
     MorphoVaultV2StateGraphQLResponse,  # api/morpho/vault/v2/state相关
 )
+from .schemas import MorphoVaultV2WarningResponse  # api/morpho/vault/v2/warning相关
 from .schemas import MorphoVotesResponse  # api/morpho/vaults相关
 from .service import (
     get_market_state,  # api/morpho/market/state相关
@@ -26,6 +27,7 @@ from .service import (
 )
 from .service import get_vault_state_main_graphql  # api/morpho/vault/v1/state相关
 from .service import get_vault_v2_state_main_graphql  # api/morpho/vault/v2/state相关
+from .service import get_vault_v2_warnings  # api/morpho/vault/v2/warning相关
 from .service import get_votes_page  # api/morpho/vaults相关
 
 router = APIRouter(prefix="/api/morpho")
@@ -196,6 +198,19 @@ async def vault_v2_state(
 ) -> MorphoVaultV2StateGraphQLResponse:
     # api/morpho/vault/v2/state相关：固定主网查询，不暴露 chain_id
     return await get_vault_v2_state_main_graphql(address=address, pool=pool)
+
+
+# [V2_WARNING_ADD] 新增：GET /api/morpho/vault/v2/warning
+@router.get(
+    "/vault/v2/warning",
+    response_model=MorphoVaultV2WarningResponse,
+    summary="Morpho Vault V2 关联 V1/market warnings",
+)
+async def vault_v2_warning(
+    pool: AsyncpgPool,
+    address: str = Query(..., description="Vault V2 合约地址（EVM）"),
+) -> MorphoVaultV2WarningResponse:
+    return await get_vault_v2_warnings(address=address, pool=pool)
 
 
 # api/morpho/vaults相关：GET /api/morpho/vaults（v1/v2 金库总表概览，分页）

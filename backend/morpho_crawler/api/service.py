@@ -65,6 +65,8 @@ from .schemas import (
 )
 from .schemas import MorphoVaultV1StateGraphQLResponse  # api/morpho/vault/v1/state相关
 from .schemas import MorphoVaultV2StateGraphQLResponse  # api/morpho/vault/v2/state相关
+from .schemas import MorphoVaultV2WarningItem  # api/morpho/vault/v2/warning相关
+from .schemas import MorphoVaultV2WarningResponse  # api/morpho/vault/v2/warning相关
 from .schemas import (
     MorphoVotesAsset,  # api/morpho/vaults相关
     MorphoVotesItem,  # api/morpho/vaults相关
@@ -169,6 +171,30 @@ query MarketLiquidity($marketId: String!, $chainId: Int!) {
 }
 """.strip()
 
+# [V2_WARNING_ADD] 新增：查询 V1 vault warnings
+_VAULT_V1_WARNINGS_GRAPHQL = """
+query VaultV1Warnings($address: String!, $chainId: Int!) {
+  vaultByAddress(address: $address, chainId: $chainId) {
+    warnings {
+      level
+      type
+    }
+  }
+}
+""".strip()
+
+# [V2_WARNING_ADD] 新增：查询 market warnings
+_MARKET_WARNINGS_GRAPHQL = """
+query MarketWarnings($marketId: String!, $chainId: Int!) {
+  marketById(marketId: $marketId, chainId: $chainId) {
+    warnings {
+      level
+      type
+    }
+  }
+}
+""".strip()
+
 # api/morpho/vault/v2/state相关：Morpho 主站 GraphQL，字段对齐 tmp/morpho_vault_v2_xxx.json
 _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL = """
 query VaultV2ByAddress($address: String!, $chainId: Int!) {
@@ -192,34 +218,39 @@ query VaultV2ByAddress($address: String!, $chainId: Int!) {
       symbol
       decimals
     }
-    gatesConfig {
-      sendSharesGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      receiveAssetsGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      receiveSharesGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      sendAssetsGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
+    # [V2_STATE_ADAPTERS_ADD] 新增：返回 adapters（按约定输出 address / market_id）
+    adapters {
+      items {
+        type
+        ... on MetaMorphoAdapter {
+          position {
+            state {
+              address: id
+              assets
+              assetsUsd
+            }
+          }
+        }
+        ... on MorphoVaultV2Adapter {
+          assets
+          assetsUsd
+          innerVault {
+            address
+          }
+        }
+        ... on MorphoMarketV1Adapter {
+          assets
+          assetsUsd
+          positions {
+            items {
+              market_id: id
+              state {
+                supplyAssets
+                supplyAssetsUsd
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -677,7 +708,155 @@ async def _done_none() -> None:
     return None
 
 
-# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，透传 Morpho 主站 GraphQL 的 data + extensions
+async def _post_morpho_main_graphql(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(MORPHO_MAIN_GRAPHQL_URL_V2, json=payload)
+            resp.raise_for_status()
+            return cast(dict[str, Any], resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho 主站 GraphQL 请求失败: {exc}",
+        ) from exc
+
+
+# [V2_STATE_ADAPTERS_ADD] 新增：去掉适配器标识里的链前缀（例如 "1-"）
+def _strip_chain_prefix(text: Any) -> str:
+    raw = str(text or "")
+    return re.sub(r"^\d+-", "", raw)
+
+
+# [V2_WARNING_ADD] 新增：从 adapter position id 中提取真正的 address / market_id
+def _adapter_target_id(text: Any) -> str:
+    raw = _strip_chain_prefix(text)
+    return raw.split("-", 1)[0] if raw else ""
+
+
+# [V2_STATE_ADAPTERS_ADD] 新增：规范化 adapters 输出中的 id/address/market_id
+def _normalize_v2_adapters_identifiers(vault: dict[str, Any]) -> None:
+    adapters = (vault.get("adapters") or {}).get("items") or []
+    if not isinstance(adapters, list):
+        return
+    for adapter in adapters:
+        if not isinstance(adapter, dict):
+            continue
+        position = adapter.get("position")
+        if isinstance(position, dict):
+            state = position.get("state")
+            if isinstance(state, dict) and state.get("address") is not None:
+                state["address"] = _adapter_target_id(state.get("address"))
+        positions = adapter.get("positions")
+        if isinstance(positions, dict):
+            p_items = positions.get("items") or []
+            if isinstance(p_items, list):
+                for p in p_items:
+                    if isinstance(p, dict) and p.get("market_id") is not None:
+                        p["market_id"] = _adapter_target_id(p.get("market_id"))
+
+
+# [V2_WARNING_ADD] 新增：从 V2 adapters 提取 V1 地址和 market id
+def _extract_v2_warning_targets(vault: dict[str, Any]) -> tuple[list[str], list[str]]:
+    v1_addresses: list[str] = []
+    market_ids: list[str] = []
+    adapters = (vault.get("adapters") or {}).get("items") or []
+    if not isinstance(adapters, list):
+        return v1_addresses, market_ids
+    for adapter in adapters:
+        if not isinstance(adapter, dict):
+            continue
+        adapter_type = str(adapter.get("type") or "")
+        if adapter_type == "MetaMorpho":
+            state = (
+                ((adapter.get("position") or {}).get("state") or {})
+                if isinstance(adapter.get("position"), dict)
+                else {}
+            )
+            addr = _adapter_target_id(state.get("address"))
+            if addr and addr not in v1_addresses:
+                v1_addresses.append(addr)
+        elif adapter_type == "MorphoMarketV1":
+            positions = (
+                ((adapter.get("positions") or {}).get("items") or [])
+                if isinstance(adapter.get("positions"), dict)
+                else []
+            )
+            if isinstance(positions, list):
+                for item in positions:
+                    if not isinstance(item, dict):
+                        continue
+                    market_id = _adapter_target_id(item.get("market_id"))
+                    if market_id and market_id not in market_ids:
+                        market_ids.append(market_id)
+    return v1_addresses, market_ids
+
+
+async def _fetch_warning_rows(
+    *,
+    query: str,
+    variables: dict[str, Any],
+    root_field: str,
+) -> list[dict[str, Any]]:
+    body = await _post_morpho_main_graphql({"query": query, "variables": variables})
+    if body.get("errors"):
+        raise HTTPException(
+            status_code=502, detail=f"Morpho warnings 返回错误: {body['errors']}"
+        )
+    row = (body.get("data") or {}).get(root_field) or {}
+    warnings = row.get("warnings") if isinstance(row, dict) else None
+    return [w for w in warnings or [] if isinstance(w, dict)]
+
+
+# [V2_WARNING_ADD] 新增：GET /api/morpho/vault/v2/warning
+async def get_vault_v2_warnings(
+    *,
+    address: str,
+    chain_id: int = 1,
+    pool: AsyncpgPool | None = None,
+) -> MorphoVaultV2WarningResponse:
+    state = await get_vault_v2_state_main_graphql(
+        address=address, chain_id=chain_id, pool=pool
+    )
+    vault = state.vaultV2ByAddress.model_dump()
+    v1_addresses, market_ids = _extract_v2_warning_targets(vault)
+
+    warning_items: list[MorphoVaultV2WarningItem] = []
+    for v1_address in v1_addresses:
+        rows = await _fetch_warning_rows(
+            query=_VAULT_V1_WARNINGS_GRAPHQL,
+            variables={"address": v1_address, "chainId": chain_id},
+            root_field="vaultByAddress",
+        )
+        for row in rows:
+            warning_items.append(
+                MorphoVaultV2WarningItem(
+                    level=row.get("level"),
+                    warnings_type=row.get("type"),
+                    id=v1_address,
+                    type="v1",
+                )
+            )
+
+    for market_id in market_ids:
+        rows = await _fetch_warning_rows(
+            query=_MARKET_WARNINGS_GRAPHQL,
+            variables={"marketId": market_id, "chainId": chain_id},
+            root_field="marketById",
+        )
+        for row in rows:
+            warning_items.append(
+                MorphoVaultV2WarningItem(
+                    level=row.get("level"),
+                    warnings_type=row.get("type"),
+                    id=market_id,
+                    type="market",
+                )
+            )
+
+    return MorphoVaultV2WarningResponse(warnings=warning_items)
+
+
+# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，返回顶层 vaultV2ByAddress
 async def get_vault_v2_state_main_graphql(
     *,
     address: str,
@@ -697,22 +876,19 @@ async def get_vault_v2_state_main_graphql(
             pool, vault_address=checksum
         )
         if table_data is not None:
-            vault_table = (table_data.get("data") or {}).get("vaultV2ByAddress") or {}
+            vault_table = table_data.get("vaultV2ByAddress") or {}
             if isinstance(vault_table, dict):
                 vault_table["dataSource"] = "table"
-                gates = vault_table.get("gatesConfig") or {}
-                if isinstance(gates, dict):
-                    for gate_type in (
-                        "sendSharesGate",
-                        "receiveAssetsGate",
-                        "receiveSharesGate",
-                        "sendAssetsGate",
-                    ):
-                        gate = gates.get(gate_type)
-                        if isinstance(gate, dict):
-                            gate["dataSource"] = "table"
-            data_payload_v2 = cast(dict[str, Any], table_data.get("data") or {})
-            return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
+                # [V2_STATE_ADAPTERS_ADD] 新增：为 adapters 标记数据来源
+                adapters = (vault_table.get("adapters") or {}).get("items") or []
+                if isinstance(adapters, list):
+                    for adapter in adapters:
+                        if isinstance(adapter, dict):
+                            adapter["dataSource"] = "table"
+                _normalize_v2_adapters_identifiers(vault_table)
+            return MorphoVaultV2StateGraphQLResponse(
+                vaultV2ByAddress=cast(Any, vault_table)
+            )
 
     payload = {
         "query": _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL,
@@ -739,26 +915,18 @@ async def get_vault_v2_state_main_graphql(
         raise HTTPException(status_code=404, detail=detail)
     if isinstance(vault, dict):
         vault["dataSource"] = "graphql"
-        gates = vault.get("gatesConfig") or {}
-        if isinstance(gates, dict):
-            for gate_type in (
-                "sendSharesGate",
-                "receiveAssetsGate",
-                "receiveSharesGate",
-                "sendAssetsGate",
-            ):
-                gate = gates.get(gate_type)
-                if isinstance(gate, dict):
-                    gate["dataSource"] = "graphql"
+        # [V2_STATE_ADAPTERS_ADD] 新增：为 adapters 标记数据来源
+        adapters = (vault.get("adapters") or {}).get("items") or []
+        if isinstance(adapters, list):
+            for adapter in adapters:
+                if isinstance(adapter, dict):
+                    adapter["dataSource"] = "graphql"
+        _normalize_v2_adapters_identifiers(vault)
     # api/morpho/vault/v2/state相关：GraphQL 命中后回写 V2 当前表
     if pool is not None and isinstance(vault, dict):
         await _upsert_vault_v2_state_to_table(pool, vault=vault)
 
-    data_payload_v2 = cast(
-        dict[str, Any],
-        data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
-    )
-    return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
+    return MorphoVaultV2StateGraphQLResponse(vaultV2ByAddress=cast(Any, vault))
 
 
 # api/morpho/vault/v2/state相关：按地址查 V2 当前表并组装接口结构
@@ -786,7 +954,9 @@ async def _fetch_vault_v2_state_from_table(
                 max_apy,
                 force_deallocatable_liquidity_usd,
                 performance_fee,
-                management_fee
+                management_fee,
+                market_asset,
+                market_asset_usd
             FROM loan.morpho_vault_v2_current
             WHERE vault_address = $1
             LIMIT 1
@@ -795,62 +965,94 @@ async def _fetch_vault_v2_state_from_table(
         )
         if head is None:
             return None
-        gate_rows = await conn.fetch(
+        # [V2_STATE_ADAPTERS_ADD] 修改：改为读取 adapters 当前表
+        adapter_rows = await conn.fetch(
             """
             SELECT
-                gate_type,
-                gate_address,
-                abdicated,
-                pending_abdication_executable_at,
-                pending_address,
-                pending_executable_at
-            FROM loan.morpho_vault_v2_gates_current
+                id,
+                assets,
+                assets_usd,
+                type
+            FROM loan.morpho_vault_v2_adapters_current
             WHERE vault_address = $1
             """,
             vault_addr_b,
         )
-    gates_config: dict[str, Any] = {}
-    for row in gate_rows:
-        gate_type = str(row["gate_type"])
-        gates_config[gate_type] = {
-            "address": _db_bytes_to_evm(row["gate_address"])
-            if row["gate_address"]
-            else None,
-            "abdicated": bool(row["abdicated"]),
-            "pendingAbdicationExecutableAt": row["pending_abdication_executable_at"],
-            "pendingAddress": _db_bytes_to_evm(row["pending_address"])
-            if row["pending_address"]
-            else None,
-            "pendingExecutableAt": row["pending_executable_at"],
-        }
+    # [V2_STATE_ADAPTERS_ADD] 新增：按最小表结构重建 adapters 输出
+    adapters_items: list[dict[str, Any]] = []
+    for row in adapter_rows:
+        adapter_type = str(row["type"] or "")
+        adapter_id = str(row["id"] or "")
+        assets = float(row["assets"] or 0)
+        assets_usd = float(row["assets_usd"] or 0)
+        if adapter_type == "v1":
+            adapters_items.append(
+                {
+                    "type": "MetaMorpho",
+                    "position": {
+                        "state": {
+                            "address": adapter_id,
+                            "assets": assets,
+                            "assetsUsd": assets_usd,
+                        }
+                    },
+                }
+            )
+        elif adapter_type == "v2":
+            adapters_items.append(
+                {
+                    "type": "MorphoVaultV2",
+                    "assets": assets,
+                    "assetsUsd": assets_usd,
+                    "innerVault": {"address": adapter_id},
+                }
+            )
+        else:
+            adapters_items.append(
+                {
+                    "type": "MorphoMarketV1",
+                    "assets": assets,
+                    "assetsUsd": assets_usd,
+                    "positions": {
+                        "items": [
+                            {
+                                "market_id": adapter_id,
+                                "state": {
+                                    "supplyAssets": assets,
+                                    "supplyAssetsUsd": assets_usd,
+                                },
+                            }
+                        ]
+                    },
+                }
+            )
     return {
-        "data": {
-            "vaultV2ByAddress": {
-                "address": _db_bytes_to_evm(head["vault_address"]),
-                "name": head["vault_name"],
-                "totalAssetsUsd": float(head["total_assets_usd"] or 0),
-                "idleAssetsUsd": float(head["idle_assets_usd"] or 0),
-                "liquidityUsd": float(head["liquidity_usd"] or 0),
-                "apy": float(head["apy"] or 0),
-                "netApy": float(head["net_apy"] or 0),
-                "netApyExcludingRewards": float(head["net_apy_excluding_rewards"] or 0),
-                "avgNetApy": float(head["avg_net_apy"] or 0),
-                "avgNetApyExcludingRewards": float(
-                    head["avg_net_apy_excluding_rewards"] or 0
-                ),
-                "maxApy": float(head["max_apy"] or 0),
-                "forceDeallocatableLiquidityUsd": float(
-                    head["force_deallocatable_liquidity_usd"] or 0
-                ),
-                "performanceFee": float(head["performance_fee"] or 0),
-                "managementFee": float(head["management_fee"] or 0),
-                "asset": {
-                    "address": _db_bytes_to_evm(head["asset_address"]),
-                    "symbol": head["asset_symbol"],
-                    "decimals": head["asset_decimals"],
-                },
-                "gatesConfig": gates_config,
-            }
+        "vaultV2ByAddress": {
+            "address": _db_bytes_to_evm(head["vault_address"]),
+            "name": head["vault_name"],
+            "totalAssetsUsd": float(head["total_assets_usd"] or 0),
+            "idleAssetsUsd": float(head["idle_assets_usd"] or 0),
+            "liquidityUsd": float(head["liquidity_usd"] or 0),
+            "apy": float(head["apy"] or 0),
+            "netApy": float(head["net_apy"] or 0),
+            "netApyExcludingRewards": float(head["net_apy_excluding_rewards"] or 0),
+            "avgNetApy": float(head["avg_net_apy"] or 0),
+            "avgNetApyExcludingRewards": float(
+                head["avg_net_apy_excluding_rewards"] or 0
+            ),
+            "maxApy": float(head["max_apy"] or 0),
+            "forceDeallocatableLiquidityUsd": float(
+                head["force_deallocatable_liquidity_usd"] or 0
+            ),
+            "performanceFee": float(head["performance_fee"] or 0),
+            "managementFee": float(head["management_fee"] or 0),
+            "asset": {
+                "address": _db_bytes_to_evm(head["asset_address"]),
+                "symbol": head["asset_symbol"],
+                "decimals": head["asset_decimals"],
+            },
+            # [V2_STATE_ADAPTERS_ADD] 新增：在原有输出上追加 adapters
+            "adapters": {"items": adapters_items},
         }
     }
 
@@ -863,9 +1065,20 @@ async def _upsert_vault_v2_state_to_table(
     if not vault_addr:
         return
     asset = vault.get("asset") or {}
-    gates = vault.get("gatesConfig") or {}
+    # [V2_STATE_ADAPTERS_ADD] 修改：改为解析 adapters 并写入 adapters 当前表
+    adapters = (vault.get("adapters") or {}).get("items") or []
     vault_addr_b = _evm_to_db_bytes(vault_addr)
     asset_addr_b = _evm_to_db_bytes(str(asset.get("address") or ZERO_ADDRESS))
+    market_asset = None
+    market_asset_usd = None
+    if isinstance(adapters, list):
+        for adapter in adapters:
+            if not isinstance(adapter, dict):
+                continue
+            if str(adapter.get("type") or "") == "MorphoMarketV1":
+                market_asset = adapter.get("assets")
+                market_asset_usd = adapter.get("assetsUsd")
+                break
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
@@ -875,10 +1088,11 @@ async def _upsert_vault_v2_state_to_table(
                     total_assets_usd, idle_assets_usd, liquidity_usd, apy, net_apy,
                     net_apy_excluding_rewards, avg_net_apy, avg_net_apy_excluding_rewards,
                     max_apy, force_deallocatable_liquidity_usd, performance_fee, management_fee,
+                    market_asset, market_asset_usd,
                     source_ts, updated_at
                 )
                 VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW()
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),NOW()
                 )
                 ON CONFLICT (vault_address) DO UPDATE SET
                     vault_name = EXCLUDED.vault_name,
@@ -897,6 +1111,8 @@ async def _upsert_vault_v2_state_to_table(
                     force_deallocatable_liquidity_usd = EXCLUDED.force_deallocatable_liquidity_usd,
                     performance_fee = EXCLUDED.performance_fee,
                     management_fee = EXCLUDED.management_fee,
+                    market_asset = EXCLUDED.market_asset,
+                    market_asset_usd = EXCLUDED.market_asset_usd,
                     source_ts = NOW(),
                     updated_at = NOW()
                 """,
@@ -917,48 +1133,108 @@ async def _upsert_vault_v2_state_to_table(
                 vault.get("forceDeallocatableLiquidityUsd"),
                 vault.get("performanceFee"),
                 vault.get("managementFee"),
+                market_asset,
+                market_asset_usd,
             )
             await conn.execute(
                 """
-                DELETE FROM loan.morpho_vault_v2_gates_current
+                DELETE FROM loan.morpho_vault_v2_adapters_current
                 WHERE vault_address = $1
                 """,
                 vault_addr_b,
             )
             rows: list[tuple[Any, ...]] = []
-            for gate_type in (
-                "sendSharesGate",
-                "receiveAssetsGate",
-                "receiveSharesGate",
-                "sendAssetsGate",
-            ):
-                gate = gates.get(gate_type) if isinstance(gates, dict) else None
-                if not isinstance(gate, dict):
-                    continue
-                rows.append(
-                    (
-                        vault_addr_b,
-                        gate_type,
-                        _evm_to_db_bytes(str(gate.get("address")))
-                        if gate.get("address")
-                        else None,
-                        bool(gate.get("abdicated") or False),
-                        gate.get("pendingAbdicationExecutableAt"),
-                        _evm_to_db_bytes(str(gate.get("pendingAddress")))
-                        if gate.get("pendingAddress")
-                        else None,
-                        gate.get("pendingExecutableAt"),
+            if isinstance(adapters, list):
+                for adapter in adapters:
+                    if not isinstance(adapter, dict):
+                        continue
+                    adapter_type = str(adapter.get("type") or "")
+                    if adapter_type == "MetaMorpho":
+                        pos = (
+                            ((adapter.get("position") or {}).get("state") or {})
+                            if isinstance(adapter.get("position"), dict)
+                            else {}
+                        )
+                        adapter_id = _adapter_target_id(pos.get("address"))
+                        adapter_assets = pos.get("assets")
+                        adapter_assets_usd = pos.get("assetsUsd")
+                        normalized_type = "v1"
+                        if not adapter_id:
+                            continue
+                        rows.append(
+                            (
+                                vault_addr_b,
+                                adapter_id,
+                                adapter_assets,
+                                adapter_assets_usd,
+                                normalized_type,
+                            )
+                        )
+                        continue
+                    if adapter_type == "MorphoVaultV2":
+                        adapter_id = str(
+                            ((adapter.get("innerVault") or {}).get("address") or "")
+                        )
+                        normalized_type = "v2"
+                        if not adapter_id:
+                            continue
+                        rows.append(
+                            (
+                                vault_addr_b,
+                                adapter_id,
+                                adapter.get("assets"),
+                                adapter.get("assetsUsd"),
+                                normalized_type,
+                            )
+                        )
+                        continue
+                    if adapter_type == "MorphoMarketV1":
+                        normalized_type = "market"
+                        positions = (
+                            ((adapter.get("positions") or {}).get("items") or [])
+                            if isinstance(adapter.get("positions"), dict)
+                            else []
+                        )
+                        if isinstance(positions, list) and positions:
+                            for p in positions:
+                                if not isinstance(p, dict):
+                                    continue
+                                p_state = p.get("state") or {}
+                                adapter_id = _adapter_target_id(p.get("market_id"))
+                                if not adapter_id:
+                                    continue
+                                rows.append(
+                                    (
+                                        vault_addr_b,
+                                        adapter_id,
+                                        p_state.get("supplyAssets"),
+                                        p_state.get("supplyAssetsUsd"),
+                                        normalized_type,
+                                    )
+                                )
+                            continue
+                        # 无 positions 时没有可追踪的 market_id，不写入明细表。
+                        continue
+                    # 未知 type 兜底
+                    fallback_id = str(adapter.get("id") or "")
+                    if not fallback_id:
+                        continue
+                    rows.append(
+                        (
+                            vault_addr_b,
+                            fallback_id,
+                            adapter.get("assets"),
+                            adapter.get("assetsUsd"),
+                            "market",
+                        )
                     )
-                )
             if rows:
                 await conn.executemany(
                     """
-                    INSERT INTO loan.morpho_vault_v2_gates_current (
-                        vault_address, gate_type, gate_address, abdicated,
-                        pending_abdication_executable_at, pending_address, pending_executable_at,
-                        source_ts, updated_at
+                    INSERT INTO loan.morpho_vault_v2_adapters_current (
+                        vault_address, id, assets, assets_usd, type, source_ts, updated_at
                     )
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),NOW())
+                    VALUES ($1,$2,$3,$4,$5,NOW(),NOW())
                     """,
                     rows,
                 )
