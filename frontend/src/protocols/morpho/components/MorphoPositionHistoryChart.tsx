@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -19,8 +19,14 @@ import {
   ChartInfoButton,
   type ExplainItem,
 } from '../../../components/ChartAssist';
-import { MorphoDynamicLiquidationChart } from './MorphoDynamicLiquidationChart';
+import { ChartFallback } from '../../../shared/components/ChartFallback';
 import type { MorphoPricePoint } from './morphoDynamicLiquidationUtils';
+
+const MorphoDynamicLiquidationChart = lazy(() =>
+  import('./MorphoDynamicLiquidationChart').then((module) => ({
+    default: module.MorphoDynamicLiquidationChart,
+  })),
+);
 
 interface MorphoPositionHistoryChartProps {
   address: string;
@@ -796,15 +802,17 @@ export function MorphoPositionHistoryChart({
       </section>
 
       {canShowDynamicLiquidationChart && (
-        <MorphoDynamicLiquidationChart
-          collateralSeries={collateralSeries}
-          debtSeries={debtSeries}
-          debtAmount={debtAmount ?? 0}
-          collateralAmount={collateralAmount ?? 0}
-          lltv={lltv ?? 0}
-          collateralSymbol={collateralTokenSymbol || 'Collateral'}
-          debtSymbol={symbol}
-        />
+        <Suspense fallback={<ChartFallback minHeight="340px" />}>
+          <MorphoDynamicLiquidationChart
+            collateralSeries={collateralSeries}
+            debtSeries={debtSeries}
+            debtAmount={debtAmount ?? 0}
+            collateralAmount={collateralAmount ?? 0}
+            lltv={lltv ?? 0}
+            collateralSymbol={collateralTokenSymbol || 'Collateral'}
+            debtSymbol={symbol}
+          />
+        </Suspense>
       )}
     </div>
   );
