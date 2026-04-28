@@ -275,7 +275,7 @@ export function MakerDaoPersonalDashboard({ address }: MakerDaoPersonalDashboard
     }, 1400);
   };
 
-  const positions = data?.positions ?? [];
+  const positions = useMemo(() => data?.positions ?? [], [data?.positions]);
   const sortedPositions = useMemo(
     () =>
       [...positions].sort((a, b) => toNum(b.collateral_value_usd) - toNum(a.collateral_value_usd)),
