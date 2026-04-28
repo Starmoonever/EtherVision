@@ -13,20 +13,20 @@ repos:
 
   # Prettier (JS / TS / JSON / Markdown / YAML)
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: v3.8.1
+    rev: v3.8.3
     hooks:
       - id: prettier
 
   # Markdown 规范检查
   - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.22.0
+    rev: v0.22.1
     hooks:
       - id: markdownlint-cli2
         args: ['--fix'] # 自动修复可修复的问题
 
   # Python lint + formatter (Ruff)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.8
+    rev: v0.15.12
     hooks:
       - id: ruff-check
         args: ['--fix'] # 自动修复可修复的问题
@@ -34,7 +34,7 @@ repos:
 
   # Python 类型检查
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.408
+    rev: v1.1.409
     hooks:
       - id: pyright
 

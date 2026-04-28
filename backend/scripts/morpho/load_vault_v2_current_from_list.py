@@ -89,9 +89,7 @@ async def _fetch_one(address: str, sem: asyncio.Semaphore) -> dict[str, Any] | N
     async with sem:
         try:
             resp = await get_vault_v2_state_main_graphql(address=address)
-            return (
-                ((resp.data or {}).get("vaultV2ByAddress") or {}) if resp.data else None
-            )
+            return resp.data.vaultV2ByAddress.model_dump()
         except Exception:  # noqa: BLE001
             return None
 
