@@ -272,31 +272,6 @@ class MorphoVaultV1StateGraphQLResponse(BaseModel):
     data: MorphoVaultV1Data = Field(description="GraphQL data 字段。")
 
 
-# api/morpho/vault/v2/state相关：文档结构（类型展示）
-class MorphoVaultV2Gate(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    address: str | None = Field(default=None, description="Gate 地址。")
-    abdicated: bool | None = Field(default=None, description="是否已 abdicated。")
-    pendingAbdicationExecutableAt: int | None = Field(
-        default=None, description="pending abdication 可执行时间。"
-    )
-    pendingAddress: str | None = Field(default=None, description="pending 地址。")
-    pendingExecutableAt: int | None = Field(
-        default=None, description="pending 可执行时间。"
-    )
-    dataSource: str | None = Field(default=None, description="数据来源标记。")
-
-
-class MorphoVaultV2GatesConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    sendSharesGate: MorphoVaultV2Gate | None = Field(default=None)
-    receiveAssetsGate: MorphoVaultV2Gate | None = Field(default=None)
-    receiveSharesGate: MorphoVaultV2Gate | None = Field(default=None)
-    sendAssetsGate: MorphoVaultV2Gate | None = Field(default=None)
-
-
 # [V2_STATE_ADAPTERS_ADD] 新增：V2 adapters 输出结构（保持 extra 兼容）
 class MorphoVaultV2MetaMorphoPositionState(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -372,7 +347,6 @@ class MorphoVaultV2ByAddress(BaseModel):
     performanceFee: float | None = Field(default=None, description="业绩费。")
     managementFee: float | None = Field(default=None, description="管理费。")
     asset: MorphoVaultTokenInfo = Field(description="金库资产信息。")
-    gatesConfig: MorphoVaultV2GatesConfig = Field(description="Gate 配置。")
     # [V2_STATE_ADAPTERS_ADD] 新增：在原有输出上追加 adapters 字段
     adapters: MorphoVaultV2AdaptersPayload | None = Field(
         default=None, description="Adapter 列表。"
@@ -380,16 +354,70 @@ class MorphoVaultV2ByAddress(BaseModel):
     dataSource: str | None = Field(default=None, description="数据来源标记。")
 
 
-class MorphoVaultV2Data(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class MorphoVaultV2StateGraphQLResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
+            "example": {
+                "vaultV2ByAddress": {
+                    "address": "string",
+                    "name": "string",
+                    "totalAssetsUsd": 0.0,
+                    "idleAssetsUsd": 0.0,
+                    "liquidityUsd": 0.0,
+                    "apy": 0.0,
+                    "netApy": 0.0,
+                    "netApyExcludingRewards": 0.0,
+                    "avgNetApy": 0.0,
+                    "avgNetApyExcludingRewards": 0.0,
+                    "maxApy": 0.0,
+                    "forceDeallocatableLiquidityUsd": 0.0,
+                    "performanceFee": 0.0,
+                    "managementFee": 0.0,
+                    "asset": {
+                        "address": "string",
+                        "symbol": "string",
+                        "decimals": 6,
+                    },
+                    "adapters": {
+                        "items": [
+                            {
+                                "type": "MetaMorpho",
+                                "position": {
+                                    "state": {
+                                        "address": "string",
+                                        "assets": 0,
+                                        "assetsUsd": 0,
+                                    }
+                                },
+                                "dataSource": "table",
+                            },
+                            {
+                                "type": "MorphoMarketV1",
+                                "assets": 0,
+                                "assetsUsd": 0.0,
+                                "positions": {
+                                    "items": [
+                                        {
+                                            "market_id": "string",
+                                            "state": {
+                                                "supplyAssets": 0,
+                                                "supplyAssetsUsd": 0.0,
+                                            },
+                                        }
+                                    ]
+                                },
+                                "dataSource": "table",
+                            },
+                        ]
+                    },
+                    "dataSource": "table",
+                }
+            }
+        },
+    )
 
     vaultV2ByAddress: MorphoVaultV2ByAddress = Field(description="V2 金库结果。")
-
-
-class MorphoVaultV2StateGraphQLResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    data: MorphoVaultV2Data = Field(description="GraphQL data 字段。")
 
 
 # api/morpho/vaults相关：总表资产信息

@@ -192,36 +192,6 @@ query VaultV2ByAddress($address: String!, $chainId: Int!) {
       symbol
       decimals
     }
-    gatesConfig {
-      sendSharesGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      receiveAssetsGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      receiveSharesGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-      sendAssetsGate {
-        address
-        abdicated
-        pendingAbdicationExecutableAt
-        pendingAddress
-        pendingExecutableAt
-      }
-    }
     # [V2_STATE_ADAPTERS_ADD] 新增：返回 adapters（按约定输出 address / market_id）
     adapters {
       items {
@@ -740,7 +710,7 @@ def _normalize_v2_adapters_identifiers(vault: dict[str, Any]) -> None:
                         p["market_id"] = _strip_chain_prefix(p.get("market_id"))
 
 
-# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，透传 Morpho 主站 GraphQL 的 data + extensions
+# api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，返回顶层 vaultV2ByAddress
 async def get_vault_v2_state_main_graphql(
     *,
     address: str,
@@ -760,7 +730,7 @@ async def get_vault_v2_state_main_graphql(
             pool, vault_address=checksum
         )
         if table_data is not None:
-            vault_table = (table_data.get("data") or {}).get("vaultV2ByAddress") or {}
+            vault_table = table_data.get("vaultV2ByAddress") or {}
             if isinstance(vault_table, dict):
                 vault_table["dataSource"] = "table"
                 # [V2_STATE_ADAPTERS_ADD] 新增：为 adapters 标记数据来源
@@ -770,8 +740,9 @@ async def get_vault_v2_state_main_graphql(
                         if isinstance(adapter, dict):
                             adapter["dataSource"] = "table"
                 _normalize_v2_adapters_identifiers(vault_table)
-            data_payload_v2 = cast(dict[str, Any], table_data.get("data") or {})
-            return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
+            return MorphoVaultV2StateGraphQLResponse(
+                vaultV2ByAddress=cast(Any, vault_table)
+            )
 
     payload = {
         "query": _VAULT_V2_BY_ADDRESS_MAIN_GRAPHQL,
@@ -809,11 +780,7 @@ async def get_vault_v2_state_main_graphql(
     if pool is not None and isinstance(vault, dict):
         await _upsert_vault_v2_state_to_table(pool, vault=vault)
 
-    data_payload_v2 = cast(
-        dict[str, Any],
-        data if isinstance(data, dict) else {"vaultV2ByAddress": vault},
-    )
-    return MorphoVaultV2StateGraphQLResponse(data=cast(Any, data_payload_v2))
+    return MorphoVaultV2StateGraphQLResponse(vaultV2ByAddress=cast(Any, vault))
 
 
 # api/morpho/vault/v2/state相关：按地址查 V2 当前表并组装接口结构
@@ -914,36 +881,32 @@ async def _fetch_vault_v2_state_from_table(
                 }
             )
     return {
-        "data": {
-            "vaultV2ByAddress": {
-                "address": _db_bytes_to_evm(head["vault_address"]),
-                "name": head["vault_name"],
-                "totalAssetsUsd": float(head["total_assets_usd"] or 0),
-                "idleAssetsUsd": float(head["idle_assets_usd"] or 0),
-                "liquidityUsd": float(head["liquidity_usd"] or 0),
-                "apy": float(head["apy"] or 0),
-                "netApy": float(head["net_apy"] or 0),
-                "netApyExcludingRewards": float(head["net_apy_excluding_rewards"] or 0),
-                "avgNetApy": float(head["avg_net_apy"] or 0),
-                "avgNetApyExcludingRewards": float(
-                    head["avg_net_apy_excluding_rewards"] or 0
-                ),
-                "maxApy": float(head["max_apy"] or 0),
-                "forceDeallocatableLiquidityUsd": float(
-                    head["force_deallocatable_liquidity_usd"] or 0
-                ),
-                "performanceFee": float(head["performance_fee"] or 0),
-                "managementFee": float(head["management_fee"] or 0),
-                "asset": {
-                    "address": _db_bytes_to_evm(head["asset_address"]),
-                    "symbol": head["asset_symbol"],
-                    "decimals": head["asset_decimals"],
-                },
-                # [V2_STATE_ADAPTERS_ADD] 兼容保留：旧字段继续返回空对象
-                "gatesConfig": {},
-                # [V2_STATE_ADAPTERS_ADD] 新增：在原有输出上追加 adapters
-                "adapters": {"items": adapters_items},
-            }
+        "vaultV2ByAddress": {
+            "address": _db_bytes_to_evm(head["vault_address"]),
+            "name": head["vault_name"],
+            "totalAssetsUsd": float(head["total_assets_usd"] or 0),
+            "idleAssetsUsd": float(head["idle_assets_usd"] or 0),
+            "liquidityUsd": float(head["liquidity_usd"] or 0),
+            "apy": float(head["apy"] or 0),
+            "netApy": float(head["net_apy"] or 0),
+            "netApyExcludingRewards": float(head["net_apy_excluding_rewards"] or 0),
+            "avgNetApy": float(head["avg_net_apy"] or 0),
+            "avgNetApyExcludingRewards": float(
+                head["avg_net_apy_excluding_rewards"] or 0
+            ),
+            "maxApy": float(head["max_apy"] or 0),
+            "forceDeallocatableLiquidityUsd": float(
+                head["force_deallocatable_liquidity_usd"] or 0
+            ),
+            "performanceFee": float(head["performance_fee"] or 0),
+            "managementFee": float(head["management_fee"] or 0),
+            "asset": {
+                "address": _db_bytes_to_evm(head["asset_address"]),
+                "symbol": head["asset_symbol"],
+                "decimals": head["asset_decimals"],
+            },
+            # [V2_STATE_ADAPTERS_ADD] 新增：在原有输出上追加 adapters
+            "adapters": {"items": adapters_items},
         }
     }
 
