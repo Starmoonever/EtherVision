@@ -1,7 +1,7 @@
 """add makerdao ilks current table
 
 Revision ID: e9f0a1b2c3d4
-Revises: 5e6f7a8b9c0d, 8a9b0c1d2e3f, b1c2d3e4f5a6, d9e0f1a2b3c4
+Revises: e2a7c14d8f05
 Create Date: 2026-04-25 00:00:00.000000
 """
 
@@ -13,12 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "e9f0a1b2c3d4"
-down_revision: Union[str, Sequence[str], None] = (
-    "5e6f7a8b9c0d",
-    "8a9b0c1d2e3f",
-    "b1c2d3e4f5a6",
-    "d9e0f1a2b3c4",
-)
+down_revision: Union[str, Sequence[str], None] = "e2a7c14d8f05"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

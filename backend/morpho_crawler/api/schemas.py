@@ -297,6 +297,57 @@ class MorphoVaultV2GatesConfig(BaseModel):
     sendAssetsGate: MorphoVaultV2Gate | None = Field(default=None)
 
 
+# [V2_STATE_ADAPTERS_ADD] 新增：V2 adapters 输出结构（保持 extra 兼容）
+class MorphoVaultV2MetaMorphoPositionState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    address: str | None = Field(default=None, description="MetaMorpho position 标识。")
+    assets: float | int | None = Field(default=None, description="资产数量。")
+    assetsUsd: float | None = Field(default=None, description="资产 USD。")
+
+
+class MorphoVaultV2MetaMorphoPosition(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    state: MorphoVaultV2MetaMorphoPositionState | None = Field(default=None)
+
+
+class MorphoVaultV2AdapterMarketPositionState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    supplyAssets: float | int | None = Field(default=None, description="供给资产。")
+    supplyAssetsUsd: float | None = Field(default=None, description="供给资产 USD。")
+
+
+class MorphoVaultV2AdapterMarketPositionItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    market_id: str | None = Field(default=None, description="市场标识。")
+    state: MorphoVaultV2AdapterMarketPositionState | None = Field(default=None)
+
+
+class MorphoVaultV2AdapterMarketPositions(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[MorphoVaultV2AdapterMarketPositionItem] = Field(default_factory=list)
+
+
+class MorphoVaultV2AdapterItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str | None = Field(default=None, description="Adapter 类型。")
+    assets: float | int | None = Field(default=None, description="资产数量。")
+    assetsUsd: float | None = Field(default=None, description="资产 USD。")
+    position: MorphoVaultV2MetaMorphoPosition | None = Field(default=None)
+    positions: MorphoVaultV2AdapterMarketPositions | None = Field(default=None)
+
+
+class MorphoVaultV2AdaptersPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[MorphoVaultV2AdapterItem] = Field(default_factory=list)
+
+
 class MorphoVaultV2ByAddress(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -322,6 +373,10 @@ class MorphoVaultV2ByAddress(BaseModel):
     managementFee: float | None = Field(default=None, description="管理费。")
     asset: MorphoVaultTokenInfo = Field(description="金库资产信息。")
     gatesConfig: MorphoVaultV2GatesConfig = Field(description="Gate 配置。")
+    # [V2_STATE_ADAPTERS_ADD] 新增：在原有输出上追加 adapters 字段
+    adapters: MorphoVaultV2AdaptersPayload | None = Field(
+        default=None, description="Adapter 列表。"
+    )
     dataSource: str | None = Field(default=None, description="数据来源标记。")
 
 

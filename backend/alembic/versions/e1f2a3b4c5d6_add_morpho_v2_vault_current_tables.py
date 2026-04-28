@@ -75,24 +75,15 @@ def upgrade() -> None:
             schema="loan",
         )
 
-    # api/morpho/vault/v2/state相关：V2 gates 当前快照表
-    if not _table_exists("morpho_vault_v2_gates_current"):
+    # api/morpho/vault/v2/state相关：V2 adapters 当前快照表（最简结构）
+    if not _table_exists("morpho_vault_v2_adapters_current"):
         op.create_table(
-            "morpho_vault_v2_gates_current",
+            "morpho_vault_v2_adapters_current",
             sa.Column("vault_address", postgresql.BYTEA(), nullable=False),
-            sa.Column("gate_type", sa.Text(), nullable=False),
-            sa.Column("gate_address", postgresql.BYTEA(), nullable=True),
-            sa.Column(
-                "abdicated",
-                sa.Boolean(),
-                nullable=False,
-                server_default=sa.text("false"),
-            ),
-            sa.Column(
-                "pending_abdication_executable_at", sa.BigInteger(), nullable=True
-            ),
-            sa.Column("pending_address", postgresql.BYTEA(), nullable=True),
-            sa.Column("pending_executable_at", sa.BigInteger(), nullable=True),
+            sa.Column("id", sa.Text(), nullable=False),
+            sa.Column("assets", sa.Numeric(precision=78, scale=0), nullable=True),
+            sa.Column("assets_usd", sa.Numeric(precision=78, scale=18), nullable=True),
+            sa.Column("type", sa.Text(), nullable=False),
             sa.Column(
                 "source_ts",
                 sa.DateTime(timezone=True),
@@ -105,7 +96,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default=sa.text("now()"),
             ),
-            sa.PrimaryKeyConstraint("vault_address", "gate_type"),
+            sa.PrimaryKeyConstraint("vault_address", "id", "type"),
             schema="loan",
         )
 
@@ -124,20 +115,8 @@ def upgrade() -> None:
     )
     op.execute(
         sa.text(
-            "ALTER TABLE loan.morpho_vault_v2_gates_current "
+            "ALTER TABLE loan.morpho_vault_v2_adapters_current "
             "ALTER COLUMN vault_address SET STORAGE PLAIN"
-        )
-    )
-    op.execute(
-        sa.text(
-            "ALTER TABLE loan.morpho_vault_v2_gates_current "
-            "ALTER COLUMN gate_address SET STORAGE PLAIN"
-        )
-    )
-    op.execute(
-        sa.text(
-            "ALTER TABLE loan.morpho_vault_v2_gates_current "
-            "ALTER COLUMN pending_address SET STORAGE PLAIN"
         )
     )
 
@@ -149,48 +128,16 @@ def upgrade() -> None:
             unique=False,
             schema="loan",
         )
-    if not _index_exists(
-        "morpho_vault_v2_gates_current", "idx_morpho_v2_gates_abdicated"
-    ):
-        op.create_index(
-            "idx_morpho_v2_gates_abdicated",
-            "morpho_vault_v2_gates_current",
-            ["abdicated"],
-            unique=False,
-            schema="loan",
-        )
-    if not _index_exists(
-        "morpho_vault_v2_gates_current", "idx_morpho_v2_gates_gate_type"
-    ):
-        op.create_index(
-            "idx_morpho_v2_gates_gate_type",
-            "morpho_vault_v2_gates_current",
-            ["gate_type"],
-            unique=False,
-            schema="loan",
-        )
 
 
 def downgrade() -> None:
-    if _index_exists("morpho_vault_v2_gates_current", "idx_morpho_v2_gates_gate_type"):
-        op.drop_index(
-            "idx_morpho_v2_gates_gate_type",
-            table_name="morpho_vault_v2_gates_current",
-            schema="loan",
-        )
-    if _index_exists("morpho_vault_v2_gates_current", "idx_morpho_v2_gates_abdicated"):
-        op.drop_index(
-            "idx_morpho_v2_gates_abdicated",
-            table_name="morpho_vault_v2_gates_current",
-            schema="loan",
-        )
     if _index_exists("morpho_vault_v2_current", "idx_morpho_v2_current_updated_at"):
         op.drop_index(
             "idx_morpho_v2_current_updated_at",
             table_name="morpho_vault_v2_current",
             schema="loan",
         )
-    if _table_exists("morpho_vault_v2_gates_current"):
-        op.drop_table("morpho_vault_v2_gates_current", schema="loan")
+    if _table_exists("morpho_vault_v2_adapters_current"):
+        op.drop_table("morpho_vault_v2_adapters_current", schema="loan")
     if _table_exists("morpho_vault_v2_current"):
         op.drop_table("morpho_vault_v2_current", schema="loan")
