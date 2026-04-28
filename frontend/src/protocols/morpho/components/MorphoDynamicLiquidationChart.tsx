@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as echarts from 'echarts';
-import type { EChartsOption } from 'echarts';
+import { LineChart } from 'echarts/charts';
+import {
+  DataZoomComponent,
+  DatasetComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+} from 'echarts/components';
+import { graphic, init, use as registerECharts, util, type EChartsCoreOption } from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
 import { ChartInfoButton, type ExplainItem } from '../../../components/ChartAssist';
 import {
   buildDynamicLiquidationSeries,
@@ -10,6 +18,16 @@ import {
 } from './morphoDynamicLiquidationUtils';
 
 type LiquidationChartMode = 'collateral' | 'debt';
+
+registerECharts([
+  LineChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  DatasetComponent,
+  DataZoomComponent,
+  CanvasRenderer,
+]);
 
 interface MorphoDynamicLiquidationChartProps {
   collateralSeries: MorphoPricePoint[];
@@ -79,7 +97,7 @@ export function MorphoDynamicLiquidationChart({
   useEffect(() => {
     if (!chartRef.current || chartData.length === 0) return undefined;
 
-    const chart = echarts.init(chartRef.current);
+    const chart = init(chartRef.current);
     const splitNumber = 5;
     const isDebtMode = mode === 'debt';
     const currentKey = isDebtMode ? 'debtPrice' : 'collateralPrice';
@@ -100,7 +118,7 @@ export function MorphoDynamicLiquidationChart({
       splitNumber,
     ).left;
 
-    const yAxis = echarts.util.map(
+    const yAxis = util.map(
       [
         {
           type: 'value' as const,
@@ -130,9 +148,9 @@ export function MorphoDynamicLiquidationChart({
         ...axisConfig,
         splitNumber,
       }),
-    ) as EChartsOption['yAxis'];
+    ) as EChartsCoreOption['yAxis'];
 
-    const option: EChartsOption = {
+    const option: EChartsCoreOption = {
       backgroundColor: 'transparent',
       animationDuration: 520,
       grid: {
@@ -292,7 +310,7 @@ export function MorphoDynamicLiquidationChart({
           },
           areaStyle: {
             opacity: 1,
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            color: new graphic.LinearGradient(0, 0, 0, 1, [
               { offset: 0, color: areaStartColor },
               { offset: 1, color: 'rgba(15, 23, 42, 0)' },
             ]),

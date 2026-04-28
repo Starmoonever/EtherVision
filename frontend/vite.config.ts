@@ -33,12 +33,27 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/recharts')) {
+          if (!id.includes('node_modules')) {
+            return undefined;
+          }
+          const normalizedId = id.replaceAll('\\', '/');
+          if (
+            normalizedId.includes('/node_modules/react/') ||
+            normalizedId.includes('/node_modules/react-dom/') ||
+            normalizedId.includes('/node_modules/scheduler/')
+          ) {
+            return 'react';
+          }
+          if (normalizedId.includes('/node_modules/recharts/')) {
             return 'recharts';
           }
-          if (id.includes('node_modules/viem')) {
+          if (normalizedId.includes('/node_modules/echarts/')) {
+            return 'echarts';
+          }
+          if (normalizedId.includes('/node_modules/viem/')) {
             return 'viem';
           }
+          return 'vendor';
         },
       },
     },
