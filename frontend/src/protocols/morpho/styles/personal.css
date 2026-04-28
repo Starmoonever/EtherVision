@@ -387,8 +387,6 @@
   .morpho-vault-search-row,
   .morpho-vault-detail-layout,
   .morpho-vault-metric-grid,
-  .morpho-vault-v2-detail-grid,
-  .morpho-vault-v2-detail-grid-wide,
   .morpho-vault-v2-gates-grid {
     grid-template-columns: 1fr;
   }

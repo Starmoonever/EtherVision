@@ -27,8 +27,10 @@ export interface PriceQueryOptions {
 const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const priceCache = new Map<string, { fetchedAt: number; value: number }>();
+const priceMissCache = new Map<string, { fetchedAt: number; message: string }>();
 const priceInflight = new Map<string, Promise<number>>();
 const pricePeriodCache = new Map<string, { fetchedAt: number; value: PricePeriodItem[] }>();
+const pricePeriodMissCache = new Map<string, { fetchedAt: number; message: string }>();
 const pricePeriodInflight = new Map<string, Promise<PricePeriodItem[]>>();
 
 function isEvmAddress(value: string): boolean {
@@ -77,6 +79,10 @@ export async function fetchAssetPriceWithMeta(
       },
     };
   }
+  const missed = priceMissCache.get(key);
+  if (missed) {
+    throw new Error(missed.message);
+  }
 
   const inflight = priceInflight.get(key);
   if (inflight) {
@@ -95,8 +101,14 @@ export async function fetchAssetPriceWithMeta(
     .then((data) => {
       const price = parseFloat(data.price_usd);
       if (isNaN(price)) throw new Error(`Invalid ${asset} price response`);
+      priceMissCache.delete(key);
       priceCache.set(key, { fetchedAt: Date.now(), value: price });
       return price;
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : `无法获取 ${asset} 价格`;
+      priceMissCache.set(key, { fetchedAt: Date.now(), message });
+      throw error;
     })
     .finally(() => {
       priceInflight.delete(key);
@@ -146,6 +158,10 @@ export async function fetchAssetPricePeriodWithMeta(
       },
     };
   }
+  const missed = pricePeriodMissCache.get(key);
+  if (missed) {
+    throw new Error(missed.message);
+  }
 
   const inflight = pricePeriodInflight.get(key);
   if (inflight) {
@@ -165,8 +181,14 @@ export async function fetchAssetPricePeriodWithMeta(
       if (!data.prices || !Array.isArray(data.prices)) {
         throw new Error(`Invalid ${asset} price period response format`);
       }
+      pricePeriodMissCache.delete(key);
       pricePeriodCache.set(key, { fetchedAt: Date.now(), value: data.prices });
       return data.prices;
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : `无法获取 ${asset} 历史价格`;
+      pricePeriodMissCache.set(key, { fetchedAt: Date.now(), message });
+      throw error;
     })
     .finally(() => {
       pricePeriodInflight.delete(key);
