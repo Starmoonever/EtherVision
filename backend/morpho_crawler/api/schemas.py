@@ -212,7 +212,9 @@ class MorphoVaultV1AllocationMarket(BaseModel):
 
     market_id: str = Field(description="市场 id。")
     loanAsset: MorphoVaultTokenInfo = Field(description="借贷侧资产。")
-    collateralAsset: MorphoVaultTokenInfo = Field(description="抵押侧资产。")
+    collateralAsset: MorphoVaultTokenInfo | None = Field(
+        default=None, description="抵押侧资产；无抵押市场为 null。"
+    )
     dataSource: str | None = Field(default=None, description="数据来源标记。")
 
 
@@ -418,6 +420,39 @@ class MorphoVaultV2StateGraphQLResponse(BaseModel):
     )
 
     vaultV2ByAddress: MorphoVaultV2ByAddress = Field(description="V2 金库结果。")
+
+
+# [V2_WARNING_ADD] 新增：GET /api/morpho/vault/v2/warning 输出结构
+class MorphoVaultV2WarningItem(BaseModel):
+    level: str | None = Field(default=None, description="警告等级。")
+    warnings_type: str | None = Field(default=None, description="警告类型。")
+    id: str = Field(description="警告对应的 V1 vault address 或 market_id。")
+    type: str = Field(description="警告来源类型：v1 或 market。")
+
+
+class MorphoVaultV2WarningResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "warnings": [
+                    {
+                        "level": "string",
+                        "warnings_type": "string",
+                        "id": "string",
+                        "type": "v1",
+                    },
+                    {
+                        "level": "string",
+                        "warnings_type": "string",
+                        "id": "string",
+                        "type": "market",
+                    },
+                ]
+            }
+        }
+    )
+
+    warnings: list[MorphoVaultV2WarningItem] = Field(default_factory=list)
 
 
 # api/morpho/vaults相关：总表资产信息

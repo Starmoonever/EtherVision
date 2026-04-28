@@ -65,6 +65,8 @@ from .schemas import (
 )
 from .schemas import MorphoVaultV1StateGraphQLResponse  # api/morpho/vault/v1/state相关
 from .schemas import MorphoVaultV2StateGraphQLResponse  # api/morpho/vault/v2/state相关
+from .schemas import MorphoVaultV2WarningItem  # api/morpho/vault/v2/warning相关
+from .schemas import MorphoVaultV2WarningResponse  # api/morpho/vault/v2/warning相关
 from .schemas import (
     MorphoVotesAsset,  # api/morpho/vaults相关
     MorphoVotesItem,  # api/morpho/vaults相关
@@ -164,6 +166,30 @@ query MarketLiquidity($marketId: String!, $chainId: Int!) {
     state {
       supplyAssets
       borrowAssets
+    }
+  }
+}
+""".strip()
+
+# [V2_WARNING_ADD] 新增：查询 V1 vault warnings
+_VAULT_V1_WARNINGS_GRAPHQL = """
+query VaultV1Warnings($address: String!, $chainId: Int!) {
+  vaultByAddress(address: $address, chainId: $chainId) {
+    warnings {
+      level
+      type
+    }
+  }
+}
+""".strip()
+
+# [V2_WARNING_ADD] 新增：查询 market warnings
+_MARKET_WARNINGS_GRAPHQL = """
+query MarketWarnings($marketId: String!, $chainId: Int!) {
+  marketById(marketId: $marketId, chainId: $chainId) {
+    warnings {
+      level
+      type
     }
   }
 }
@@ -682,10 +708,29 @@ async def _done_none() -> None:
     return None
 
 
+async def _post_morpho_main_graphql(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(MORPHO_MAIN_GRAPHQL_URL_V2, json=payload)
+            resp.raise_for_status()
+            return cast(dict[str, Any], resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Morpho 主站 GraphQL 请求失败: {exc}",
+        ) from exc
+
+
 # [V2_STATE_ADAPTERS_ADD] 新增：去掉适配器标识里的链前缀（例如 "1-"）
 def _strip_chain_prefix(text: Any) -> str:
     raw = str(text or "")
     return re.sub(r"^\d+-", "", raw)
+
+
+# [V2_WARNING_ADD] 新增：从 adapter position id 中提取真正的 address / market_id
+def _adapter_target_id(text: Any) -> str:
+    raw = _strip_chain_prefix(text)
+    return raw.split("-", 1)[0] if raw else ""
 
 
 # [V2_STATE_ADAPTERS_ADD] 新增：规范化 adapters 输出中的 id/address/market_id
@@ -700,14 +745,115 @@ def _normalize_v2_adapters_identifiers(vault: dict[str, Any]) -> None:
         if isinstance(position, dict):
             state = position.get("state")
             if isinstance(state, dict) and state.get("address") is not None:
-                state["address"] = _strip_chain_prefix(state.get("address"))
+                state["address"] = _adapter_target_id(state.get("address"))
         positions = adapter.get("positions")
         if isinstance(positions, dict):
             p_items = positions.get("items") or []
             if isinstance(p_items, list):
                 for p in p_items:
                     if isinstance(p, dict) and p.get("market_id") is not None:
-                        p["market_id"] = _strip_chain_prefix(p.get("market_id"))
+                        p["market_id"] = _adapter_target_id(p.get("market_id"))
+
+
+# [V2_WARNING_ADD] 新增：从 V2 adapters 提取 V1 地址和 market id
+def _extract_v2_warning_targets(vault: dict[str, Any]) -> tuple[list[str], list[str]]:
+    v1_addresses: list[str] = []
+    market_ids: list[str] = []
+    adapters = (vault.get("adapters") or {}).get("items") or []
+    if not isinstance(adapters, list):
+        return v1_addresses, market_ids
+    for adapter in adapters:
+        if not isinstance(adapter, dict):
+            continue
+        adapter_type = str(adapter.get("type") or "")
+        if adapter_type == "MetaMorpho":
+            state = (
+                ((adapter.get("position") or {}).get("state") or {})
+                if isinstance(adapter.get("position"), dict)
+                else {}
+            )
+            addr = _adapter_target_id(state.get("address"))
+            if addr and addr not in v1_addresses:
+                v1_addresses.append(addr)
+        elif adapter_type == "MorphoMarketV1":
+            positions = (
+                ((adapter.get("positions") or {}).get("items") or [])
+                if isinstance(adapter.get("positions"), dict)
+                else []
+            )
+            if isinstance(positions, list):
+                for item in positions:
+                    if not isinstance(item, dict):
+                        continue
+                    market_id = _adapter_target_id(item.get("market_id"))
+                    if market_id and market_id not in market_ids:
+                        market_ids.append(market_id)
+    return v1_addresses, market_ids
+
+
+async def _fetch_warning_rows(
+    *,
+    query: str,
+    variables: dict[str, Any],
+    root_field: str,
+) -> list[dict[str, Any]]:
+    body = await _post_morpho_main_graphql({"query": query, "variables": variables})
+    if body.get("errors"):
+        raise HTTPException(
+            status_code=502, detail=f"Morpho warnings 返回错误: {body['errors']}"
+        )
+    row = (body.get("data") or {}).get(root_field) or {}
+    warnings = row.get("warnings") if isinstance(row, dict) else None
+    return [w for w in warnings or [] if isinstance(w, dict)]
+
+
+# [V2_WARNING_ADD] 新增：GET /api/morpho/vault/v2/warning
+async def get_vault_v2_warnings(
+    *,
+    address: str,
+    chain_id: int = 1,
+    pool: AsyncpgPool | None = None,
+) -> MorphoVaultV2WarningResponse:
+    state = await get_vault_v2_state_main_graphql(
+        address=address, chain_id=chain_id, pool=pool
+    )
+    vault = state.vaultV2ByAddress.model_dump()
+    v1_addresses, market_ids = _extract_v2_warning_targets(vault)
+
+    warning_items: list[MorphoVaultV2WarningItem] = []
+    for v1_address in v1_addresses:
+        rows = await _fetch_warning_rows(
+            query=_VAULT_V1_WARNINGS_GRAPHQL,
+            variables={"address": v1_address, "chainId": chain_id},
+            root_field="vaultByAddress",
+        )
+        for row in rows:
+            warning_items.append(
+                MorphoVaultV2WarningItem(
+                    level=row.get("level"),
+                    warnings_type=row.get("type"),
+                    id=v1_address,
+                    type="v1",
+                )
+            )
+
+    for market_id in market_ids:
+        rows = await _fetch_warning_rows(
+            query=_MARKET_WARNINGS_GRAPHQL,
+            variables={"marketId": market_id, "chainId": chain_id},
+            root_field="marketById",
+        )
+        for row in rows:
+            warning_items.append(
+                MorphoVaultV2WarningItem(
+                    level=row.get("level"),
+                    warnings_type=row.get("type"),
+                    id=market_id,
+                    type="market",
+                )
+            )
+
+    return MorphoVaultV2WarningResponse(warnings=warning_items)
 
 
 # api/morpho/vault/v2/state相关：GET /api/morpho/vault/v2/state，返回顶层 vaultV2ByAddress
@@ -1009,7 +1155,7 @@ async def _upsert_vault_v2_state_to_table(
                             if isinstance(adapter.get("position"), dict)
                             else {}
                         )
-                        adapter_id = _strip_chain_prefix(pos.get("address"))
+                        adapter_id = _adapter_target_id(pos.get("address"))
                         adapter_assets = pos.get("assets")
                         adapter_assets_usd = pos.get("assetsUsd")
                         normalized_type = "v1"
@@ -1054,7 +1200,7 @@ async def _upsert_vault_v2_state_to_table(
                                 if not isinstance(p, dict):
                                     continue
                                 p_state = p.get("state") or {}
-                                adapter_id = _strip_chain_prefix(p.get("market_id"))
+                                adapter_id = _adapter_target_id(p.get("market_id"))
                                 if not adapter_id:
                                     continue
                                 rows.append(
@@ -1067,17 +1213,7 @@ async def _upsert_vault_v2_state_to_table(
                                     )
                                 )
                             continue
-                        # 无 positions 时，仍保留 adapter 级数据
-                        fallback_id = str(adapter.get("id") or "market")
-                        rows.append(
-                            (
-                                vault_addr_b,
-                                fallback_id,
-                                adapter.get("assets"),
-                                adapter.get("assetsUsd"),
-                                normalized_type,
-                            )
-                        )
+                        # 无 positions 时没有可追踪的 market_id，不写入明细表。
                         continue
                     # 未知 type 兜底
                     fallback_id = str(adapter.get("id") or "")
