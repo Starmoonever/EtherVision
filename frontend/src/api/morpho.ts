@@ -3,6 +3,7 @@ import type { DataWithMeta } from './requestMeta';
 
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
 const MORPHO_PERSISTED_CACHE_PREFIX = 'morpho:data-cache:';
+const MORPHO_VAULT_V2_CACHE_NAMESPACE = 'vault-v2-adapters-v2';
 export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
 export const MORPHO_VAULT_V2_SAMPLE_ADDRESS = '0x9a1D6bd5b8642C41F25e0958129B85f8E1176F3e';
 
@@ -234,6 +235,22 @@ export interface MorphoVaultV2GatesConfig {
   send_assets_gate: MorphoVaultV2Gate | null;
 }
 
+export interface MorphoVaultV2Adapter {
+  type: string | null;
+  assets: string | null;
+  assets_usd: string | null;
+  target_type: 'vault-v1' | 'market' | null;
+  target_id: string | null;
+  market_positions: Array<{
+    market_id: string;
+    loan_symbol: string | null;
+    collateral_symbol: string | null;
+    supply_assets: string | null;
+    supply_assets_usd: string | null;
+  }>;
+  data_source: string | null;
+}
+
 export interface MorphoVaultV2Response {
   id: string | null;
   address: string;
@@ -267,6 +284,7 @@ export interface MorphoVaultV2Response {
   curator_address: string | null;
   factory_address: string | null;
   gates_config: MorphoVaultV2GatesConfig;
+  adapters: MorphoVaultV2Adapter[];
   data_source: 'api';
 }
 
@@ -461,6 +479,9 @@ interface MorphoVaultV2ByAddressApiPayload {
     receiveSharesGate?: MorphoVaultV2GateApiPayload | null;
     sendAssetsGate?: MorphoVaultV2GateApiPayload | null;
   } | null;
+  adapters?: {
+    items?: MorphoVaultV2AdapterApiPayload[] | null;
+  } | null;
 }
 
 interface MorphoVaultV2GateApiPayload {
@@ -469,6 +490,52 @@ interface MorphoVaultV2GateApiPayload {
   pendingAbdicationExecutableAt?: string | null;
   pendingAddress?: string | null;
   pendingExecutableAt?: string | null;
+}
+
+interface MorphoVaultV2AdapterApiPayload {
+  type?: string | null;
+  assets?: string | number | null;
+  assetsUsd?: string | number | null;
+  position?: {
+    state?: {
+      address?: string | null;
+      assets?: string | number | null;
+      assetsUsd?: string | number | null;
+    } | null;
+  } | null;
+  positions?: {
+    items?: Array<{
+      market_id?: string | null;
+      marketId?: string | null;
+      market?: {
+        market_id?: string | null;
+        marketId?: string | null;
+        loanAsset?: {
+          symbol?: string | null;
+          address?: string | null;
+        } | null;
+        collateralAsset?: {
+          symbol?: string | null;
+          address?: string | null;
+        } | null;
+      } | null;
+      loanAsset?: {
+        symbol?: string | null;
+        address?: string | null;
+      } | null;
+      collateralAsset?: {
+        symbol?: string | null;
+        address?: string | null;
+      } | null;
+      state?: {
+        supplyAssets?: string | number | null;
+        supplyAssetsUsd?: string | number | null;
+        assets?: string | number | null;
+        assetsUsd?: string | number | null;
+      } | null;
+    }> | null;
+  } | null;
+  dataSource?: string | null;
 }
 
 interface MorphoVaultAllocationApiPayload {
@@ -848,6 +915,76 @@ function normalizeMorphoVaultAllocation(
   };
 }
 
+function normalizeMorphoVaultV2AdapterTargetId(item: MorphoVaultV2AdapterApiPayload): {
+  targetType: 'vault-v1' | 'market' | null;
+  targetId: string | null;
+} {
+  const adapterType = (item.type ?? '').toLowerCase();
+  const firstMarketPosition = item.positions?.items?.find(
+    (position) => position.market_id || position.marketId,
+  );
+  const marketId = firstMarketPosition?.market_id ?? firstMarketPosition?.marketId ?? null;
+
+  if (marketId) {
+    return { targetType: 'market', targetId: marketId };
+  }
+
+  if (adapterType.includes('metamorpho')) {
+    const stateAddress = item.position?.state?.address ?? '';
+    const vaultAddress = stateAddress.split('-').find((part) => part.startsWith('0x')) ?? null;
+    return { targetType: vaultAddress ? 'vault-v1' : null, targetId: vaultAddress };
+  }
+
+  return { targetType: null, targetId: null };
+}
+
+function normalizeMorphoVaultV2Adapter(item: MorphoVaultV2AdapterApiPayload): MorphoVaultV2Adapter {
+  const positions = item.positions?.items ?? [];
+  const marketPositions = positions
+    .map((position) => {
+      const market = position.market;
+      const marketId =
+        position.market_id ?? position.marketId ?? market?.market_id ?? market?.marketId;
+      if (!marketId) return null;
+
+      return {
+        market_id: marketId,
+        loan_symbol: position.loanAsset?.symbol ?? market?.loanAsset?.symbol ?? null,
+        collateral_symbol:
+          position.collateralAsset?.symbol ?? market?.collateralAsset?.symbol ?? null,
+        supply_assets: normalizeDecimalString(
+          position.state?.supplyAssets ?? position.state?.assets,
+        ),
+        supply_assets_usd: normalizeDecimalString(
+          position.state?.supplyAssetsUsd ?? position.state?.assetsUsd,
+        ),
+      };
+    })
+    .filter((position): position is NonNullable<typeof position> => Boolean(position));
+  const positionsAssetsUsd = positions.reduce((sum, position) => {
+    const value = normalizeNumber(position.state?.supplyAssetsUsd ?? position.state?.assetsUsd);
+    return sum + (value ?? 0);
+  }, 0);
+  const assetsUsd =
+    normalizeDecimalString(item.assetsUsd) ??
+    normalizeDecimalString(item.position?.state?.assetsUsd) ??
+    (positions.length ? String(positionsAssetsUsd) : null);
+  const target = normalizeMorphoVaultV2AdapterTargetId(item);
+
+  return {
+    type: item.type ?? null,
+    assets:
+      normalizeDecimalString(item.assets) ??
+      normalizeDecimalString(item.position?.state?.assets) ??
+      null,
+    assets_usd: assetsUsd,
+    target_type: target.targetType,
+    target_id: target.targetId,
+    market_positions: marketPositions,
+    data_source: item.dataSource ?? null,
+  };
+}
+
 function normalizeMorphoVaultResponse(
   payload: MorphoVaultApiPayload,
   dataSource: 'api',
@@ -905,6 +1042,7 @@ function normalizeMorphoVaultV2Response(
 ): MorphoVaultV2Response {
   const vault = getMorphoVaultV2Payload(payload);
   const assetDecimals = vault.asset?.decimals ?? null;
+  const adapters = (vault.adapters?.items ?? []).map(normalizeMorphoVaultV2Adapter);
 
   return {
     id: vault.id ?? null,
@@ -948,6 +1086,7 @@ function normalizeMorphoVaultV2Response(
       receive_shares_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.receiveSharesGate),
       send_assets_gate: normalizeMorphoVaultV2Gate(vault.gatesConfig?.sendAssetsGate),
     },
+    adapters,
     data_source: dataSource,
   };
 }
@@ -1753,7 +1892,7 @@ export async function fetchMorphoVaultV2WithMeta(
 
   if (!force) {
     const persisted = readMorphoPersistedCache<MorphoVaultV2Response>(
-      'vault-v2',
+      MORPHO_VAULT_V2_CACHE_NAMESPACE,
       normalizedAddress,
     );
     if (persisted) {
@@ -1785,7 +1924,11 @@ export async function fetchMorphoVaultV2WithMeta(
   ])
     .then((payload) => normalizeMorphoVaultV2Response(payload, 'api'))
     .then((data) => {
-      const fetchedAt = writeMorphoPersistedCache('vault-v2', normalizedAddress, data);
+      const fetchedAt = writeMorphoPersistedCache(
+        MORPHO_VAULT_V2_CACHE_NAMESPACE,
+        normalizedAddress,
+        data,
+      );
       morphoVaultV2Cache.set(normalizedAddress, { fetchedAt, data });
       return data;
     })

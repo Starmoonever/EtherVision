@@ -8,9 +8,9 @@
 .morpho-vault-mode-card,
 .morpho-vaults-table-shell,
 .morpho-vault-overview-card,
-.morpho-vault-v2-info-card,
 .morpho-vault-v2-fee-card,
 .morpho-vault-v2-gates-card,
+.morpho-vault-v2-adapters-card,
 .morpho-vault-allocation-card,
 .morpho-vault-reallocation-card {
   display: grid;
@@ -71,11 +71,11 @@
 }
 
 .morpho-vaults-table th:last-child,
-.morpho-vaults-table td:last-child {
+.morpho-vaults-table .morpho-vaults-row td:last-child {
   text-align: center;
 }
 
-.morpho-vaults-table td:last-child .morpho-vault-version {
+.morpho-vaults-table .morpho-vaults-row td:last-child .morpho-vault-version {
   margin-inline: auto;
 }
 
@@ -634,20 +634,6 @@
   display: block;
 }
 
-.morpho-vault-v2-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.morpho-vault-v2-detail-grid-wide {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.morpho-vault-v2-detail-grid .metric-box {
-  min-height: 6.5rem;
-}
-
 .morpho-vault-gate-summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1135,6 +1121,64 @@
   align-self: stretch;
 }
 
+.morpho-vault-v2-adapter-actions {
+  display: grid;
+  grid-template-columns: calc(32% - 0.5rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(96, 165, 250, 0.12);
+}
+
+.morpho-vault-v2-adapter-actions .morpho-vault-market-directory {
+  height: auto;
+  min-height: 16rem;
+}
+
+.morpho-vault-v1-inline-result {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-overview-card,
+.morpho-vault-v1-inline-result .morpho-vault-allocation-card {
+  padding: 0.75rem;
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-hero-band {
+  padding: 0.85rem;
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-metric-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-allocation-layout {
+  grid-template-columns: 1fr;
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-pie-panel {
+  height: 18rem;
+}
+
+.morpho-vault-v1-inline-result .morpho-vault-allocation-chart {
+  height: 20rem;
+}
+
+.morpho-vault-market-directory-item:disabled {
+  cursor: default;
+  opacity: 0.54;
+  transform: none;
+}
+
+.morpho-vault-market-directory-item:disabled:hover {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.5);
+  box-shadow: none;
+}
+
 .morpho-vault-market-placeholder,
 .morpho-vault-empty-chart {
   display: grid;
@@ -1191,6 +1235,10 @@
   }
 
   .morpho-vault-allocation-market-section {
+    grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-v2-adapter-actions {
     grid-template-columns: 1fr;
   }
 
