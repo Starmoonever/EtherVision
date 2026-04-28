@@ -272,6 +272,12 @@ function formatLiquidationBuffer(
   return `${(((price - liquidation) / price) * 100).toFixed(2)}%`;
 }
 
+function formatPercentFixed(value: string | number | null | undefined, multiplier = 1): string {
+  const number = toNumber(value) * multiplier;
+  if (!Number.isFinite(number)) return '--';
+  return `${number.toFixed(2)}%`;
+}
+
 function formatHealthFactor(
   healthFactor: string | number | null | undefined,
   debtValue: string | number | null | undefined,
@@ -683,7 +689,7 @@ function MakerDaoPositionsTable({
                             <div className="makerdao-detail-item">
                               <span className="makerdao-detail-label">清算率</span>
                               <span className="makerdao-detail-value">
-                                {formatScientificNumber(toNumber(item.liquidation_ratio) * 100, 2)}%
+                                {formatPercentFixed(item.liquidation_ratio, 100)}
                               </span>
                             </div>
                             <div className="makerdao-detail-item">
