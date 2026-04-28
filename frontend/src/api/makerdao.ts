@@ -53,22 +53,31 @@ export interface MakerDaoSystemPositionResponse {
   position_uid: string;
   ilk: string;
   urn_address: string;
-  block_number: number | null;
+  block_number: number;
   block_timestamp: string;
   snapshot_at: string;
-  collateral_symbol: string | null;
-  collateral_token_address: string | null;
+  collateral_symbol: string;
+  collateral_token_address: string;
   collateral_amount: string;
-  collateral_value_usd: string | null;
+  collateral_value_usd: string;
   debt_symbol: string;
-  debt_token_address: string | null;
+  debt_token_address: string;
   debt_amount: string;
-  debt_value_usd: string | null;
-  liquidation_ratio: string | null;
-  liquidation_price_usd: string | null;
-  health_factor: string | null;
+  debt_value_usd: string;
+  liquidation_ratio: string;
+  liquidation_price_usd: string;
+  health_factor: string;
   is_healthy: boolean;
   data_source: string;
+}
+
+export interface MakerDaoSystemPositionsResponse {
+  chain: string;
+  protocol: string;
+  urn_address: string;
+  total_positions: number;
+  ilks: string[];
+  positions: MakerDaoSystemPositionResponse[];
 }
 
 export interface MakerDaoIlkItem {
@@ -116,6 +125,20 @@ const makerDaoSystemPositionCache = new Map<
 const makerDaoSystemPositionInflight = new Map<string, Promise<MakerDaoSystemPositionResponse>>();
 const makerDaoIlksCache = new Map<string, { fetchedAt: number; data: MakerDaoIlkListResponse }>();
 const makerDaoIlksInflight = new Map<string, Promise<MakerDaoIlkListResponse>>();
+
+function normalizeMakerDaoSystemPositionResponse(
+  data: MakerDaoSystemPositionResponse | MakerDaoSystemPositionsResponse,
+): MakerDaoSystemPositionResponse {
+  if ('positions' in data) {
+    const firstPosition = data.positions[0];
+    if (!firstPosition) {
+      throw new Error('MakerDAO 系统仓位未返回 positions 数据');
+    }
+    return firstPosition;
+  }
+
+  return data;
+}
 
 function buildMakerDaoPositionKey({
   address,
@@ -244,12 +267,13 @@ export async function fetchMakerDaoSystemPositionWithMeta(
     searchParams.set('ilk', params.ilk.trim());
   }
 
-  const request = apiFetch<MakerDaoSystemPositionResponse>(
+  const request = apiFetch<MakerDaoSystemPositionResponse | MakerDaoSystemPositionsResponse>(
     `/makerdao/system/position?${searchParams.toString()}`,
   )
     .then((data) => {
-      makerDaoSystemPositionCache.set(key, { fetchedAt: Date.now(), data });
-      return data;
+      const normalized = normalizeMakerDaoSystemPositionResponse(data);
+      makerDaoSystemPositionCache.set(key, { fetchedAt: Date.now(), data: normalized });
+      return normalized;
     })
     .finally(() => {
       makerDaoSystemPositionInflight.delete(key);

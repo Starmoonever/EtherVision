@@ -326,15 +326,19 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
         </div>
 
         <div className="makerdao-metadata-groups">
-          {GROUP_OPTIONS.filter((item) => item.value !== 'all').map((item) => (
+          {GROUP_OPTIONS.map((item) => (
             <button
               key={item.value}
               type="button"
               className={groupFilter === item.value ? 'active' : ''}
               onClick={() => setGroupFilter(item.value)}
             >
-              <span>{item.label}</span>
-              <strong>{groupCounts[item.value as Exclude<IlkGroup, 'all'>]}</strong>
+              <span>{item.value === 'all' ? 'All' : item.label}</span>
+              <strong>
+                {item.value === 'all'
+                  ? views.length.toLocaleString()
+                  : groupCounts[item.value as Exclude<IlkGroup, 'all'>]}
+              </strong>
             </button>
           ))}
         </div>
@@ -347,20 +351,6 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="ETH-A / RWA / WBTC..."
             />
-          </label>
-
-          <label className="makerdao-market-select">
-            <span>分组</span>
-            <select
-              value={groupFilter}
-              onChange={(event) => setGroupFilter(event.target.value as IlkGroup)}
-            >
-              {GROUP_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
           </label>
 
           <label className="makerdao-market-select">
