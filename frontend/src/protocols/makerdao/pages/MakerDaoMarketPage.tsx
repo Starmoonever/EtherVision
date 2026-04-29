@@ -56,6 +56,8 @@ const EMPTY_META: AggregatedRequestMeta = {
 };
 const METADATA_PAGE_SIZE = 10;
 const POSITIONS_PAGE_SIZE = 25;
+const PRICE_FAILURE_TTL_MS = 5 * 60 * 1000;
+const priceFailureCache = new Map<string, number>();
 
 const GROUP_LABELS: Record<Exclude<IlkGroup, 'all'>, string> = {
   native: 'Native Crypto',
@@ -261,11 +263,19 @@ function formatUsdFixed(value: string | number | null | undefined): string {
 }
 
 function getCollateralPriceKey(item: MakerDaoPositionListItem): string {
-  return (item.collateral_token_address || item.collateral_symbol || '').trim().toLowerCase();
+  return (item.collateral_token_address || '').trim().toLowerCase();
 }
 
 function getCollateralPriceAsset(item: MakerDaoPositionListItem): string {
-  return (item.collateral_token_address || item.collateral_symbol || '').trim();
+  return (item.collateral_token_address || '').trim();
+}
+
+function isPriceFailureCached(key: string): boolean {
+  const failedAt = priceFailureCache.get(key);
+  if (!failedAt) return false;
+  if (Date.now() - failedAt < PRICE_FAILURE_TTL_MS) return true;
+  priceFailureCache.delete(key);
+  return false;
 }
 
 function formatLiquidationBuffer(
@@ -1067,7 +1077,7 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
           .map((item) => {
             const key = getCollateralPriceKey(item);
             const asset = getCollateralPriceAsset(item);
-            return key && asset ? [key, asset] : null;
+            return key && asset && !isPriceFailureCached(key) ? [key, asset] : null;
           })
           .filter((entry): entry is [string, string] => Boolean(entry)),
       ).entries(),
@@ -1083,8 +1093,10 @@ export function MakerDaoMarketPage({ active }: MakerDaoMarketPageProps) {
         priceTargets.map(async ([key, asset]) => {
           try {
             const result = await fetchAssetPriceWithMeta(asset, { chain: 'ethereum' });
+            priceFailureCache.delete(key);
             return [key, result.data] as const;
           } catch {
+            priceFailureCache.set(key, Date.now());
             return [key, null] as const;
           }
         }),
