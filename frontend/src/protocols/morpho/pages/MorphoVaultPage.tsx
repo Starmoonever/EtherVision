@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type MouseEvent,
   type ReactNode,
@@ -23,6 +24,7 @@ import {
 import {
   fetchMorphoVaultsWithMeta,
   fetchMorphoVaultWithMeta,
+  fetchMorphoVaultV2WarningWithMeta,
   fetchMorphoVaultV2WithMeta,
   MORPHO_VAULT_SAMPLE_ADDRESS,
   MORPHO_VAULT_V2_SAMPLE_ADDRESS,
@@ -33,6 +35,7 @@ import {
   type MorphoVaultAllocation,
   type MorphoVaultResponse,
   type MorphoVaultV2Response,
+  type MorphoVaultV2WarningItem,
 } from '../../../api/morpho';
 import { copyToClipboard } from '../../../shared/utils/copyToClipboard';
 import type { MorphoMarketView } from '../../../hooks/useMorphoData';
@@ -70,6 +73,13 @@ interface AdapterVaultV1DetailState {
   vault: MorphoVaultResponse | null;
 }
 
+interface VaultV2WarningLoadState {
+  loading: boolean;
+  error: string;
+  warnings: MorphoVaultV2WarningItem[];
+  fetchedAt: number | null;
+}
+
 const usdFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
 });
@@ -102,6 +112,10 @@ const MORPHO_VAULT_HISTORY_STORAGE_KEY = 'morpho_vault_search_history_by_version
 const MORPHO_VAULT_LEGACY_HISTORY_STORAGE_KEY = 'morpho_vault_search_history';
 const MORPHO_VAULT_HISTORY_LIMIT = 30;
 const MORPHO_VAULTS_PAGE_SIZE = 10;
+
+function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(' ');
+}
 
 type MorphoVaultSearchHistoryByVersion = Record<MorphoVaultVersion, string[]>;
 
@@ -224,6 +238,27 @@ function compactMarketId(marketId: string): string {
 
 function isMorphoMarketId(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value.trim());
+}
+
+function normalizeWarningTargetId(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function getVaultV2WarningLevel(warnings: MorphoVaultV2WarningItem[]): 'red' | 'yellow' | 'green' {
+  if (warnings.some((item) => item.level === 'red')) return 'red';
+  if (warnings.some((item) => item.level === 'yellow')) return 'yellow';
+  return 'green';
+}
+
+function getVaultV2RedWarningIds(warnings: MorphoVaultV2WarningItem[]): string[] {
+  return Array.from(
+    new Set(
+      warnings
+        .filter((item) => item.level === 'red')
+        .map((item) => normalizeWarningTargetId(item.id))
+        .filter(Boolean),
+    ),
+  );
 }
 
 function resolveMarketPairLabel(
@@ -986,24 +1021,128 @@ function MorphoVaultOverview({ vault }: { vault: MorphoVaultResponse }) {
   );
 }
 
-function MorphoVaultV2Overview({ vault }: { vault: MorphoVaultV2Response }) {
+function MorphoVaultV2WarningBadge({ warningState }: { warningState?: VaultV2WarningLoadState }) {
+  const { copied, copy } = useCopiedValue();
+  const [expanded, setExpanded] = useState(false);
+  const warnings = warningState?.warnings ?? [];
+  const level =
+    !warningState || warningState.loading || warningState.error
+      ? 'unknown'
+      : getVaultV2WarningLevel(warnings);
+  const redCount = warnings.filter((item) => item.level === 'red').length;
+  const yellowCount = warnings.filter((item) => item.level === 'yellow').length;
+  const greenCount = warnings.filter((item) => item.level === 'green').length;
+  const summary =
+    !warningState || (warningState.loading && warnings.length === 0)
+      ? 'Loading'
+      : warningState?.error
+        ? 'N/A'
+        : `${warnings.length} items`;
+
+  return (
+    <div className="morpho-vault-warning-wrap">
+      <button
+        type="button"
+        className={cx(
+          'morpho-vault-warning-badge',
+          `morpho-vault-warning-badge-${level}`,
+          level === 'red' && 'morpho-vault-warning-red-pulse',
+        )}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span>Warning</span>
+        <strong>{level.toUpperCase()}</strong>
+        <small>{summary}</small>
+      </button>
+
+      {expanded ? (
+        <div className="morpho-vault-warning-popover">
+          {warningState?.error ? (
+            <div className="morpho-vault-warning-empty">{warningState.error}</div>
+          ) : warnings.length > 0 ? (
+            <>
+              <div className="morpho-vault-warning-counts">
+                <span>RED {redCount}</span>
+                <span>Yellow {yellowCount}</span>
+                <span>Green {greenCount}</span>
+              </div>
+              <div className="morpho-vault-warning-list">
+                {warnings.map((item, index) => (
+                  <div
+                    key={`${item.type}:${item.id}:${index}`}
+                    className={cx(
+                      'morpho-vault-warning-item',
+                      `morpho-vault-warning-item-${item.level}`,
+                      item.level === 'red' && 'morpho-vault-warning-red-pulse',
+                    )}
+                  >
+                    <div className="morpho-vault-warning-item-head">
+                      <strong>{item.level.toUpperCase()}</strong>
+                      <span>{item.type}</span>
+                    </div>
+                    <div className="morpho-vault-warning-field">
+                      <span>warning_type</span>
+                      <strong>{item.warning_type || 'N/A'}</strong>
+                    </div>
+                    <div className="morpho-vault-warning-field">
+                      <span>type</span>
+                      <strong>{item.type}</strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="morpho-vault-warning-copy"
+                      onClick={(event) => void copy(event, item.id)}
+                      title={item.id}
+                    >
+                      <span>{copied === item.id ? '已复制' : compactAddress(item.id)}</span>
+                      <i aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="morpho-vault-warning-empty">暂无提醒项</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MorphoVaultV2Overview({
+  vault,
+  warningState,
+}: {
+  vault: MorphoVaultV2Response;
+  warningState?: VaultV2WarningLoadState;
+}) {
   const { copied, copy } = useCopiedValue();
   const netApyTooltip = buildVaultV2NetApyTooltip(vault);
+  const hasRedWarning = warningState?.warnings.some((item) => item.level === 'red') ?? false;
 
   return (
     <>
-      <section className="card morpho-detail-card morpho-vault-overview-card">
+      <section
+        className={cx(
+          'card morpho-detail-card morpho-vault-overview-card',
+          hasRedWarning && 'morpho-vault-warning-red-pulse',
+        )}
+      >
         <div className="morpho-vault-hero-band">
           <div className="morpho-vault-hero-meta">
             <span className="morpho-vault-kicker">Vault</span>
             <div className="morpho-vault-hero-actions">
-              <MorphoVaultCopyLine
-                label="Vault 地址"
-                value={vault.address}
-                copied={copied}
-                onCopy={copy}
-              />
-              <span className="morpho-vault-version">V2</span>
+              <MorphoVaultV2WarningBadge warningState={warningState} />
+              <div className="morpho-vault-hero-address-row">
+                <MorphoVaultCopyLine
+                  label="Vault 地址"
+                  value={vault.address}
+                  copied={copied}
+                  onCopy={copy}
+                />
+                <span className="morpho-vault-version">V2</span>
+              </div>
             </div>
           </div>
           <h2>{vault.name || vault.symbol || 'Morpho Vault V2'}</h2>
@@ -1110,6 +1249,30 @@ function MorphoVaultAllocationChart({
     setHoveredMarketId(marketId);
     if (shouldQuery) onMarketSelect(marketId);
   };
+  const resolveMarketIndexByChartPointer = (event: MouseEvent<HTMLDivElement>): number | null => {
+    if (legendItems.length === 0) return null;
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const plotLeft = 50;
+    const plotRight = 10;
+    const plotWidth = bounds.width - plotLeft - plotRight;
+    const x = event.clientX - bounds.left - plotLeft;
+    if (plotWidth <= 0 || x < 0 || x > plotWidth) return null;
+
+    return Math.min(
+      legendItems.length - 1,
+      Math.max(0, Math.floor((x / plotWidth) * legendItems.length)),
+    );
+  };
+  const previewMarketByChartPointer = (event: MouseEvent<HTMLDivElement>) => {
+    const nextIndex = resolveMarketIndexByChartPointer(event);
+    previewMarket(nextIndex === null ? null : (legendItems[nextIndex]?.marketId ?? null));
+  };
+  const pinMarketByChartPointer = (event: MouseEvent<HTMLDivElement>) => {
+    const nextIndex = resolveMarketIndexByChartPointer(event);
+    const marketId = nextIndex === null ? null : legendItems[nextIndex]?.marketId;
+    if (marketId) pinMarket(marketId, true);
+  };
 
   return (
     <section className="card morpho-detail-card morpho-vault-allocation-card">
@@ -1196,7 +1359,12 @@ function MorphoVaultAllocationChart({
           )}
         </div>
 
-        <div className="morpho-vault-allocation-chart">
+        <div
+          className="morpho-vault-allocation-chart"
+          onMouseMove={previewMarketByChartPointer}
+          onMouseLeave={() => previewMarket(null)}
+          onClick={pinMarketByChartPointer}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={legendItems}
@@ -1220,21 +1388,6 @@ function MorphoVaultAllocationChart({
                 }
               }}
               onMouseLeave={() => previewMarket(null)}
-              onClick={(event) => {
-                const activeEvent = event as unknown as {
-                  activeTooltipIndex?: number;
-                  activePayload?: Array<{ payload?: AllocationHistogramItem }>;
-                };
-                const payload = activeEvent.activePayload?.find(
-                  (entry) => entry.payload?.marketId,
-                )?.payload;
-                const marketId =
-                  payload?.marketId ??
-                  (typeof activeEvent.activeTooltipIndex === 'number'
-                    ? legendItems[activeEvent.activeTooltipIndex]?.marketId
-                    : null);
-                if (marketId) pinMarket(marketId, true);
-              }}
             >
               <CartesianGrid
                 vertical={false}
@@ -1295,6 +1448,8 @@ function MorphoVaultAllocationChart({
                         : 'morpho-vault-bar-cell'
                     }
                     onMouseEnter={() => previewMarket(item.marketId)}
+                    onMouseMove={() => previewMarket(item.marketId)}
+                    onMouseOver={() => previewMarket(item.marketId)}
                     onClick={() => pinMarket(item.marketId, true)}
                   />
                 ))}
@@ -1323,6 +1478,8 @@ function MorphoVaultAllocationChart({
                         : 'morpho-vault-bar-cell'
                     }
                     onMouseEnter={() => previewMarket(item.marketId)}
+                    onMouseMove={() => previewMarket(item.marketId)}
+                    onMouseOver={() => previewMarket(item.marketId)}
                     onClick={() => pinMarket(item.marketId, true)}
                   />
                 ))}
@@ -1389,7 +1546,7 @@ function createVaultV2AdapterChartItems(vault: MorphoVaultV2Response): VaultV2Ad
           );
 
           return {
-            key: `${adapter.type ?? 'market'}:${position.market_id}`,
+            key: `${adapter.type ?? 'market'}:${index}:${positionIndex}:${position.market_id}`,
             label: marketLabel,
             displayName: marketLabel,
             amountUsd,
@@ -1412,7 +1569,7 @@ function createVaultV2AdapterChartItems(vault: MorphoVaultV2Response): VaultV2Ad
             : label;
 
       return {
-        key: `${adapter.type ?? 'adapter'}:${adapter.target_id ?? index}`,
+        key: `${adapter.type ?? 'adapter'}:${index}:${adapter.target_id ?? 'none'}`,
         label,
         displayName,
         amountUsd,
@@ -1482,32 +1639,41 @@ function MorphoVaultV2AdapterChart({
   onVaultV1Select,
   onMarketSelect,
   queryResultSection,
+  redWarningIds = [],
 }: {
   vault: MorphoVaultV2Response;
   onVaultV1Select: (address: string) => void;
   onMarketSelect: (marketId: string) => void;
   queryResultSection?: ReactNode;
+  redWarningIds?: string[];
 }) {
   const adapterItems = useMemo(() => createVaultV2AdapterChartItems(vault), [vault]);
+  const redWarningIdSet = useMemo(() => new Set(redWarningIds), [redWarningIds]);
   const totalUsd = useMemo(
     () => adapterItems.reduce((sum, item) => sum + item.amountUsd, 0),
     [adapterItems],
   );
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
-  const [pinnedKey, setPinnedKey] = useState<string | null>(null);
-  const activeKey = hoveredKey ?? pinnedKey;
-  const activeAdapter = adapterItems.find((item) => item.key === activeKey) ?? null;
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const activeIndex = hoveredIndex ?? pinnedIndex;
+  const activeAdapter = activeIndex !== null ? (adapterItems[activeIndex] ?? null) : null;
+  const activeAdapterHasRedWarning = Boolean(
+    activeAdapter?.targetId &&
+    redWarningIdSet.has(normalizeWarningTargetId(activeAdapter.targetId)),
+  );
   const targetCount = adapterItems.filter((item) => item.targetId).length;
   const v1Count = adapterItems.filter((item) => item.targetType === 'vault-v1').length;
 
   useEffect(() => {
-    setHoveredKey(null);
-    setPinnedKey(null);
+    setHoveredIndex(null);
+    setPinnedIndex(null);
   }, [vault.address, adapterItems.length]);
 
-  const selectAdapter = (item: VaultV2AdapterChartItem) => {
-    setPinnedKey(item.key);
-    setHoveredKey(item.key);
+  const selectAdapter = (item: VaultV2AdapterChartItem, index = adapterItems.indexOf(item)) => {
+    const nextIndex =
+      index >= 0 ? index : adapterItems.findIndex((entry) => entry.key === item.key);
+    setPinnedIndex(nextIndex >= 0 ? nextIndex : null);
+    setHoveredIndex(nextIndex >= 0 ? nextIndex : null);
     if (!item.targetId) return;
     if (item.targetType === 'vault-v1') {
       onVaultV1Select(item.targetId);
@@ -1518,24 +1684,51 @@ function MorphoVaultV2AdapterChart({
     }
   };
 
-  const previewAdapter = (key: string | null) => {
-    setHoveredKey(key);
+  const previewAdapter = (index: number | null) => {
+    setHoveredIndex(index);
   };
 
-  const selectEventAdapter = (event: unknown) => {
+  const selectEventAdapterIndex = (event: unknown): number | null => {
     const activeEvent = event as {
       activeTooltipIndex?: number;
       activePayload?: Array<{ payload?: VaultV2AdapterChartItem }>;
     };
     const payload = activeEvent.activePayload?.find((entry) => entry.payload?.key)?.payload;
-    return (
-      payload ??
-      (typeof activeEvent.activeTooltipIndex === 'number'
-        ? adapterItems[activeEvent.activeTooltipIndex]
-        : null)
+    const payloadIndex = payload ? adapterItems.findIndex((item) => item.key === payload.key) : -1;
+    if (payloadIndex >= 0) return payloadIndex;
+    return typeof activeEvent.activeTooltipIndex === 'number'
+      ? activeEvent.activeTooltipIndex
+      : null;
+  };
+  const resolveAdapterIndexByChartPointer = (event: MouseEvent<HTMLDivElement>): number | null => {
+    if (adapterItems.length === 0) {
+      return null;
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const plotLeft = 50;
+    const plotRight = 10;
+    const plotWidth = bounds.width - plotLeft - plotRight;
+    const x = event.clientX - bounds.left - plotLeft;
+    if (plotWidth <= 0 || x < 0 || x > plotWidth) {
+      return null;
+    }
+
+    return Math.min(
+      adapterItems.length - 1,
+      Math.max(0, Math.floor((x / plotWidth) * adapterItems.length)),
     );
   };
-
+  const previewAdapterByChartPointer = (event: MouseEvent<HTMLDivElement>) => {
+    const nextIndex = resolveAdapterIndexByChartPointer(event);
+    setHoveredIndex(nextIndex);
+  };
+  const selectAdapterByChartPointer = (event: MouseEvent<HTMLDivElement>) => {
+    const nextIndex = resolveAdapterIndexByChartPointer(event);
+    if (nextIndex === null) return;
+    const item = adapterItems[nextIndex];
+    if (item) selectAdapter(item, nextIndex);
+  };
   return (
     <section className="card morpho-detail-card morpho-vault-allocation-card morpho-vault-v2-adapters-card">
       <div className="card-header">
@@ -1573,10 +1766,13 @@ function MorphoVaultV2AdapterChart({
                       cornerRadius={5}
                       labelLine={false}
                       isAnimationActive={false}
-                      onMouseLeave={() => setHoveredKey(null)}
+                      onMouseLeave={() => setHoveredIndex(null)}
                     >
-                      {adapterItems.map((item) => {
-                        const isActive = item.key === activeAdapter?.key;
+                      {adapterItems.map((item, index) => {
+                        const isActive = index === activeIndex;
+                        const hasRedWarning =
+                          item.targetId !== null &&
+                          redWarningIdSet.has(normalizeWarningTargetId(item.targetId));
                         return (
                           <Cell
                             key={item.key}
@@ -1586,13 +1782,13 @@ function MorphoVaultV2AdapterChart({
                             }
                             strokeWidth={isActive ? 4.4 : 3.2}
                             opacity={1}
-                            className={
-                              isActive
-                                ? 'morpho-vault-pie-slice morpho-vault-pie-slice-active'
-                                : 'morpho-vault-pie-slice'
-                            }
-                            onMouseEnter={() => previewAdapter(item.key)}
-                            onClick={() => selectAdapter(item)}
+                            className={cx(
+                              'morpho-vault-pie-slice',
+                              isActive && 'morpho-vault-pie-slice-active',
+                              hasRedWarning && 'morpho-vault-warning-red-pulse',
+                            )}
+                            onMouseEnter={() => previewAdapter(index)}
+                            onClick={() => selectAdapter(item, index)}
                           />
                         );
                       })}
@@ -1620,7 +1816,12 @@ function MorphoVaultV2AdapterChart({
           )}
         </div>
 
-        <div className="morpho-vault-allocation-chart">
+        <div
+          className="morpho-vault-allocation-chart"
+          onMouseMove={previewAdapterByChartPointer}
+          onMouseLeave={() => setHoveredIndex(null)}
+          onClick={selectAdapterByChartPointer}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={adapterItems}
@@ -1628,14 +1829,10 @@ function MorphoVaultV2AdapterChart({
               margin={{ top: 12, right: 10, bottom: 40, left: 6 }}
               className="morpho-vault-clickable-chart"
               onMouseMove={(event) => {
-                const item = selectEventAdapter(event);
-                setHoveredKey(item?.key ?? null);
+                const index = selectEventAdapterIndex(event);
+                if (index !== null) setHoveredIndex(index);
               }}
-              onMouseLeave={() => setHoveredKey(null)}
-              onClick={(event) => {
-                const item = selectEventAdapter(event);
-                if (item) selectAdapter(item);
-              }}
+              onMouseLeave={() => setHoveredIndex(null)}
             >
               <CartesianGrid
                 vertical={false}
@@ -1652,7 +1849,7 @@ function MorphoVaultV2AdapterChart({
                     {...props}
                     items={adapterItems}
                     activeKey={activeAdapter?.key ?? null}
-                    onAdapterSelect={selectAdapter}
+                    onAdapterSelect={(item) => selectAdapter(item)}
                   />
                 )}
                 stroke="rgba(148, 163, 184, 0.42)"
@@ -1672,7 +1869,7 @@ function MorphoVaultV2AdapterChart({
                 cursor={{ fill: 'rgba(55, 69, 103, 0.42)' }}
               />
               <Bar dataKey="amountUsd" barSize={30} radius={[5, 5, 0, 0]} isAnimationActive={false}>
-                {adapterItems.map((item) => (
+                {adapterItems.map((item, index) => (
                   <Cell
                     key={item.key}
                     fill={item.color}
@@ -1683,13 +1880,17 @@ function MorphoVaultV2AdapterChart({
                         : hexToRgba(item.color, 0.74)
                     }
                     strokeWidth={item.key === activeAdapter?.key ? 3.5 : 1}
-                    className={
-                      item.key === activeAdapter?.key
-                        ? 'morpho-vault-bar-cell morpho-vault-bar-cell-active'
-                        : 'morpho-vault-bar-cell'
-                    }
-                    onMouseEnter={() => previewAdapter(item.key)}
-                    onClick={() => selectAdapter(item)}
+                    className={cx(
+                      'morpho-vault-bar-cell',
+                      item.key === activeAdapter?.key && 'morpho-vault-bar-cell-active',
+                      item.targetId !== null &&
+                        redWarningIdSet.has(normalizeWarningTargetId(item.targetId)) &&
+                        'morpho-vault-warning-red-pulse',
+                    )}
+                    onMouseEnter={() => previewAdapter(index)}
+                    onMouseMove={() => previewAdapter(index)}
+                    onMouseOver={() => previewAdapter(index)}
+                    onClick={() => selectAdapter(item, index)}
                   />
                 ))}
               </Bar>
@@ -1706,41 +1907,57 @@ function MorphoVaultV2AdapterChart({
               <span>{targetCount} targets</span>
             </div>
             <div className="morpho-vault-market-directory-list">
-              {adapterItems.map((item) => (
-                <button
-                  type="button"
-                  key={item.key}
-                  className={
-                    item.key === activeAdapter?.key
-                      ? 'morpho-vault-market-directory-item morpho-vault-market-directory-item-active'
-                      : 'morpho-vault-market-directory-item'
-                  }
-                  onClick={() => selectAdapter(item)}
-                  disabled={!item.targetId}
-                  title={item.targetId ?? item.label}
-                >
-                  <span
-                    className="morpho-vault-market-directory-swatch"
-                    style={{ background: item.color }}
-                  />
-                  <span className="morpho-vault-market-directory-main">
-                    <strong>{item.label}</strong>
-                    <small>
-                      {item.targetType === 'vault-v1'
-                        ? '查询 Vault V1'
-                        : item.targetType === 'market'
-                          ? '查询 Market'
-                          : '无查询目标'}
-                    </small>
-                  </span>
-                  <span className="morpho-vault-market-directory-value">
-                    {formatCompactUsd(String(item.amountUsd))}
-                  </span>
-                </button>
-              ))}
+              {adapterItems.map((item, index) => {
+                const hasRedWarning =
+                  item.targetId !== null &&
+                  redWarningIdSet.has(normalizeWarningTargetId(item.targetId));
+                return (
+                  <button
+                    type="button"
+                    key={item.key}
+                    className={cx(
+                      'morpho-vault-market-directory-item',
+                      item.key === activeAdapter?.key &&
+                        'morpho-vault-market-directory-item-active',
+                      hasRedWarning && 'morpho-vault-warning-red-pulse',
+                    )}
+                    onClick={() => selectAdapter(item, index)}
+                    disabled={!item.targetId}
+                    title={item.targetId ?? item.label}
+                  >
+                    <span
+                      className={cx(
+                        'morpho-vault-market-directory-swatch',
+                        hasRedWarning && 'morpho-vault-warning-red-pulse',
+                      )}
+                      style={{ background: item.color }}
+                    />
+                    <span className="morpho-vault-market-directory-main">
+                      <strong>{item.label}</strong>
+                      <small>
+                        {item.targetType === 'vault-v1'
+                          ? '查询 Vault V1'
+                          : item.targetType === 'market'
+                            ? '查询 Market'
+                            : '无查询目标'}
+                      </small>
+                    </span>
+                    <span className="morpho-vault-market-directory-value">
+                      {formatCompactUsd(String(item.amountUsd))}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
-          <div className="morpho-vault-market-query-result">{queryResultSection}</div>
+          <div
+            className={cx(
+              'morpho-vault-market-query-result',
+              activeAdapterHasRedWarning && 'morpho-vault-warning-red-pulse',
+            )}
+          >
+            {queryResultSection}
+          </div>
         </div>
       ) : null}
     </section>
@@ -1802,9 +2019,56 @@ export function MorphoVaultPage({
     error: '',
     vault: null,
   });
+  const [vaultV2WarningsByAddress, setVaultV2WarningsByAddress] = useState<
+    Record<string, VaultV2WarningLoadState>
+  >({});
+  const vaultV2WarningStatusRef = useRef<Record<string, 'loading' | 'done' | 'error'>>({});
   const activeVaultAddress = vaultAddressByVersion[vaultVersion];
   const vaultSearchHistory = vaultSearchHistoryByVersion[vaultVersion];
   const vaultsTotalPages = Math.max(1, Math.ceil(vaultsTotal / MORPHO_VAULTS_PAGE_SIZE));
+  const loadVaultV2Warnings = useCallback(async (address: string, force = false) => {
+    const normalizedAddress = address.trim().toLowerCase();
+    if (!normalizedAddress) return;
+    const status = vaultV2WarningStatusRef.current[normalizedAddress];
+    if (!force && status) return;
+
+    vaultV2WarningStatusRef.current[normalizedAddress] = 'loading';
+    setVaultV2WarningsByAddress((current) => ({
+      ...current,
+      [normalizedAddress]: {
+        loading: true,
+        error: '',
+        warnings: current[normalizedAddress]?.warnings ?? [],
+        fetchedAt: current[normalizedAddress]?.fetchedAt ?? null,
+      },
+    }));
+
+    try {
+      const result = await fetchMorphoVaultV2WarningWithMeta(address, { force });
+      vaultV2WarningStatusRef.current[normalizedAddress] = 'done';
+      setVaultV2WarningsByAddress((current) => ({
+        ...current,
+        [normalizedAddress]: {
+          loading: false,
+          error: '',
+          warnings: result.data.warnings,
+          fetchedAt: result.meta.fetchedAt,
+        },
+      }));
+    } catch (warningError) {
+      vaultV2WarningStatusRef.current[normalizedAddress] = 'error';
+      setVaultV2WarningsByAddress((current) => ({
+        ...current,
+        [normalizedAddress]: {
+          loading: false,
+          error:
+            warningError instanceof Error ? warningError.message : '无法加载 Vault V2 warning 数据',
+          warnings: [],
+          fetchedAt: Date.now(),
+        },
+      }));
+    }
+  }, []);
   const rememberVaultAddress = useCallback((address: string, version: MorphoVaultVersion) => {
     const normalizedAddress = address.trim();
     if (!normalizedAddress) return;
@@ -1858,6 +2122,7 @@ export function MorphoVaultPage({
           const result = await fetchMorphoVaultV2WithMeta(normalizedAddress, { force });
           setVaultV2(result.data);
           setVaultFetchedAt(result.meta.fetchedAt);
+          void loadVaultV2Warnings(normalizedAddress, force);
           rememberVaultAddress(normalizedAddress, version);
         } else {
           setVaultV2(null);
@@ -1872,7 +2137,7 @@ export function MorphoVaultPage({
         setLoading(false);
       }
     },
-    [onMarketSelect, rememberVaultAddress, vaultVersion],
+    [loadVaultV2Warnings, rememberVaultAddress, vaultVersion],
   );
 
   const loadVault = useCallback(
@@ -1993,6 +2258,7 @@ export function MorphoVaultPage({
                   }
                 : current,
             );
+            void loadVaultV2Warnings(item.address, false);
             return;
           }
 
@@ -2026,7 +2292,7 @@ export function MorphoVaultPage({
         }
       })();
     },
-    [expandedVaultKey, onMarketSelect],
+    [expandedVaultKey, loadVaultV2Warnings],
   );
 
   const handleVaultV2AdapterVaultV1Select = useCallback(
@@ -2070,6 +2336,16 @@ export function MorphoVaultPage({
         hour12: false,
       })
     : 'N/A';
+  const vaultV2WarningState = vaultV2
+    ? vaultV2WarningsByAddress[normalizeWarningTargetId(vaultV2.address)]
+    : undefined;
+  const vaultV2RedWarningIds = getVaultV2RedWarningIds(vaultV2WarningState?.warnings ?? []);
+  const expandedVaultV2WarningState = expandedVaultDetail.vaultV2
+    ? vaultV2WarningsByAddress[normalizeWarningTargetId(expandedVaultDetail.vaultV2.address)]
+    : undefined;
+  const expandedVaultV2RedWarningIds = getVaultV2RedWarningIds(
+    expandedVaultV2WarningState?.warnings ?? [],
+  );
 
   useEffect(() => {
     if (activeVaultView !== 'query') return;
@@ -2151,12 +2427,16 @@ export function MorphoVaultPage({
       <div className="morpho-market-table-error-row">{expandedVaultDetail.error}</div>
     ) : expandedVaultDetail.vaultV2 ? (
       <>
-        <MorphoVaultV2Overview vault={expandedVaultDetail.vaultV2} />
+        <MorphoVaultV2Overview
+          vault={expandedVaultDetail.vaultV2}
+          warningState={expandedVaultV2WarningState}
+        />
         <MorphoVaultV2AdapterChart
           vault={expandedVaultDetail.vaultV2}
           onVaultV1Select={handleVaultV2AdapterVaultV1Select}
           onMarketSelect={handleVaultV2AdapterMarketSelect}
           queryResultSection={vaultV2AdapterQuerySection}
+          redWarningIds={expandedVaultV2RedWarningIds}
         />
       </>
     ) : expandedVaultDetail.vault ? (
@@ -2311,12 +2591,13 @@ export function MorphoVaultPage({
 
           {vaultVersion === 'v2' && vaultV2 ? (
             <>
-              <MorphoVaultV2Overview vault={vaultV2} />
+              <MorphoVaultV2Overview vault={vaultV2} warningState={vaultV2WarningState} />
               <MorphoVaultV2AdapterChart
                 vault={vaultV2}
                 onVaultV1Select={handleVaultV2AdapterVaultV1Select}
                 onMarketSelect={handleVaultV2AdapterMarketSelect}
                 queryResultSection={vaultV2AdapterQuerySection}
+                redWarningIds={vaultV2RedWarningIds}
               />
             </>
           ) : null}

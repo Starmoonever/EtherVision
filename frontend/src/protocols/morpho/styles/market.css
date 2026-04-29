@@ -370,6 +370,35 @@
   min-height: 12rem;
 }
 
+.morpho-market-detail-chart :focus,
+.morpho-market-detail-chart :focus-visible,
+.morpho-market-detail-chart .recharts-wrapper:focus,
+.morpho-market-detail-chart .recharts-wrapper:focus-visible,
+.morpho-market-detail-chart .recharts-surface:focus,
+.morpho-market-detail-chart .recharts-surface:focus-visible,
+.morpho-market-detail-chart svg:focus,
+.morpho-market-detail-chart svg:focus-visible,
+.morpho-market-detail-chart path:focus,
+.morpho-market-detail-chart path:focus-visible,
+.morpho-market-detail-chart rect:focus,
+.morpho-market-detail-chart rect:focus-visible,
+.morpho-market-detail-chart g:focus,
+.morpho-market-detail-chart g:focus-visible,
+.morpho-market-detail-chart .recharts-layer:focus,
+.morpho-market-detail-chart .recharts-layer:focus-visible,
+.morpho-market-detail-chart .recharts-bar-rectangle:focus,
+.morpho-market-detail-chart .recharts-bar-rectangle:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.morpho-market-detail-chart,
+.morpho-market-detail-chart .recharts-wrapper,
+.morpho-market-detail-chart .recharts-surface {
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
 .morpho-market-chart-tooltip {
   min-width: 9rem;
   border: 1px solid rgba(30, 41, 59, 0.96);
