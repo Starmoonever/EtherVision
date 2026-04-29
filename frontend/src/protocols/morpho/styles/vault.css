@@ -384,10 +384,18 @@
 }
 
 .morpho-vault-hero-actions {
+  display: grid;
+  justify-items: end;
+  justify-content: flex-end;
+  gap: 0.42rem;
+}
+
+.morpho-vault-hero-address-row {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: 0.55rem;
+  min-width: 0;
 }
 
 .morpho-vault-hero-band h2 {
@@ -516,6 +524,225 @@
 
 .morpho-vault-hero-actions .morpho-vault-copy-line {
   color: #cbd5e1;
+}
+
+.morpho-vault-warning-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.morpho-vault-warning-badge {
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.72rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #cbd5e1;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.28rem 0.6rem;
+}
+
+.morpho-vault-warning-badge span,
+.morpho-vault-warning-badge small {
+  color: #94a3b8;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.morpho-vault-warning-badge strong {
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.morpho-vault-warning-badge-red {
+  border-color: rgba(248, 113, 113, 0.54);
+  background: rgba(127, 29, 29, 0.34);
+  color: #fecaca;
+}
+
+.morpho-vault-warning-badge-yellow {
+  border-color: rgba(250, 204, 21, 0.42);
+  background: rgba(113, 63, 18, 0.26);
+  color: #fde68a;
+}
+
+.morpho-vault-warning-badge-green {
+  border-color: rgba(74, 222, 128, 0.32);
+  background: rgba(20, 83, 45, 0.22);
+  color: #bbf7d0;
+}
+
+.morpho-vault-warning-badge-unknown {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.morpho-vault-warning-popover {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 50;
+  display: grid;
+  gap: 0.6rem;
+  width: min(22rem, 82vw);
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  border-radius: 10px;
+  background: rgba(8, 15, 29, 0.98);
+  box-shadow: 0 24px 54px rgba(2, 6, 23, 0.42);
+  padding: 0.75rem;
+}
+
+.morpho-vault-warning-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.morpho-vault-warning-counts span {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.52);
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.28rem 0.5rem;
+}
+
+.morpho-vault-warning-list {
+  display: grid;
+  gap: 0.52rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding-right: 0.1rem;
+}
+
+.morpho-vault-warning-item {
+  display: grid;
+  gap: 0.42rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.58rem;
+}
+
+.morpho-vault-warning-item-red {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.morpho-vault-warning-item-yellow {
+  border-color: rgba(250, 204, 21, 0.28);
+}
+
+.morpho-vault-warning-item-green {
+  border-color: rgba(74, 222, 128, 0.22);
+}
+
+.morpho-vault-warning-item-head,
+.morpho-vault-warning-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.morpho-vault-warning-item-head strong {
+  color: #fecaca;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.morpho-vault-warning-item-head span,
+.morpho-vault-warning-field span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.morpho-vault-warning-field strong {
+  overflow: hidden;
+  color: #e2e8f0;
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-warning-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.42);
+  color: #bae6fd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.34rem 0.48rem;
+}
+
+.morpho-vault-warning-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.morpho-vault-warning-copy i {
+  position: relative;
+  flex: 0 0 auto;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: #93c5fd;
+}
+
+.morpho-vault-warning-copy i::before,
+.morpho-vault-warning-copy i::after {
+  content: '';
+  position: absolute;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.morpho-vault-warning-copy i::before {
+  inset: 0.2rem 0 0 0.2rem;
+}
+
+.morpho-vault-warning-copy i::after {
+  inset: 0 0.2rem 0.2rem 0;
+}
+
+.morpho-vault-warning-empty {
+  color: #94a3b8;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+@keyframes morpho-vault-red-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(248, 113, 113, 0);
+    filter: drop-shadow(0 0 0 rgba(248, 113, 113, 0));
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(248, 113, 113, 0.36),
+      0 0 24px rgba(248, 113, 113, 0.28);
+    filter: drop-shadow(0 0 9px rgba(248, 113, 113, 0.32));
+  }
+}
+
+.morpho-vault-warning-red-pulse {
+  animation: morpho-vault-red-breathe 1.9s ease-in-out infinite;
 }
 
 .morpho-vault-copy-line span {
@@ -865,6 +1092,26 @@
 .morpho-vault-allocation-chart :focus,
 .morpho-vault-pie :focus-visible,
 .morpho-vault-allocation-chart :focus-visible,
+.morpho-vault-pie .recharts-wrapper:focus,
+.morpho-vault-pie .recharts-wrapper:focus-visible,
+.morpho-vault-allocation-chart .recharts-wrapper:focus,
+.morpho-vault-allocation-chart .recharts-wrapper:focus-visible,
+.morpho-vault-pie .recharts-surface:focus,
+.morpho-vault-pie .recharts-surface:focus-visible,
+.morpho-vault-allocation-chart .recharts-surface:focus,
+.morpho-vault-allocation-chart .recharts-surface:focus-visible,
+.morpho-vault-pie svg:focus,
+.morpho-vault-pie svg:focus-visible,
+.morpho-vault-allocation-chart svg:focus,
+.morpho-vault-allocation-chart svg:focus-visible,
+.morpho-vault-pie path:focus,
+.morpho-vault-pie path:focus-visible,
+.morpho-vault-allocation-chart path:focus,
+.morpho-vault-allocation-chart path:focus-visible,
+.morpho-vault-pie g:focus,
+.morpho-vault-pie g:focus-visible,
+.morpho-vault-allocation-chart g:focus,
+.morpho-vault-allocation-chart g:focus-visible,
 .morpho-vault-axis-tick:focus,
 .morpho-vault-axis-tick:focus-visible,
 .morpho-vault-pie-slice:focus,
@@ -874,11 +1121,17 @@
 .morpho-vault-clickable-chart .recharts-bar-rectangle:focus,
 .morpho-vault-clickable-chart .recharts-bar-rectangle:focus-visible {
   outline: none !important;
+  box-shadow: none !important;
 }
 
 .morpho-vault-pie,
-.morpho-vault-allocation-chart {
+.morpho-vault-allocation-chart,
+.morpho-vault-pie .recharts-wrapper,
+.morpho-vault-allocation-chart .recharts-wrapper,
+.morpho-vault-pie .recharts-surface,
+.morpho-vault-allocation-chart .recharts-surface {
   -webkit-tap-highlight-color: transparent;
+  outline: none;
 }
 
 .morpho-vault-pie-center {
@@ -1257,6 +1510,11 @@
   }
 
   .morpho-vault-hero-actions {
+    justify-items: start;
+    justify-content: flex-start;
+  }
+
+  .morpho-vault-hero-address-row {
     justify-content: flex-start;
   }
 
@@ -1304,6 +1562,12 @@
 
   .morpho-vault-hero-stats {
     grid-template-columns: 1fr;
+  }
+
+  .morpho-vault-warning-popover {
+    left: 0;
+    right: auto;
+    width: min(19rem, calc(100vw - 2rem));
   }
 }
 

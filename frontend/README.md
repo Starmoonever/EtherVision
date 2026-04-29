@@ -165,7 +165,7 @@ frontend/
 
 - 市场列表：市场视图分页拉取 `market_id`、`collateral`、`loan`，以及后端可选返回的 `total_market_size_usd`、`utilization` 等轻量字段；页面访问第几页才请求第几页，不在前端一次性拉取所有页；市场筛选位于列表表头的 `Collateral` 与 `Loan` 列，分别对应 markets 接口的 `collateral` 与 `loan` 参数，两个值都可为空，并在输入框内按回车后提交请求
 - 市场状态：市场视图在用户展开单个 Morpho 市场行后按需请求 `GET /api/morpho/market/state`；市场查询视图在搜索框输入完整 `market_id` 后直接请求同一接口，并返回这一个市场的详情。该接口用于展示市场规模、借款规模、可用空间、利用率、LLTV、容量负载空间、Supply APY、Borrow APY、token 单价与地址等紧凑详情；详情中的市场规模直接读取 `total_market_size_usd`，借款规模由 `total_market_size_usd * utilization` 推导，可用空间由市场规模减借款规模推导；token 单价仅用于展示，不参与市场规模、借款规模和可用空间计算
-- Vaults 分析：`Morpho Vaults` 视图通过 `GET /api/morpho/vaults` 分页展示 V1 / V2 vault 列表；单个 Vault V1 详情请求 `GET /api/morpho/vault/v1/state`，单个 Vault V2 详情请求 `GET /api/morpho/vault/v2/state`。V1 allocation 图表点击市场后复用 `GET /api/morpho/market/state` 做市场详情懒加载；V2 adapters 图表按接口返回的 `adapters.items` 展示占比与美元金额，点击 MetaMorpho 目标会在右侧结果区展示 Vault V1 查询结果，点击 MorphoMarketV1 market position 查询对应市场
+- Vaults 分析：`Morpho Vaults` 视图通过 `GET /api/morpho/vaults` 分页展示 V1 / V2 vault 列表；单个 Vault V1 详情请求 `GET /api/morpho/vault/v1/state`，单个 Vault V2 详情请求 `GET /api/morpho/vault/v2/state`，并通过 `GET /api/morpho/vault/v2/warning` 获取 V2 warning 等级、来源类型与关联 id。V1 allocation 图表点击市场后复用 `GET /api/morpho/market/state` 做市场详情懒加载；V2 adapters 图表按接口返回的 `adapters.items` 展示占比与美元金额，点击 MetaMorpho 目标会切换到 Vault V1 查询，点击 MorphoMarketV1 market position 查询对应市场；RED warning 会在 V2 概览、相关 adapter 图表项与详情区保持风险提示效果
 
 Morpho 市场页不应在列表加载阶段批量请求所有市场状态；市场行内详情展开后才请求市场状态，市场查询只请求用户输入的单个 market id，Vault allocation 与 V2 adapter market position 也只在用户点击具体市场后请求对应 state。
 

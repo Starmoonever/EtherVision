@@ -4,6 +4,7 @@ import type { DataWithMeta } from './requestMeta';
 const MORPHO_CACHE_TTL_MS = 5 * 60 * 1000;
 const MORPHO_PERSISTED_CACHE_PREFIX = 'morpho:data-cache:';
 const MORPHO_VAULT_V2_CACHE_NAMESPACE = 'vault-v2-adapters-v2';
+const MORPHO_VAULT_V2_WARNING_CACHE_NAMESPACE = 'vault-v2-warning';
 export const MORPHO_VAULT_SAMPLE_ADDRESS = '0x19b3cD7032B8C062E8d44EaCad661a0970DD8c55';
 export const MORPHO_VAULT_V2_SAMPLE_ADDRESS = '0x9a1D6bd5b8642C41F25e0958129B85f8E1176F3e';
 
@@ -288,6 +289,20 @@ export interface MorphoVaultV2Response {
   data_source: 'api';
 }
 
+export type MorphoVaultV2WarningLevel = 'red' | 'yellow' | 'green' | 'unknown';
+
+export interface MorphoVaultV2WarningItem {
+  level: MorphoVaultV2WarningLevel;
+  warning_type: string | null;
+  id: string;
+  type: string;
+}
+
+export interface MorphoVaultV2WarningResponse {
+  warnings: MorphoVaultV2WarningItem[];
+  data_source: 'api';
+}
+
 export interface MorphoVaultReallocationPoint {
   date: string;
   reallocation_count: number;
@@ -433,6 +448,16 @@ interface MorphoVaultV2ApiPayload {
     vaultV2ByAddress?: MorphoVaultV2ByAddressApiPayload | null;
   };
   vaultV2ByAddress?: MorphoVaultV2ByAddressApiPayload | null;
+}
+
+interface MorphoVaultV2WarningApiPayload {
+  warnings?: Array<{
+    level?: string | null;
+    warnings_type?: string | null;
+    warning_type?: string | null;
+    id?: string | null;
+    type?: string | null;
+  }> | null;
 }
 
 interface MorphoVaultV2ByAddressApiPayload {
@@ -588,6 +613,11 @@ const morphoVaultsCache = new Map<string, { fetchedAt: number; data: MorphoVault
 const morphoVaultsInflight = new Map<string, Promise<MorphoVaultsResponse>>();
 const morphoVaultV2Cache = new Map<string, { fetchedAt: number; data: MorphoVaultV2Response }>();
 const morphoVaultV2Inflight = new Map<string, Promise<MorphoVaultV2Response>>();
+const morphoVaultV2WarningCache = new Map<
+  string,
+  { fetchedAt: number; data: MorphoVaultV2WarningResponse }
+>();
+const morphoVaultV2WarningInflight = new Map<string, Promise<MorphoVaultV2WarningResponse>>();
 const morphoVaultReallocationsCache = new Map<
   string,
   { fetchedAt: number; data: MorphoVaultReallocationResponse }
@@ -1088,6 +1118,39 @@ function normalizeMorphoVaultV2Response(
     },
     adapters,
     data_source: dataSource,
+  };
+}
+
+function normalizeMorphoVaultV2WarningLevel(
+  level: string | null | undefined,
+): MorphoVaultV2WarningLevel {
+  const normalized = level?.trim().toLowerCase();
+  if (normalized === 'red' || normalized === 'yellow' || normalized === 'green') {
+    return normalized;
+  }
+  return 'unknown';
+}
+
+function normalizeMorphoVaultV2WarningResponse(
+  payload: MorphoVaultV2WarningApiPayload,
+): MorphoVaultV2WarningResponse {
+  const warnings = (payload.warnings ?? [])
+    .map((item) => {
+      const id = item.id?.trim();
+      const type = item.type?.trim();
+      if (!id || !type) return null;
+      return {
+        level: normalizeMorphoVaultV2WarningLevel(item.level),
+        warning_type: item.warnings_type ?? item.warning_type ?? null,
+        id,
+        type,
+      };
+    })
+    .filter((item): item is MorphoVaultV2WarningItem => Boolean(item));
+
+  return {
+    warnings,
+    data_source: 'api',
   };
 }
 
@@ -1937,6 +2000,89 @@ export async function fetchMorphoVaultV2WithMeta(
     });
 
   morphoVaultV2Inflight.set(normalizedAddress, request);
+  const data = await request;
+  return {
+    data,
+    meta: {
+      fetchedAt: Date.now(),
+      fromCache: false,
+    },
+  };
+}
+
+export async function fetchMorphoVaultV2Warning(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<MorphoVaultV2WarningResponse> {
+  const result = await fetchMorphoVaultV2WarningWithMeta(address, options);
+  return result.data;
+}
+
+export async function fetchMorphoVaultV2WarningWithMeta(
+  address: string,
+  options: { force?: boolean } = {},
+): Promise<DataWithMeta<MorphoVaultV2WarningResponse>> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const force = options.force === true;
+  const cached = morphoVaultV2WarningCache.get(normalizedAddress);
+
+  if (!force && cached && Date.now() - cached.fetchedAt < MORPHO_CACHE_TTL_MS) {
+    return {
+      data: cached.data,
+      meta: {
+        fetchedAt: cached.fetchedAt,
+        fromCache: true,
+      },
+    };
+  }
+
+  if (!force) {
+    const persisted = readMorphoPersistedCache<MorphoVaultV2WarningResponse>(
+      MORPHO_VAULT_V2_WARNING_CACHE_NAMESPACE,
+      normalizedAddress,
+    );
+    if (persisted) {
+      morphoVaultV2WarningCache.set(normalizedAddress, persisted);
+      return {
+        data: persisted.data,
+        meta: {
+          fetchedAt: persisted.fetchedAt,
+          fromCache: true,
+        },
+      };
+    }
+  }
+
+  const inflight = morphoVaultV2WarningInflight.get(normalizedAddress);
+  if (!force && inflight) {
+    return inflight.then((data) => ({
+      data,
+      meta: {
+        fetchedAt: Date.now(),
+        fromCache: false,
+      },
+    }));
+  }
+
+  const params = new URLSearchParams({ address });
+  const request = fetchMorphoWithFallback<MorphoVaultV2WarningApiPayload>([
+    `/morpho/vault/v2/warning?${params.toString()}`,
+  ])
+    .then((payload) => normalizeMorphoVaultV2WarningResponse(payload))
+    .then((data) => {
+      const fetchedAt = writeMorphoPersistedCache(
+        MORPHO_VAULT_V2_WARNING_CACHE_NAMESPACE,
+        normalizedAddress,
+        data,
+      );
+      morphoVaultV2WarningCache.set(normalizedAddress, { fetchedAt, data });
+      return data;
+    })
+    .finally(() => {
+      morphoVaultV2WarningInflight.delete(normalizedAddress);
+    });
+
+  morphoVaultV2WarningInflight.set(normalizedAddress, request);
   const data = await request;
   return {
     data,
